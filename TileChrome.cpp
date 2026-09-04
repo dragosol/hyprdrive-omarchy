@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <vector>
 
 #include <hyprland/src/helpers/time/Time.hpp>
 
@@ -142,6 +143,17 @@ PHLWINDOWREF                                        g_pressed;
 // the cursor is no longer on it.
 PHLWINDOWREF                                        g_lingering;
 
+// Captions are queued during TileChrome::render and flushed after the dock, so
+// a title hanging off a window at the bottom of the active card is not covered.
+struct SCaption {
+    PHLWINDOWREF window;
+    CBox         tileBox;
+    float        fade  = 1.F;
+    float        scale = 1.F;
+};
+
+std::vector<SCaption> g_captions;
+
 SState* stateFor(const PHLWINDOW& window, bool create) {
     if (!window)
         return nullptr;
@@ -178,6 +190,26 @@ float easedHover(const SEase& ease) {
 
 float shortSide(const CBox& box) {
     return sc<float>(std::min(box.w, box.h));
+}
+
+void drawCaption(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, float fade, float scale) {
+    if (!monitor || !window || tileBox.w < 1 || tileBox.h < 1)
+        return;
+
+    const auto* const HSTATE = stateFor(window, false);
+    if (!HSTATE)
+        return;
+
+    const float A = std::clamp(easedHover(HSTATE->hover), 0.F, 1.F) * fade;
+    if (A <= 0.01F)
+        return;
+
+    // RESTING side, not the growing app-icon: the caption is a hover surface
+    // and is only ever seen at FADE 1, and pinning it here stops the pill
+    // sliding up the screen if a hover lands mid-open.
+    const float ICONSIDE = std::clamp(shortSide(tileBox) * ICON_FRACTION, ICON_MIN * scale, ICON_MAX * scale);
+    const float BOTTOM   = sc<float>(tileBox.y + tileBox.h) + ICONSIDE / 2.F + CAPTION_GAP * scale;
+    OverviewRender::labelPill(monitor, window->m_title, sc<float>(tileBox.x + tileBox.w / 2.0), BOTTOM + CAPTION_H * scale, A, scale);
 }
 
 }
@@ -235,6 +267,7 @@ void forget() {
     g_hovered.reset();
     g_pressed.reset();
     g_lingering.reset();
+    g_captions.clear();
 }
 
 PHLWINDOW hovered() {
@@ -404,21 +437,10 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
         }
     }
 
-    // X57. The tile's CAPTION -- the overview had none at all. Same pill as the
-    // dock's tooltip, and it rides the hover ease so it fades in and out with
-    // the tile rather than popping. Below the tile, clear of X8's app icon,
-    // which straddles the bottom edge.
-    if (const auto* const HSTATE = stateFor(window, false)) {
-        const float A = std::clamp(easedHover(HSTATE->hover), 0.F, 1.F) * FADE;
-        if (A > 0.01F) {
-            // RESTING side, not the growing one above: the caption is a hover
-            // surface and is only ever seen at FADE 1, and pinning it here stops
-            // the pill sliding up the screen if a hover lands mid-open.
-            const float ICONSIDE = std::clamp(shortSide(tileBox) * ICON_FRACTION, ICON_MIN * SCALE, ICON_MAX * SCALE);
-            const float BOTTOM   = sc<float>(tileBox.y + tileBox.h) + ICONSIDE / 2.F + CAPTION_GAP * SCALE;
-            OverviewRender::labelPill(monitor, window->m_title, sc<float>(tileBox.x + tileBox.w / 2.0), BOTTOM + CAPTION_H * SCALE, A, SCALE);
-        }
-    }
+    // X57. The tile's CAPTION -- queued, not drawn. Dock::render runs after
+    // every tile, so a label hanging off a window at the bottom of the active
+    // card used to sit under the pill. renderCaptions() flushes these last.
+    g_captions.push_back({window, tileBox, FADE, SCALE});
 
     // V2 (user, 2026-08-17): "on tile mouseover the existing hover CLOSE button
     // is temporarily REPLACED by the 3-button pill". A CROSS-FADE rather than a
@@ -487,6 +509,14 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
         x.a = ALPHA;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(x));
     }
+}
+
+void renderCaptions(PHLMONITOR monitor) {
+    for (const auto& cap : g_captions) {
+        if (const auto window = cap.window.lock())
+            drawCaption(monitor, window, cap.tileBox, cap.fade, cap.scale);
+    }
+    g_captions.clear();
 }
 
 }

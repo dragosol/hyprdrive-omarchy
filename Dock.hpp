@@ -255,8 +255,9 @@ void revealNow(PHLMONITOR monitor);
 // stack popup and V2's window pill -- and it is one call rather than five copies
 // of the same six lines, so a re-theme moves all of them together instead of
 // four of them. The blur is the live dual-kawase, inheriting decoration:blur:*
-// through the -1 sentinels (X71); the tint on top is the dock's background
-// colour, and `alpha` is multiplied into both.
+// through the -1 sentinels (X71) and skipped entirely when
+// decoration:blur:enabled is off, matching Omarchy windows; the tint on top is
+// the dock's background colour, and `alpha` is multiplied into both.
 void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha);
 
 // A dragged icon is drawn as a translucent CLONE -- the original is still in its

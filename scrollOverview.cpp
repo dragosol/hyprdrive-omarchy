@@ -5778,6 +5778,10 @@ void CScrollOverview::render() {
     // distance itself, this only says whether a drag is happening at all.
     ScrollOverview::Dock::setWindowDragActive(drag.activeWindow.operator bool());
     ScrollOverview::Dock::render(MONITOR);
+    // Hover titles hang off the bottom of a tile, so they collide with the
+    // dock on the active card. Flush them after the pill so the label is the
+    // thing you read, not the thing the dock covers.
+    TileChrome::renderCaptions(MONITOR);
 
     // X52. One line per frame after a keystroke: the frame that PAINTS the new
     // results is frame 1, so its total is the keystroke-to-paint cost.

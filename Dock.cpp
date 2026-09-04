@@ -66,6 +66,7 @@
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -1376,14 +1377,20 @@ CBox hoverBox(const CBox& iconBox, float scale) {
 // of the hover highlight. Anchoring to the pill put it ITEM_PAD_BOTTOM -
 // HOVER_PAD = 8px too low, and that gap is what read as "not 1:1".
 
-// X87. Dock frost is always LIVE (xray=false), desktop and overview.
-// One surface, so it does not reintroduce the multi-card compound bug that
-// forced shared sampling for strip/search. decoration:blur:* still applies
-// when the dock keys are -1 (X71). Sampling m_blurFB here was wrong for the
-// desktop path (no behind-chrome pre-blur exists) and broke once the shared
-// draw path was rewritten.
+// X87. Dock frost is LIVE (xray=false), desktop and overview, and only when
+// Hyprland window blur is on. One surface, so it does not reintroduce the
+// multi-card compound bug that forced shared sampling for strip/search.
+// decoration:blur:* still applies when the dock keys are -1 (X71). Sampling
+// m_blurFB here was wrong for the desktop path (no behind-chrome pre-blur
+// exists) and broke once the shared draw path was rewritten.
 static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alpha) {
     if (box.empty() || alpha <= 0.F)
+        return;
+
+    // Same switch window frost and overview chrome capture use. Dock keys of
+    // -1 already mean "follow decoration:blur:*"; with the theme blur off a
+    // frost pass would still run and look like a dock-only effect.
+    if (!ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
         return;
 
     COverviewBlurPassElement::SData blur;
@@ -3742,8 +3749,25 @@ void render(PHLMONITOR monitor) {
 
     // X13/X29/X86: dock pill. Live on the desktop (single surface). In overview
     // it samples the same decoration:blur:* behind-chrome buffer as the strip
-    // so strength cannot drift with search-result count.
+    // so strength cannot drift with search-result count. Frost itself is
+    // skipped when decoration:blur:enabled is off, matching Omarchy windows.
     frostedPlate(monitor, LAYOUT.pill, LAYOUT.rounding, 1.F);
+
+    // Same outline the workspace cards use: theme accent, Hyprland border
+    // weight, floored at 1 so a theme with border_size 0 still frames the pill.
+    {
+        const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+        const auto ACCENT     = ScrollOverview::Config::highlightColor();
+
+        CBorderPassElement::SBorderData border;
+        border.box           = LAYOUT.pill.copy().round();
+        border.grad1.reset(ACCENT.modifyA(1.F));
+        border.a             = 1.F;
+        border.borderSize    = BORDERSIZE;
+        border.round         = LAYOUT.rounding;
+        border.roundingPower = 2.F;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+    }
 
     // (user, 2026-08-03): GNOME lights the hovered app cell with a translucent
     // lighter fill and a slightly stronger outline, and labels it. Mouse coords
