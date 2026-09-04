@@ -1623,6 +1623,7 @@ constexpr float TOOLTIP_FADE_OUT_MS = 110.F; // exits are ~25% quicker, house ru
 // no longer under the pointer.
 struct STooltip {
     std::string     name;
+    std::string     subject; // icon or window, not the text; titles can tick without this moving
     CBox            anchor;
     float           bottomY = 0.F; // Y2; 0 = hang off the pill
     Time::steady_tp since   = Time::steadyNow();
@@ -1630,19 +1631,41 @@ struct STooltip {
 };
 STooltip g_tip;
 
+std::string tooltipSubject(const PHLWINDOW& window) {
+    return "w:" + std::to_string(reinterpret_cast<uintptr_t>(window.get()));
+}
+
+std::string tooltipSubject(const SItem& item) {
+    if (!item.uri.empty())
+        return "u:" + item.uri;
+    if (!item.desktopId.empty())
+        return "i:" + item.desktopId;
+    if (!item.wmClass.empty())
+        return "i:" + item.wmClass;
+    return "i:" + item.icon;
+}
+
 // Y2. `bottomY` is the monitor-local RENDER y the plate's underside sits on. 0
 // means "the pill", which is every caller that labels an icon. The hover panel
 // passes its own top instead, so a preview's title rides above the previews
 // rather than behind them.
-void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& NAME, float bottomY = 0.F) {
-    if (!NAME.empty()) {
-        // The fade restarts when the label CHANGES, so sliding along the dock
-        // gives each name its own entrance rather than one fade for the trip.
-        if (NAME != g_tip.name || g_tip.out) {
-            g_tip.name  = NAME;
-            g_tip.since = Time::steadyNow();
-            g_tip.out   = false;
-        }
+// `subject` is the hovered icon or window. The fade restarts when THAT changes
+// (sliding to the next icon), not when the same window's title ticks -- a
+// streaming Grok/browser title used to punch the plate back to zero alpha
+// every update.
+void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& NAME, float bottomY = 0.F, const std::string& subject = {}) {
+    const bool LIVE = !subject.empty() || !NAME.empty();
+    if (LIVE) {
+        const std::string& KEY = !subject.empty() ? subject : NAME;
+        // New hover target, or coming back from a fade-out: own entrance.
+        // Same target, new text: swap the string, keep the alpha.
+        if (KEY != g_tip.subject || g_tip.out) {
+            g_tip.subject = KEY;
+            g_tip.name    = NAME;
+            g_tip.since   = Time::steadyNow();
+            g_tip.out     = false;
+        } else if (!NAME.empty())
+            g_tip.name = NAME;
         g_tip.anchor = anchor;
         // Y2. Remembered with the anchor and for the same reason: the plate
         // outlives the hover so it can fade away, and by then the cell it was
@@ -1657,9 +1680,13 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
         }
     }
 
+    if (g_tip.name.empty())
+        return;
+
     const float T = std::clamp(elapsedMs(g_tip.since) / (g_tip.out ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS), 0.F, 1.F);
     if (g_tip.out && T >= 1.F) {
         g_tip.name.clear();
+        g_tip.subject.clear();
         return;
     }
 
@@ -4051,13 +4078,13 @@ void render(PHLMONITOR monitor) {
 
     if (g_menu)
         renderTooltip(monitor, LAYOUT, CBox{}, "");
-    else if (CELL && !CELL->second->m_title.empty())
-        renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y));
+    else if (CELL)
+        renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y), tooltipSubject(CELL->second));
     else if (HASHOVER) {
         const float ABOVE = (panelUp() && g_hover.drawn.height >= 1) ? sc<float>(g_hover.drawn.y) : 0.F;
-        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM), ABOVE);
+        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM), ABOVE, tooltipSubject(*HOVEREDITEM));
     } else if (HOVERAPPS)
-        renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications");
+        renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications", 0.F, "show-apps");
     else
         renderTooltip(monitor, LAYOUT, CBox{}, "");
 
