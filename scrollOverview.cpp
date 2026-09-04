@@ -279,12 +279,21 @@ void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::stea
     }
 }
 
+// Omarchy lockscreen (shell/plugins/lock/LockView.qml MultiEffect):
+//   blur: 1.0, blurMax: 128, blurMultiplier: 1.25, contrast: -0.08
+// Dual-kawase size * 2^passes ≈ 128px; contrast 0.92 ≈ 1 - 0.08; no grain.
+// Independent of decoration:blur:enabled — the lockscreen blurs even when
+// Omarchy windows do not.
+constexpr int   LOCKSCREEN_BLUR_SIZE     = 8;
+constexpr int   LOCKSCREEN_BLUR_PASSES   = 4;
+constexpr float LOCKSCREEN_BLUR_CONTRAST = 0.92F;
+
 void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now) {
-    if (!monitor || wallpaperMode == 1 || !ScrollOverview::Config::getBlur())
+    if (!monitor || wallpaperMode == 1)
         return;
 
     if (frost.lastBackdropWallpaperMode != wallpaperMode) {
-        frost.backdropDirty         = true;
+        frost.backdropDirty             = true;
         frost.lastBackdropWallpaperMode = wallpaperMode;
     }
 
@@ -302,9 +311,6 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
         frost.backdropDirty = true;
     }
 
-    if (!frost.backdropDirty)
-        return;
-
     if (g_pHyprRenderer->m_renderData.currentFB)
         frost.backdropFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
 
@@ -317,7 +323,27 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
         OverviewRender::flushPass(monitor);
     }
 
-    auto blurDamage = fullDamage;
+    const auto PREV_ENABLED  = ScrollOverview::Config::getValue<bool>("decoration:blur:enabled");
+    const auto PREV_SIZE     = ScrollOverview::Config::getValue<int>("decoration:blur:size");
+    const auto PREV_PASSES   = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
+    const auto PREV_NOISE    = ScrollOverview::Config::getValue<float>("decoration:blur:noise");
+    const auto PREV_CONTRAST = ScrollOverview::Config::getValue<float>("decoration:blur:contrast");
+    ScrollOverview::Config::setValue("decoration:blur:enabled", true);
+    ScrollOverview::Config::setValue("decoration:blur:size", LOCKSCREEN_BLUR_SIZE);
+    ScrollOverview::Config::setValue("decoration:blur:passes", LOCKSCREEN_BLUR_PASSES);
+    ScrollOverview::Config::setValue("decoration:blur:noise", 0.F);
+    ScrollOverview::Config::setValue("decoration:blur:contrast", LOCKSCREEN_BLUR_CONTRAST);
+    auto restoreBlur = Hyprutils::Utils::CScopeGuard([PREV_ENABLED, PREV_SIZE, PREV_PASSES, PREV_NOISE, PREV_CONTRAST, monitor] {
+        ScrollOverview::Config::setValue("decoration:blur:enabled", PREV_ENABLED);
+        ScrollOverview::Config::setValue("decoration:blur:size", PREV_SIZE);
+        ScrollOverview::Config::setValue("decoration:blur:passes", PREV_PASSES);
+        ScrollOverview::Config::setValue("decoration:blur:noise", PREV_NOISE);
+        ScrollOverview::Config::setValue("decoration:blur:contrast", PREV_CONTRAST);
+        if (monitor)
+            monitor->m_blurFBDirty = true;
+    });
+
+    auto       blurDamage = fullDamage;
     const auto BLURREDTEX = g_pHyprRenderer->blurFramebuffer(frost.backdropFB, 1.F, &blurDamage);
     if (!BLURREDTEX || !BLURREDTEX->m_size.x || !BLURREDTEX->m_size.y)
         return;
@@ -345,8 +371,8 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
     frost.backdropDirty = false;
 }
 
-void CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor) {
-    if (!monitor || !frost.backdropFB || !frost.backdropFB->isAllocated() || !frost.backdropFB->getTexture())
+void CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
+    if (!monitor || alpha <= 0.F || !frost.backdropFB || !frost.backdropFB->isAllocated() || !frost.backdropFB->getTexture())
         return;
 
     const auto TEX = frost.backdropFB->getTexture();
@@ -354,10 +380,10 @@ void CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor) {
 
     g_pHyprRenderer->draw(
         CTexPassElement::SRenderData{
-            .tex      = TEX,
-            .box      = CBox{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y},
-            .a        = 1.F,
-            .damage   = fullDamage,
+            .tex          = TEX,
+            .box          = CBox{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y},
+            .a            = std::clamp(alpha, 0.F, 1.F),
+            .damage       = fullDamage,
             .flipEndFrame = true,
         },
         fullDamage);
@@ -5621,15 +5647,9 @@ void CScrollOverview::render() {
 
     const auto WALLPAPERMODE = ScrollOverview::Config::getWallpaperMode();
 
-    if (ScrollOverview::Config::getBlur() && WALLPAPERMODE != 1) {
-        updateBackdropBlurCache(MONITOR, WALLPAPERMODE, NOW);
-        if (frost.backdropFB && frost.backdropFB->isAllocated() && frost.backdropFB->getTexture())
-            renderBackdropBlurCache(MONITOR);
-        else
-            renderGlobalWallpaper(MONITOR, NOW);
-    } else if (WALLPAPERMODE == 0 || WALLPAPERMODE == 2) {
+    if (WALLPAPERMODE == 0 || WALLPAPERMODE == 2)
         renderGlobalWallpaper(MONITOR, NOW);
-    } else
+    else
         g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, {});
 
     Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
@@ -5643,15 +5663,19 @@ void CScrollOverview::render() {
     updateCardWallpaperFB(MONITOR, NOW);
 
     // The wallpaper canvas is still the monitor fill; the cards float on top
-    // of it. Dim that pulled-back canvas so it reads as behind the cards, not
-    // as more of the same wallpaper. 80% black, faded with open progress so a
-    // swipe does not slam it on. Flush BEFORE the cards so the scrim cannot
-    // land on top of the card fill (draw() of the card wallpaper and this
-    // rect used to share a pass, and the dim covered the cards).
+    // of it. Blur it the way the Omarchy lockscreen blurs its wallpaper, then
+    // dim 80% black, both faded with open progress so a swipe does not slam
+    // them on. Cards keep the undimmed, unblurred fill captured above.
+    // Flush BEFORE the cards so the scrim cannot land on top of the card fill.
     {
-        const float OPEN  = ScrollOverview::Config::getScale();
-        const float RANGE = std::max(0.01F, std::abs(1.F - OPEN));
-        const float DIM   = 0.80F * std::clamp(std::abs(SCALE - 1.F) / RANGE, 0.F, 1.F);
+        const float OPEN     = ScrollOverview::Config::getScale();
+        const float RANGE    = std::max(0.01F, std::abs(1.F - OPEN));
+        const float PROGRESS = std::clamp(std::abs(SCALE - 1.F) / RANGE, 0.F, 1.F);
+        const float DIM      = 0.80F * PROGRESS;
+        if (PROGRESS > 0.001F && WALLPAPERMODE != 1) {
+            updateBackdropBlurCache(MONITOR, WALLPAPERMODE, NOW);
+            renderBackdropBlurCache(MONITOR, PROGRESS);
+        }
         if (DIM > 0.001F) {
             CRectPassElement::SRectData scrim;
             scrim.box   = CBox{0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y};

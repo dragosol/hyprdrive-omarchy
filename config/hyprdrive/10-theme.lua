@@ -9,6 +9,8 @@
 --   strip      squared). Dock rounding stays 24.
 --   blur       decoration:blur:*                  -> dock/search frost; off when
 --              decoration:blur:enabled is false
+--   canvas     Omarchy lockscreen MultiEffect     -> dimmed wallpaper behind cards
+--              (blurMax 128), not window blur
 --   shadows    decoration:shadow:*                -> plugin shadow at -1
 --   dock pill  Omarchy colors.toml background     -> dockBackgroundColor()
 --              at terminal opacity (0.985), else misc:background_color
