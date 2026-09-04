@@ -1001,14 +1001,20 @@ void renderOverviewWindow(const SRenderParams& params) {
     const Vector2D previousWindowSize      = params.window->m_realSize->value();
     const bool     previousAnimatingIn     = params.window->m_animatingIn;
     const bool     previousSizeAnimating   = params.window->sizeAnimation()->isBeingAnimated();
+    const bool     previousPosAnimating    = params.window->positionAnimation()->isBeingAnimated();
     const auto     WORKSPACE               = params.window->m_workspace;
     const bool     OVERRIDEWORKSPACEOFFSET = WORKSPACE && !params.window->m_pinned;
     const Vector2D previousWorkspaceOffset = OVERRIDEWORKSPACEOFFSET ? WORKSPACE->m_renderOffset->value() : Vector2D{};
 
+    // Mark BOTH animated before writing current. Writing position while the
+    // variable is "not being animated" can commit the tile box as the window's
+    // goal; on close that left a border/frame at the top-left (X91 found the
+    // same leak on dock live previews, which no longer rewrite geometry).
+    COverviewAnimatedVariableAccess::setBeingAnimated(params.window->positionAnimation().get(), true);
+    COverviewAnimatedVariableAccess::setBeingAnimated(params.window->sizeAnimation().get(), true);
     params.window->positionAnimation()->value() = params.monitor->m_position + params.windowBox.pos() / params.monitor->m_scale - params.window->m_floatingOffset;
     params.window->sizeAnimation()->value()     = params.windowBox.size() / params.monitor->m_scale;
     params.window->m_animatingIn                 = true;
-    COverviewAnimatedVariableAccess::setBeingAnimated(params.window->sizeAnimation().get(), true);
     if (OVERRIDEWORKSPACEOFFSET)
         WORKSPACE->m_renderOffset->value() = {};
 
@@ -1016,6 +1022,7 @@ void renderOverviewWindow(const SRenderParams& params) {
         params.window->positionAnimation()->value() = previousWindowPos;
         params.window->sizeAnimation()->value()     = previousWindowSize;
         params.window->m_animatingIn                 = previousAnimatingIn;
+        COverviewAnimatedVariableAccess::setBeingAnimated(params.window->positionAnimation().get(), previousPosAnimating);
         COverviewAnimatedVariableAccess::setBeingAnimated(params.window->sizeAnimation().get(), previousSizeAnimating);
         if (OVERRIDEWORKSPACEOFFSET && WORKSPACE)
             WORKSPACE->m_renderOffset->value() = previousWorkspaceOffset;

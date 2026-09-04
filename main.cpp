@@ -661,23 +661,11 @@ static CHyprSignalListener g_pTapSuperButtonHook;
 static bool                g_tapSuperCandidate = false;
 static uint32_t            g_tapSuperPressedAt = 0;
 
-// V2. IS SUPER DOWN RIGHT NOW -- the window pill's whole existence rides this.
-//
-// COUNTED, not a bool, and clamped at zero for the same reason
-// g_heldGuardModifiers is: the two META keys are independent, and a release
-// whose press went somewhere else (a VT switch, a grab) would otherwise strand
-// the count and leave the pill either permanently out or permanently unreachable.
-//
-// Read off the RAW key stream rather than from xkb, which is the lesson
-// isGuardModifierKeycode already records in this file: xkb was measured
-// answering logo=0 for the second key of a SUPER chord in this VM.
-static int g_heldSuperKeys = 0;
-
-// ONE raw-key listener, and it owns five things in this order: the guard-
-// modifier count, V5's SPACE preview, the search keys, V2's SUPER hold and the
-// SUPER tap. The order is load-bearing at every step (each branch says why), and
-// they are one listener because they read one key stream and each has to decide
-// whether the key survives to the next -- two listeners could not.
+// ONE raw-key listener, and it owns the guard-modifier count, V5's SPACE
+// preview, the search keys, and the SUPER tap. The order is load-bearing at
+// every step (each branch says why), and they are one listener because they
+// read one key stream and each has to decide whether the key survives to the
+// next -- two listeners could not.
 static void                registerRawKeyHooks() {
     g_pRawKeyHook = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
         const bool PRESSED = event.state == WL_KEYBOARD_KEY_STATE_PRESSED;
@@ -735,14 +723,6 @@ static void                registerRawKeyHooks() {
                 g_tapSuperCandidate = false; // SUPER is being held as a modifier
             return;
         }
-
-        // V2. The pill's reveal rides SUPER itself, ahead of and independently of
-        // the tap logic below: a HELD Super is precisely the case the tap
-        // candidate is about to be cancelled by, and the pill is what that hold
-        // is for. No debounce -- V2's own gate is "pill appears <=150ms after
-        // SUPER down", which leaves no room for a hold threshold in front of it.
-        g_heldSuperKeys = std::max(0, g_heldSuperKeys + (PRESSED ? 1 : -1));
-        ScrollOverview::WindowPill::setSuperHeld(g_heldSuperKeys > 0);
 
         if (PRESSED) {
             g_tapSuperCandidate = true;
@@ -1231,19 +1211,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             return;
         }
 
-        // V2. The window pill, BEHIND the dock in the same ladder: the dock
-        // floats over the whole desktop, so a point inside the pill belongs to
-        // the dock before it belongs to any window under it.
-        //
-        // What this does NOT claim is the point: a press on a window's body --
-        // including the capsule between the pill's own buttons -- falls straight
-        // through, and Hyprland's `SUPER + mouse:272 -> window.drag` bindm is
-        // dispatched from CInputManager::onMouseButton, which runs after this
-        // bus event and returns early on info.cancelled. Claiming here is
-        // therefore a veto over the drag, and passing through leaves it exactly
-        // as it was before the pill existed.
-        if (ScrollOverview::WindowPill::handleDesktop(MONITOR, LOCAL, event.button, PRESSED).claimed)
-            info.cancelled = true;
+        // Hold-Super window pills are disabled on this fork.
     });
 
     // X33. The wheel over the pill, on the PLAIN desktop only.
@@ -1282,11 +1250,6 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // the flag if the overview closed while one was in flight.
         ScrollOverview::Dock::setWindowDragActive(false);
 
-        // V2. The SUPER-hold pills go on at this stage too, and BEFORE the dock:
-        // one stage for every window's pill puts them all above every window
-        // (so a pill is never buried by the window in front of the one it
-        // belongs to) and still under the dock, which floats over everything.
-        ScrollOverview::WindowPill::renderDesktop(MONITOR);
         ScrollOverview::Dock::render(MONITOR);
     });
 

@@ -49,6 +49,13 @@ CScrollOverview::~CScrollOverview() {
     restoreWorkspaceAnimationOverrides();
     restoreInputConfigOverrides();
     forced.restoreAll();
+    if (const auto MONITOR = pMonitor.lock()) {
+        for (auto const& WINDOW : Desktop::windowState()->windows()) {
+            if (!WINDOW || WINDOW->m_monitor.lock() != MONITOR)
+                continue;
+            OverviewWindow::forceDecoRecalc(WINDOW);
+        }
+    }
     images.clear(); // otherwise we get a vram leak
     trailingWorkspace.reset();
     gapWorkspaces.clear();
@@ -5229,10 +5236,11 @@ void CScrollOverview::close() {
         useAnimDirection(false);
         *scale = 1.F;
 
-        if (!ScrollOverview::Config::getValue<int>("animations:enabled")) {
-            forceWorkspaceWindowsDecoRecalc(finalWorkspace ? finalWorkspace : pMonitor->m_activeWorkspace);
-            damage();
-        }
+        // Always recalc decorations on close. Skipping this when animations
+        // were on left window frames stuck at the overview tile (often the
+        // top-left) after the overview was gone.
+        forceWorkspaceWindowsDecoRecalc(finalWorkspace ? finalWorkspace : pMonitor->m_activeWorkspace);
+        damage();
 
         scale->setCallbackOnEnd([this](auto) { removeOverview(this); });
     };
