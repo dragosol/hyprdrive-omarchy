@@ -556,6 +556,16 @@ inline bool overviewMembershipMatches(const PHLWINDOW& WINDOW) {
 // cannot disagree about which windows exist. Dropping a window from the gate
 // removes it from the grid too, and the survivors re-lay-out through the U4
 // reflow animation at no extra cost.
+// Omarchy's screensaver is a real fullscreen terminal (class
+// org.omarchy.screensaver). The overview owns the monitor's render pass, so
+// that window cannot cover the output while an overview is up. Drop the
+// overview immediately; do not wait for the close animation.
+inline bool isScreensaverWindow(const PHLWINDOW& window) {
+    if (!window)
+        return false;
+    return window->m_class == "org.omarchy.screensaver" || window->m_initialClass == "org.omarchy.screensaver";
+}
+
 inline bool shouldShowOverviewWindow(const PHLWINDOW& window) {
     // Z9r5: a window hidden for a dock flight is the proxy's alone -- drawing
     // its tile too would be the double image the spec forbids.

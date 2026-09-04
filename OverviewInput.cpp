@@ -606,9 +606,14 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
             trackpadSwipeLayout(images[viewportCurrentWorkspace]->pWorkspace, e.delta);
 }
 
-void CScrollOverview::onWindowOpen(PHLWINDOW) {
+void CScrollOverview::onWindowOpen(PHLWINDOW window) {
         if (closing)
             return;
+
+        if (isScreensaverWindow(window)) {
+            dropScrollOverviewsForMonitor(pMonitor.lock());
+            return;
+        }
 
         rebuildPending = true;
         damage();
@@ -633,6 +638,11 @@ void CScrollOverview::onWindowMove(PHLWINDOW, PHLWORKSPACE) {
 void CScrollOverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
         if (closing)
             return;
+
+        if (isScreensaverWindow(window)) {
+            dropScrollOverviewsForMonitor(pMonitor.lock());
+            return;
+        }
 
         g_pInputManager->unconstrainMouse();
 
@@ -664,6 +674,11 @@ void CScrollOverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
 void CScrollOverview::onWindowFullscreen(PHLWINDOW window) {
         if (closing || emittingFullscreenVisibilityState)
             return;
+
+        if (isScreensaverWindow(window)) {
+            dropScrollOverviewsForMonitor(pMonitor.lock());
+            return;
+        }
 
         window = getOverviewWindowToShow(window);
         if (!window || window->m_monitor != pMonitor || !Fullscreen::controller()->isFullscreen(window))
