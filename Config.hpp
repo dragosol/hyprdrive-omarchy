@@ -98,6 +98,8 @@ int           getGestureDistance();
 //   dockBackgroundColor()   dock:background_color, else misc:background_color
 //   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
 //   dock blur/shadow -1     follow decoration:blur:* / decoration:shadow:*
+//   search / result cards   themeRounding, highlightColor, general:border_size,
+//                           col.inactive_border fill; frost only if blur:enabled
 //
 // Pin a plugin key only to stop inheriting.
 CHyprColor    highlightColor();

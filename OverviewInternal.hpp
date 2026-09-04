@@ -833,9 +833,7 @@ inline constexpr float OVERVIEW_RESULT_CELLWL = 132.F, OVERVIEW_RESULT_CELLHL = 
 // -text gap and the name-to-description gap were all the literal 10, and reading
 // them as one number is how "nudge the description over" quietly moves the G6
 // header too.
-inline constexpr float OVERVIEW_CARD_ROUNDL       = 16.F; // the card's corner radius
 inline constexpr float OVERVIEW_CARD_PADL         = 12.F; // inner pad: card edge -> icon, row edge -> icon
-inline constexpr float OVERVIEW_CARD_SELROUNDL    = 10.F; // the selected row's / cell's fill
 inline constexpr float OVERVIEW_CARD_HEADICONL    = 32.F; // G6 provider icon on the leading edge
 inline constexpr float OVERVIEW_CARD_HEADGAPL     = 10.F; // that icon -> the provider name
 inline constexpr float OVERVIEW_CARD_HEADPX       = 14.F; // the provider name

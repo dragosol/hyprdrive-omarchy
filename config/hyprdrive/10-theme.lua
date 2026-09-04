@@ -4,7 +4,10 @@
 -- The plugin reads live compositor values (see Config.hpp):
 --   accent     general:col.active_border          -> highlightColor()
 --   cards      decoration:rounding                -> themeRounding()
---   blur       decoration:blur:*                  -> dock frost at -1
+--   search     the same rounding, border, fill,   -> drawSearch()
+--              and decoration:blur:enabled
+--   blur       decoration:blur:*                  -> dock/search frost; off when
+--              decoration:blur:enabled is false
 --   shadows    decoration:shadow:*                -> plugin shadow at -1
 --   dock pill  misc:background_color              -> dockBackgroundColor()
 --   dock dots  the same accent                    -> dockIndicatorColor()

@@ -3893,6 +3893,12 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     out.drawable = true;
     out.pill     = pill;
 
+    // Same rounding the workspace cards and the strip use: decoration:rounding
+    // (0 on Omarchy) and decoration:rounding_power. Clamped per-box at draw.
+    const auto CARDROUND = getOverviewCardRounding(MONITOR, IN.renderScale);
+    out.rounding         = CARDROUND.rounding;
+    out.roundingPower    = CARDROUND.power;
+
     // Everything inside the pill is measured off the box as it actually landed,
     // so the badge and the type follow the card transform for free.
     out.scale          = sc<float>(pill.width) / PILLWL;
@@ -4060,30 +4066,52 @@ static void drawSearch(const SSearchLayout& L) {
 
     const float FADE  = L.fade;
     const float SCALE = L.scale;
+    const float POWER = L.roundingPower;
     const CBox& PILL  = L.pill;
     const CBox& BADGE = L.badge;
 
-    // X11 / X86: frosted pill -- sample the behind-chrome theme blur.
-    OverviewRender::queueBlur(PILL, sc<int>(std::round(PILL.height / 2.F)), 2.F, FADE, false); // X87: live overview frost under the bar
+    const auto roundFor = [&](const CBox& box) {
+        return std::min(L.rounding, sc<int>(std::round(std::min(box.w, box.h) / 2.0)));
+    };
+
+    const int PILLROUND  = roundFor(PILL);
+    const int BADGEROUND = roundFor(BADGE);
+
+    // Frost only when the theme blurs windows. queueBlur is a no-op if
+    // decoration:blur:enabled is off, so a squared Omarchy theme is not frosted.
+    OverviewRender::queueBlur(PILL, PILLROUND, POWER, FADE, false);
 
     // X4: hue inherited from the theme, alpha kept at the tuned value. The
     // resting surface reads col.inactive_border and the badge the accent -- the
     // same pairing renderStrip already uses for its cells.
-    const auto INACTIVE = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
-    const auto ACCENT   = ScrollOverview::Config::highlightColor();
+    const auto INACTIVE   = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
+    const auto ACCENT     = ScrollOverview::Config::highlightColor();
+    const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+
+    const auto outline = [&](const CBox& box, int rounding, float alpha) {
+        CBorderPassElement::SBorderData border;
+        border.box           = box.copy().round();
+        border.grad1.reset(ACCENT.modifyA(1.F));
+        border.a             = alpha;
+        border.borderSize    = BORDERSIZE;
+        border.round         = rounding;
+        border.roundingPower = POWER;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+    };
 
     CRectPassElement::SRectData bg;
     bg.box           = PILL;
     bg.color         = INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.60F * FADE} : INACTIVE.m_colors[0].modifyA(0.60F * FADE);
-    bg.round         = sc<int>(std::round(PILL.height / 2.F));
-    bg.roundingPower = 2.F;
+    bg.round         = PILLROUND;
+    bg.roundingPower = POWER;
     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+    outline(PILL, PILLROUND, FADE);
 
     CRectPassElement::SRectData badgeBg;
     badgeBg.box           = BADGE;
     badgeBg.color         = ACCENT.modifyA(0.30F * FADE);
-    badgeBg.round         = sc<int>(std::round(BADGE.width / 2.F));
-    badgeBg.roundingPower = 2.F;
+    badgeBg.round         = BADGEROUND;
+    badgeBg.roundingPower = POWER;
     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(badgeBg));
 
     // Every texture in this pass rides TEXFADE rather than FADE directly. The
@@ -4114,27 +4142,25 @@ static void drawSearch(const SSearchLayout& L) {
         ADDTEX(GLYPHTEX, glyphBox.round());
     }
 
-    const int PANELROUND = std::max(1, sc<int>(std::round(OVERVIEW_CARD_ROUNDL * SCALE)));
-    const int ROWPAD     = sc<int>(std::round(OVERVIEW_CARD_PADL * SCALE));
-    const int SELROUND   = std::max(1, sc<int>(std::round(OVERVIEW_CARD_SELROUNDL * SCALE)));
+    const int ROWPAD = sc<int>(std::round(OVERVIEW_CARD_PADL * SCALE));
 
     for (const auto& CARD : L.cards) {
         texFade = FADE * CARD.alpha;
 
+        const int   PANELROUND    = roundFor(CARD.box);
+        const float CARDALPHA     = FADE * CARD.alpha;
         // §10 clause 3 / X92: result frost samples the private overview chrome blur.
-        // X99: result cards share the weaker chrome frost (passes-1).
-        // Y12: full passes, not passes-1. The live fallback has to match the
-        // private chrome FB or the strip changes strength whenever the capture
-        // is missing.
+        // Skipped when decoration:blur:enabled is off (same gate as the pill).
         const int CHROME_PASSES = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
-        OverviewRender::queueBlur(CARD.box, PANELROUND, 2.F, FADE * CARD.alpha, true, CHROME_PASSES);
+        OverviewRender::queueBlur(CARD.box, PANELROUND, POWER, CARDALPHA, true, CHROME_PASSES);
 
         CRectPassElement::SRectData cardBg;
         cardBg.box           = CARD.box;
-        cardBg.color         = INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.55F * FADE * CARD.alpha} : INACTIVE.m_colors[0].modifyA(0.55F * FADE * CARD.alpha);
+        cardBg.color         = INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.55F * CARDALPHA} : INACTIVE.m_colors[0].modifyA(0.55F * CARDALPHA);
         cardBg.round         = PANELROUND;
-        cardBg.roundingPower = 2.F;
+        cardBg.roundingPower = POWER;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(cardBg));
+        outline(CARD.box, PANELROUND, CARDALPHA);
 
         if (CARD.grid) {
             for (const auto& ITEM : CARD.items) {
@@ -4145,8 +4171,8 @@ static void drawSearch(const SSearchLayout& L) {
                     sel.box = CELL;
                     // Opaque for the same reason the list's selection is.
                     sel.color         = ACCENT.modifyA(FADE * CARD.alpha);
-                    sel.round         = SELROUND;
-                    sel.roundingPower = 2.F;
+                    sel.round         = roundFor(CELL);
+                    sel.roundingPower = POWER;
                     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
                 }
 
@@ -4225,8 +4251,8 @@ static void drawSearch(const SSearchLayout& L) {
                 // selected one is flat. That difference holds against any
                 // wallpaper, which a colour delta does not.
                 sel.color         = ACCENT.modifyA(FADE * CARD.alpha);
-                sel.round         = SELROUND;
-                sel.roundingPower = 2.F;
+                sel.round         = roundFor(ROW);
+                sel.roundingPower = POWER;
                 g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
             }
 
@@ -4297,11 +4323,12 @@ static void drawSearch(const SSearchLayout& L) {
     ADDTEX(TEX, textBox.round());
 }
 
-// OVERVIEW_CPP_SPEC §5 F1 + §13.4 X2. The search bar, styled after the
-// deprecated Quickshell overview (ii/modules/ii/overview/SearchBar.qml): a
-// full-round pill carrying an accent badge with the Material "search" glyph, a
-// placeholder while empty, and a fixed field width that widens once a query is
-// typed. The reference's metrics are the OVERVIEW_PILL_* family.
+// OVERVIEW_CPP_SPEC §5 F1 + §13.4 X2. The search bar: a field carrying an
+// accent badge with the Material "search" glyph, a placeholder while empty,
+// and a fixed field width that widens once a query is typed. Rounding, border,
+// fill and frost come from the Hyprland theme (decoration:rounding, blur,
+// general:border_size, col.inactive_border) rather than a forced capsule.
+// The reference's metrics are the OVERVIEW_PILL_* family.
 // ponytail: the width change is a hard cut; the reference eases it over 300ms.
 // The reference's two trailing icon buttons (Google Lens, SongRec) are not
 // drawn -- neither action exists in this overview, so they would be decoration

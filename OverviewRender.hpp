@@ -9,6 +9,8 @@
 namespace OverviewRender {
 
 void flushPass(PHLMONITOR monitor);
+// No-op when decoration:blur:enabled is off, so overview chrome (search, strip,
+// result cards) does not frost on a theme with no window blur.
 void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, int blurPasses = -1);
 
 // X92. Stable dual-kawase of the overview main FB for strip/result chrome.

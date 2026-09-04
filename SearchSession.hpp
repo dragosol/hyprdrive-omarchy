@@ -155,6 +155,9 @@ struct SSearchLayout {
 
     float fade  = 0.F; // the overview's open progress; every element rides it
     float scale = 1.F; // pill.width / its logical width: the card transform, MEASURED
+    // decoration:rounding / rounding_power, same source as workspace cards.
+    int   rounding      = 0;
+    float roundingPower = 2.F;
     bool  queried = false, emptyResult = false;
 
     CBox  pill, badge;

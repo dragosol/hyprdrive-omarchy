@@ -265,6 +265,12 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     if (box.empty())
         return;
 
+    // Same switch window frost and dock frost use. Search/strip chrome used to
+    // queue a live dual-kawase even when decoration:blur:enabled was off, so a
+    // squared Omarchy theme still got a frosted pill.
+    if (!ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
+        return;
+
     // X14: NOT a CRectPassElement. Upstream leaves a blurred rect's corners square
     // (see COverviewBlurPassElement::draw), so every frosted surface here -- strip
     // panel, workspace card, search pill -- leaked blur into its corner arcs.
