@@ -95,7 +95,9 @@ int           getGestureDistance();
 //   themeRounding()         decoration:rounding (0 is squared, and is valid)
 //   themeRoundingPower()    decoration:rounding_power
 //   dockIndicatorColor()    dock:indicator_color, else highlightColor()
-//   dockBackgroundColor()   dock:background_color, else misc:background_color
+//   dockBackgroundColor()   dock:background_color, else Omarchy terminal
+//                           background (colors.toml), else misc:background_color
+//                           opacity defaults to Omarchy terminal opacity (0.985)
 //   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
 //   dock blur/shadow -1     follow decoration:blur:* / decoration:shadow:*
 //   search / result cards   themeRounding, highlightColor, general:border_size,

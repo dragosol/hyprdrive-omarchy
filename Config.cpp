@@ -16,8 +16,13 @@
 #include <hyprland/src/managers/KeybindManager.hpp>
 
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
+#include <fstream>
+#include <optional>
 #include <regex>
+#include <string>
+#include <sys/stat.h>
 
 extern "C" {
 #include <lauxlib.h>
@@ -569,9 +574,13 @@ static void registerConfigValuesFor() {
                                   "hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations)", true));
 
     addKey(makeShared<CColorValue>(KEY("dock:background_color"),
-                                   "hyprgnomedock: pill hue (alpha 0 = follow misc:background_color; opacity is background_opacity)",
+                                   "hyprgnomedock: pill hue (alpha 0 = Omarchy terminal background, else misc:background_color; opacity is background_opacity)",
                                    (Hyprlang::INT)0));
-    addKey(makeShared<CFloatValue>(KEY("dock:background_opacity"), "hyprgnomedock: pill alpha (D2D background-opacity)", 0.19F,
+    // Omarchy terminals use the default-opacity window rule `0.985 0.96`.
+    // 0.19 was Dash-to-Dock glass over live frost; without window blur that
+    // left the pill almost invisible.
+    addKey(makeShared<CFloatValue>(KEY("dock:background_opacity"),
+                                   "hyprgnomedock: pill alpha (Omarchy terminal opacity when unset)", 0.985F,
                                    SFloatValueOptions{.min = 0.F, .max = 1.F}));
     // X29. The dock's frost is blur-my-shell's `[dash-to-dock]`, not the desktop's
     // window blur: sigma 30, brightness 0.60, live (static-blur false), and no
@@ -659,6 +668,52 @@ static CHyprColor colorFromArgb(uint32_t argb, float alphaOverride = -1.F) {
     return CHyprColor{sc<float>((argb >> 16) & 0xFF) / 255.F, sc<float>((argb >> 8) & 0xFF) / 255.F, sc<float>(argb & 0xFF) / 255.F, a};
 }
 
+// Omarchy writes the terminal background into colors.toml on `omarchy theme set`
+// and reloads Hyprland. Cached on mtime so a frame does not reopen the file.
+static std::optional<uint32_t> omarchyThemeBackgroundRgb() {
+    const char* const STATE = std::getenv("XDG_STATE_HOME");
+    const char* const HOME  = std::getenv("HOME");
+    const std::string PATH  = (STATE && *STATE) ? std::string{STATE} + "/omarchy/current/theme/colors.toml" :
+                              (HOME && *HOME)   ? std::string{HOME} + "/.local/state/omarchy/current/theme/colors.toml" :
+                                                  std::string{};
+    if (PATH.empty())
+        return {};
+
+    struct stat st {};
+    if (stat(PATH.c_str(), &st) != 0)
+        return {};
+
+    static std::string cachedPath;
+    static time_t      cachedMtime = 0;
+    static uint32_t    cachedRgb   = 0;
+    static bool        cachedOk    = false;
+
+    if (cachedOk && cachedPath == PATH && cachedMtime == st.st_mtime)
+        return cachedRgb;
+
+    cachedOk    = false;
+    cachedPath  = PATH;
+    cachedMtime = st.st_mtime;
+
+    std::ifstream in{PATH};
+    if (!in)
+        return {};
+
+    static const std::regex RE{R"(^\s*background\s*=\s*[\"']?#([0-9A-Fa-f]{6}))"};
+    std::string             line;
+    while (std::getline(in, line)) {
+        std::smatch match;
+        if (!std::regex_search(line, match, RE))
+            continue;
+
+        cachedRgb = 0xFF000000u | sc<uint32_t>(std::strtoul(match[1].str().c_str(), nullptr, 16));
+        cachedOk  = true;
+        return cachedRgb;
+    }
+
+    return {};
+}
+
 CHyprColor highlightColor() {
     if (const auto HIGHLIGHT = getValue<::Config::CGradientValueData>("plugin:hyprdrive:col_highlight");
         !HIGHLIGHT.m_colors.empty() && HIGHLIGHT.m_colors[0].a > 0.001F)
@@ -701,7 +756,13 @@ CHyprColor dockIndicatorColor() {
 CHyprColor dockBackgroundColor() {
     const auto     OPACITY = std::clamp(getValue<float>("plugin:hyprdrive:dock:background_opacity"), 0.F, 1.F);
     const uint32_t ARGB    = getValue<uint32_t>("plugin:hyprdrive:dock:background_color");
-    const uint32_t RGB     = ((ARGB >> 24) == 0) ? getValue<uint32_t>("misc:background_color") : ARGB;
+    uint32_t       RGB     = ARGB;
+    if ((ARGB >> 24) == 0) {
+        if (const auto THEME = omarchyThemeBackgroundRgb())
+            RGB = *THEME;
+        else
+            RGB = getValue<uint32_t>("misc:background_color");
+    }
     return colorFromArgb(RGB, OPACITY);
 }
 

@@ -9,7 +9,8 @@
 --   blur       decoration:blur:*                  -> dock/search frost; off when
 --              decoration:blur:enabled is false
 --   shadows    decoration:shadow:*                -> plugin shadow at -1
---   dock pill  misc:background_color              -> dockBackgroundColor()
+--   dock pill  Omarchy colors.toml background     -> dockBackgroundColor()
+--              at terminal opacity (0.985), else misc:background_color
 --   dock dots  the same accent                    -> dockIndicatorColor()
 --   dock radius dock:corner_radius (24)           -> dockCornerRadius()
 --               the pill and its highlights keep the original Dash-to-Dock

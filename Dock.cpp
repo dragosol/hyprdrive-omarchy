@@ -3462,6 +3462,17 @@ CBox panelTarget(PHLMONITOR monitor, const SLayout& layout, const std::vector<PH
     return CBox{std::round(X), std::round(sc<float>(layout.pill.y) - PANEL_GAP * SCALE - HEIGHT), WIDTH, HEIGHT};
 }
 
+// A 1px sliver on the dock's TOP edge, centred on the icon. The panel grows
+// from here instead of from the icon box itself, so the lerp never paints
+// live window thumbnails over the rest of the pill.
+CBox panelRiseOrigin(const SLayout& layout, const CBox& anchor) {
+    CBox origin = anchor;
+    origin.height = 1;
+    origin.y      = sc<float>(layout.pill.y) - 1;
+    origin.round();
+    return origin;
+}
+
 // Pass an empty class when nothing is hovered; like the tooltip, the panel
 // outlives the hover so that it can animate AWAY instead of blinking out.
 void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& wmClass, const std::string& desktopId,
@@ -3473,8 +3484,9 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         const CBox TARGET = panelTarget(monitor, layout, windows, anchor);
 
         if (!g_hover.panel) {
-            // Rises out of the icon, decelerating into place.
-            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .anchor = anchor, .target = TARGET, .from = anchor, .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
+            // Rises off the dock's top edge, decelerating into place. Growing
+            // from the icon box itself painted the live thumbnails over the pill.
+            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
         } else {
             g_hover.panel->leaving = false;
             g_hover.panel->wmClass = wmClass;
@@ -3501,12 +3513,12 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             g_hover.panel->leftAt  = now;
         }
 
-        // The grace expires: shrink back into the icon, accelerating.
+        // The grace expires: shrink back to the dock's top edge, accelerating.
         if (g_hover.panel->leaving && elapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
             const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
 
             g_hover.panel->from      = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
-            g_hover.panel->target    = g_hover.panel->anchor;
+            g_hover.panel->target    = panelRiseOrigin(layout, g_hover.panel->anchor);
             g_hover.panel->moveSince = now;
             g_hover.panel->moveMs    = PANEL_OUT_MS;
             g_hover.panel->decel     = false;
@@ -3534,8 +3546,13 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         return;
     }
 
-    const CBox  DRAWN = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
+    CBox        DRAWN = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
     const float SCALE = std::max(monitor->m_scale, 0.01F);
+    // Never let the growing plate (or its live window thumbnails) eat the pill.
+    // The rise origin sits on the dock's top edge; this is the belt.
+    if (const double LIMIT = layout.pill.y; DRAWN.y + DRAWN.height > LIMIT)
+        DRAWN.height = std::max(0.0, LIMIT - DRAWN.y);
+    DRAWN.round();
 
     if (DRAWN.width < 2.0 || DRAWN.height < 2.0) {
         forgetPanelGeometry();
