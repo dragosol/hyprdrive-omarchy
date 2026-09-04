@@ -8,6 +8,7 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
@@ -1311,6 +1312,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Config::registerGesture(::onRegisterOverviewGesture, ::overviewGestureKeyword);
     ScrollOverview::Config::registerConfig();
     registerRawKeyHooks();
+
+    // Reload can drop live window alphas until decorations are recomputed.
+    // Re-apply Omarchy's default-opacity (0.985 0.96) to already-mapped windows.
+    if (Desktop::globalWindowController())
+        Desktop::globalWindowController()->updateAllWindowsDecorations();
 
     // ONE RELEASE. Pinned dock apps are user data; they do not get to disappear
     // because the plugin changed its name. Both are one-shot and no-ops once

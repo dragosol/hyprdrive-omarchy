@@ -14,8 +14,6 @@
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/config/values/types/GradientValue.hpp>
 #include <hyprland/src/macros.hpp>
-#include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 
 #include <cstdint>
@@ -807,30 +805,14 @@ CHyprColor dockIndicatorColor() {
     return colorFromArgb(ARGB);
 }
 
-// Omarchy tags ordinary windows `default-opacity` and then applies
-// `opacity = "0.985 0.96"` (active / inactive). Stock is nearly solid; the
-// dock still has to follow it rather than invent a second glass. Super+Backspace
-// marks one window opaque — skip those so a toggle cannot pin the pill.
+// Omarchy's stock window rule is `opacity = "0.985 0.96"` on the
+// default-opacity tag (default/hypr/windows.lua). The dock follows that
+// number, not a live window's current alpha — sampling a window that had
+// lost the rule (or Super+Backspace opaque) copied 1.0 onto the pill.
 static float omarchyWindowOpacity() {
-    static constexpr float FALLBACK = 0.985F;
+    static constexpr float STOCK = 0.985F;
     const float ACTIVE = std::clamp(getValue<float>("decoration:active_opacity"), 0.F, 1.F);
-
-    if (!Desktop::windowState())
-        return FALLBACK;
-
-    for (const auto& window : Desktop::windowState()->windows()) {
-        if (!window || !window->m_isMapped || !window->m_ruleApplicator)
-            continue;
-        if (!window->m_ruleApplicator->m_tagKeeper.isTagged("default-opacity"))
-            continue;
-        if (window->m_ruleApplicator->opaque().valueOrDefault())
-            continue;
-
-        const auto RULE = window->m_ruleApplicator->alpha().valueOrDefault();
-        return std::clamp(RULE.applyAlpha(ACTIVE), 0.F, 1.F);
-    }
-
-    return FALLBACK;
+    return std::clamp(STOCK * ACTIVE, 0.F, 1.F);
 }
 
 CHyprColor dockBackgroundColor() {

@@ -15,3 +15,9 @@ o.window({ class = [[^(org\.gnome\.NautilusPreviewer)$]] }, {
     float = true,
     center = true,
 })
+
+-- Restate Omarchy's default-opacity (default/hypr/windows.lua). Plugin load
+-- reloads Hyprland config; this keeps terminals on the stock `0.985 0.96`
+-- instead of a dropped rule leaving them fully opaque. Apps that opt out
+-- (`-default-opacity`) are untouched.
+o.window({ tag = "default-opacity" }, { opacity = "0.985 0.96" })
