@@ -97,7 +97,9 @@ int           getGestureDistance();
 //   dockIndicatorColor()    dock:indicator_color, else highlightColor()
 //   dockBackgroundColor()   dock:background_color, else Omarchy terminal
 //                           background (colors.toml), else misc:background_color
-//                           opacity defaults to Omarchy terminal opacity (0.985)
+//                           opacity -1 = Omarchy default-opacity window rule
+//   themeFontFamily()       misc:font_family if pinned, else Omarchy
+//                           fontconfig monospace (omarchy font set)
 //   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
 //   dock blur/shadow -1     follow decoration:blur:* / decoration:shadow:*
 //   search / results / strip  same plate as the dock (dockBackgroundColor,
@@ -109,6 +111,7 @@ CHyprColor    highlightColor();
 CHyprColor    highlightForeground();
 int           themeRounding();
 float         themeRoundingPower();
+std::string   themeFontFamily();
 CHyprColor    dockIndicatorColor();
 CHyprColor    dockBackgroundColor();
 int           dockCornerRadius();

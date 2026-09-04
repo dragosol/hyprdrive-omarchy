@@ -13,7 +13,8 @@
 --              (blurMax 128), not window blur
 --   shadows    decoration:shadow:*                -> plugin shadow at -1
 --   dock pill  Omarchy colors.toml background     -> dockBackgroundColor()
---              at terminal opacity (0.985), else misc:background_color
+--              at Omarchy default-opacity, else misc:background_color
+--   type       Omarchy font (fontconfig monospace) -> themeFontFamily()
 --   dock dots  the same accent                    -> dockIndicatorColor()
 --   dock radius dock:corner_radius (24)           -> dockCornerRadius()
 --               the pill and its highlights keep the original Dash-to-Dock

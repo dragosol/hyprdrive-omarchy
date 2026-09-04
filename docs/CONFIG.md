@@ -100,7 +100,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `show_mounts_only_mounted` | bool | `true` |  | hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted) |
 | `isolate_locations` | bool | `true` |  | hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations) |
 | `background_color` | color | `0` |  | hyprgnomedock: pill hue (alpha 0 = Omarchy terminal background, else misc:background_color; opacity is background_opacity) |
-| `background_opacity` | float | `0.985` | 0 .. 1 | hyprgnomedock: pill alpha (Omarchy terminal opacity when unset) |
+| `background_opacity` | float | `-1` | -1 .. 1 | hyprgnomedock: pill alpha (-1 = Omarchy default-opacity) |
 | `blur_size` | int | `-1` | -1 .. 64 | hyprgnomedock: blur size (-1 = follow decoration:blur:size) |
 | `blur_passes` | int | `-1` | -1 .. 10 | hyprgnomedock: blur passes (-1 = follow decoration:blur:passes) |
 | `blur_brightness` | float | `-1` | -1 .. 2 | hyprgnomedock: blur brightness (blur-my-shell brightness; -1 = follow decoration:blur:brightness) |

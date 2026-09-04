@@ -13,6 +13,9 @@
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/config/values/types/GradientValue.hpp>
+#include <hyprland/src/macros.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 
 #include <cstdint>
@@ -576,12 +579,12 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CColorValue>(KEY("dock:background_color"),
                                    "hyprgnomedock: pill hue (alpha 0 = Omarchy terminal background, else misc:background_color; opacity is background_opacity)",
                                    (Hyprlang::INT)0));
-    // Omarchy terminals use the default-opacity window rule `0.985 0.96`.
-    // 0.19 was Dash-to-Dock glass over live frost; without window blur that
-    // left the pill almost invisible.
+    // -1 follows Omarchy's default-opacity window rule (stock `0.985 0.96`).
+    // A pin of 0.19 was Dash-to-Dock glass; without window blur that left
+    // the pill almost invisible.
     addKey(makeShared<CFloatValue>(KEY("dock:background_opacity"),
-                                   "hyprgnomedock: pill alpha (Omarchy terminal opacity when unset)", 0.985F,
-                                   SFloatValueOptions{.min = 0.F, .max = 1.F}));
+                                   "hyprgnomedock: pill alpha (-1 = Omarchy default-opacity)", -1.F,
+                                   SFloatValueOptions{.min = -1.F, .max = 1.F}));
     // X29. The dock's frost is blur-my-shell's `[dash-to-dock]`, not the desktop's
     // window blur: sigma 30, brightness 0.60, live (static-blur false), and no
     // grain. Hyprland's dual-kawase has no sigma at all, so size/passes are not
@@ -746,6 +749,57 @@ float themeRoundingPower() {
     return std::clamp(POWER > 0.F ? POWER : 2.F, 1.F, 10.F);
 }
 
+// Omarchy's `omarchy font set` writes ~/.config/fontconfig/fonts.conf so the
+// "monospace" alias resolves to the chosen family. Hyprland's unset default is
+// Sans; that is not Omarchy's font. A user-set misc:font_family still wins.
+std::string themeFontFamily() {
+    const auto PIN = getValue<std::string>("misc:font_family");
+    if (!PIN.empty() && PIN != STRVAL_EMPTY && PIN != "Sans")
+        return PIN;
+
+    const char* const CFG  = std::getenv("XDG_CONFIG_HOME");
+    const char* const HOME = std::getenv("HOME");
+    const std::string PATH = (CFG && *CFG)  ? std::string{CFG} + "/fontconfig/fonts.conf" :
+                             (HOME && *HOME) ? std::string{HOME} + "/.config/fontconfig/fonts.conf" :
+                                               std::string{};
+    if (PATH.empty())
+        return "monospace";
+
+    struct stat st {};
+    if (stat(PATH.c_str(), &st) != 0)
+        return "monospace";
+
+    static std::string cachedPath;
+    static time_t      cachedMtime = 0;
+    static std::string cachedFamily;
+
+    if (cachedPath == PATH && cachedMtime == st.st_mtime && !cachedFamily.empty())
+        return cachedFamily;
+
+    cachedPath  = PATH;
+    cachedMtime = st.st_mtime;
+    cachedFamily = "monospace";
+
+    std::ifstream in{PATH};
+    if (!in)
+        return cachedFamily;
+
+    static const std::regex RE{R"(<string>([^<]+)</string>)"};
+    std::string             line;
+    while (std::getline(in, line)) {
+        std::smatch match;
+        if (!std::regex_search(line, match, RE))
+            continue;
+        const auto NAME = match[1].str();
+        if (NAME.empty() || NAME == "monospace")
+            continue;
+        cachedFamily = NAME;
+        break;
+    }
+
+    return cachedFamily;
+}
+
 CHyprColor dockIndicatorColor() {
     const uint32_t ARGB = getValue<uint32_t>("plugin:hyprdrive:dock:indicator_color");
     if ((ARGB >> 24) == 0)
@@ -753,17 +807,48 @@ CHyprColor dockIndicatorColor() {
     return colorFromArgb(ARGB);
 }
 
+// Omarchy tags ordinary windows `default-opacity` and then applies
+// `opacity = "0.985 0.96"` (active / inactive). Stock is nearly solid; the
+// dock still has to follow it rather than invent a second glass. Super+Backspace
+// marks one window opaque — skip those so a toggle cannot pin the pill.
+static float omarchyWindowOpacity() {
+    static constexpr float FALLBACK = 0.985F;
+    const float ACTIVE = std::clamp(getValue<float>("decoration:active_opacity"), 0.F, 1.F);
+
+    if (!Desktop::windowState())
+        return FALLBACK;
+
+    for (const auto& window : Desktop::windowState()->windows()) {
+        if (!window || !window->m_isMapped || !window->m_ruleApplicator)
+            continue;
+        if (!window->m_ruleApplicator->m_tagKeeper.isTagged("default-opacity"))
+            continue;
+        if (window->m_ruleApplicator->opaque().valueOrDefault())
+            continue;
+
+        const auto RULE = window->m_ruleApplicator->alpha().valueOrDefault();
+        return std::clamp(RULE.applyAlpha(ACTIVE), 0.F, 1.F);
+    }
+
+    return FALLBACK;
+}
+
 CHyprColor dockBackgroundColor() {
-    const auto     OPACITY = std::clamp(getValue<float>("plugin:hyprdrive:dock:background_opacity"), 0.F, 1.F);
-    const uint32_t ARGB    = getValue<uint32_t>("plugin:hyprdrive:dock:background_color");
-    uint32_t       RGB     = ARGB;
+    float OPACITY = getValue<float>("plugin:hyprdrive:dock:background_opacity");
+    if (OPACITY < 0.F)
+        OPACITY = omarchyWindowOpacity();
+    else
+        OPACITY = std::clamp(OPACITY, 0.F, 1.F);
+
+    const uint32_t ARGB = getValue<uint32_t>("plugin:hyprdrive:dock:background_color");
+    uint32_t       RGB  = ARGB;
     if ((ARGB >> 24) == 0) {
         if (const auto THEME = omarchyThemeBackgroundRgb())
             RGB = *THEME;
         else
             RGB = getValue<uint32_t>("misc:background_color");
     }
-    return colorFromArgb(RGB, OPACITY);
+    return colorFromArgb(RGB).modifyA(OPACITY);
 }
 
 int dockCornerRadius() {

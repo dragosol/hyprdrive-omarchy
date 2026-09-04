@@ -225,8 +225,13 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
     if (str.empty())
         return nullptr;
 
+    // Empty family used to rasterise Hyprland's default Sans. Omarchy's font
+    // lives on the fontconfig monospace alias (`omarchy font set`); callers
+    // that do not pin a family inherit that.
+    const std::string FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+
     const STextKey KEY{.str        = str,
-                       .fontFamily = fontFamily,
+                       .fontFamily = FAMILY,
                        .color      = color.getAsHex(),
                        .fontSize   = fontSize,
                        .maxWidth   = maxWidth,
@@ -240,7 +245,7 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
         g_textCache.clear();
 
     const auto T0      = Prof::clock::now();
-    auto       texture = g_pHyprRenderer->renderText(str, color, fontSize, italic, fontFamily, maxWidth, weight);
+    auto       texture = g_pHyprRenderer->renderText(str, color, fontSize, italic, FAMILY, maxWidth, weight);
     Prof::txtNs += std::chrono::duration_cast<std::chrono::nanoseconds>(Prof::clock::now() - T0).count();
     ++Prof::txtCold;
     g_textCache.emplace(KEY, texture);
