@@ -29,17 +29,15 @@ DEPS := $(OBJS:.o=.d)
 VERSION_HEADER = .build/PluginVersion.hpp
 VERSION_SCRIPT = scripts/generate-plugin-version.sh
 
-.PHONY: all check clean FORCE
+.PHONY: all check clean install FORCE
 
 # An undefined symbol is a lazy-bind compositor kill (three same-day incidents
 # recorded in symcheck.sh's header), so the check IS part of the build. So is
 # keycheck: a config key read through the deprecated alias resolves, returns the
-# default forever and reports nothing -- see that script's header. And so is the
-# schema: it MIRRORS Config.cpp for the settings app, and an unrefreshed mirror
-# is an option the app cannot reach and nobody is told about. And so are the
-# host tests: they cost a second, they need no compositor, and a pure function
-# that is only ever checked by photographing a tile is checked three minutes and
-# one fixture at a time.
+# default forever and reports nothing -- see that script's header. And so are
+# the host tests: they cost a second, they need no compositor, and a pure
+# function that is only ever checked by photographing a tile is checked three
+# minutes and one fixture at a time.
 all: hyprdrive.so check
 
 hyprdrive.so: $(OBJS)
@@ -60,8 +58,13 @@ check: hyprdrive.so
 	bash scripts/symcheck.sh
 	bash scripts/keycheck.sh
 	bash scripts/gen_keys_table.sh --check
-	python3 scripts/gen_schema.py --check
 	bash scripts/host_tests.sh
+
+PREFIX ?= $(HOME)/.local
+
+install: hyprdrive.so
+	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
+	bash scripts/install-fragments.sh
 
 clean:
 	rm -rf .build hyprdrive.so

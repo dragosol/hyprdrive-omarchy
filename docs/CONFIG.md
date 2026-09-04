@@ -64,7 +64,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `enabled` | bool | `true` |  | hyprgnomedock: draw the dock |
 | `icon_size` | int | `54` | 8 .. 512 | hyprgnomedock: max icon size (dash-max-icon-size) |
 | `height_fraction` | float | `0.90` | 0.05 .. 1 | hyprgnomedock: max fraction of the monitor's long axis the dock may span |
-| `corner_radius` | int | `24` | >= 0 | hyprgnomedock: pill corner radius |
+| `corner_radius` | int | `-1` | >= -1 | hyprgnomedock: pill corner radius (-1 = follow decoration:rounding) |
 | `minimize_ms` | int | `400` | 0 .. 2000 | hyprgnomedock: minimize/restore flight duration, 0 to teleport (Y5: GNOME's MINIMIZE_WINDOW_ANIMATION_TIME) |
 | `autohide` | bool | `true` |  | hyprgnomedock: hide the dock until the bottom edge is pressed (D2D autohide) |
 | `pressure_threshold` | float | `100` | 0 .. 2000 | hyprgnomedock: px of motion pushed into the bottom edge before the dock reveals (D2D pressure-threshold) |
@@ -73,7 +73,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `hide_delay_ms` | int | `200` | 0 .. 5000 | hyprgnomedock: delay from the pointer leaving to the hide (D2D hide-delay) |
 | `autohide_ms` | int | `200` | 0 .. 2000 | hyprgnomedock: slide duration (D2D animation-time) |
 | `running_indicator` | bool | `true` |  | hyprgnomedock: dot under a running app's icon (D2D show-running) |
-| `indicator_color` | color | `0xFFFAFAFB` |  | hyprgnomedock: running-dot colour (shell .app-grid-running-dot) |
+| `indicator_color` | color | `0` |  | hyprgnomedock: running-dot colour (alpha 0 = follow general:col.active_border) |
 | `indicator_size` | int | `5` | 1 .. 64 | hyprgnomedock: running-dot diameter in px |
 | `notification_counter` | bool | `true` |  | hyprgnomedock: red count badge on the icon (D2D show-icons-notifications-counter) |
 | `emblems` | bool | `true` |  | hyprgnomedock: draw Unity LauncherEntry emblems at all (D2D show-icons-emblems) |
@@ -90,7 +90,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `shift_middle_click_action` | string | `"launch"` |  | hyprgnomedock: shift+middle click on an icon (D2D shift-middle-click-action) |
 | `isolate_workspaces` | bool | `false` |  | hyprgnomedock: the dock lists only windows on the current workspace (D2D isolate-workspaces) |
 | `workspace_agnostic_urgent` | bool | `true` |  | hyprgnomedock: an urgent window stays listed even when isolate_workspaces hides its workspace (D2D workspace-agnostic-urgent-windows) |
-| `hot_keys` | bool | `true` |  | hyprgnomedock: Super+number activates dock apps (D2D hot-keys) |
+| `hot_keys` | bool | `false` |  | hyprgnomedock: Super+number activates dock apps (D2D hot-keys) |
 | `hotkeys_overlay` | bool | `true` |  | hyprgnomedock: a hotkey press draws the slot numbers on the icons (D2D hotkeys-overlay) |
 | `hotkeys_show_dock` | bool | `true` |  | hyprgnomedock: a hotkey press reveals a hidden dock while the overlay is up (D2D hotkeys-show-dock) |
 | `shortcut_timeout` | float | `2` | 0 .. 10 | hyprgnomedock: seconds the number overlay stays up (D2D shortcut-timeout) |
@@ -99,7 +99,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `show_mounts_network` | bool | `true` |  | hyprgnomedock: include network shares among the mounts (D2D show-mounts-network) |
 | `show_mounts_only_mounted` | bool | `true` |  | hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted) |
 | `isolate_locations` | bool | `true` |  | hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations) |
-| `background_color` | color | `0xFFC0BFBC` |  | hyprgnomedock: pill hue (alpha comes from background_opacity) |
+| `background_color` | color | `0` |  | hyprgnomedock: pill hue (alpha 0 = follow misc:background_color; opacity is background_opacity) |
 | `background_opacity` | float | `0.19` | 0 .. 1 | hyprgnomedock: pill alpha (D2D background-opacity) |
 | `blur_size` | int | `-1` | -1 .. 64 | hyprgnomedock: blur size (-1 = follow decoration:blur:size) |
 | `blur_passes` | int | `-1` | -1 .. 10 | hyprgnomedock: blur passes (-1 = follow decoration:blur:passes) |

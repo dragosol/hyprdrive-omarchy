@@ -873,7 +873,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
                 border.grad1      = WINDOW->m_realBorderColor;
                 border.a          = alpha;
                 border.borderSize = BORDERSIZE;
-                border.round      = sc<int>(sc<float>(ScrollOverview::Config::getValue<int>("decoration:rounding")) * monitor->m_scale);
+                border.round      = sc<int>(sc<float>(ScrollOverview::Config::themeRounding()) * monitor->m_scale);
                 g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
             }
         }

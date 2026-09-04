@@ -15,6 +15,7 @@
 #include <hyprland/src/config/values/types/GradientValue.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 
+#include <cstdint>
 #include <deque>
 #include <regex>
 
@@ -442,8 +443,9 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CFloatValue>(KEY("dock:height_fraction"),
                                    "hyprgnomedock: max fraction of the monitor's long axis the dock may span", 0.90F,
                                    SFloatValueOptions{.min = 0.05F, .max = 1.F}));
-    addKey(makeShared<CIntValue>(KEY("dock:corner_radius"), "hyprgnomedock: pill corner radius", 24,
-                                 SIntValueOptions{.min = 0}));
+    addKey(makeShared<CIntValue>(KEY("dock:corner_radius"),
+                                 "hyprgnomedock: pill corner radius (-1 = follow decoration:rounding)", -1,
+                                 SIntValueOptions{.min = -1}));
     // 400ms, both directions: GNOME's MINIMIZE_WINDOW_ANIMATION_TIME, extracted
     // from the host's windowManager.js, and the number the SPEC settles on.
     //
@@ -489,8 +491,9 @@ static void registerConfigValuesFor() {
     // `running-indicator-style` DEFAULT, which draws no dot of its own and leaves
     // the shell's own showing -- `.app-grid-running-dot`, 5px, #fafafb.
     addKey(makeShared<CBoolValue>(KEY("dock:running_indicator"), "hyprgnomedock: dot under a running app's icon (D2D show-running)", true));
-    addKey(makeShared<CColorValue>(KEY("dock:indicator_color"), "hyprgnomedock: running-dot colour (shell .app-grid-running-dot)",
-                                   (Hyprlang::INT)0xFFFAFAFB));
+    addKey(makeShared<CColorValue>(KEY("dock:indicator_color"),
+                                   "hyprgnomedock: running-dot colour (alpha 0 = follow general:col.active_border)",
+                                   (Hyprlang::INT)0));
     addKey(makeShared<CIntValue>(KEY("dock:indicator_size"), "hyprgnomedock: running-dot diameter in px", 5,
                                  SIntValueOptions{.min = 1, .max = 64}));
     addKey(makeShared<CBoolValue>(KEY("dock:notification_counter"),
@@ -544,7 +547,7 @@ static void registerConfigValuesFor() {
 
     // X34. The accelerators are NOT keys -- Hyprland's own `bind` lines are the
     // store GNOME uses gsettings for. These four are the behaviour around them.
-    addKey(makeShared<CBoolValue>(KEY("dock:hot_keys"), "hyprgnomedock: Super+number activates dock apps (D2D hot-keys)", true));
+    addKey(makeShared<CBoolValue>(KEY("dock:hot_keys"), "hyprgnomedock: Super+number activates dock apps (D2D hot-keys)", false));
     addKey(makeShared<CBoolValue>(KEY("dock:hotkeys_overlay"),
                                   "hyprgnomedock: a hotkey press draws the slot numbers on the icons (D2D hotkeys-overlay)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:hotkeys_show_dock"),
@@ -566,8 +569,9 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CBoolValue>(KEY("dock:isolate_locations"),
                                   "hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations)", true));
 
-    addKey(makeShared<CColorValue>(KEY("dock:background_color"), "hyprgnomedock: pill hue (alpha comes from background_opacity)",
-                                   (Hyprlang::INT)0xFFC0BFBC));
+    addKey(makeShared<CColorValue>(KEY("dock:background_color"),
+                                   "hyprgnomedock: pill hue (alpha 0 = follow misc:background_color; opacity is background_opacity)",
+                                   (Hyprlang::INT)0));
     addKey(makeShared<CFloatValue>(KEY("dock:background_opacity"), "hyprgnomedock: pill alpha (D2D background-opacity)", 0.19F,
                                    SFloatValueOptions{.min = 0.F, .max = 1.F}));
     // X29. The dock's frost is blur-my-shell's `[dash-to-dock]`, not the desktop's
@@ -651,6 +655,11 @@ int getGestureDistance() {
     return std::max<int>(1, getValue<int>("plugin:hyprdrive:gesture_distance"));
 }
 
+static CHyprColor colorFromArgb(uint32_t argb, float alphaOverride = -1.F) {
+    const float a = alphaOverride >= 0.F ? alphaOverride : sc<float>((argb >> 24) & 0xFF) / 255.F;
+    return CHyprColor{sc<float>((argb >> 16) & 0xFF) / 255.F, sc<float>((argb >> 8) & 0xFF) / 255.F, sc<float>(argb & 0xFF) / 255.F, a};
+}
+
 CHyprColor highlightColor() {
     if (const auto HIGHLIGHT = getValue<::Config::CGradientValueData>("plugin:hyprdrive:col_highlight");
         !HIGHLIGHT.m_colors.empty() && HIGHLIGHT.m_colors[0].a > 0.001F)
@@ -672,6 +681,34 @@ CHyprColor highlightForeground() {
     // Not flat black: the accent's own dark end reads as the same material,
     // where black on a warm pink reads as a hole punched through it.
     return CHyprColor{BG.r * 0.18F, BG.g * 0.18F, BG.b * 0.18F, 1.F};
+}
+
+int themeRounding() {
+    return std::max(0, getValue<int>("decoration:rounding"));
+}
+
+float themeRoundingPower() {
+    const auto POWER = getValue<float>("decoration:rounding_power");
+    return std::clamp(POWER > 0.F ? POWER : 2.F, 1.F, 10.F);
+}
+
+CHyprColor dockIndicatorColor() {
+    const uint32_t ARGB = getValue<uint32_t>("plugin:hyprdrive:dock:indicator_color");
+    if ((ARGB >> 24) == 0)
+        return highlightColor();
+    return colorFromArgb(ARGB);
+}
+
+CHyprColor dockBackgroundColor() {
+    const auto     OPACITY = std::clamp(getValue<float>("plugin:hyprdrive:dock:background_opacity"), 0.F, 1.F);
+    const uint32_t ARGB    = getValue<uint32_t>("plugin:hyprdrive:dock:background_color");
+    const uint32_t RGB     = ((ARGB >> 24) == 0) ? getValue<uint32_t>("misc:background_color") : ARGB;
+    return colorFromArgb(RGB, OPACITY);
+}
+
+int dockCornerRadius() {
+    const int RADIUS = getValue<int>("plugin:hyprdrive:dock:corner_radius");
+    return RADIUS < 0 ? themeRounding() : std::max(0, RADIUS);
 }
 
 float getScale() {

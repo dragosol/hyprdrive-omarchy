@@ -9,8 +9,13 @@ if hyprdrive_loaded() then
         plugin = {
             hyprdrive = {
                 scale         = 0.82,
-                layout        = "horizontal",   -- matches the quickshell overview left/right scroll
+                layout        = "horizontal",
                 workspace_gap = 40,
+                dock = {
+                    -- Super+1..0 stay Omarchy workspace focus. The plugin still
+                    -- has the hotkey dispatcher; this fork does not steal the keys.
+                    hot_keys = false,
+                },
             },
         },
     })

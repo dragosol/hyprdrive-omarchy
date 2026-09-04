@@ -2,24 +2,44 @@
 -- fragment uses.
 --
 -- MACHINE-OWNED above the raw-snippet marker; USER-OWNED below it. Everything
--- above BEGIN is rewritten wholesale when this fragment is regenerated (by the
--- settings app, or by `scripts/fragment.py write`); everything between BEGIN
--- and END is carried across verbatim. Put hand edits THERE, not here.
---
--- Fragments load in filename order, so the numeric prefix is the load order.
--- This one is 00 because nothing else can run until the .so has registered its
--- config keys.
+-- above BEGIN is rewritten wholesale when this fragment is regenerated;
+-- everything between BEGIN and END is carried across verbatim. Put hand edits
+-- THERE, not here.
+
+local function file_exists(path)
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
+
+local home = os.getenv("HOME") or ""
+local so = os.getenv("HYPRDRIVE_SO")
+if not (so and file_exists(so)) then
+    for _, path in ipairs({
+        home .. "/.local/lib/hyprdrive/hyprdrive.so",
+        home .. "/Projects/hyprdrive-omarchy/hyprdrive.so",
+    }) do
+        if file_exists(path) then
+            so = path
+            break
+        end
+    end
+end
 
 -- hl.plugin.load is PARSE-TIME only: this line is what makes the plugin survive
 -- a reboot, and it is a no-op on `hyprctl reload`. Manual equivalent:
---   hyprctl plugin load ~/overview-cpp/hyprdrive.so
-hl.plugin.load(HOME .. "/overview-cpp/hyprdrive.so")
+--   hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
+if so then
+    hl.plugin.load(so)
+end
 
 -- hl.config runs at parse time and the plugin:hyprdrive:* keys do not exist
 -- until the .so has registered them, so an unguarded config block throws
 -- "unknown config key" for every property on boot and on reload.
 function hyprdrive_loaded()
-    -- entries are tables: {name, author, version, description}
     for _, v in ipairs(hl.get_loaded_plugins() or {}) do
         if (type(v) == "table" and v.name or v) == "hyprdrive" then
             return true

@@ -57,24 +57,16 @@ struct SOverviewCardRounding {
     float power    = 2.F;
 };
 
-// ponytail: the floor is a constant, not a config knob. Spec §13.1 fixes the
-// "desktops are never square" rule, so a knob could only be used to break it.
-inline constexpr int OVERVIEW_MIN_CARD_ROUNDING = 8;
-
 inline SOverviewCardRounding getOverviewCardRounding(PHLMONITOR monitor, float overviewScale) {
-    const auto THEMEROUNDING = ScrollOverview::Config::getValue<int>("decoration:rounding");
-    const auto THEMEPOWER    = ScrollOverview::Config::getValue<float>("decoration:rounding_power");
+    const auto THEMEROUNDING = ScrollOverview::Config::themeRounding();
+    const auto THEMEPOWER    = ScrollOverview::Config::themeRoundingPower();
 
     const float MONITORSCALE = monitor ? monitor->m_scale : 1.F;
 
-    // E8-c (user): the desktop curve the eye compares against is NOT
-    // decoration:rounding -- it is the rice fake screen rounding, the
-    // quickshell:screenCorners overlay. That layer is exactly radius-sized
-    // (23x23 corner pieces today), so read the radius off the live layer and
-    // the cards follow the rice by construction. Unscaled on purpose: the user
-    // asked for the SAME radius as the desktop curve, not a shrunk one.
-    // ponytail: exact namespace match; a differently-named corner overlay
-    // falls back to the theme path below.
+    // If a screen-corners overlay is present (illogical-impulse names it
+    // quickshell:screenCorners), cards match that radius. Omarchy has none, so
+    // this loop is a no-op and decoration:rounding wins -- including 0, which
+    // is Omarchy's squared default.
     if (monitor) {
         for (auto const& lsRef : monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY]) {
             const auto LS = lsRef.lock();
@@ -86,17 +78,17 @@ inline SOverviewCardRounding getOverviewCardRounding(PHLMONITOR monitor, float o
                 continue;
 
             return {
-                .rounding = std::max(1, sc<int>(std::round(DIM * MONITORSCALE))),
-                .power    = std::clamp(THEMEPOWER > 0.F ? THEMEPOWER : 2.F, 1.F, 10.F),
+                .rounding = std::max(0, sc<int>(std::round(DIM * MONITORSCALE))),
+                .power    = THEMEPOWER,
             };
         }
     }
 
-    const int LOGICAL = std::max(THEMEROUNDING, OVERVIEW_MIN_CARD_ROUNDING);
+    const int LOGICAL = std::max(THEMEROUNDING, 0);
 
     return {
-        .rounding = std::max(1, sc<int>(std::round(LOGICAL * MONITORSCALE * overviewScale))),
-        .power    = std::clamp(THEMEPOWER > 0.F ? THEMEPOWER : 2.F, 1.F, 10.F),
+        .rounding = std::max(0, sc<int>(std::round(LOGICAL * MONITORSCALE * overviewScale))),
+        .power    = THEMEPOWER,
     };
 }
 

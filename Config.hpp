@@ -85,31 +85,28 @@ void setValue(const std::string& name, const T& value) {
 }
 
 int           getGestureDistance();
-// X56 (user, 2026-08-06): "pick a different colour from the hyprland theme
-// colours, something brighter and easier to see".
-//
-// general:col.active_border is NOT the theme's accent on this rice -- matugen
-// fills it from `outline_variant`, which is a dark warm brown that sits within
-// a few units of the blurred wallpaper. X61 already had to draw the selection
-// ring OPAQUE and 4px thick just to make it visible against that.
-//
-// So the highlight reads its own key, `plugin:hyprdrive:col_highlight`,
-// which the matugen template fills from `primary` -- the same bright colour the
-// pinned-window rule already uses. It regenerates with every theme change, so
-// the highlights follow the theme without the plugin having to read quickshell's
-// palette behind Hyprland's back.
-//
-// Alpha 0 means UNSET: fall back to col.active_border, so a machine without the
-// template line behaves exactly as before.
-CHyprColor    highlightColor();
 
-// Type to put ON the highlight. The selection fill is OPAQUE (X2: a selection
-// that can be mistaken for a hover is not a selection), so whatever sits on it
-// is reading against the accent itself, not against the dark card. With a dark
-// accent that means white; with a bright one -- which is the whole point of
-// col_highlight -- white is the low-contrast case the user reported as the
-// highlight "overpowering the fonts".
+// Appearance is Hyprland's. Plugin keys that are unset (alpha 0 / -1) read the
+// compositor's live values, so a theme that reloads Hyprland retints every
+// surface. This is the one place those reads live; call sites do not parse a
+// second palette.
+//
+//   highlightColor()        accent: col_highlight, else general:col.active_border
+//   themeRounding()         decoration:rounding (0 is squared, and is valid)
+//   themeRoundingPower()    decoration:rounding_power
+//   dockIndicatorColor()    dock:indicator_color, else highlightColor()
+//   dockBackgroundColor()   dock:background_color, else misc:background_color
+//   dockCornerRadius()      dock:corner_radius, else themeRounding()
+//   dock blur/shadow -1     follow decoration:blur:* / decoration:shadow:*
+//
+// Pin a plugin key only to stop inheriting.
+CHyprColor    highlightColor();
 CHyprColor    highlightForeground();
+int           themeRounding();
+float         themeRoundingPower();
+CHyprColor    dockIndicatorColor();
+CHyprColor    dockBackgroundColor();
+int           dockCornerRadius();
 
 float         getScale();
 float         getOpenSpeed();

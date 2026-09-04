@@ -255,9 +255,6 @@ constexpr float WIGGLE_DEGREES   = 15.F;
 constexpr const char* KEY_ENABLED    = "plugin:hyprdrive:dock:enabled";
 constexpr const char* KEY_ICON_SIZE  = "plugin:hyprdrive:dock:icon_size";
 constexpr const char* KEY_FRACTION   = "plugin:hyprdrive:dock:height_fraction";
-constexpr const char* KEY_RADIUS     = "plugin:hyprdrive:dock:corner_radius";
-constexpr const char* KEY_BG_COLOR   = "plugin:hyprdrive:dock:background_color";
-constexpr const char* KEY_BG_OPACITY = "plugin:hyprdrive:dock:background_opacity";
 constexpr const char* KEY_BLUR_SIZE   = "plugin:hyprdrive:dock:blur_size";
 constexpr const char* KEY_BLUR_PASSES = "plugin:hyprdrive:dock:blur_passes";
 constexpr const char* KEY_BLUR_BRIGHT = "plugin:hyprdrive:dock:blur_brightness";
@@ -286,7 +283,6 @@ constexpr const char* KEY_AUTOHIDE_MS  = "plugin:hyprdrive:dock:autohide_ms";
 // the reference, which means "take the theme's numbers" -- so the theme's
 // numbers are the defaults and the key is where a different theme would land.
 constexpr const char* KEY_SHOW_RUNNING  = "plugin:hyprdrive:dock:running_indicator";
-constexpr const char* KEY_DOT_COLOR     = "plugin:hyprdrive:dock:indicator_color";
 constexpr const char* KEY_DOT_SIZE      = "plugin:hyprdrive:dock:indicator_size";
 constexpr const char* KEY_BADGE         = "plugin:hyprdrive:dock:notification_counter";
 constexpr const char* KEY_EMBLEMS       = "plugin:hyprdrive:dock:emblems";
@@ -800,12 +796,7 @@ float previewAspect(const PHLWINDOW& window) {
 }
 
 CHyprColor background() {
-    // D2D `transparency-mode` FIXED with `custom-background-color`: the hue and
-    // the alpha are two independent settings, so the key's own alpha is ignored.
-    const auto     OPACITY = std::clamp(Config::getValue<float>(KEY_BG_OPACITY), 0.F, 1.F);
-    const uint32_t ARGB    = Config::getValue<uint32_t>(KEY_BG_COLOR);
-
-    return CHyprColor{sc<float>((ARGB >> 16) & 0xFF) / 255.F, sc<float>((ARGB >> 8) & 0xFF) / 255.F, sc<float>(ARGB & 0xFF) / 255.F, OPACITY};
+    return ScrollOverview::Config::dockBackgroundColor();
 }
 
 // X25. A minimized window lives on a special workspace nobody shows, so every
@@ -1122,7 +1113,7 @@ SLayout baseLayout(PHLMONITOR monitor) {
 
     out.pill = CBox{XL * SCALE, YL * SCALE, M.width * SCALE, M.height * SCALE};
     out.pill.round();
-    out.rounding = std::max(0, sc<int>(std::round(sc<float>(Config::getValue<int>(KEY_RADIUS)) * SCALE)));
+    out.rounding = std::max(0, sc<int>(std::round(sc<float>(ScrollOverview::Config::dockCornerRadius()) * SCALE)));
 
     float cursor = XL + CONTAINER_PAD_X + ITEM_MARGIN_X;
     out.items = std::move(items);
@@ -1414,7 +1405,7 @@ void renderRunningDot(PHLMONITOR monitor, const SLayout& layout, const SItem& it
     const float CX    = sc<float>(item.iconBox.x) + sc<float>(item.iconBox.width) / 2.F;
     const float TOP   = sc<float>(item.iconBox.y) + sc<float>(item.iconBox.height) + DOT_MARGIN_B * SCALE;
 
-    const uint32_t ARGB = Config::getValue<uint32_t>(KEY_DOT_COLOR);
+    const CHyprColor DOTCOL = ScrollOverview::Config::dockIndicatorColor();
 
     // Z12 (user, 2026-08-07, overrides X31's measured single dot): one dot per
     // WINDOW. Row one keeps today's exact position and grows outward from the
@@ -1446,7 +1437,7 @@ void renderRunningDot(PHLMONITOR monitor, const SLayout& layout, const SItem& it
         for (size_t i = 0; i < n; ++i) {
             CRectPassElement::SRectData dot;
             dot.box   = CBox{std::round(CX - SPAN / 2.F + sc<float>(i) * (SIZE + GAP)), std::round(top), std::round(SIZE), std::round(SIZE)};
-            dot.color = CHyprColor{sc<float>((ARGB >> 16) & 0xFF) / 255.F, sc<float>((ARGB >> 8) & 0xFF) / 255.F, sc<float>(ARGB & 0xFF) / 255.F, sc<float>((ARGB >> 24) & 0xFF) / 255.F};
+            dot.color = DOTCOL;
             // `border-radius: 5px` on a 5px box: a circle. Truncated, not
             // rounded -- a radius even slightly OVER half the box collapses the
             // circle into a diamond (seen on screen 2026-08-03).
