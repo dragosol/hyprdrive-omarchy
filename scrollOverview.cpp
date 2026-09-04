@@ -5193,8 +5193,17 @@ void CScrollOverview::close() {
     // Set at the top, before the dock teardown below, so it doubles as the
     // guard against a second close() -- setClosing(true) further down re-affirms
     // it (idempotent) alongside the state teardown it also owns.
-    if (closing)
+    if (closing) {
+        // A close-swipe used to setClosing(true) before calling close(), so
+        // this guard fired and left an invisible overview owning the monitor.
+        // If we are marked closing but nothing is actually animating out,
+        // finish the teardown so Super / a second swipe can always get out.
+        m_isSwiping    = false;
+        m_swipeClosing = false;
+        if (!scale || !scale->isBeingAnimated())
+            removeOverview(this);
         return;
+    }
     closing = true;
 
     // X28. The pill only exists while the overview does, so its menu must go
@@ -5943,13 +5952,8 @@ bool CScrollOverview::dispatchSubmapMouseClick(uint32_t button) {
 }
 
 void CScrollOverview::resetSwipe() {
-    if (closing) {
-        close();
-        return;
-    }
-
-    (*scale)    = ScrollOverview::Config::getScale();
-    m_isSwiping = false;
+    m_isSwiping    = false;
+    m_swipeClosing = false;
 }
 
 void CScrollOverview::onSwipeUpdate(double delta) {
@@ -5957,17 +5961,32 @@ void CScrollOverview::onSwipeUpdate(double delta) {
 
     m_isSwiping = true;
 
-    const float PERC = closing ? 1.0 - std::clamp(delta / sc<double>(DISTANCE), 0.0, 1.0) : std::clamp(delta / sc<double>(DISTANCE), 0.0, 1.0);
+    const bool  DISMISS = m_swipeClosing || closing;
+    const float PERC    = DISMISS ? 1.0 - std::clamp(delta / sc<double>(DISTANCE), 0.0, 1.0) : std::clamp(delta / sc<double>(DISTANCE), 0.0, 1.0);
 
     scale->setValueAndWarp(hyprlerp(1.F, ScrollOverview::Config::getScale(), PERC));
 }
 
 void CScrollOverview::onSwipeEnd() {
-    if (closing) {
-        close();
+    const bool DISMISS = m_swipeClosing;
+    m_isSwiping        = false;
+    m_swipeClosing     = false;
+
+    if (!DISMISS) {
+        *scale = ScrollOverview::Config::getScale();
         return;
     }
 
-    (*scale)    = ScrollOverview::Config::getScale();
-    m_isSwiping = false;
+    // How far the fingers drove toward the desktop. Scale 1 is closed, the
+    // configured overview scale is open. Commit the close if they got past
+    // a third of the way; otherwise snap back so a graze cannot trap them.
+    const float OPEN       = ScrollOverview::Config::getScale();
+    const float RANGE      = std::max(0.01F, std::abs(1.F - OPEN));
+    const float CLOSEDNESS = std::clamp(std::abs(scale->value() - OPEN) / RANGE, 0.F, 1.F);
+    if (CLOSEDNESS >= 0.35F)
+        close();
+    else {
+        useAnimDirection(true);
+        *scale = OPEN;
+    }
 }

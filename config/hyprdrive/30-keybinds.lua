@@ -28,6 +28,7 @@ if hyprdrive_loaded() then
 
     -- 3-finger swipe up opens the overview and follows the fingers (GNOME /
     -- macOS Mission Control). 3-finger horizontal stays Omarchy workspace
-    -- switching. Swipe up again while it is open starts the close.
+    -- switching. Swipe up again while it is open closes it. Super tap still
+    -- toggles, including if a swipe left the overview stuck.
     hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
 end

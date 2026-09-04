@@ -272,7 +272,18 @@ static bool openOverview(PHLMONITOR monitor) {
         // Already open is a no-op, but still CLOSING is not: reversing the
         // animation is what makes a second tap of SUPER feel immediate instead
         // of landing on an overview that is on its way out and being dropped.
-        EXISTING->reopen();
+        //
+        // Exception: a close that never started its animation (the swipe
+        // gesture used to mark `closing` without tearing down) is already
+        // gone on screen. Reopening it would resurrect a ghost. Finish it.
+        if (EXISTING->isClosing()) {
+            EXISTING->close();
+            if (!scrollOverviewForMonitor(monitor))
+                return true;
+            if (const auto STILL = scrollOverviewForMonitor(monitor))
+                STILL->reopen();
+            return true;
+        }
         return true;
     }
 

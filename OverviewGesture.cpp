@@ -19,21 +19,28 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
 
     auto       overview = scrollOverviewForMonitor(MONITOR);
 
+    if (overview && overview->isClosing()) {
+        // Mid-close, or the zombie this gesture used to leave behind (marked
+        // closing, never destroyed). A second swipe must be able to get out.
+        dropScrollOverviewsForMonitor(MONITOR);
+        m_overview.reset();
+        return;
+    }
+
     if (!overview) {
         if (!ensureScrollOverviewHooks())
             return;
 
         overview = makeShared<CScrollOverview>(MONITOR->m_activeWorkspace, true, MONITOR);
         registerScrollOverview(overview);
+        overview->m_swipeClosing = false;
     } else {
         overview->selectHoveredWorkspace();
-        overview->setClosing(true);
+        overview->m_swipeClosing = true;
     }
 
-    // No "current overview" pointer to update: the gesture always begins on the
-    // FOCUSED monitor, which is activeScrollOverview()'s second tier, so the
-    // write this used to make could never change an answer.
-    m_overview = overview;
+    overview->m_isSwiping = true;
+    m_overview            = overview;
 }
 
 void COverviewGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
@@ -58,9 +65,5 @@ void COverviewGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
     const auto OVERVIEW = m_overview.lock();
     if (OVERVIEW)
         OVERVIEW->onSwipeEnd();
-
-    // Re-check the same instance since onSwipeEnd can finish its close.
-    if (std::ranges::find(scrollOverviews(), OVERVIEW) != scrollOverviews().end())
-        OVERVIEW->resetSwipe();
     m_overview.reset();
 }

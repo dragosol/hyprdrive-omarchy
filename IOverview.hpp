@@ -120,7 +120,14 @@ class IOverview : public IOverviewFramePolicy, public IOverviewGeometry {
     virtual bool selectAndClose(const PHLWINDOW& window) = 0;
 
     PHLMONITORREF pMonitor;
-    bool          m_isSwiping = false;
+    bool          m_isSwiping    = false;
+    // This swipe is dismissing an already-open overview. Distinct from
+    // `closing`: that flag is the lifecycle (close() has started and will
+    // destroy us). The gesture used to set `closing` at swipe-begin so the
+    // follow math ran in reverse, and then onSwipeEnd's close() saw the flag
+    // and returned without tearing anything down -- overview invisible,
+    // still owning the monitor, clicks and menus dead.
+    bool          m_swipeClosing = false;
 };
 
 const std::vector<SP<IOverview>>& scrollOverviews();
