@@ -3183,6 +3183,25 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
             DMG);
     } else if (WORKSPACEALPHA >= 0.999F)
         renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, WORKSPACEBOX, renderScale, now);
+
+    // Outline the floating card so it separates from the dimmed canvas behind
+    // it. Same accent the tile ring and strip use; same weight as Hyprland
+    // window borders, floored at 1 so a theme with border_size 0 still frames
+    // the card.
+    if (WORKSPACEALPHA > 0.001F) {
+        const auto CARDROUND   = getOverviewCardRounding(monitor, ScrollOverview::Config::getScale());
+        const int  BORDERSIZE  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+        const auto ACCENT      = ScrollOverview::Config::highlightColor();
+
+        CBorderPassElement::SBorderData border;
+        border.box           = WORKSPACEBOX.copy().round();
+        border.grad1.reset(ACCENT.modifyA(1.F));
+        border.a             = WORKSPACEALPHA;
+        border.borderSize    = BORDERSIZE;
+        border.round         = CARDROUND.rounding;
+        border.roundingPower = CARDROUND.power;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+    }
 }
 
 void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now) {
@@ -5648,6 +5667,22 @@ void CScrollOverview::render() {
     // render at this stage and not earlier (empty-FB bug, take two).
     OverviewRender::flushPass(MONITOR);
     updateCardWallpaperFB(MONITOR, NOW);
+
+    // The wallpaper canvas is still the monitor fill; the cards float on top
+    // of it. Dim that pulled-back canvas so it reads as behind the cards, not
+    // as more of the same wallpaper. 80% black, faded with open progress so a
+    // swipe does not slam it on.
+    {
+        const float OPEN  = ScrollOverview::Config::getScale();
+        const float RANGE = std::max(0.01F, std::abs(1.F - OPEN));
+        const float DIM   = 0.80F * std::clamp(std::abs(SCALE - 1.F) / RANGE, 0.F, 1.F);
+        if (DIM > 0.001F) {
+            CRectPassElement::SRectData scrim;
+            scrim.box   = CBox{0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y};
+            scrim.color = CHyprColor{0.F, 0.F, 0.F, DIM};
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(scrim));
+        }
+    }
 
     {
         Prof::Timer PROFBG{Prof::bgNs, Prof::bgCalls};
