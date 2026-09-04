@@ -4042,35 +4042,23 @@ void render(PHLMONITOR monitor) {
     // The menu says the app's name louder than the tooltip does, and the two
     // plates would otherwise sit on top of each other.
     //
-    // X47 makes the PANEL a third plate in the same place, so it suppresses the
-    // name the same way -- a name plate under a wall of previews of that very
-    // app is the stack the menu branch already refuses to draw.
-    // ponytail: the panel therefore shows no text at all. Windows puts each
-    // window's TITLE over its thumbnail; add that (labelPill per cell, it is
-    // already shared with the overview caption) when per-window identification
-    // matters, e.g. once G15's window rows land.
-    //
-    // The empty-name call is what drives the fade-OUT: without it the plate would
-    // simply stop being drawn, which is the pop X57 is removing.
-    // Y2 retires that ponytail note: per-window identification matters now. A
-    // preview under the pointer names ITS OWN window -- the full title, not the
-    // app -- on the same plate, with the same fade, one gap above the panel.
-    // Tested FIRST because while the panel is up the pointer is in it rather
-    // than on an icon, and the title is the more specific answer of the two.
+    // A preview under the pointer names ITS OWN window -- the full title, not
+    // the app -- one gap above the panel. The icon still names the APP: with
+    // the panel up that plate sits above the previews, centred on the icon,
+    // so the wall of thumbnails does not bury "what is this". Empty-name is
+    // the fade-OUT: without it the plate would pop off instead of leaving.
     const auto CELL = panelUp() ? panelCellAt(MOUSE) : std::optional<std::pair<CBox, PHLWINDOW>>{};
 
     if (g_menu)
         renderTooltip(monitor, LAYOUT, CBox{}, "");
     else if (CELL && !CELL->second->m_title.empty())
         renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y));
-    else if (!panelUp()) {
-        if (HASHOVER)
-            renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM));
-        else if (HOVERAPPS)
-            renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications");
-        else
-            renderTooltip(monitor, LAYOUT, CBox{}, "");
-    } else
+    else if (HASHOVER) {
+        const float ABOVE = (panelUp() && g_hover.drawn.height >= 1) ? sc<float>(g_hover.drawn.y) : 0.F;
+        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM), ABOVE);
+    } else if (HOVERAPPS)
+        renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications");
+    else
         renderTooltip(monitor, LAYOUT, CBox{}, "");
 
     // X46/Y5/Y4/Z16. The flight loop lives in FlightController.cpp now -- WHOLE,
