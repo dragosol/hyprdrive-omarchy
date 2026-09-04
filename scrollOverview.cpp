@@ -262,8 +262,11 @@ void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::stea
         auto restoreDamage = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE] { g_pHyprRenderer->m_renderData.damage = SAVEDDAMAGE; });
 
         g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
-        // BACKGROUND is empty on this rice (the wallpaper is quickshell:background
-        // on BOTTOM), but walk both for generality.
+        // Same sources as renderGlobalWallpaper: hyprpaper via renderBackground,
+        // then BACKGROUND/BOTTOM layers (Omarchy's wallpaper is often a BOTTOM
+        // layer). The card fill must be the undimmed wallpaper, or the dimmed
+        // canvas shows through the floating workspace.
+        g_pHyprRenderer->renderBackground(monitor);
         for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
             for (auto const& ls : monitor->m_layerSurfaceLayers[LAYER]) {
                 if (!Desktop::View::validMapped(ls.lock()))
@@ -3166,7 +3169,7 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
     // FB into the card box with shader round/roundingPower. The corners are
     // genuinely clipped and antialiased against whatever is behind them --
     // shadow included -- which no painted-on mask could match exactly.
-    if (WORKSPACEALPHA >= 0.999F && frost.cardWallpaperFB && frost.cardWallpaperFB->isAllocated() && frost.cardWallpaperFB->getTexture()) {
+    if (WORKSPACEALPHA > 0.001F && frost.cardWallpaperFB && frost.cardWallpaperFB->isAllocated() && frost.cardWallpaperFB->getTexture()) {
         const auto    CARDROUND = getOverviewCardRounding(monitor, ScrollOverview::Config::getScale());
         const auto    BOXPX     = WORKSPACEBOX.copy().round();
         const CRegion DMG{BOXPX};
@@ -3175,14 +3178,14 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
             CTexPassElement::SRenderData{
                 .tex           = frost.cardWallpaperFB->getTexture(),
                 .box           = BOXPX,
-                .a             = 1.F,
+                .a             = WORKSPACEALPHA,
                 .damage        = DMG,
                 .round         = CARDROUND.rounding,
                 .roundingPower = CARDROUND.power,
                 .flipEndFrame  = true,
             },
             DMG);
-    } else if (WORKSPACEALPHA >= 0.999F)
+    } else if (WORKSPACEALPHA > 0.001F)
         renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, WORKSPACEBOX, renderScale, now);
 
     // Outline the floating card so it separates from the dimmed canvas behind
@@ -5674,7 +5677,9 @@ void CScrollOverview::render() {
     // The wallpaper canvas is still the monitor fill; the cards float on top
     // of it. Dim that pulled-back canvas so it reads as behind the cards, not
     // as more of the same wallpaper. 80% black, faded with open progress so a
-    // swipe does not slam it on.
+    // swipe does not slam it on. Flush BEFORE the cards so the scrim cannot
+    // land on top of the card fill (draw() of the card wallpaper and this
+    // rect used to share a pass, and the dim covered the cards).
     {
         const float OPEN  = ScrollOverview::Config::getScale();
         const float RANGE = std::max(0.01F, std::abs(1.F - OPEN));
@@ -5684,6 +5689,7 @@ void CScrollOverview::render() {
             scrim.box   = CBox{0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y};
             scrim.color = CHyprColor{0.F, 0.F, 0.F, DIM};
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(scrim));
+            OverviewRender::flushPass(MONITOR);
         }
     }
 
