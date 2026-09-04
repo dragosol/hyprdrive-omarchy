@@ -4,6 +4,7 @@
 #include "globals.hpp"
 
 #include "AppSearch.hpp"
+#include "Dock.hpp"
 #include "OverviewRender.hpp"
 #include "WindowPill.hpp"
 
@@ -209,14 +210,30 @@ void drawCaption(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBo
     // sliding up the screen if a hover lands mid-open.
     const float ICONSIDE = std::clamp(shortSide(tileBox) * ICON_FRACTION, ICON_MIN * scale, ICON_MAX * scale);
     const float BOTTOM   = sc<float>(tileBox.y + tileBox.h) + ICONSIDE / 2.F + CAPTION_GAP * scale;
-    OverviewRender::labelPill(monitor, window->m_title, sc<float>(tileBox.x + tileBox.w / 2.0), BOTTOM + CAPTION_H * scale, A, scale);
+    float       plateBottom = BOTTOM + CAPTION_H * scale;
+    // Keep the title readable without covering dock icons. The plate is still
+    // drawn after the dock (z-order); this only moves it up off the pill.
+    const auto DOCK = Dock::layout(monitor).pill;
+    if (!DOCK.empty() && plateBottom > sc<float>(DOCK.y))
+        plateBottom = sc<float>(DOCK.y) - CAPTION_GAP * scale;
+    OverviewRender::labelPill(monitor, window->m_title, sc<float>(tileBox.x + tileBox.w / 2.0), plateBottom, A, scale);
 }
 
 }
 
-void setHovered(const PHLWINDOW& window) {
-    if (g_hovered.lock() == window)
+void setHovered(const PHLWINDOW& window, bool lingerOnLeave) {
+    if (g_hovered.lock() == window) {
+        // Already not on a tile, but a linger may still be counting down.
+        // The dock asks for this so a title sitting over the pill drops now.
+        if (!window && !lingerOnLeave) {
+            if (const auto LINGERING = g_lingering.lock()) {
+                if (auto* const LINGER = stateFor(LINGERING, false))
+                    LINGER->hover.hurry();
+            }
+            g_lingering.reset();
+        }
         return;
+    }
 
     // Arming a new tile ends any linger immediately, so only one tile is ever
     // grown. Re-arming the LINGERING tile is not a cancel -- that is the cursor
@@ -231,11 +248,15 @@ void setHovered(const PHLWINDOW& window) {
 
     if (const auto PREVWINDOW = g_hovered.lock()) {
         if (auto* const PREV = stateFor(PREVWINDOW, false)) {
-            // Leaving for empty space holds the blow-up; leaving for another
-            // tile does not.
-            PREV->hover.retarget(0.F, HOVER_OUT_MS, window ? 0.F : HOVER_LINGER_MS);
-            if (!window)
+            // Leaving for empty space holds the blow-up so the close button
+            // stays reachable; leaving for another tile, or for the dock, does
+            // not.
+            const bool LINGER = !window && lingerOnLeave;
+            PREV->hover.retarget(0.F, HOVER_OUT_MS, LINGER ? HOVER_LINGER_MS : 0.F);
+            if (LINGER)
                 g_lingering = PREVWINDOW;
+            else
+                PREV->hover.hurry();
         }
     }
 

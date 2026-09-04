@@ -873,6 +873,14 @@ void CScrollOverview::updateTileHover() {
         return;
     }
 
+    // The linger is for reaching the close button through empty space. The
+    // dock is a different surface: keep the hold and the title sits on the
+    // pill, so drop it the moment the pointer is on the dock.
+    if (ScrollOverview::Dock::uiContains(pMonitor.lock(), lastMousePosLocal)) {
+        TileChrome::setHovered(PHLWINDOW{}, false);
+        return;
+    }
+
     // X62. A result under the cursor takes the selection, so pointing at a row
     // and arrowing onto it land on the SAME highlight -- there is only one
     // selection and both devices move it. It also swallows the tile hover: the

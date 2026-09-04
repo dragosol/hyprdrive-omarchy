@@ -11,7 +11,10 @@
 namespace ScrollOverview::TileChrome {
 
 // The cursor moved. Pass nullptr when it is over no tile.
-void setHovered(const PHLWINDOW& window);
+// `lingerOnLeave` is the post-hover hold that keeps the close button
+// reachable in empty space. False when the pointer has gone to the dock:
+// that hold would keep the title over the pill.
+void setHovered(const PHLWINDOW& window, bool lingerOnLeave = true);
 
 // The primary button went down on / came up from the hovered tile. Drives X7's
 // "shrink just a little bit as pressed feedback".

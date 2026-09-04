@@ -2467,6 +2467,12 @@ bool pillContains(PHLMONITOR monitor, const Vector2D& point) {
     return PILL.width >= 1 && PILL.height >= 1 && PILL.containsPoint(point);
 }
 
+bool uiContains(PHLMONITOR monitor, const Vector2D& point) {
+    // The hover-preview plate is only reached after the pointer is already
+    // on the pill, so the pill is the linger-cancel surface.
+    return pillContains(monitor, point);
+}
+
 bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
     if (!pillContains(monitor, point))
         return false;

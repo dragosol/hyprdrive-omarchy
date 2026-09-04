@@ -77,6 +77,9 @@ void    render(PHLMONITOR monitor);
 // handling asks this before it asks any workspace: the pill floats over the main
 // area, so the card underneath would otherwise claim the drop.
 bool    pillContains(PHLMONITOR monitor, const Vector2D& point);
+// Pill or the hover-preview plate above it. Overview tile linger asks this so
+// a window title over the dock drops as soon as the pointer is on the dock.
+bool    uiContains(PHLMONITOR monitor, const Vector2D& point);
 
 // X24. A click inside the pill, in the same monitor-local RENDER px as
 // pillContains. An icon min/maxes the app's window on THIS desktop: restore
