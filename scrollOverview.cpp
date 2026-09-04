@@ -3405,7 +3405,7 @@ CBox CScrollOverview::stripCellLogicalBox(size_t workspaceIdx) const {
     if (BAND <= 0.F)
         return {};
 
-    const float  PAD    = BAND * 0.18F;
+    const float  PAD    = BAND * OVERVIEW_STRIP_BAND_PAD_FRAC;
     const float  GAP    = sc<float>(ScrollOverview::Config::getStripGap());
     const float  ASPECT = MONITOR->m_size.y > 1 ? sc<float>(MONITOR->m_size.x) / sc<float>(MONITOR->m_size.y) : 1.6F;
     const size_t COUNT  = images.size();
@@ -3544,7 +3544,7 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
             // already settled that the theme's absolute radii are used unshrunk;
             // a padding derived from them has to follow the same rule or the
             // panel's curve stops being concentric with the corner cells.
-            constexpr float PANELPAD = 10.F;
+            constexpr float PANELPAD = OVERVIEW_STRIP_PANELPADL;
 
             const CBox PANELLOGICAL = {
                 FIRSTLOGICAL.x - PANELPAD,

@@ -208,7 +208,12 @@ namespace OvInternal {
         // band, only the direction changed. X48's real constraint survives in
         // overviewResultsBandTarget's budget: the band may never grow so tall that
         // the strip and the tiles are pushed off the screen.
-        if (const float TOPCHROME = overviewStripLogicalHeight(monitor) + overviewSearchLogicalHeight(monitor) + overviewResultsLogicalHeight(monitor); TOPCHROME > 0.F) {
+        //
+        // The strip's reserved band is taller than the drawn panel. Inset by the
+        // panel's foot plus the same gap that sits between the search pill and
+        // the strip, not by the unused bottom of the band plus another
+        // mission-control gap -- that pair was the hole between strip and windows.
+        if (const float TOPCHROME = overviewStripStackL(monitor) + overviewSearchLogicalHeight(monitor) + overviewResultsLogicalHeight(monitor); TOPCHROME > 0.F) {
             usable.y += TOPCHROME;
             usable.h -= TOPCHROME;
             if (usable.h <= 1)
@@ -218,9 +223,8 @@ namespace OvInternal {
         const float  GAP   = sc<float>(ScrollOverview::Config::getMissionControlGap());
 
         usable.x += GAP;
-        usable.y += GAP;
         usable.w -= 2.0 * GAP;
-        usable.h -= 2.0 * GAP;
+        usable.h -= GAP;
         if (usable.w <= 1 || usable.h <= 1)
             return false;
 
@@ -262,11 +266,16 @@ namespace OvInternal {
         size_t row      = 0;
         size_t rowFirst = 0;
         size_t rowCount = 0;
+        float  y        = sc<float>(usable.y);
         for (; row < bestRows; ++row) {
             rowCount = BASE + (row < EXTRA ? 1 : 0);
             if (INDEX < rowFirst + rowCount)
                 break;
 
+            float rowH = 0.F;
+            for (size_t i = 0; i < rowCount; ++i)
+                rowH = std::max(rowH, sc<float>(overviewGridWindowSize(WINDOWS[rowFirst + i]).y) * bestScale);
+            y += rowH + GAP;
             rowFirst += rowCount;
         }
 
@@ -284,8 +293,7 @@ namespace OvInternal {
         const auto  SIZE   = overviewGridWindowSize(target);
         const float WIDTH  = sc<float>(SIZE.x) * bestScale;
         const float HEIGHT = sc<float>(SIZE.y) * bestScale;
-        const float CELLH  = (sc<float>(usable.h) - GAP * sc<float>(bestRows - 1)) / sc<float>(bestRows);
-        const float Y      = sc<float>(usable.y) + sc<float>(row) * (CELLH + GAP) + (CELLH - HEIGHT) / 2.F;
+        const float Y      = y;
 
         out = CBox{x, Y, WIDTH, HEIGHT};
         return true;

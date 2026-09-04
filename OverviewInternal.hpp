@@ -766,6 +766,35 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
     return H > 1.F && H < sc<float>(monitor->m_size.y) / 2.F ? H : 0.F;
 }
 
+// Strip cells sit in the reserved band with this pad on every side. The panel
+// around them is a fixed 10px (same as the reference). The empty space between
+// the search pill and that panel is the chrome gap the grid must match below
+// the strip -- otherwise the leftover band + mission-control gap reads as a
+// hole between the strip and the windows.
+inline constexpr float OVERVIEW_STRIP_BAND_PAD_FRAC = 0.18F;
+inline constexpr float OVERVIEW_STRIP_PANELPADL     = 10.F;
+
+inline float overviewStripPadL(PHLMONITOR monitor) {
+    return overviewStripLogicalHeight(monitor) * OVERVIEW_STRIP_BAND_PAD_FRAC;
+}
+
+inline float overviewChromeGapL(PHLMONITOR monitor) {
+    const float PAD = overviewStripPadL(monitor);
+    return std::max(0.F, PAD - OVERVIEW_STRIP_PANELPADL + OVERVIEW_SEARCH_DOCKPADL);
+}
+
+// Search/results, then the drawn strip panel, then one chrome gap. The grid
+// starts immediately after this; it must not also add mission_control_gap.
+inline float overviewStripStackL(PHLMONITOR monitor) {
+    const float BAND = overviewStripLogicalHeight(monitor);
+    if (BAND <= 0.F)
+        return 0.F;
+
+    const float PAD   = overviewStripPadL(monitor);
+    const float CELLH = std::max(0.F, BAND - 2.F * PAD);
+    return PAD + CELLH + OVERVIEW_STRIP_PANELPADL + overviewChromeGapL(monitor);
+}
+
 // X10 + the pill row's published height. OVERVIEW_SEARCH_ROWHL and the value
 // itself live in SearchSession.hpp: the row is written by the search render step
 // from the pill's ACTUAL landed foot, so it is part of the published layout and
