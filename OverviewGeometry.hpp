@@ -67,6 +67,11 @@ namespace ScrollOverview::Geometry {
         Vector2D position;     // global logical position of the output
         Vector2D size;         // logical size of the output
         float    scale = 1.0F; // the output's own scale factor
+        // Extra translation after scale-about-centre, in monitor-local render
+        // px. Used to sit the floating card in the band between the top bar
+        // and the dock so those two paddings match. Zero keeps the old
+        // monitor-centre transform (geometry_test).
+        Vector2D originOffset{};
 
         Vector2D renderSize() const {
             return size * scale;

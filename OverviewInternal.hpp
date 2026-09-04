@@ -133,9 +133,44 @@ static_assert(sc<int>(Layout::CORNER_TOPRIGHT) == sc<int>(OvGeom::CORNER_TOPRIGH
 static_assert(sc<int>(Layout::CORNER_BOTTOMLEFT) == sc<int>(OvGeom::CORNER_BOTTOMLEFT));
 static_assert(sc<int>(Layout::CORNER_BOTTOMRIGHT) == sc<int>(OvGeom::CORNER_BOTTOMRIGHT));
 
+inline float overviewTopChromeBottomL(PHLMONITOR monitor);
+
+// Sit the scaled card in the band between the Omarchy top bar and the dock
+// so the padding above the card equals the padding below it. The shift fades
+// with open progress: at scale 1 the desktop still fills the monitor.
+inline Vector2D overviewCardOriginOffset(PHLMONITOR monitor, float overviewScale) {
+    if (!monitor)
+        return {};
+
+    const float MS    = std::max(monitor->m_scale, 0.01F);
+    const float H     = sc<float>(monitor->m_size.y) * MS;
+    const float MONCY = H * 0.5F;
+
+    const float TOP = std::max(0.F, (overviewTopChromeBottomL(monitor) - sc<float>(monitor->m_position.y)) * MS);
+
+    float bottom = H;
+    if (ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:dock:enabled")) {
+        const float ICON = sc<float>(std::clamp(ScrollOverview::Config::getValue<int>("plugin:hyprdrive:dock:icon_size"), 8, 512));
+        // Dock.cpp: ICON_PAD 14 on top and bottom, EDGE_MARGIN 4 under the pill.
+        const float DOCKH = ICON + 14.F + 14.F + 4.F;
+        bottom            = std::max(TOP + 1.F, H - DOCKH * MS);
+    }
+
+    if (bottom <= TOP + 1.F)
+        return {};
+
+    const float OPEN  = ScrollOverview::Config::getScale();
+    const float RANGE = std::max(0.01F, 1.F - OPEN);
+    const float T     = std::clamp((1.F - overviewScale) / RANGE, 0.F, 1.F);
+    return {0.F, ((TOP + bottom) * 0.5F - MONCY) * T};
+}
+
 // Everything the pure transforms need from an output, read once at the boundary.
-inline OvGeom::SViewport viewportOf(PHLMONITOR monitor) {
-    return OvGeom::SViewport{monitor->m_position, monitor->m_size, monitor->m_scale};
+inline OvGeom::SViewport viewportOf(PHLMONITOR monitor, float overviewScale = 1.F) {
+    OvGeom::SViewport vp{monitor->m_position, monitor->m_size, monitor->m_scale};
+    if (monitor && overviewScale < 0.999F)
+        vp.originOffset = overviewCardOriginOffset(monitor, overviewScale);
+    return vp;
 }
 
 inline OvGeom::EAxis axisOf(ScrollOverview::Config::ELayout layout) {
@@ -941,12 +976,12 @@ inline float axisSize(const Vector2D& size, ScrollOverview::Config::ELayout layo
 // lookup, so no call site had to learn a new vocabulary.
 inline CBox getOverviewBox(CBox box, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
                            bool round = true) {
-    return OvGeom::overviewBox(box, viewportOf(monitor), scale, viewOffset, offset, axisOf(layout), round);
+    return OvGeom::overviewBox(box, viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout), round);
 }
 
 inline CBox getOverviewGlobalBox(CBox globalBox, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
                                  bool round = true) {
-    return OvGeom::overviewGlobalBox(globalBox, viewportOf(monitor), scale, viewOffset, offset, axisOf(layout), round);
+    return OvGeom::overviewGlobalBox(globalBox, viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout), round);
 }
 
 // X22: the top chrome -- search pill, results panel, workspace strip -- is
@@ -1043,7 +1078,7 @@ inline bool isOverviewPointerOnMonitor(PHLMONITOR monitor) {
 }
 
 inline CBox getOverviewWorkspaceBox(PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout) {
-    return OvGeom::overviewWorkspaceBox(viewportOf(monitor), scale, viewOffset, offset, axisOf(layout));
+    return OvGeom::overviewWorkspaceBox(viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout));
 }
 
 inline CBox getWorkspaceGlobalBox(PHLWORKSPACE workspace, PHLMONITOR fallbackMonitor) {

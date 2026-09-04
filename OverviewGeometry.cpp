@@ -30,7 +30,12 @@ namespace ScrollOverview::Geometry {
         const auto VIEWPORT_CENTER = CBox{{}, viewport.size * MONITORSCALE}.middle();
 
         box = {box.pos() * MONITORSCALE, box.size() * MONITORSCALE};
-        box.translate(-VIEWPORT_CENTER).scale(scale).translate(VIEWPORT_CENTER).translate(-viewOffset * scale * MONITORSCALE).translate(axisOffsetVector(offset, axis));
+        box.translate(-VIEWPORT_CENTER)
+            .scale(scale)
+            .translate(VIEWPORT_CENTER)
+            .translate(viewport.originOffset)
+            .translate(-viewOffset * scale * MONITORSCALE)
+            .translate(axisOffsetVector(offset, axis));
         if (round)
             box.round();
 
