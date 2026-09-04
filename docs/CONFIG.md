@@ -64,7 +64,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `enabled` | bool | `true` |  | hyprgnomedock: draw the dock |
 | `icon_size` | int | `54` | 8 .. 512 | hyprgnomedock: max icon size (dash-max-icon-size) |
 | `height_fraction` | float | `0.90` | 0.05 .. 1 | hyprgnomedock: max fraction of the monitor's long axis the dock may span |
-| `corner_radius` | int | `-1` | >= -1 | hyprgnomedock: pill corner radius (-1 = follow decoration:rounding) |
+| `corner_radius` | int | `24` | >= 0 | hyprgnomedock: pill corner radius |
 | `minimize_ms` | int | `400` | 0 .. 2000 | hyprgnomedock: minimize/restore flight duration, 0 to teleport (Y5: GNOME's MINIMIZE_WINDOW_ANIMATION_TIME) |
 | `autohide` | bool | `true` |  | hyprgnomedock: hide the dock until the bottom edge is pressed (D2D autohide) |
 | `pressure_threshold` | float | `100` | 0 .. 2000 | hyprgnomedock: px of motion pushed into the bottom edge before the dock reveals (D2D pressure-threshold) |

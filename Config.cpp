@@ -443,9 +443,8 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CFloatValue>(KEY("dock:height_fraction"),
                                    "hyprgnomedock: max fraction of the monitor's long axis the dock may span", 0.90F,
                                    SFloatValueOptions{.min = 0.05F, .max = 1.F}));
-    addKey(makeShared<CIntValue>(KEY("dock:corner_radius"),
-                                 "hyprgnomedock: pill corner radius (-1 = follow decoration:rounding)", -1,
-                                 SIntValueOptions{.min = -1}));
+    addKey(makeShared<CIntValue>(KEY("dock:corner_radius"), "hyprgnomedock: pill corner radius", 24,
+                                 SIntValueOptions{.min = 0}));
     // 400ms, both directions: GNOME's MINIMIZE_WINDOW_ANIMATION_TIME, extracted
     // from the host's windowManager.js, and the number the SPEC settles on.
     //
@@ -707,8 +706,7 @@ CHyprColor dockBackgroundColor() {
 }
 
 int dockCornerRadius() {
-    const int RADIUS = getValue<int>("plugin:hyprdrive:dock:corner_radius");
-    return RADIUS < 0 ? themeRounding() : std::max(0, RADIUS);
+    return std::max(0, getValue<int>("plugin:hyprdrive:dock:corner_radius"));
 }
 
 float getScale() {

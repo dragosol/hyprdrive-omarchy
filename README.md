@@ -37,18 +37,20 @@ and every surface goes through the accessors in `Config.hpp`:
 | what you see | Hyprland key | accessor |
 | --- | --- | --- |
 | selection, hover, running dots | `general:col.active_border` | `highlightColor()` |
-| overview cards, dock pill corners | `decoration:rounding` | `themeRounding()` |
+| overview cards | `decoration:rounding` | `themeRounding()` |
+| dock pill and dock highlights | `plugin:hyprdrive:dock:corner_radius` (24) | `dockCornerRadius()` |
 | dock / overview frost | `decoration:blur:*` | `-1` follow |
 | workspace-card shadows | `decoration:shadow:*` | `-1` follow |
 | dock pill hue | `misc:background_color` | `dockBackgroundColor()` |
 
 Omarchy already writes the border colour from the theme accent and reloads
 Hyprland on `omarchy theme set`. Squared windows (`decoration:rounding = 0`)
-stay squared; a theme that rounds windows rounds the overview and the dock too.
-Blur off means frost off — that is inheritance, not a missing feature.
+stay squared in the overview; the dock keeps its original Dash-to-Dock pill
+radius of 24, including hover and selection highlights. Blur off means frost
+off — that is inheritance, not a missing feature.
 
-Do not pin `plugin:hyprdrive:col_highlight` (or dock colours, or rounding) in a
-fragment unless you want that value frozen across theme changes.
+Do not pin `plugin:hyprdrive:col_highlight` (or dock colours) in a fragment
+unless you want that value frozen across theme changes.
 
 ## Build and install
 

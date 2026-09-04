@@ -96,7 +96,7 @@ int           getGestureDistance();
 //   themeRoundingPower()    decoration:rounding_power
 //   dockIndicatorColor()    dock:indicator_color, else highlightColor()
 //   dockBackgroundColor()   dock:background_color, else misc:background_color
-//   dockCornerRadius()      dock:corner_radius, else themeRounding()
+//   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
 //   dock blur/shadow -1     follow decoration:blur:* / decoration:shadow:*
 //
 // Pin a plugin key only to stop inheriting.
