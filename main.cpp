@@ -460,7 +460,14 @@ static bool isGuardModifierKeycode(uint32_t keycode) {
     }
 }
 
-static int g_heldGuardModifiers = 0;
+// Keycodes, not a count: Super-tap key-repeat used to increment a counter
+// without a matching release, after which searchKeyFor refused every letter
+// for the rest of the session.
+static std::unordered_set<uint32_t> g_heldGuardKeys;
+
+static bool overviewAcceptsSearch() {
+    return std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && !overview->isClosing(); });
+}
 
 // G1: the compose sequence table, built once from the locale. A guest with no
 // Compose file leaves this null and every path below falls through to the plain
@@ -521,7 +528,7 @@ struct SSearchKey {
 // What this keycode contributes to the query. Returns nothing whenever a guard
 // modifier is held, so SUPER+Q stays a keybind instead of becoming the letter q.
 static SSearchKey searchKeyFor(uint32_t keycode) {
-    if (g_heldGuardModifiers > 0)
+    if (!g_heldGuardKeys.empty())
         return {};
 
     const auto STATE = activeXkbState();
@@ -600,9 +607,12 @@ static void afterQueryEdit() {
     if (g_search.query.text.empty())
         g_search.nav.zone = EOverviewNavZone::Tile;
 
-    for (const auto& overview : scrollOverviews())
-        if (overview)
-            overview->damage();
+    for (const auto& overview : scrollOverviews()) {
+        if (!overview)
+            continue;
+        overview->damage();
+        overview->requestInputFrame();
+    }
 }
 
 // OVERVIEW_CPP_SPEC 5 F5. The overview is not a wayland client. Seat keyboard
@@ -618,8 +628,11 @@ static void afterQueryEdit() {
 static std::unordered_set<uint32_t> g_consumedPresses;
 
 static bool handleSearchPress(uint32_t keycode) {
-    if (!activeScrollOverview())
+    if (!overviewAcceptsSearch())
         return false;
+
+    if (g_pSeatManager)
+        g_pSeatManager->setKeyboardFocus(nullptr);
 
     // X5: ESC is always ours while the overview is open -- it either clears the
     // query or exits -- so it must never fall through to the window underneath.
@@ -675,10 +688,10 @@ static void                registerRawKeyHooks() {
         const bool ISSUPER = event.keycode == EVDEV_KEY_LEFTMETA || event.keycode == EVDEV_KEY_RIGHTMETA;
 
         if (isGuardModifierKeycode(event.keycode)) {
-            // Clamped, not just decremented: a modifier released while its
-            // press went to someone else would otherwise strand the count
-            // negative and disable search for the rest of the session.
-            g_heldGuardModifiers = std::max(0, g_heldGuardModifiers + (PRESSED ? 1 : -1));
+            if (PRESSED)
+                g_heldGuardKeys.insert(event.keycode);
+            else
+                g_heldGuardKeys.erase(event.keycode);
         }
 
         if (!ISSUPER) {
@@ -718,7 +731,7 @@ static void                registerRawKeyHooks() {
                 // Overview owns the keyboard: a key that is not search input
                 // still must not reach the window or a layer-shell bar.
                 // Arrows/Tab/Return are left for CScrollOverview::onKeyboardKey.
-                if (activeScrollOverview() && !isModifierKeycode(event.keycode) &&
+                if (overviewAcceptsSearch() && !isModifierKeycode(event.keycode) &&
                     event.keycode != 15 && event.keycode != 28 && event.keycode != 96 &&
                     event.keycode != 103 && event.keycode != 105 && event.keycode != 106 &&
                     event.keycode != 108) {

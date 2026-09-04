@@ -90,10 +90,15 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         if (!drag.pendingPrimary && !submapMouseClickPending && !resize.pointerDown && !pan.pointerDown && !drag.activeWindow && !resize.activeWindow && isPointerOnTopLayer(pMonitor.lock())) {
             submapMouseClickPending = false;
             submapMouseClickButton  = 0;
+            // Hyprland restores keyboard focus to a window whenever it is
+            // null and the pointer moves. Steal it back so the bar taking
+            // pointer hover cannot keep the keys.
+            stealOverviewKeyboard();
             return;
         }
 
         info.cancelled = true;
+        stealOverviewKeyboard();
         requestInputFrame();
 
         // D6: a drag that STARTS on a strip mini picks up that window, not
