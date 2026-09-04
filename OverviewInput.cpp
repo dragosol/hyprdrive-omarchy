@@ -658,6 +658,7 @@ void CScrollOverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
         }
 
         damage();
+        stealOverviewKeyboard();
 }
 
 void CScrollOverview::onWindowFullscreen(PHLWINDOW window) {

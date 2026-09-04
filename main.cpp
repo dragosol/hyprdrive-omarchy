@@ -594,9 +594,9 @@ static void afterQueryEdit() {
             overview->damage();
 }
 
-// OVERVIEW_CPP_SPEC 5 F5. The overview is not a wayland client and takes no
-// keyboard focus, so the query is assembled from the raw key stream and those
-// events are cancelled to keep them out of the focused window underneath.
+// OVERVIEW_CPP_SPEC 5 F5. The overview is not a wayland client. Seat keyboard
+// focus is cleared while it is open, and the query is assembled from the raw
+// key stream with those events cancelled so they cannot reach a window or bar.
 //
 // This used to be a pure isSearchKey(keycode) predicate, consulted separately
 // for the press and the release on the promise that both would agree. COMPOSE
@@ -628,9 +628,9 @@ static bool handleSearchPress(uint32_t keycode) {
     }
 
     if (keycode == EVDEV_KEY_BACKSPACE) {
-        if (!g_search.query.active)
-            return false;
         resetCompose();
+        if (!g_search.query.active)
+            return true;
         popCodepoint(g_search.query.text);
         afterQueryEdit();
         return true;
@@ -639,14 +639,6 @@ static bool handleSearchPress(uint32_t keycode) {
     const SSearchKey KEY = searchKeyFor(keycode);
     if (!KEY.consume)
         return false;
-
-    // G1: whitespace must never START a search -- GNOME's trigger test rejects a
-    // keysym whose value is pure whitespace -- but it types normally once one is
-    // running. The key stays CONSUMED either way: the overview holds the
-    // keyboard, so falling through would type a space into a window the user
-    // cannot see.
-    if (KEY.text == " " && !g_search.query.active)
-        return true;
 
     if (KEY.starts)
         g_search.query.active = true;
@@ -707,6 +699,18 @@ static void                registerRawKeyHooks() {
                 }
 
                 if (handleSearchPress(event.keycode)) {
+                    g_consumedPresses.insert(event.keycode);
+                    info.cancelled = true;
+                    return;
+                }
+
+                // Overview owns the keyboard: a key that is not search input
+                // still must not reach the window or a layer-shell bar.
+                // Arrows/Tab/Return are left for CScrollOverview::onKeyboardKey.
+                if (activeScrollOverview() && !isModifierKeycode(event.keycode) &&
+                    event.keycode != 15 && event.keycode != 28 && event.keycode != 96 &&
+                    event.keycode != 103 && event.keycode != 105 && event.keycode != 106 &&
+                    event.keycode != 108) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;

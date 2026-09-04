@@ -201,6 +201,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     rememberSelection(Desktop::focusState()->window());
     viewportCurrentWorkspace = activeWorkspaceIndex();
     syncSelectionToViewport();
+    stealOverviewKeyboard();
 }
 
 void CScrollOverview::renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha) {
@@ -5872,6 +5873,7 @@ void CScrollOverview::reopen() {
     *viewOffset = Vector2D{};
     *scale      = ScrollOverview::Config::getScale();
 
+    stealOverviewKeyboard();
     damage();
 }
 

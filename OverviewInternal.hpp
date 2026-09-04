@@ -206,6 +206,14 @@ inline bool isOverviewSubmapActive() {
     return g_pKeybindManager && isOverviewSubmapName(g_pKeybindManager->getCurrentSubmap().name);
 }
 
+// The overview is not a Wayland client. Clear seat keyboard focus so keys
+// cannot reach the window (or a layer-shell bar) underneath; the raw-key
+// hook builds the search query from the same stream.
+inline void stealOverviewKeyboard() {
+    if (g_pSeatManager)
+        g_pSeatManager->setKeyboardFocus(nullptr);
+}
+
 inline bool isTopLayerFocused(PHLMONITOR monitor) {
     const auto FOCUSEDSURFACE = g_pSeatManager->m_state.keyboardFocus.lock();
 
