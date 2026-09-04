@@ -1076,26 +1076,7 @@ inline bool isOverviewPointerOnMonitor(PHLMONITOR monitor) {
 }
 
 inline CBox getOverviewWorkspaceBox(PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout) {
-    CBox box = OvGeom::overviewWorkspaceBox(viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout));
-    if (!monitor)
-        return box;
-
-    // Search, results and the workspace strip are overlay chrome on the
-    // dimmed canvas (same material as the dock). They used to sit inside the
-    // desktop card, so the card's wallpaper and border wrapped them. Inset
-    // the card below that band; windows already layout in the usable box.
-    const float CHROME = overviewSearchLogicalHeight(monitor) + overviewResultsLogicalHeight(monitor) + overviewStripLogicalHeight(monitor);
-    if (CHROME <= 0.F)
-        return box;
-
-    const float INSET = CHROME * scale * std::max(monitor->m_scale, 0.01F);
-    if (INSET + 1.F >= sc<float>(box.h))
-        return box;
-
-    box.y += INSET;
-    box.h -= INSET;
-    box.round();
-    return box;
+    return OvGeom::overviewWorkspaceBox(viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout));
 }
 
 inline CBox getWorkspaceGlobalBox(PHLWORKSPACE workspace, PHLMONITOR fallbackMonitor) {
