@@ -107,6 +107,11 @@ class IOverview : public IOverviewFramePolicy, public IOverviewGeometry {
     virtual void onSwipeUpdate(double delta) = 0;
     virtual void onSwipeEnd()                = 0;
 
+    // 0 at the desktop, 1 when the overview is fully open. The 3-finger
+    // swipe warps this every update; Super-tap animates it. The dock's
+    // autohide slide reads it so the pill cannot run on a second clock.
+    virtual float openProgress() const = 0;
+
     // ---- ROLE: SELECTION ---------------------------------------------------
     virtual void performPrimaryClickAction()                        = 0;
     virtual void selectHoveredWorkspace()                           = 0;

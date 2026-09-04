@@ -132,6 +132,7 @@ class CScrollOverview : public IOverview {
     void         resetSwipe() override;
     void         onSwipeUpdate(double delta) override;
     void         onSwipeEnd() override;
+    float        openProgress() const override;
 
     // close without a selection
     void         close() override;

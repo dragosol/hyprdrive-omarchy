@@ -6004,6 +6004,13 @@ void CScrollOverview::resetSwipe() {
     m_swipeClosing = false;
 }
 
+float CScrollOverview::openProgress() const {
+    if (!scale)
+        return 0.F;
+
+    return overviewGridProgress(scale->value());
+}
+
 void CScrollOverview::onSwipeUpdate(double delta) {
     const int DISTANCE = ScrollOverview::Config::getGestureDistance();
 

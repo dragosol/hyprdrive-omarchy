@@ -1034,6 +1034,12 @@ float hiddenFraction(PHLMONITOR monitor) {
     if (!monitor)
         return 0.F;
 
+    // Overview owns the slide while it exists: the 3-finger swipe warps
+    // openProgress every update, so the pill tracks the fingers the same way
+    // the cards do. Super-tap uses the scale animation, same number.
+    if (const auto OV = scrollOverviewForMonitor(monitor); OV && Config::getValue<bool>(KEY_AUTOHIDE))
+        return 1.F - OV->openProgress();
+
     const auto& R  = g_reveal[monitor->m_id];
     const int   MS = std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS));
     const float E  = revealEase(std::clamp(elapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
@@ -1177,7 +1183,19 @@ void updateAutohide(PHLMONITOR monitor) {
     // Neither waits out `show-delay` -- that delay belongs to the pressure
     // barrier, and making the overview's own dock crawl in behind it would be
     // reading the reference wrong.
-    if (!Config::getValue<bool>(KEY_AUTOHIDE) || scrollOverviewForMonitor(monitor)) {
+    // While the overview exists the visual is driven by openProgress, not this
+    // timer. Keep `from` at the current fraction so a later handoff (overview
+    // gone) continues from wherever the swipe or scale animation left the pill.
+    if (const auto OV = scrollOverviewForMonitor(monitor); OV && Config::getValue<bool>(KEY_AUTOHIDE)) {
+        R.from      = 1.F - OV->openProgress();
+        R.shown     = true;
+        R.changedAt = Time::steadyNow();
+        R.pending   = false;
+        R.pressure  = 0.F;
+        return;
+    }
+
+    if (!Config::getValue<bool>(KEY_AUTOHIDE)) {
         if (!R.shown) {
             R.from      = hiddenFraction(monitor);
             R.shown     = true;
