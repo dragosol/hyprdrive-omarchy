@@ -713,16 +713,19 @@ std::vector<SItem> dockItems() {
             item.icon      = ENTRY->icon;
             item.favorite  = true;
 
-            // First running class that resolves to this id owns the slot, so a
-            // pinned app that IS running is one icon, not two.
+            // Every running class that resolves to this id owns the slot, so a
+            // pinned app that IS running is one icon, not two -- including a
+            // Chromium webapp whose live class is chrome-host_path-Default and
+            // a second profile of the same app (another class, same desktop id).
+            // itemWindows then finds every window of those classes.
             for (size_t i = 0; i < RUNNING.size(); ++i) {
                 if (runningIds[i] != ID || claimed.contains(i))
                     continue;
 
                 claimed.insert(i);
-                item.wmClass = RUNNING[i];
+                if (item.wmClass.empty())
+                    item.wmClass = RUNNING[i];
                 item.running = true;
-                break;
             }
 
             out.emplace_back(std::move(item));
@@ -1399,6 +1402,8 @@ static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, fl
     g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(blur));
 }
 
+std::vector<PHLWINDOW> itemWindows(const SItem& item);
+
 void renderRunningDot(PHLMONITOR monitor, const SLayout& layout, const SItem& item) {
     const float SCALE = std::max(monitor->m_scale, 0.01F);
     const float SIZE  = std::max(1.F, sc<float>(Config::getValue<int>(KEY_DOT_SIZE)) * SCALE);
@@ -1420,11 +1425,7 @@ void renderRunningDot(PHLMONITOR monitor, const SLayout& layout, const SItem& it
     // config key of its own (dock:isolate_workspaces, default false) and is not
     // what the amendment asked for. `interesting()` is what that key moves, so
     // turning it on scopes both together, exactly as the reference does.
-    size_t count = 0;
-    for (const auto& WINDOW : Desktop::windowState()->windows())
-        if (interesting(WINDOW) && WINDOW->m_class == item.wmClass)
-            ++count;
-    count = std::max<size_t>(count, 1);
+    size_t count = std::max<size_t>(itemWindows(item).size(), 1);
 
     const float  GAP    = 3.F * SCALE;
     const size_t PERROW = std::max<size_t>(1, sc<size_t>((sc<float>(item.iconBox.width) + GAP) / (SIZE + GAP)));
@@ -1676,51 +1677,71 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
 // X32 adds the LAUNCH branch, which X27 could not have: a pinned favourite owns
 // no window, so `click-action` has nothing to minimize and the reference falls
 // through to launching the app.
-std::vector<PHLWINDOW> classWindows(const std::string& wmClass) {
-    if (wmClass.empty())
+// A dock icon is a favourite desktop id, a live window class, or both. Exact
+// class match is not enough: a pinned Chromium webapp's window is
+// `chrome-{host}_{path}-Default` while the favourite's id is the .desktop
+// stem, and a second Chrome profile is a second class of the same id. Clicking
+// the icon with those windows on THIS desktop must find them -- otherwise the
+// ladder sees "none here" and launches a duplicate.
+bool windowMatchesItem(const PHLWINDOW& window, const SItem& item) {
+    if (!interesting(window))
+        return false;
+
+    if (!item.wmClass.empty() && window->m_class == item.wmClass)
+        return true;
+
+    if (!item.desktopId.empty() && AppSearch::idForClass(window->m_class) == item.desktopId)
+        return true;
+
+    return false;
+}
+
+std::vector<PHLWINDOW> itemWindows(const SItem& item) {
+    if (item.wmClass.empty() && item.desktopId.empty())
         return {};
 
     std::vector<PHLWINDOW> out;
     for (const auto& WINDOW : Desktop::windowState()->windows()) {
-        if (interesting(WINDOW) && WINDOW->m_class == wmClass)
+        if (windowMatchesItem(WINDOW, item))
             out.emplace_back(WINDOW);
     }
 
     return out;
 }
 
-// V6 (user, 2026-08-17): "if I have multiple windows of the same app e.g.
-// nautilus open and i click its icon, it should only minimizes/maximizes the
-// window in the current workspace." The click ladder keeps its shape; what
-// changes is the set it is computed over -- the app's windows on the ACTIVE
-// DESKTOP, and nothing else. Zero here launches here even with windows
-// elsewhere, one here toggles that one, N here cycle among those N.
+// The app's windows on the ACTIVE DESKTOP. A minimized window counts toward
+// the desktop it will COME BACK TO: its own m_workspace is the stash
+// (`special:minimized`) and answers no useful question, so this goes through
+// the overview's one home-desktop helper rather than inventing a second answer.
 //
-// A minimized window counts toward the desktop it will COME BACK TO, which is
-// the only reading that keeps the toggle reversible: minimize on desktop 2,
-// walk to desktop 3, and the app is not there -- walk back and the click that
-// put it away is the click that brings it out. Its own m_workspace is the
-// stash and answers no useful question, so this goes through the overview's
-// one home-desktop helper (46bccac) rather than inventing a second answer.
-//
-// SCOPED IS THE CLICK, not the dock. runningClasses/dockItems are untouched:
-// an app running on another desktop keeps its icon and its running DOT, which
-// answer "is this app up at all" -- the reference's own `isolate-workspaces`
-// key (dock:isolate_workspaces, default false) is what changes that, and the
-// amendment did not ask for it. So the dock still says nautilus is running;
-// clicking it now acts here.
-std::vector<PHLWINDOW> classWindowsHere(const std::string& wmClass, PHLMONITOR monitor) {
+// SCOPED IS THE CLICK, not the dock. runningClasses/dockItems stay global: an
+// app running on another desktop keeps its icon and its running DOT.
+std::vector<PHLWINDOW> itemWindowsHere(const SItem& item, PHLMONITOR monitor) {
     const auto ACTIVE = monitor ? monitor->m_activeWorkspace : nullptr;
+    auto       all    = itemWindows(item);
     if (!ACTIVE)
-        return classWindows(wmClass);
+        return all;
 
     std::vector<PHLWINDOW> out;
-    for (const auto& WINDOW : classWindows(wmClass)) {
+    for (const auto& WINDOW : all) {
         if (OvInternal::overviewGridHomeWorkspace(WINDOW) == ACTIVE->m_id)
             out.emplace_back(WINDOW);
     }
 
     return out;
+}
+
+std::string itemCycleKey(const SItem& item) {
+    return !item.wmClass.empty() ? item.wmClass : item.desktopId;
+}
+
+PHLWINDOW frontWindow(const std::vector<PHLWINDOW>& windows) {
+    for (const auto& WINDOW : windows) {
+        if (WINDOW && !Minimize::isMinimized(WINDOW))
+            return WINDOW;
+    }
+
+    return windows.empty() ? nullptr : windows.front();
 }
 
 // Go to a window on the desktop it belongs to. Preview clicks and "show me
@@ -1763,13 +1784,10 @@ struct SCycle {
 
 std::optional<SCycle> g_cycle;
 
-// V6 gives this an explicit list: the CLICK cycles the active desktop's windows
-// (`N > 1 here -> the existing cycle behavior, scoped to those N`), while the
-// scroll-wheel and middle-click actions below still cycle the whole app. The
-// staleness test then does the right thing for free -- walking to another
-// desktop changes the count, which drops the memory and restarts the cycle at
-// the top of the new set instead of stepping into a remembered window that is
-// no longer here.
+// Scroll (and CTRL+click) cycle. The list is explicit so the click can hand
+// this desktop's windows and the wheel can hand the whole app. Walking to
+// another desktop changes the count, which drops the memory and restarts the
+// cycle at the top of the new set.
 void cycleThroughWindows(const std::string& wmClass, bool reversed, const std::vector<PHLWINDOW>& WINDOWS) {
     if (WINDOWS.empty())
         return;
@@ -1799,25 +1817,22 @@ void cycleThroughWindows(const std::string& wmClass, bool reversed, const std::v
     activateWindow(WINDOW);
 }
 
-void cycleThroughWindows(const std::string& wmClass, bool reversed) {
-    cycleThroughWindows(wmClass, reversed, classWindows(wmClass));
-}
-
 // The reference's shared entry point for a cycle: if the app already has focus
 // and nothing of it is shouting, step to its next window; otherwise the gesture
 // is simply "bring this app forward", which is what an urgent window wants.
-void cycleOrActivate(const std::string& wmClass, bool reversed) {
-    const auto WINDOWS = classWindows(wmClass);
+// Scroll on the icon uses this (global, every window of the app).
+void cycleOrActivate(const SItem& item, bool reversed) {
+    const auto WINDOWS = itemWindows(item);
     if (WINDOWS.empty())
         return;
 
-    const auto FOCUSED = Desktop::focusState()->window();
-    const bool OWNSFOCUS = FOCUSED && FOCUSED->m_class == wmClass;
+    const auto FOCUSED   = Desktop::focusState()->window();
+    const bool OWNSFOCUS = FOCUSED && windowMatchesItem(FOCUSED, item);
 
-    if (OWNSFOCUS && !classUrgent(wmClass))
-        cycleThroughWindows(wmClass, reversed);
+    if (OWNSFOCUS && !classUrgent(item.wmClass))
+        cycleThroughWindows(itemCycleKey(item), reversed, WINDOWS);
     else
-        activateWindow(WINDOWS.front());
+        activateWindow(frontWindow(WINDOWS));
 }
 
 // The overview gets out of the way, because a window that maps behind an open
@@ -1857,7 +1872,7 @@ void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace =
     if (!item.icon.empty() && item.iconBox.width >= 1 && item.iconBox.height >= 1)
         g_flight.launchZooms.emplace_back(SLaunchZoom{.icon = item.icon, .from = item.iconBox, .startedAt = Time::steadyNow()});
 
-    const bool  FIRSTINSTANCE = item.uri.empty() ? classWindows(item.wmClass).empty() : true;
+    const bool  FIRSTINSTANCE = item.uri.empty() ? itemWindows(item).empty() : true;
     const auto  PENDKEY       = !item.uri.empty() ? item.uri : (item.desktopId.empty() ? item.wmClass : item.desktopId);
     if (!deliberate && FIRSTINSTANCE && !PENDKEY.empty()) {
         if (const auto IT = g_pendingLaunches.find(PENDKEY); IT != g_pendingLaunches.end() && elapsedMs(IT->second) < LAUNCH_PENDING_MS)
@@ -1916,78 +1931,55 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
         return;
     }
 
-    // V6. Every count and every target below is the ACTIVE DESKTOP's windows.
-    const auto windows = classWindowsHere(item.wmClass, monitor);
-
-    // Y4. NO WINDOWS: launch. X45's first branch, and the only one it keeps.
-    //
-    // V6 widened what "no windows" means, and deliberately: none HERE launches
-    // here even when the app has windows on other desktops ("regardless of
-    // other workspaces"). That supersedes Z7, whose whole branch was the
-    // opposite reading of the same gesture -- go to the other desktop and focus
-    // the window there. Both are the user's words ten days apart; the later one
-    // is the one the dock obeys. The go-there is not gone from the product, it
-    // is gone from THIS gesture: the hover panel's previews still travel to a
-    // window wherever it lives, which is where "show me that window" belongs.
-    if (windows.empty()) {
-        launchApp(monitor, item);
-        return;
-    }
-
-    // Y4. CTRL is now the ONLY thing that cycles. This replaces X45's
-    // count-based branch, where two-or-more windows made a plain click cycle and
-    // there was consequently no gesture that could put a multi-window app away.
-    // activateWindow() restores a minimized window on the way, so the cycle
-    // still reaches windows sitting in the icon as well as windows on screen.
-    // V6 scopes it to the same set as the rest of the ladder: `N > 1 here ->
-    // the existing cycle behavior, scoped to those N`.
+    // Scroll cycles. Click does not. CTRL+click is the leftover cycle from Y4
+    // (scoped to this desktop when the app is here, otherwise the whole app).
+    const auto here = itemWindowsHere(item, monitor);
     if (ctrl) {
-        cycleThroughWindows(item.wmClass, false, windows);
+        const auto CYCLE = !here.empty() ? here : itemWindows(item);
+        cycleThroughWindows(itemCycleKey(item), false, CYCLE);
         return;
     }
 
-    // Y4. Otherwise the click is a toggle over the WHOLE app whatever the count:
-    // anything visible goes down, and when there is nothing left visible the
-    // next click brings all of it back. This is what `minimize-shift` used to
-    // mean, promoted to the default -- so SHIFT and a plain click have converged
-    // and `shift` is deliberately not consulted below.
-    //
-    // Decided by the WINDOWS' own state, not by focus. X45 measured why: the
-    // overview owns the focus while it is up, so focusState()->window() is never
-    // a dock app's window and a focus test made the minimize branch dead.
-    std::vector<PHLWINDOW> visible;
-    for (const auto& WINDOW : windows) {
-        if (!Minimize::isMinimized(WINDOW))
-            visible.emplace_back(WINDOW);
-    }
+    // Window on THIS desktop: minimize/maximize that window. Never spawn a
+    // second instance of an app you can already see (or just hid) here.
+    // Visible -> minimize; hidden (or mid-restore flight) -> restore.
+    // Scroll, not click, is what cycles when there is more than one.
+    if (!here.empty()) {
+        std::vector<PHLWINDOW> visible;
+        for (const auto& WINDOW : here) {
+            if (!Minimize::isMinimized(WINDOW))
+                visible.emplace_back(WINDOW);
+        }
 
-    // Z5. A window mid-RESTORE-flight still reads as minimized (it stays
-    // stashed until landing), so without this a spam of clicks re-restored
-    // forever instead of toggling. Count it as visible; minimizeWithFlightImpl
-    // then reverses its flight in place.
-    for (const auto& WINDOW : windows) {
-        if (Flight::hasFlight(WINDOW) && Flight::isRestoreFlight(WINDOW) && Minimize::isMinimized(WINDOW))
-            visible.emplace_back(WINDOW);
-    }
+        // Z5. A window mid-RESTORE-flight still reads as minimized (it stays
+        // stashed until landing), so without this a spam of clicks re-restored
+        // forever instead of toggling. Count it as visible; the next minimize
+        // then reverses its flight in place.
+        for (const auto& WINDOW : here) {
+            if (Flight::hasFlight(WINDOW) && Flight::isRestoreFlight(WINDOW) && Minimize::isMinimized(WINDOW))
+                visible.emplace_back(WINDOW);
+        }
 
-    // Z7's GO-THERE branch stood here and V6 deleted it rather than left it
-    // unreachable. Z7 (user, 2026-08-07) was "if window is open in another
-    // workspace... just go to that workspace and focus the window"; V6 (user,
-    // 2026-08-17) is "0 windows here -> launch here, regardless of other
-    // workspaces". Both cannot be the same click, and the later one wins. With
-    // the ladder scoped, every window that reaches this point already lives on
-    // the active desktop -- a visible one has m_workspace == the active
-    // workspace by construction -- so the test could only ever have answered
-    // "something is here". The `anyFlight` flag went with it: it existed to keep
-    // a mid-flight app out of the go-there, and nothing else read it.
-    if (visible.empty()) {
-        for (const auto& WINDOW : windows)
-            Flight::restore(monitor, WINDOW);
+        if (visible.empty()) {
+            for (const auto& WINDOW : here)
+                Flight::restore(monitor, WINDOW);
+            return;
+        }
+
+        for (const auto& WINDOW : visible)
+            Flight::minimize(monitor, WINDOW);
         return;
     }
 
-    for (const auto& WINDOW : visible)
-        Flight::minimize(monitor, WINDOW);
+    // Running only on another desktop: go there and focus it. Launching a
+    // fresh window here is what left the original stashed on special:minimized
+    // after a desktop switch ("locked regardless of desktop").
+    if (const auto ALL = itemWindows(item); !ALL.empty()) {
+        activateWindow(frontWindow(ALL));
+        return;
+    }
+
+    launchApp(monitor, item);
 }
 
 // X33. `middle-click-action` and `shift-middle-click-action`, both `launch` in
@@ -2018,7 +2010,7 @@ void applyClickAction(PHLMONITOR monitor, const SItem& item, const std::string& 
         return;
     }
 
-    const auto WINDOWS = classWindows(item.wmClass);
+    const auto WINDOWS = itemWindows(item);
 
     if (WINDOWS.empty()) {
         launchApp(monitor, item);
@@ -2030,7 +2022,7 @@ void applyClickAction(PHLMONITOR monitor, const SItem& item, const std::string& 
     else if (action == "minimize")
         activateItem(monitor, item, shift);
     else if (action == "cycle-windows")
-        cycleOrActivate(item.wmClass, false);
+        cycleOrActivate(item, false);
     else if (action == "quit") {
         for (const auto& WINDOW : WINDOWS)
             WINDOW->sendClose();
@@ -2141,7 +2133,7 @@ std::vector<SRow> buildRows(const SItem& item) {
     for (const auto& ACTION : AppSearch::actionsForClass(wmClass))
         rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec});
 
-    const auto WINDOWS = classWindows(wmClass);
+    const auto WINDOWS = itemWindows(item);
     if (!rows.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::Separator});
 
@@ -2214,7 +2206,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::Favorite: toggleFavorite(AppSearch::idForClass(wmClass)); return;
 
         case ERow::Quit:
-            for (const auto& WINDOW : classWindows(wmClass))
+            for (const auto& WINDOW : itemWindows(item))
                 WINDOW->sendClose();
             return;
     }
@@ -2516,7 +2508,7 @@ bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
     if (ITEM == LAYOUT.items.end())
         return true;
 
-    cycleOrActivate(ITEM->wmClass, up);
+    cycleOrActivate(*ITEM, up);
     return true;
 }
 
@@ -3361,6 +3353,7 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
 // entrance is a box lerp and the previews ride it.
 struct SPanel {
     std::string     wmClass;
+    std::string     desktopId;
     CBox            anchor;                          // the icon it belongs to
     CBox            target;                          // where it settles
     CBox            from;                            // where the current move started
@@ -3423,14 +3416,16 @@ bool sameBox(const CBox& a, const CBox& b) {
     return sc<int>(a.x) == sc<int>(b.x) && sc<int>(a.y) == sc<int>(b.y) && sc<int>(a.width) == sc<int>(b.width) && sc<int>(a.height) == sc<int>(b.height);
 }
 
-// The windows an icon previews. classWindows already answers with the minimized
-// ones included, which is what makes a minimized window reachable from its own
-// icon -- the whole point of X45's 1-window branch.
-std::vector<PHLWINDOW> panelWindows(const std::string& wmClass) {
-    if (wmClass.empty())
+// The windows an icon previews. itemWindows already includes minimized ones,
+// which is what makes a minimized window reachable from its own icon.
+std::vector<PHLWINDOW> panelWindows(const std::string& wmClass, const std::string& desktopId = {}) {
+    if (wmClass.empty() && desktopId.empty())
         return {};
 
-    auto out = classWindows(wmClass);
+    SItem item;
+    item.wmClass   = wmClass;
+    item.desktopId = desktopId;
+    auto out       = itemWindows(item);
     std::erase_if(out, [](const auto& window) { return !window || !window->m_isMapped || !window->wlSurface() || !window->wlSurface()->resource(); });
     if (out.size() > PANEL_MAX)
         out.resize(PANEL_MAX);
@@ -3462,8 +3457,9 @@ CBox panelTarget(PHLMONITOR monitor, const SLayout& layout, const std::vector<PH
 
 // Pass an empty class when nothing is hovered; like the tooltip, the panel
 // outlives the hover so that it can animate AWAY instead of blinking out.
-void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& wmClass, const Time::steady_tp& now) {
-    auto       windows = panelWindows(wmClass);
+void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& wmClass, const std::string& desktopId,
+                        const Time::steady_tp& now) {
+    auto       windows = panelWindows(wmClass, desktopId);
     const bool WANT    = !windows.empty();
 
     if (WANT) {
@@ -3471,10 +3467,11 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
 
         if (!g_hover.panel) {
             // Rises out of the icon, decelerating into place.
-            g_hover.panel = SPanel{.wmClass = wmClass, .anchor = anchor, .target = TARGET, .from = anchor, .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
+            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .anchor = anchor, .target = TARGET, .from = anchor, .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
         } else {
             g_hover.panel->leaving = false;
             g_hover.panel->wmClass = wmClass;
+            g_hover.panel->desktopId = desktopId;
             g_hover.panel->anchor  = anchor;
 
             // Caught mid-dismissal, or moved to another icon: in both cases the
@@ -3965,15 +3962,17 @@ void render(PHLMONITOR monitor) {
 
     CBox        panelAnchor;
     std::string panelClass;
+    std::string panelDesktopId;
     if (PANELWANTED) {
         // Over the plate but not over an icon: keep the app it is already
         // showing, so crossing from icon to preview is one continuous panel.
         const bool FROMICON = HASHOVER;
         panelAnchor         = FROMICON ? HOVEREDITEM->iconBox : g_hover.panel->anchor;
         panelClass          = FROMICON ? HOVEREDITEM->wmClass : g_hover.panel->wmClass;
+        panelDesktopId      = FROMICON ? HOVEREDITEM->desktopId : g_hover.panel->desktopId;
     }
 
-    renderHoverPreview(monitor, LAYOUT, panelAnchor, panelClass, NOW);
+    renderHoverPreview(monitor, LAYOUT, panelAnchor, panelClass, panelDesktopId, NOW);
 
     // The menu says the app's name louder than the tooltip does, and the two
     // plates would otherwise sit on top of each other.

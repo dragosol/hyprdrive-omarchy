@@ -79,18 +79,18 @@ void    render(PHLMONITOR monitor);
 bool    pillContains(PHLMONITOR monitor, const Vector2D& point);
 
 // X24. A click inside the pill, in the same monitor-local RENDER px as
-// pillContains. An icon toggles its app's minimized state
-// (`click-action='minimize'`); a preview restores that one window. `shift`
-// applies `minimize-shift` -- the whole app rather than just the front window.
+// pillContains. An icon min/maxes the app's window on THIS desktop: restore
+// if it is hidden, minimize if it is visible. A window only on another
+// desktop is focused there -- never launched over, never stashed from here.
+// Launch only when the app has no windows at all. A preview still restores
+// that one window.
 // Returns whether an item claimed the click; the caller swallows the event
 // either way, since the pill is not a window and must not leak clicks through.
 //
 // X33. `middle` runs `middle-click-action` / `shift-middle-click-action`
 // instead, which reach ICONS only -- the reference hangs middle-click off the
 // AppIcon, so previews and Show Applications are not targets for it.
-// Y4. `ctrl` is what CYCLES now -- a plain click minimizes the whole app
-// whatever its window count, which is what X45's count-based branch made
-// impossible for a multi-window app.
+// Scroll (not click) cycles windows. `ctrl` is the leftover click-cycle.
 bool    click(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle = false, bool ctrl = false);
 
 // Z2. The Y1 hover panel's own button. It sits ABOVE the pill, so `pillContains`
