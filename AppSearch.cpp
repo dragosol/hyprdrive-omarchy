@@ -695,6 +695,69 @@ namespace AppSearch {
 
             return args;
         }
+
+        // Chromium --app=URL (Omarchy's omarchy-launch-webapp execs that) sets
+        // the Wayland app_id to chrome-{host}_{path}-Default, with '/' in the
+        // path turned into '_'. Omarchy webapp .desktop files have no
+        // StartupWMClass, so the dock would otherwise see a running window and
+        // no Icon=.
+        std::string chromeAppClassStem(const std::string& exec) {
+            std::string url;
+            const auto  ARGS = splitArgs(stripFieldCodes(exec));
+            for (size_t i = 0; i < ARGS.size(); ++i) {
+                if (ARGS[i].starts_with("--app=")) {
+                    url = ARGS[i].substr(6);
+                    break;
+                }
+                if (ARGS[i] == "omarchy-launch-webapp" && i + 1 < ARGS.size()) {
+                    url = ARGS[i + 1];
+                    break;
+                }
+            }
+            if (url.empty())
+                return {};
+
+            std::string rest = url;
+            if (const auto SCHEME = rest.find("://"); SCHEME != std::string::npos)
+                rest = rest.substr(SCHEME + 3);
+            if (rest.empty() || rest.starts_with('/'))
+                return {};
+
+            std::string host, path;
+            if (const auto SLASH = rest.find('/'); SLASH != std::string::npos) {
+                host = rest.substr(0, SLASH);
+                path = rest.substr(SLASH);
+            } else {
+                host = rest;
+                path = "/";
+            }
+
+            if (const auto AT = host.find('@'); AT != std::string::npos)
+                host = host.substr(AT + 1);
+            if (const auto CUT = host.find_first_of("?#"); CUT != std::string::npos)
+                host = host.substr(0, CUT);
+            if (const auto CUT = path.find_first_of("?#"); CUT != std::string::npos)
+                path = path.substr(0, CUT);
+            if (host.empty())
+                return {};
+
+            // GenerateApplicationNameFromURL is host + "_" + path; WM_CLASS then
+            // replaces remaining '/' with '_'. Profile suffix is appended later
+            // ("-Default"), so this stem stops before that.
+            std::string stem = "chrome-" + host + "_" + path;
+            for (char& c : stem) {
+                if (c == '/')
+                    c = '_';
+            }
+            return lower(stem);
+        }
+
+        bool chromeAppClassMatches(const std::string& want, const std::string& exec) {
+            const auto STEM = chromeAppClassStem(exec);
+            if (STEM.empty() || !want.starts_with(STEM))
+                return false;
+            return want.size() == STEM.size() || want[STEM.size()] == '-';
+        }
     }
 
     const std::vector<SEntry>& inventory() {
@@ -1002,7 +1065,8 @@ namespace AppSearch {
             // component covers the rest ("kitty", "firefox").
             const auto ID   = lower(ENTRY.id);
             const auto TAIL = ID.substr(ID.find_last_of('.') == std::string::npos ? 0 : ID.find_last_of('.') + 1);
-            if (lower(ENTRY.wmClass) == WANT || ID == WANT || TAIL == WANT || lower(ENTRY.name) == WANT) {
+            if (lower(ENTRY.wmClass) == WANT || ID == WANT || TAIL == WANT || lower(ENTRY.name) == WANT ||
+                chromeAppClassMatches(WANT, ENTRY.exec)) {
                 found = i;
                 break;
             }
