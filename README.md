@@ -41,7 +41,7 @@ and every surface goes through the accessors in `Config.hpp`:
 | dock pill and dock highlights | `plugin:hyprdrive:dock:corner_radius` (24) | `dockCornerRadius()` |
 | dock / overview frost | `decoration:blur:*` | `-1` follow |
 | workspace-card shadows | `decoration:shadow:*` | `-1` follow |
-| dock pill hue | Omarchy terminal background (`colors.toml`), else `misc:background_color` | `dockBackgroundColor()` |
+| dock / search / strip / results fill | Omarchy terminal background (`colors.toml`), else `misc:background_color` | `dockBackgroundColor()` |
 
 Omarchy already writes the border colour from the theme accent and reloads
 Hyprland on `omarchy theme set`. Squared windows (`decoration:rounding = 0`)

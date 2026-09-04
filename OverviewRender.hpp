@@ -13,6 +13,12 @@ void flushPass(PHLMONITOR monitor);
 // result cards) does not frost on a theme with no window blur.
 void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, int blurPasses = -1);
 
+// Search bar, result cards, and the workspace strip: the same plate the dock
+// wears (Omarchy terminal background, accent border, frost only if window blur
+// is on). Rounding is the caller's -- themeRounding for these surfaces, the
+// Dash-to-Dock 24 stays on the dock itself.
+void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur);
+
 // X92. Stable dual-kawase of the overview main FB for strip/result chrome.
 // blurMainFramebuffer() returns a TEMPORARY texture that window live-blurs
 // overwrite in the same frame — storing only that pointer made the strip frost

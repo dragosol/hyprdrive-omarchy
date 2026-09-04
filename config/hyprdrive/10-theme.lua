@@ -4,8 +4,9 @@
 -- The plugin reads live compositor values (see Config.hpp):
 --   accent     general:col.active_border          -> highlightColor()
 --   cards      decoration:rounding                -> themeRounding()
---   search     the same rounding, border, fill,   -> drawSearch()
---              and decoration:blur:enabled
+--   search     same plate as the dock, rounding   -> themePlate() / drawSearch()
+--   results    from decoration:rounding (0 stays
+--   strip      squared). Dock rounding stays 24.
 --   blur       decoration:blur:*                  -> dock/search frost; off when
 --              decoration:blur:enabled is false
 --   shadows    decoration:shadow:*                -> plugin shadow at -1

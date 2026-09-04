@@ -100,8 +100,9 @@ int           getGestureDistance();
 //                           opacity defaults to Omarchy terminal opacity (0.985)
 //   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
 //   dock blur/shadow -1     follow decoration:blur:* / decoration:shadow:*
-//   search / result cards   themeRounding, highlightColor, general:border_size,
-//                           col.inactive_border fill; frost only if blur:enabled
+//   search / results / strip  same plate as the dock (dockBackgroundColor,
+//                             highlightColor border, frost if blur:enabled);
+//                             rounding is themeRounding, not dockCornerRadius
 //
 // Pin a plugin key only to stop inheriting.
 CHyprColor    highlightColor();

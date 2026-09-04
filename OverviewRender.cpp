@@ -5,6 +5,7 @@
 #include <cmath>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
+#include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/gl/GLTexture.hpp>
 #include <drm_fourcc.h>
@@ -286,6 +287,33 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     // matches the weaker capture (sample path ignores this; capture bakes it).
     data.blurPasses    = blurPasses;
     g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(data));
+}
+
+void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
+    if (box.empty() || alpha <= 0.F)
+        return;
+
+    const int PASSES = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
+    queueBlur(box, rounding, roundingPower, alpha, usePrecomputedBlur, PASSES);
+
+    const auto TINT = ScrollOverview::Config::dockBackgroundColor();
+    CRectPassElement::SRectData bg;
+    bg.box           = box;
+    bg.color         = CHyprColor{TINT.r, TINT.g, TINT.b, TINT.a * alpha};
+    bg.round         = rounding;
+    bg.roundingPower = roundingPower;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+
+    const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+    const auto ACCENT     = ScrollOverview::Config::highlightColor();
+    CBorderPassElement::SBorderData border;
+    border.box           = box.copy().round();
+    border.grad1.reset(ACCENT.modifyA(1.F));
+    border.a             = alpha;
+    border.borderSize    = BORDERSIZE;
+    border.round         = rounding;
+    border.roundingPower = roundingPower;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
 }
 
 

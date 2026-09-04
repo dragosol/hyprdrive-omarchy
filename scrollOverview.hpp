@@ -174,7 +174,7 @@ class CScrollOverview : public IOverview {
     // open/close fade every one of them multiplies its alpha by.
     struct SStripStyle {
         int   round      = 0;
-        int   innerRound = 1;
+        int   innerRound = 0;
         float power      = 2.F;
         float fade       = 1.F;
     };

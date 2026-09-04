@@ -3525,36 +3525,17 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
                 // Radius in RENDER space = the cells' radius plus the padding as
                 // it actually landed after the transform. Measuring the gap off
                 // the transformed boxes avoids duplicating the scale maths.
-                const auto FIRSTCELL  = stripCellBox(0, monitor, renderScale);
-                const int  PANELROUND = ROUND + std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PANEL.x))));
+                const auto FIRSTCELL = stripCellBox(0, monitor, renderScale);
+                // Concentric with the cells only when the theme actually rounds.
+                // Omarchy's squared default (decoration:rounding 0) must stay
+                // squared; inflating by the padding used to force a curve.
+                const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PANEL.x))));
+                const int PANELROUND = ROUND <= 0 ? 0 : ROUND + PADPX;
 
-                // X4: hue from the theme, the same general:col.inactive_border the
-                // cell backdrop below reads.
-                // ponytail: alpha 0.25, not the reference's 0.65. The cell backdrop's
-                // tuned 0.38 is this build's fixed point, and the reference keeps its
-                // panel LESS prominent than its cells (0.65 panel under opaque cells);
-                // 0.38 / (1 / 0.65) preserves that ordering instead of burying the
-                // cells under a panel more opaque than they are.
-                const auto INACTIVE = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
-
-                // X96/X98. Strip PANEL samples private full-mon chrome blur
-                // (decoration:blur:* × kawase a=1). Composite alpha is FADE —
-                // same open/close progress as the tint and minis — so Super spam
-                // does not leave a full-strength frost ghost. Kawase radius is
-                // never multiplied by FADE (OverviewPassElement always blurs at 1).
-                // X99: one dual-kawase pass weaker than decoration:blur:passes / windows.
-                // Y12: full passes, not passes-1. The live fallback has to match the
-                // private chrome FB or the strip changes strength whenever the
-                // capture is missing.
-                const int CHROME_PASSES = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
-                OverviewRender::queueBlur(PANEL, PANELROUND, STYLE.power, FADE, true, CHROME_PASSES);
-
-                CRectPassElement::SRectData panel;
-                panel.box           = PANEL;
-                panel.color = INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.25F * FADE} : INACTIVE.m_colors[0].modifyA(0.25F * FADE);
-                panel.round         = PANELROUND;
-                panel.roundingPower = STYLE.power;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(panel));
+                // Same plate as the dock (Omarchy terminal fill, accent border,
+                // frost only if window blur is on). Rounding is the theme's,
+                // not the dock's Dash-to-Dock 24.
+                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true);
             }
         }
     }
@@ -3615,7 +3596,7 @@ void CScrollOverview::renderStripCellRect(const CBox& cell, const CHyprColor& co
     // here deliberately; do not restore it as a regression fix.
 void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool largeLeft, bool largeRight, const SStripStyle& STYLE) const {
     const auto OUTLINE = ScrollOverview::Config::highlightColor();
-    const int  BORDER  = std::max(1, sc<int>(std::round(2.F * monitor->m_scale)));
+    const int  BORDER  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
     // Inset by the full stroke width: renderBorder centres nothing, it grows
     // outward from the box, so the box has to be the INNER rectangle for the
     // stroke to land inside the tile. Radii shrink with it or the curve would
@@ -3643,15 +3624,11 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
 
     renderOverviewWorkspaceShadow(monitor, CELL, renderScale, false, FADE);
 
-    // X4: the cell backdrop is themed from general:col.inactive_border, the
-    // mirror of the hover tint's col.active_border below. Only the hue is
-    // inherited; alpha stays at the tuned 0.38. Black is the no-theme fallback.
-    const auto INACTIVE = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
-
     const bool ATLEFT  = workspaceIdx == 0;
     const bool ATRIGHT = workspaceIdx + 1 == images.size();
 
-    renderStripCellRect(CELL, INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.38F * FADE} : INACTIVE.m_colors[0].modifyA(0.38F * FADE), ATLEFT, ATRIGHT, STYLE);
+    // Resting fill is the strip panel (the same Omarchy terminal plate as the
+    // dock). Only hover tints the cell itself.
 
     // X3: the deprecated overview centres a large, faint workspace number in
     // every cell (ii/modules/ii/overview/OverviewWidget.qml:182-193): 250px
@@ -3758,7 +3735,7 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
     // (8:23) applied to whatever the outer radius resolves to, rather than a
     // literal 8. E8-c pinned the outer radius to the live desktop curve, so a
     // hardcoded inner would stop tracking the theme the moment that changes.
-    style.innerRound = std::max(1, sc<int>(std::round(sc<float>(style.round) * 8.F / 23.F)));
+    style.innerRound = std::max(0, sc<int>(std::round(sc<float>(style.round) * 8.F / 23.F)));
 
     renderStripPanel(monitor, renderScale, style);
 
@@ -4076,36 +4053,11 @@ static void drawSearch(const SSearchLayout& L) {
 
     const int PILLROUND  = roundFor(PILL);
     const int BADGEROUND = roundFor(BADGE);
+    const auto ACCENT    = ScrollOverview::Config::highlightColor();
 
-    // Frost only when the theme blurs windows. queueBlur is a no-op if
-    // decoration:blur:enabled is off, so a squared Omarchy theme is not frosted.
-    OverviewRender::queueBlur(PILL, PILLROUND, POWER, FADE, false);
-
-    // X4: hue inherited from the theme, alpha kept at the tuned value. The
-    // resting surface reads col.inactive_border and the badge the accent -- the
-    // same pairing renderStrip already uses for its cells.
-    const auto INACTIVE   = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
-    const auto ACCENT     = ScrollOverview::Config::highlightColor();
-    const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
-
-    const auto outline = [&](const CBox& box, int rounding, float alpha) {
-        CBorderPassElement::SBorderData border;
-        border.box           = box.copy().round();
-        border.grad1.reset(ACCENT.modifyA(1.F));
-        border.a             = alpha;
-        border.borderSize    = BORDERSIZE;
-        border.round         = rounding;
-        border.roundingPower = POWER;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
-    };
-
-    CRectPassElement::SRectData bg;
-    bg.box           = PILL;
-    bg.color         = INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.60F * FADE} : INACTIVE.m_colors[0].modifyA(0.60F * FADE);
-    bg.round         = PILLROUND;
-    bg.roundingPower = POWER;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
-    outline(PILL, PILLROUND, FADE);
+    // Same plate as the dock: Omarchy terminal fill, accent border, frost only
+    // if window blur is on. Rounding is decoration:rounding, not the dock's 24.
+    OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false);
 
     CRectPassElement::SRectData badgeBg;
     badgeBg.box           = BADGE;
@@ -4147,20 +4099,9 @@ static void drawSearch(const SSearchLayout& L) {
     for (const auto& CARD : L.cards) {
         texFade = FADE * CARD.alpha;
 
-        const int   PANELROUND    = roundFor(CARD.box);
-        const float CARDALPHA     = FADE * CARD.alpha;
-        // §10 clause 3 / X92: result frost samples the private overview chrome blur.
-        // Skipped when decoration:blur:enabled is off (same gate as the pill).
-        const int CHROME_PASSES = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
-        OverviewRender::queueBlur(CARD.box, PANELROUND, POWER, CARDALPHA, true, CHROME_PASSES);
-
-        CRectPassElement::SRectData cardBg;
-        cardBg.box           = CARD.box;
-        cardBg.color         = INACTIVE.m_colors.empty() ? CHyprColor{0.F, 0.F, 0.F, 0.55F * CARDALPHA} : INACTIVE.m_colors[0].modifyA(0.55F * CARDALPHA);
-        cardBg.round         = PANELROUND;
-        cardBg.roundingPower = POWER;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(cardBg));
-        outline(CARD.box, PANELROUND, CARDALPHA);
+        const int   PANELROUND = roundFor(CARD.box);
+        const float CARDALPHA  = FADE * CARD.alpha;
+        OverviewRender::themePlate(CARD.box, PANELROUND, POWER, CARDALPHA, true);
 
         if (CARD.grid) {
             for (const auto& ITEM : CARD.items) {
