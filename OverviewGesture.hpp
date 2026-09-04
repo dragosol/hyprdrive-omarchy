@@ -5,7 +5,7 @@
 
 class COverviewGesture : public ITrackpadGesture {
   public:
-    COverviewGesture()              = default;
+    explicit COverviewGesture(eTrackpadGestureDirection direction);
     ~COverviewGesture() override = default;
 
     void begin(const ITrackpadGesture::STrackpadGestureBegin& e) override;
@@ -13,7 +13,8 @@ class COverviewGesture : public ITrackpadGesture {
     void end(const ITrackpadGesture::STrackpadGestureEnd& e) override;
 
   private:
-    float m_lastDelta   = 0.F;
-    bool  m_firstUpdate = false;
-    WP<IOverview> m_overview;
+    eTrackpadGestureDirection m_direction   = TRACKPAD_GESTURE_DIR_NONE;
+    float                     m_lastDelta   = 0.F;
+    bool                      m_firstUpdate = false;
+    WP<IOverview>             m_overview;
 };

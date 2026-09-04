@@ -26,9 +26,9 @@ if hyprdrive_loaded() then
         hl.bind("SUPER + mouse:272", hl.plugin.hyprdrive.window([[click]]), { mouse = true, description = "Overview: select (SUPER held)" })
     end)
 
-    -- 3-finger swipe up opens the overview and follows the fingers (GNOME /
-    -- macOS Mission Control). 3-finger horizontal stays Omarchy workspace
-    -- switching. Swipe up again while it is open closes it. Super tap still
-    -- toggles, including if a swipe left the overview stuck.
+    -- 3-finger swipe up opens the overview and follows the fingers; swipe
+    -- down closes it. Reversing mid-gesture undoes the motion. 3-finger
+    -- horizontal stays Omarchy workspace switching. Super tap still toggles.
     hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
+    hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down" })
 end

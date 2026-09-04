@@ -5972,21 +5972,25 @@ void CScrollOverview::onSwipeEnd() {
     m_isSwiping        = false;
     m_swipeClosing     = false;
 
-    if (!DISMISS) {
-        *scale = ScrollOverview::Config::getScale();
+    // Scale 1 is the desktop, the configured overview scale is fully open.
+    // A reverse mid-gesture is just this number coming back the other way.
+    const float OPEN     = ScrollOverview::Config::getScale();
+    const float RANGE    = std::max(0.01F, std::abs(1.F - OPEN));
+    const float OPENNESS = std::clamp(std::abs(scale->value() - 1.F) / RANGE, 0.F, 1.F);
+
+    if (DISMISS) {
+        if (OPENNESS <= 0.65F)
+            close();
+        else {
+            useAnimDirection(true);
+            *scale = OPEN;
+        }
         return;
     }
 
-    // How far the fingers drove toward the desktop. Scale 1 is closed, the
-    // configured overview scale is open. Commit the close if they got past
-    // a third of the way; otherwise snap back so a graze cannot trap them.
-    const float OPEN       = ScrollOverview::Config::getScale();
-    const float RANGE      = std::max(0.01F, std::abs(1.F - OPEN));
-    const float CLOSEDNESS = std::clamp(std::abs(scale->value() - OPEN) / RANGE, 0.F, 1.F);
-    if (CLOSEDNESS >= 0.35F)
-        close();
-    else {
+    if (OPENNESS >= 0.35F) {
         useAnimDirection(true);
         *scale = OPEN;
-    }
+    } else
+        close();
 }

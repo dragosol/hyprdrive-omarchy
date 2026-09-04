@@ -842,7 +842,7 @@ static std::expected<void, std::string> applyOverviewGesture(size_t fingerCount,
         return std::unexpected("Invalid direction");
 
     if (action == "overview")
-        return g_pTrackpadGestures->addGesture(makeUnique<COverviewGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
+        return g_pTrackpadGestures->addGesture(makeUnique<COverviewGesture>(direction), fingerCount, direction, modMask, deltaScale, disableInhibit);
 
     if (action == "unset")
         return g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
