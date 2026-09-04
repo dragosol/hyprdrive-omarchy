@@ -1723,26 +1723,27 @@ std::vector<PHLWINDOW> classWindowsHere(const std::string& wmClass, PHLMONITOR m
     return out;
 }
 
-// The reference's `Main.activateWindow`, which is what every X33 path ends in.
-// Focus alone is not enough: the window may be on another desktop, it may be
-// minimized, and X43 already established that focus and stacking are separate
-// questions.
+// Go to a window on the desktop it belongs to. Preview clicks and "show me
+// that window" must switch there -- never fly the window onto the current
+// desktop (the restore flight comes up from the dock) and never toggle
+// special:minimized (Omarchy slides that workspace in vertically).
 void activateWindow(const PHLWINDOW& window) {
     if (!window)
         return;
 
     if (Minimize::isMinimized(window)) {
+        Minimize::showOriginalWorkspace(window);
         Minimize::restore(window);
         return;
     }
 
-    if (const auto WORKSPACE = window->m_workspace; WORKSPACE) {
+    if (const auto WORKSPACE = window->m_workspace; WORKSPACE && !WORKSPACE->m_isSpecialWorkspace) {
         if (const auto MONITOR = WORKSPACE->m_monitor.lock(); MONITOR && MONITOR->m_activeWorkspace != WORKSPACE)
-            MONITOR->changeWorkspace(WORKSPACE, false, true, true);
+            MONITOR->changeWorkspace(WORKSPACE, false, true, false);
     }
 
     Desktop::windowState()->raise(window);
-    Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_KEYBIND);
+    Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
 }
 
 // X33 `scroll-action='cycle-windows'`, transcribed from `_cycleThroughWindows`.
@@ -2191,17 +2192,13 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             if (!WINDOW)
                 return;
 
-            // ponytail: a minimized window is only restored, not selected. The
-            // overview has no card for the stash workspace, so committing a
-            // selection onto it would land the viewport on the wrong desktop.
-            // Same as clicking its X25 preview, which is the gesture next to it.
-            if (Minimize::isMinimized(WINDOW)) {
-                Minimize::restore(WINDOW);
-                return;
-            }
-
+            // Same as clicking its hover-panel preview: go to that window on
+            // its desktop. Inside the overview, commit it as the selection so
+            // close() does not overwrite the focus.
             if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
                 OVERVIEW->selectAndClose(WINDOW);
+            else
+                activateWindow(WINDOW);
             return;
         }
 
@@ -3651,18 +3648,9 @@ bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
 
     const auto WINDOW = CELL->second;
 
-    // The SAME three lines the X28 menu's window rows already run, deliberately:
-    // both are "the dock naming one window and being asked to go to it", and one
-    // dock must not have two answers. So a minimized window is restored (the
-    // stash has no card to land a selection on), and inside the overview the
-    // window is committed as the selection AND the overview closes, which is
-    // what a tile click does -- focusing it directly would be overwritten by
-    // close()'s own selection.
-    if (Minimize::isMinimized(WINDOW)) {
-        Minimize::restore(WINDOW);
-        return true;
-    }
-
+    // Always go to the window on its own desktop. A restore-flight from here
+    // would pull it onto the current desktop from the dock (below the screen);
+    // switching first is what "click the preview of that window" means.
     if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
         OVERVIEW->selectAndClose(WINDOW);
     else
