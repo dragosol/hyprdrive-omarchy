@@ -214,6 +214,34 @@ inline void stealOverviewKeyboard() {
         g_pSeatManager->setKeyboardFocus(nullptr);
 }
 
+// Give the keyboard back to the window overview stole it from. Seat focus is
+// a different thing from "which window is active": stealOverviewKeyboard
+// nulls the seat without changing Desktop::focusState, so close() used to
+// skip fullWindowFocus when the same terminal was still "the" window -- and
+// Hyprland never sent wl_keyboard.enter. Typing stayed dead until a workspace
+// switch forced a real refocus. Passing the surface, then forcing the seat,
+// is the click-path that actually delivers enter.
+inline void restoreOverviewKeyboard(const PHLWINDOW& window) {
+    for (const auto& overview : scrollOverviews()) {
+        if (overview && !overview->isClosing())
+            return;
+    }
+
+    PHLWINDOW target = window;
+    if (!Desktop::View::validMapped(target))
+        target = Desktop::focusState()->window();
+    if (!Desktop::View::validMapped(target))
+        return;
+
+    SP<CWLSurfaceResource> surf;
+    if (target->wlSurface())
+        surf = target->wlSurface()->resource();
+
+    Desktop::focusState()->fullWindowFocus(target, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD, surf);
+    if (g_pSeatManager && surf)
+        g_pSeatManager->setKeyboardFocus(surf);
+}
+
 inline bool isTopLayerFocused(PHLMONITOR monitor) {
     const auto FOCUSEDSURFACE = g_pSeatManager->m_state.keyboardFocus.lock();
 

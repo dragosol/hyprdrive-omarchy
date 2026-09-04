@@ -48,6 +48,7 @@ CScrollOverview::~CScrollOverview() {
     emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(WORKSPACE, Desktop::focusState()->window()), false);
     restoreWorkspaceAnimationOverrides();
     restoreInputConfigOverrides();
+    restoreOverviewKeyboard(getOverviewWindowToShow(closeOnWindow.lock()));
     forced.restoreAll();
     if (const auto MONITOR = pMonitor.lock()) {
         for (auto const& WINDOW : Desktop::windowState()->windows()) {
@@ -5347,6 +5348,7 @@ void CScrollOverview::close() {
 
             const auto FINALWINDOW = getOverviewWindowToShow(closeOnWindow.lock());
             finishClose(FINALWORKSPACE, FINALWINDOW);
+            restoreOverviewKeyboard(FINALWINDOW);
             return;
         }
     }
@@ -5412,6 +5414,7 @@ void CScrollOverview::close() {
     const auto FINALWINDOW    = getOverviewWindowToShow(closeOnWindow.lock());
     const auto FINALWORKSPACE = FINALWINDOW ? FINALWINDOW->m_workspace : SELECTEDWORKSPACE;
     finishClose(FINALWORKSPACE, FINALWINDOW);
+    restoreOverviewKeyboard(FINALWINDOW);
 }
 
 void CScrollOverview::onPreRender() {
