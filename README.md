@@ -96,7 +96,7 @@ raw-snippet` so they survive reinstall.
     10-theme.lua      documents inheritance; pins nothing
     20-layout.lua     scale, layout, workspace gap; dock.hot_keys = false
     25-rules.lua      float+center the Nautilus previewer
-    30-keybinds.lua   overview click submap only
+    30-keybinds.lua   overview click submap; 3-finger swipe up
 ```
 
 Lua's last assignment wins, so a line in the raw block overrides the generated
@@ -118,7 +118,9 @@ hl.bind("SUPER + SHIFT + D", hl.plugin.hyprdrive.overview("toggle"))
 hl.bind("SUPER + H", hl.plugin.hyprdrive.minimize("window"))
 ```
 
-Tap Super is not a bind (`tap_super`, default true).
+Tap Super is not a bind (`tap_super`, default true). Three-finger swipe up on
+the trackpad is the same overview, registered as `hl.plugin.hyprdrive.gesture`
+so it follows the fingers; three-finger left/right stay workspace switching.
 
 ## What this fork dropped
 
