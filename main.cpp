@@ -611,12 +611,9 @@ static void afterQueryEdit() {
     g_search.nav.selection         = -1;
     g_search.nav.explicitSelection = false;
 
-    // ...and the new ranking's TOP result takes the selection instead of the
-    // desktops. Deferred to the search render step because the providers have
-    // not answered yet; emptying the query hands the selection back to the tiles.
-    g_search.nav.selectFirstPending = !g_search.query.text.empty();
-    if (g_search.query.text.empty())
-        g_search.nav.zone = EOverviewNavZone::Tile;
+    // Typing sets focus to Search bar. Down arrow shifts focus to Result zone.
+    g_search.nav.selectFirstPending = false;
+    g_search.nav.zone              = g_search.query.text.empty() ? EOverviewNavZone::Tile : EOverviewNavZone::Search;
 
     for (const auto& overview : scrollOverviews()) {
         if (!overview)
@@ -648,6 +645,13 @@ static bool handleSearchPress(uint32_t keycode) {
     // X5: ESC is always ours while the overview is open -- it either clears the
     // query or exits -- so it must never fall through to the window underneath.
     if (keycode == EVDEV_KEY_ESC) {
+        if (OmarchySearch::isSushiActive()) {
+            OmarchySearch::closeSushi();
+            for (const auto& overview : scrollOverviews())
+                if (overview)
+                    overview->damage();
+            return true;
+        }
         resetCompose();
         // X5, GNOME-style: the first ESC drops the filter, the next one leaves.
         if (!g_search.query.active) {
@@ -660,6 +664,13 @@ static bool handleSearchPress(uint32_t keycode) {
         g_search.query.active = false;
         afterQueryEdit();
         return true;
+    }
+
+    // Typing any character while in Result zone shifts focus back to Search bar
+    if (g_search.nav.zone == EOverviewNavZone::Result) {
+        g_search.nav.zone              = EOverviewNavZone::Search;
+        g_search.nav.selection         = -1;
+        g_search.nav.explicitSelection = false;
     }
 
     if (keycode == EVDEV_KEY_BACKSPACE) {
@@ -736,11 +747,18 @@ static void                registerRawKeyHooks() {
                 if (event.keycode == EVDEV_KEY_SPACE) {
                     if (OmarchySearch::isSushiActive()) {
                         OmarchySearch::closeSushi();
+                        for (const auto& overview : scrollOverviews())
+                            if (overview)
+                                overview->damage();
                         g_consumedPresses.insert(event.keycode);
                         info.cancelled = true;
                         return;
                     }
-                    if (overviewToggleSushiForSelection()) {
+                    if (g_search.nav.zone == EOverviewNavZone::Result) {
+                        overviewToggleSushiForSelection();
+                        for (const auto& overview : scrollOverviews())
+                            if (overview)
+                                overview->damage();
                         g_consumedPresses.insert(event.keycode);
                         info.cancelled = true;
                         return;

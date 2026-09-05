@@ -54,5 +54,7 @@ bool isSushiActive();
 void toggleSushi(const std::string& filePath);
 void closeSushi();
 void updateSushiIfActive(const std::string& filePath);
+bool isOverviewSushiWindow(const std::string& windowClass, uint32_t pid = 0);
+std::vector<SSearchItem> recentFiles();
 
 } // namespace OmarchySearch

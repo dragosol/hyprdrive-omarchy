@@ -386,122 +386,116 @@ struct SSearchRow {
 
 inline std::vector<SSearchRow> overviewSearchRows() {
     std::vector<SSearchRow> rows;
-    if (g_search.query.text.empty())
-        return rows;
-
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 
-    // 1. Agent Commands (/grok, /agy, /gemini, /claude, etc.)
-    if (OmarchySearch::isAgentQuery(g_search.query.text)) {
-        for (const auto& item : OmarchySearch::searchAgents(g_search.query.text)) {
-            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 0});
-        }
-        return rows;
+    const std::string& Q = g_search.query.text;
+
+    // ------------------------------------------------------------------------
+    // COLUMN 0: OMARCHY MENU & APPS (Super+Space launcher)
+    // ------------------------------------------------------------------------
+    if (!Q.empty()) {
+        for (const auto* E : AppSearch::search(Q, 6))
+            rows.push_back({E->name, "", E->icon, E, {}, std::nullopt, 0});
     }
 
-    // 2. Instant Calculator
-    if (const auto calc = OmarchySearch::evaluateCalculator(g_search.query.text); calc) {
-        rows.push_back({calc->name, calc->description, calc->icon, nullptr, {}, *calc, 0});
-    }
-
-    // 3. Applications (Column 0)
-    for (const auto* E : AppSearch::search(g_search.query.text, OVERVIEW_APP_RESULT_LIMIT))
-        rows.push_back({E->name, "", E->icon, E, {}, std::nullopt, 0});
-
-    // 4. Omarchy Menu Actions & Toggles (Column 0)
-    for (const auto& item : OmarchySearch::searchMenu(g_search.query.text, 8)) {
+    for (const auto& item : OmarchySearch::searchMenu(Q, Q.empty() ? 6 : 8)) {
         rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 0});
     }
 
-    // 5. Files (Column 1)
-    for (const auto& f : OmarchySearch::fileResults()) {
-        rows.push_back({f.name, f.description, f.icon, nullptr, {}, f, 1});
+    // ------------------------------------------------------------------------
+    // COLUMN 1: FILES & FOLDERS (Omarchy Find Index)
+    // ------------------------------------------------------------------------
+    if (Q.empty()) {
+        for (const auto& f : OmarchySearch::recentFiles()) {
+            rows.push_back({f.name, f.description, f.icon, nullptr, {}, f, 1});
+        }
+    } else {
+        for (const auto& f : OmarchySearch::fileResults()) {
+            rows.push_back({f.name, f.description, f.icon, nullptr, {}, f, 1});
+        }
     }
 
-    // 6. D-Bus Search Providers (GNOME Settings, Characters, etc.) (Column 1)
-    std::unordered_map<std::string, size_t> perProvider;
-    for (const auto& R : SearchProviders::results()) {
-        if (perProvider[R.providerDesktopId]++ >= OVERVIEW_PROVIDER_ROW_LIMIT)
-            continue;
-        rows.push_back({R.name, R.description, R.icon, nullptr, R, std::nullopt, 1});
+    // ------------------------------------------------------------------------
+    // COLUMN 2: AI AGENTS & TOOLS
+    // ------------------------------------------------------------------------
+    if (!Q.empty()) {
+        if (const auto calc = OmarchySearch::evaluateCalculator(Q); calc) {
+            rows.push_back({calc->name, calc->description, calc->icon, nullptr, {}, *calc, 2});
+        }
     }
 
-    g_search.query.providerTotals = std::move(perProvider);
+    if (OmarchySearch::isAgentQuery(Q)) {
+        for (const auto& item : OmarchySearch::searchAgents(Q)) {
+            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
+        }
+    } else if (!Q.empty()) {
+        OmarchySearch::SSearchItem aiItem;
+        aiItem.kind = OmarchySearch::EItemKind::Agent;
+        aiItem.id = "agent:agy";
+        aiItem.name = "Ask Antigravity (AGY)";
+        aiItem.description = Q;
+        aiItem.icon = "utilities-terminal";
+        aiItem.category = "AI Agent";
+        aiItem.actionCommand = "omarchy-launch-tui --app-id=org.omarchy.agent agy --dangerously-skip-permissions --prompt-interactive \"" + Q + "\"";
+        rows.push_back({aiItem.name, aiItem.description, aiItem.icon, nullptr, {}, aiItem, 2});
+
+        OmarchySearch::SSearchItem webItem;
+        webItem.kind = OmarchySearch::EItemKind::Action;
+        webItem.id = "web:google";
+        webItem.name = "Search Google";
+        webItem.description = Q;
+        webItem.icon = "web-browser";
+        webItem.category = "Web";
+        webItem.actionCommand = "xdg-open 'https://www.google.com/search?q=" + Q + "'";
+        rows.push_back({webItem.name, webItem.description, webItem.icon, nullptr, {}, webItem, 2});
+    } else {
+        OmarchySearch::SSearchItem agyHelp;
+        agyHelp.kind = OmarchySearch::EItemKind::Agent;
+        agyHelp.id = "agent:agy";
+        agyHelp.name = "/agy <prompt>";
+        agyHelp.description = "DeepMind AGY Coding Agent";
+        agyHelp.icon = "utilities-terminal";
+        agyHelp.category = "AI Agent";
+        agyHelp.actionCommand = "omarchy-launch-tui --app-id=org.omarchy.agent agy";
+        rows.push_back({agyHelp.name, agyHelp.description, agyHelp.icon, nullptr, {}, agyHelp, 2});
+
+        OmarchySearch::SSearchItem grokHelp;
+        grokHelp.kind = OmarchySearch::EItemKind::Agent;
+        grokHelp.id = "agent:grok";
+        grokHelp.name = "/grok <prompt>";
+        grokHelp.description = "xAI Grok Agent";
+        grokHelp.icon = "utilities-terminal";
+        grokHelp.category = "AI Agent";
+        grokHelp.actionCommand = "omarchy-launch-tui --app-id=org.omarchy.agent grok";
+        rows.push_back({grokHelp.name, grokHelp.description, grokHelp.icon, nullptr, {}, grokHelp, 2});
+    }
+
     return rows;
 }
 
-// X49. One card per provider / category.
+// X49. One card per column: Omarchy Menu (0), Files & Folders (1), AI & Tools (2).
 struct SSearchSection {
     std::string         title;
     std::string         icon;
     std::vector<size_t> rows;  // indices into the overviewSearchRows() vector
-    size_t              total = 0; // G6: how many the provider had, cap included
+    size_t              total = 0;
     bool                grid = false;
-    int                 column = 0; // 0 = Left, 1 = Right
+    int                 column = 0; // 0, 1, or 2
 };
 
 inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSearchRow>& rows) {
     std::vector<SSearchSection> out;
-    std::vector<std::string>    keys;
+    out.push_back({"Omarchy Menu", "system-run", {}, 0, false, 0});
+    out.push_back({"Files & Folders", "folder", {}, 0, false, 1});
+    out.push_back({"AI & Tools", "utilities-terminal", {}, 0, false, 2});
 
     for (size_t i = 0; i < rows.size(); ++i) {
-        std::string KEY;
-        std::string title = "Results";
-        std::string icon  = "system-search";
-        bool        grid  = false;
-        int         col   = rows[i].column;
+        int col = std::clamp(rows[i].column, 0, 2);
+        out[sc<size_t>(col)].rows.push_back(i);
+    }
 
-        if (rows[i].omarchy) {
-            const auto& o = *rows[i].omarchy;
-            if (o.kind == OmarchySearch::EItemKind::Calculator) {
-                KEY   = "calc";
-                title = "Calculator";
-                icon  = "accessories-calculator";
-            } else if (o.kind == OmarchySearch::EItemKind::Agent) {
-                KEY   = "agent";
-                title = "AI Agents";
-                icon  = "utilities-terminal";
-            } else if (o.kind == OmarchySearch::EItemKind::File) {
-                KEY   = "files";
-                title = "Files";
-                icon  = "system-file-manager";
-            } else {
-                KEY   = "omarchy:" + o.category;
-                title = o.category.empty() ? "Omarchy" : o.category;
-                icon  = "system-run";
-            }
-        } else if (rows[i].app) {
-            KEY   = "apps";
-            title = "Applications";
-            icon  = "applications-other";
-            grid  = true;
-        } else {
-            KEY   = rows[i].provider.providerDesktopId;
-            title = KEY;
-            icon  = KEY;
-            if (const auto* ENTRY = AppSearch::entryForId(KEY); ENTRY) {
-                title = ENTRY->name;
-                icon  = ENTRY->icon;
-            }
-        }
-
-        if (const auto IT = std::ranges::find(keys, KEY); IT != keys.end()) {
-            out[sc<size_t>(IT - keys.begin())].rows.push_back(i);
-            continue;
-        }
-
-        keys.push_back(KEY);
-        const auto TOTALIT = g_search.query.providerTotals.find(KEY);
-
-        SSearchSection section{
-            .title  = title,
-            .icon   = icon,
-            .rows   = {i},
-            .total  = TOTALIT == g_search.query.providerTotals.end() ? 0 : TOTALIT->second,
-            .grid   = grid,
-            .column = col,
-        };
-        out.push_back(std::move(section));
+    for (auto& sec : out) {
+        sec.total = sec.rows.size();
     }
 
     return out;
@@ -677,7 +671,7 @@ inline bool shouldShowOverviewWindow(const PHLWINDOW& window) {
     if (!WINDOW)
         return false;
 
-    if (WINDOW->m_class == "org.gnome.NautilusPreviewer" || WINDOW->m_initialClass == "org.gnome.NautilusPreviewer")
+    if (OmarchySearch::isOverviewSushiWindow(WINDOW->m_class, WINDOW->getPID()))
         return false;
 
     if (!validMapped(WINDOW))
@@ -931,13 +925,8 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
     if (!monitor)
         return 1.F;
 
-    // X65 (user, 2026-08-05): "results blur should not take up 80% of the
-    // screen width, maybe something like 50%". A result is an icon, a name and
-    // a description -- it never needed the tile grid's full span, and at 86%
-    // the frosted card was the largest thing on screen. Clamped so a narrow
-    // monitor still leaves room for the G6 header column plus a usable row.
     const float GAPL = sc<float>(ScrollOverview::Config::getMissionControlGap());
-    return std::clamp(sc<float>(monitor->m_size.x) * 0.5F, 1.F, std::max(1.F, sc<float>(monitor->m_size.x) - (GAPL * 2.F)));
+    return std::clamp(sc<float>(monitor->m_size.x) * 0.84F, 880.F, std::max(1.F, sc<float>(monitor->m_size.x) - (GAPL * 2.F)));
 }
 
 // G5: the grid "caps at 6 and at whatever fits the width". The 6 is applied
@@ -978,46 +967,15 @@ inline float overviewResultsSectionHeight(const SSearchSection& section, float s
 // So the stack is made to FIT before anything measures it: rows are given up
 // from the tallest section first, and no section is ever taken below one row.
 // Every category survives; the rows given up are what G6's "%d more" reports.
-// Dropping a whole category to fit a box is never the answer -- the categories
-// ARE the feature.
 inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHLMONITOR monitor) {
     if (sections.empty() || !monitor)
         return;
 
-    const float SPANWL       = overviewResultsSpanW(monitor);
-    const float INSPECTOR_WL = std::clamp(SPANWL * 0.28F, 280.F, 380.F);
-    const float RESULTS_WL   = std::max(200.F, SPANWL - INSPECTOR_WL - 12.F);
-    const bool  TWO_COLS     = (RESULTS_WL >= 500.F);
-    const float COL_WL       = TWO_COLS ? (RESULTS_WL - 12.F) / 2.F : RESULTS_WL;
-
-    const float BUDGET = std::max(0.F, (sc<float>(monitor->m_size.y) * 0.55F) - overviewSearchLogicalHeight(monitor) - (OVERVIEW_RESULT_PANELGAPL * 2.F));
-
-    const auto stackHeight = [&] {
-        float col0H = 0.F, col1H = 0.F;
-        bool has0 = false, has1 = false;
-        for (const auto& SECTION : sections) {
-            const float w = (TWO_COLS && (SECTION.column == 0 || SECTION.column == 1)) ? COL_WL : RESULTS_WL;
-            const float h = overviewResultsSectionHeight(SECTION, w);
-            if (TWO_COLS && SECTION.column == 1) {
-                col1H += (has1 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
-                has1 = true;
-            } else {
-                col0H += (has0 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
-                has0 = true;
-            }
+    const size_t MAX_ROWS = 5;
+    for (auto& sec : sections) {
+        if (sec.rows.size() > MAX_ROWS) {
+            sec.rows.resize(MAX_ROWS);
         }
-        return std::max(col0H, col1H);
-    };
-
-    while (stackHeight() > BUDGET) {
-        const auto TALLEST = std::ranges::max_element(sections, {}, [&](const SSearchSection& SECTION) {
-            const float w = (TWO_COLS && (SECTION.column == 0 || SECTION.column == 1)) ? COL_WL : RESULTS_WL;
-            return overviewResultsSectionHeight(SECTION, w);
-        });
-        if (TALLEST == sections.end() || TALLEST->rows.size() <= 1)
-            break;
-
-        TALLEST->rows.pop_back();
     }
 }
 
@@ -1025,33 +983,15 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
     if (sections.empty() || !monitor)
         return 0.F;
 
-    const float SPANWL       = overviewResultsSpanW(monitor);
-    const float INSPECTOR_WL = std::clamp(SPANWL * 0.28F, 280.F, 380.F);
-    const float RESULTS_WL   = std::max(200.F, SPANWL - INSPECTOR_WL - 12.F);
-    const bool  TWO_COLS     = (RESULTS_WL >= 500.F);
-    const float COL_WL       = TWO_COLS ? (RESULTS_WL - 12.F) / 2.F : RESULTS_WL;
-
-    float col0H = 0.F, col1H = 0.F;
-    bool has0 = false, has1 = false;
-    for (const auto& SECTION : sections) {
-        const float w = (TWO_COLS && (SECTION.column == 0 || SECTION.column == 1)) ? COL_WL : RESULTS_WL;
-        const float h = overviewResultsSectionHeight(SECTION, w);
-        if (TWO_COLS && SECTION.column == 1) {
-            col1H += (has1 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
-            has1 = true;
-        } else {
-            col0H += (has0 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
-            has0 = true;
-        }
+    size_t maxRows = 0;
+    for (const auto& sec : sections) {
+        maxRows = std::max(maxRows, sec.rows.size());
     }
+    const size_t VISIBLE_ROWS = std::clamp<size_t>(maxRows, 1, 5);
+    const float CARD_H = 30.F + (sc<float>(VISIBLE_ROWS) * 32.F) + 16.F;
 
-    float panelH = std::max(col0H, col1H);
-    if (panelH < 180.F)
-        panelH = 180.F;
-
-    const float BUDGET = std::max(0.F, (sc<float>(monitor->m_size.y) * 0.55F) - overviewSearchLogicalHeight(monitor));
-
-    return std::min(panelH + (OVERVIEW_RESULT_PANELGAPL * 2.F), BUDGET);
+    const float BUDGET = std::min(230.F, sc<float>(monitor->m_size.y) * 0.28F);
+    return std::min(CARD_H, BUDGET);
 }
 
 // The axis helpers. They used to be defined at the bottom of this file with a

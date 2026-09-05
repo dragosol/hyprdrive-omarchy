@@ -32,27 +32,35 @@ namespace OmarchySearch {
 // ============================================================================
 // Quick Look (GNOME Sushi) State Machine
 // ============================================================================
+static bool        g_sushiActive = false;
 static pid_t       g_sushiPid = 0;
 static std::string g_sushiPath;
 
 bool isSushiActive() {
-    if (g_sushiPid <= 0)
+    return g_sushiActive;
+}
+
+bool isOverviewSushiWindow(const std::string& windowClass, uint32_t pid) {
+    if (!g_sushiActive)
         return false;
-    int status = 0;
-    pid_t res = waitpid(g_sushiPid, &status, WNOHANG);
-    if (res == 0)
-        return true; // Still alive
-    g_sushiPid = 0;
-    g_sushiPath.clear();
+    if (windowClass == "org.gnome.NautilusPreviewer")
+        return true;
+    if (pid > 0 && g_sushiPid > 0 && pid == static_cast<uint32_t>(g_sushiPid))
+        return true;
     return false;
 }
 
 void closeSushi() {
-    if (isSushiActive()) {
-        kill(g_sushiPid, SIGTERM);
-        int status = 0;
-        waitpid(g_sushiPid, &status, WNOHANG);
+    if (g_sushiActive) {
+        // GNOME Sushi D-Bus Close method
+        system("gdbus call --session --dest org.gnome.NautilusPreviewer --object-path /org/gnome/NautilusPreviewer --method org.gnome.NautilusPreviewer2.Close >/dev/null 2>&1 &");
+        if (g_sushiPid > 0) {
+            kill(g_sushiPid, SIGTERM);
+            int status = 0;
+            waitpid(g_sushiPid, &status, WNOHANG);
+        }
     }
+    g_sushiActive = false;
     g_sushiPid = 0;
     g_sushiPath.clear();
 }
@@ -61,26 +69,27 @@ void toggleSushi(const std::string& filePath) {
     if (filePath.empty())
         return;
 
-    if (isSushiActive()) {
+    if (g_sushiActive) {
         const bool same = (g_sushiPath == filePath);
         closeSushi();
         if (same)
             return; // Toggled off
     }
 
+    g_sushiActive = true;
+    g_sushiPath   = filePath;
+
     pid_t pid = fork();
     if (pid == 0) {
-        // Child
         execl("/usr/bin/sushi", "sushi", filePath.c_str(), nullptr);
         _exit(1);
     } else if (pid > 0) {
-        g_sushiPid  = pid;
-        g_sushiPath = filePath;
+        g_sushiPid = pid;
     }
 }
 
 void updateSushiIfActive(const std::string& filePath) {
-    if (isSushiActive() && !filePath.empty() && g_sushiPath != filePath) {
+    if (g_sushiActive && !filePath.empty() && g_sushiPath != filePath) {
         toggleSushi(filePath);
     }
 }
@@ -609,8 +618,32 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
     std::lock_guard<std::mutex> lock(g_menuMutex);
 
     std::vector<SSearchItem> matches;
-    if (rawQuery.empty())
+    if (rawQuery.empty()) {
+        static const std::vector<std::pair<std::string, std::pair<std::string, std::pair<std::string, std::string>>>> ROOT_DEFAULTS = {
+            {"Lock Screen", {"system.lock", {"omarchy-system-lock", ""}}},
+            {"Screenshot", {"trigger.capture.screenshot", {"omarchy-capture-screenshot", ""}}},
+            {"Nightlight", {"trigger.toggle.nightlight", {"omarchy-toggle-nightlight", "󰔎"}}},
+            {"Theme Switcher", {"style.theme", {"omarchy-theme-switcher", "󰸌"}}},
+            {"Background", {"style.background", {"omarchy-theme-bg-switcher", ""}}},
+            {"Screensaver", {"system.screensaver", {"omarchy-launch-screensaver force", "󱄄"}}},
+            {"Suspend", {"system.suspend", {"systemctl suspend", "󰒲"}}},
+            {"Reboot", {"system.reboot", {"omarchy-system-reboot", "󰜉"}}},
+            {"Shutdown", {"system.shutdown", {"omarchy-system-shutdown", "󰐥"}}},
+        };
+        for (const auto& [name, meta] : ROOT_DEFAULTS) {
+            SSearchItem it;
+            it.kind          = EItemKind::Action;
+            it.id            = "omarchy:" + meta.first;
+            it.name          = name;
+            it.actionCommand = meta.second.first;
+            it.icon          = meta.second.second;
+            it.category      = "Omarchy Menu";
+            it.description   = meta.second.first;
+            matches.push_back(std::move(it));
+            if (matches.size() >= limit) break;
+        }
         return matches;
+    }
 
     std::string query;
     for (char c : rawQuery) query += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -758,7 +791,52 @@ static void categorizeFile(const std::string& path, SSearchItem& item) {
     }
 }
 
+static int scoreTerm(const std::string& name, const std::string& term) {
+    if (name == term) return 0;
+    if (name.find(term) == 0) return 1;
+    auto idx = name.find(term);
+    if (idx != std::string::npos && idx > 0) {
+        char prev = name[idx - 1];
+        if (prev == ' ' || prev == '-' || prev == '_' || prev == '.' || prev == '/') return 2;
+        return 3;
+    }
+    return -1;
+}
+
+static int scoreFileItem(const std::string& name, const std::string& path, const std::vector<std::string>& terms) {
+    std::string lowerName;
+    for (char c : name) lowerName += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string lowerPath;
+    for (char c : path) lowerPath += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    int total = 0;
+    for (const auto& term : terms) {
+        int s = scoreTerm(lowerName, term);
+        if (s < 0) {
+            if (lowerPath.find("/" + term) != std::string::npos || lowerPath.find("/." + term) != std::string::npos ||
+                lowerPath.find(" " + term) != std::string::npos || lowerPath.find("_" + term) != std::string::npos ||
+                lowerPath.find("-" + term) != std::string::npos) s = 4;
+            else if (lowerPath.find(term) != std::string::npos) s = 5;
+            else return -1;
+        }
+        total += s;
+    }
+    return total;
+}
+
 static void fileWorkerLoop() {
+    static const char* OMARCHY_FIND_EXCLUDES[] = {
+        ".git", "node_modules", ".cache", "__pycache__", ".npm", ".nvm",
+        ".cargo", ".rustup", ".gradle", ".local/share/Trash",
+        ".local/share/flatpak", ".venv", "venv", ".steam",
+        "*Cache*", "Local Storage", "Session Storage", "Service Worker",
+        "blob_storage", "Dawn*", "logs", "*Storage*", "History",
+        "data", "Crashpad", "Dictionaries", "Partitions",
+        "Shared Dictionary", "Backups", "google-chrome*",
+        "microsoft-edge*", "chromium", "BraveSoftware", "mozilla",
+        "dconf", "ibus", "fcitx", "pulse", "procps", ".*.bak.*"
+    };
+
     while (g_fileRunning) {
         std::string queryStr;
         uint64_t    gen = 0;
@@ -781,18 +859,41 @@ static void fileWorkerLoop() {
         const char* home = std::getenv("HOME");
         if (!home) continue;
 
-        // Run fd with noise exclusions
-        std::string cmd = "fd --hidden --max-results 30 "
-                          "--exclude .git --exclude node_modules --exclude .cache "
-                          "--exclude __pycache__ --exclude .cargo --exclude .rustup "
-                          "--exclude '.local/share/Trash' --exclude .venv --exclude venv "
-                          "--exclude .steam "
-                          + queryStr + " " + home;
+        std::vector<std::string> terms;
+        std::istringstream iss(queryStr);
+        std::string token;
+        while (iss >> token) {
+            std::string lower;
+            for (char c : token) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            terms.push_back(lower);
+        }
+
+        if (terms.empty())
+            continue;
+
+        // Build fd command identical to Omarchy Find (FindBackend.js)
+        std::string cmd = "fd --color=never -i --no-ignore --follow --max-results 80 --full-path";
+        for (const auto* exc : OMARCHY_FIND_EXCLUDES) {
+            cmd += " -E '";
+            cmd += exc;
+            cmd += "'";
+        }
+
+        if (terms.size() > 1) {
+            for (size_t t = 1; t < terms.size(); ++t) {
+                cmd += " --and '" + terms[t] + "'";
+            }
+        }
+        cmd += " -- '" + terms[0] + "' '" + home + "'";
 
         FILE* pipe = popen(cmd.c_str(), "r");
         if (!pipe) continue;
 
-        std::vector<SSearchItem> results;
+        struct ScoredFile {
+            int score = 0;
+            SSearchItem item;
+        };
+        std::vector<ScoredFile> scoredFiles;
         char lineBuf[2048];
         while (fgets(lineBuf, sizeof(lineBuf), pipe)) {
             if (gen != g_fileGen.load()) break; // Query changed, abandon
@@ -807,19 +908,32 @@ static void fileWorkerLoop() {
             std::string name = (slash != std::string::npos) ? path.substr(slash + 1) : path;
             std::string dir  = (slash != std::string::npos) ? path.substr(0, slash) : "";
 
+            int score = scoreFileItem(name, path, terms);
+            if (score < 0)
+                score = 10;
+
             SSearchItem item;
             item.kind          = EItemKind::File;
             item.id            = "file:" + path;
             item.name          = name;
             item.description   = dir;
             item.filePath      = path;
-            item.category      = "Files";
+            item.category      = "Files & Folders";
             item.actionCommand = path;
 
             categorizeFile(path, item);
-            results.push_back(std::move(item));
+            scoredFiles.push_back({score, std::move(item)});
         }
         pclose(pipe);
+
+        std::sort(scoredFiles.begin(), scoredFiles.end(), [](const auto& a, const auto& b) {
+            return a.score < b.score;
+        });
+
+        std::vector<SSearchItem> results;
+        for (size_t i = 0; i < std::min<size_t>(30, scoredFiles.size()); ++i) {
+            results.push_back(std::move(scoredFiles[i].item));
+        }
 
         if (gen == g_fileGen.load()) {
             std::lock_guard<std::mutex> lock(g_fileResultsMutex);
@@ -831,6 +945,34 @@ static void fileWorkerLoop() {
 std::vector<SSearchItem> fileResults() {
     std::lock_guard<std::mutex> lock(g_fileResultsMutex);
     return g_fileResults;
+}
+
+std::vector<SSearchItem> recentFiles() {
+    std::vector<SSearchItem> items;
+    const char* home = std::getenv("HOME");
+    if (!home) return items;
+
+    static const std::vector<std::string> CANDIDATES = {
+        "Projects", "Downloads", "Documents", "Pictures", "Videos", "Desktop",
+        ".config/hypr", ".config/omarchy"
+    };
+
+    for (const auto& rel : CANDIDATES) {
+        std::string full = std::string(home) + "/" + rel;
+        if (fs::exists(full)) {
+            SSearchItem it;
+            it.kind          = EItemKind::File;
+            it.id            = "file:" + full;
+            it.name          = rel;
+            it.description   = full;
+            it.filePath      = full;
+            it.category      = "Files & Folders";
+            it.actionCommand = full;
+            categorizeFile(full, it);
+            items.push_back(std::move(it));
+        }
+    }
+    return items;
 }
 
 // ============================================================================

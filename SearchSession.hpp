@@ -47,6 +47,7 @@ enum class EOverviewNavZone : uint8_t {
     Tile = 0,
     Result,
     Desktop,
+    Search,
 };
 
 // X10: the search row above the strip. ponytail: constant 64 logical px
@@ -79,6 +80,10 @@ inline constexpr float OVERVIEW_PILL_WL(float fieldWL) {
     return OVERVIEW_PILL_PADL + OVERVIEW_PILL_BADGEL + OVERVIEW_PILL_GAPL + fieldWL + OVERVIEW_PILL_TAILL;
 }
 
+inline float overviewPillTargetWL(bool queried) {
+    return OVERVIEW_PILL_PADL + OVERVIEW_PILL_BADGEL + OVERVIEW_PILL_GAPL + (queried ? OVERVIEW_PILL_FIELDQL : OVERVIEW_PILL_FIELDL) + OVERVIEW_PILL_TAILL;
+}
+
 // OVERVIEW_CPP_SPEC §13.4 G12. A result row as it was last DRAWN. Same contract
 // as the dock's own menu rows: a row's box is only known inside the render pass,
 // so the hit-test answers against the last frame -- which is the frame the user
@@ -90,7 +95,9 @@ struct SSearchRowHit {
     // X62. Which result this box belongs to. The hit-test existed only to
     // reject drops before; answering the mouse means the hit has to say WHICH
     // result was hit, in the same index space the keyboard selection uses.
-    int         index = -1;
+    int         index    = -1;
+    int         column   = 0;
+    int         rowInCol = 0;
 };
 
 // G12. A result drag: press, HOLD, then move. The hold is the gate and the

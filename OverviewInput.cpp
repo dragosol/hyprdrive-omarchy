@@ -730,6 +730,15 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Down:
             case XKB_KEY_KP_Down:
+                if (g_search.nav.zone != EOverviewNavZone::Result) {
+                    if (!g_search.layout.hits.empty()) {
+                        g_search.nav.zone              = EOverviewNavZone::Result;
+                        g_search.nav.selection         = g_search.layout.hits[0].index;
+                        g_search.nav.explicitSelection = true;
+                        damage();
+                        break;
+                    }
+                }
                 moveSelection("down");
                 break;
             case XKB_KEY_Tab:
@@ -781,7 +790,7 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 int launchIdx = -1;
                 if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
                     launchIdx = g_search.nav.selection;
-                else if (g_search.nav.zone != EOverviewNavZone::Desktop && !RESULTS.empty() && matchingWindowCount() == 0)
+                else if (g_search.nav.zone != EOverviewNavZone::Desktop && !RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
                     launchIdx = 0;
 
                 activateSearchResult(launchIdx);
