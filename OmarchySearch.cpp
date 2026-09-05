@@ -445,16 +445,6 @@ std::vector<SSearchItem> searchAgents(const std::string& rawQuery) {
 // ============================================================================
 // Omarchy Menu JSONC Parser & Provider
 // ============================================================================
-struct SRawMenuItem {
-    std::string id;
-    std::string label;
-    std::string icon;
-    std::string action;
-    std::string description;
-    std::vector<std::string> aliases;
-    std::string category;
-};
-
 static std::string stripJsoncComments(const std::string& in) {
     std::string out;
     out.reserve(in.size());
@@ -510,12 +500,133 @@ static std::string stripJsoncComments(const std::string& in) {
     return out;
 }
 
+struct SRawMenuItem {
+    std::string id;
+    std::string parent;
+    std::string kind; // "action", "menu", "link"
+    std::string label;
+    std::string title;
+    std::string target;
+    std::string description;
+    std::string action;
+    std::string icon;
+    std::string iconFont;
+    std::string provider;
+    std::string when;
+    std::string checked;
+    std::vector<std::string> aliases;
+    std::string category = "Omarchy Menu";
+    int order = 0;
+};
+
 static std::unordered_map<std::string, SRawMenuItem> g_menuItems;
+static std::vector<std::string> g_menuItemOrder;
+static std::string g_menuCurrentRoute = "root";
+static std::vector<std::string> g_menuNavStack;
 static time_t g_menuSystemMtime = 0;
 static time_t g_menuUserMtime = 0;
 static std::mutex g_menuMutex;
 
-static void parseMenuFile(const std::string& path, std::unordered_map<std::string, SRawMenuItem>& out) {
+void navigateMenu(const std::string& routeId) {
+    std::lock_guard<std::mutex> lock(g_menuMutex);
+    if (routeId.empty()) return;
+    if (routeId != g_menuCurrentRoute) {
+        g_menuNavStack.push_back(g_menuCurrentRoute);
+        g_menuCurrentRoute = routeId;
+    }
+}
+
+bool navigateMenuBack() {
+    std::lock_guard<std::mutex> lock(g_menuMutex);
+    if (!g_menuNavStack.empty()) {
+        g_menuCurrentRoute = g_menuNavStack.back();
+        g_menuNavStack.pop_back();
+        return true;
+    }
+    if (g_menuCurrentRoute != "root") {
+        auto it = g_menuItems.find(g_menuCurrentRoute);
+        if (it != g_menuItems.end() && !it->second.parent.empty()) {
+            g_menuCurrentRoute = it->second.parent;
+        } else {
+            g_menuCurrentRoute = "root";
+        }
+        return true;
+    }
+    return false;
+}
+
+bool canNavigateMenuBack() {
+    std::lock_guard<std::mutex> lock(g_menuMutex);
+    return g_menuCurrentRoute != "root" || !g_menuNavStack.empty();
+}
+
+std::string menuCurrentRoute() {
+    std::lock_guard<std::mutex> lock(g_menuMutex);
+    return g_menuCurrentRoute;
+}
+
+std::string menuCurrentRouteTitle() {
+    std::lock_guard<std::mutex> lock(g_menuMutex);
+    if (g_menuCurrentRoute == "root")
+        return "Omarchy Menu";
+    auto it = g_menuItems.find(g_menuCurrentRoute);
+    if (it != g_menuItems.end())
+        return it->second.label;
+    return g_menuCurrentRoute;
+}
+
+void resetMenuRoute() {
+    std::lock_guard<std::mutex> lock(g_menuMutex);
+    g_menuCurrentRoute = "root";
+    g_menuNavStack.clear();
+}
+
+static std::string pathFor(const std::unordered_map<std::string, SRawMenuItem>& items, const std::string& id) {
+    std::vector<std::string> labels;
+    std::string curId = id;
+    int guard = 0;
+    while (!curId.empty() && curId != "root" && guard++ < 16) {
+        auto it = items.find(curId);
+        if (it == items.end()) break;
+        labels.push_back(it->second.label);
+        curId = it->second.parent;
+    }
+    std::reverse(labels.begin(), labels.end());
+    std::string result;
+    for (size_t i = 0; i < labels.size(); ++i) {
+        if (i > 0) result += " › ";
+        result += labels[i];
+    }
+    return result;
+}
+
+static std::string parentPathFor(const std::unordered_map<std::string, SRawMenuItem>& items, const std::string& id) {
+    auto it = items.find(id);
+    if (it == items.end() || it->second.parent.empty() || it->second.parent == "root")
+        return "";
+    return pathFor(items, it->second.parent);
+}
+
+static bool evaluateWhen(const std::string& when) {
+    if (when.empty()) return true;
+    static std::unordered_map<std::string, bool> memo;
+    static std::chrono::steady_clock::time_point lastCheck;
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastCheck).count() > 10) {
+        memo.clear();
+        lastCheck = now;
+    }
+    auto it = memo.find(when);
+    if (it != memo.end()) return it->second;
+    std::string cmd = "bash -c \"" + when + "\" >/dev/null 2>&1";
+    bool ok = (system(cmd.c_str()) == 0);
+    memo[when] = ok;
+    return ok;
+}
+
+static void parseMenuFile(const std::string& path, 
+                          std::unordered_map<std::string, SRawMenuItem>& outMap, 
+                          std::vector<std::string>& outOrder) {
     std::ifstream f(path);
     if (!f) return;
 
@@ -523,69 +634,148 @@ static void parseMenuFile(const std::string& path, std::unordered_map<std::strin
     buffer << f.rdbuf();
     std::string clean = stripJsoncComments(buffer.str());
 
-    // Regex to match "id": { properties }
-    // Handles fields: label, action, icon, description, aliases
-    static const std::regex ENTRY_RE(R"foo("([^"]+)"\s*:\s*\{([^}]+)\})foo");
-    static const std::regex PROP_RE(R"foo("([^"]+)"\s*:\s*("(?:[^"\\]|\\.)*"|\[[^\]]*\]))foo");
+    size_t pos = 0;
+    const size_t len = clean.size();
 
-    auto begin = std::sregex_iterator(clean.begin(), clean.end(), ENTRY_RE);
-    auto end   = std::sregex_iterator();
+    auto skipWs = [&]() {
+        while (pos < len && (std::isspace(static_cast<unsigned char>(clean[pos])) || clean[pos] == ','))
+            ++pos;
+    };
 
-    for (auto it = begin; it != end; ++it) {
-        std::string id   = (*it)[1].str();
-        std::string body = (*it)[2].str();
+    auto parseString = [&]() -> std::string {
+        if (pos >= len || clean[pos] != '"') return "";
+        ++pos; // skip opening "
+        std::string s;
+        while (pos < len) {
+            char c = clean[pos++];
+            if (c == '\\' && pos < len) {
+                char esc = clean[pos++];
+                if (esc == '"') s += '"';
+                else if (esc == '\\') s += '\\';
+                else if (esc == 'n') s += '\n';
+                else if (esc == 't') s += '\t';
+                else { s += '\\'; s += esc; }
+            } else if (c == '"') {
+                break;
+            } else {
+                s += c;
+            }
+        }
+        return s;
+    };
+
+    while (pos < len && clean[pos] != '{') ++pos;
+    if (pos >= len) return;
+    ++pos; // skip '{'
+
+    while (pos < len) {
+        skipWs();
+        if (pos >= len || clean[pos] == '}') break;
+
+        if (clean[pos] != '"') {
+            ++pos;
+            continue;
+        }
+        std::string id = parseString();
+        skipWs();
+        if (pos >= len || clean[pos] != ':') continue;
+        ++pos; // skip ':'
+        skipWs();
+
+        if (pos >= len || clean[pos] != '{') continue;
+        ++pos; // skip '{'
 
         SRawMenuItem item;
         item.id = id;
 
-        // Categorize by prefix
-        size_t dot = id.find('.');
-        if (dot != std::string::npos) {
-            std::string prefix = id.substr(0, dot);
-            if (prefix == "system") item.category = "System";
-            else if (prefix == "trigger") item.category = "Trigger";
-            else if (prefix == "style") item.category = "Style";
-            else if (prefix == "setup") item.category = "Setup";
-            else if (prefix == "learn") item.category = "Learn";
-            else if (prefix == "install") item.category = "Install";
-            else if (prefix == "remove") item.category = "Remove";
-            else if (prefix == "update") item.category = "Update";
-            else item.category = "Omarchy";
-        } else {
-            item.category = "Omarchy";
-        }
+        while (pos < len) {
+            skipWs();
+            if (pos >= len || clean[pos] == '}') {
+                if (pos < len) ++pos;
+                break;
+            }
+            if (clean[pos] != '"') {
+                ++pos;
+                continue;
+            }
+            std::string propKey = parseString();
+            skipWs();
+            if (pos >= len || clean[pos] != ':') continue;
+            ++pos; // skip ':'
+            skipWs();
 
-        auto pBegin = std::sregex_iterator(body.begin(), body.end(), PROP_RE);
-        auto pEnd   = std::sregex_iterator();
-        for (auto pIt = pBegin; pIt != pEnd; ++pIt) {
-            std::string key = (*pIt)[1].str();
-            std::string val = (*pIt)[2].str();
-
-            if (key == "label" && val.size() >= 2) {
-                item.label = val.substr(1, val.size() - 2);
-            } else if (key == "icon" && val.size() >= 2) {
-                item.icon = val.substr(1, val.size() - 2);
-            } else if (key == "action" && val.size() >= 2) {
-                item.action = val.substr(1, val.size() - 2);
-                item.action = replaceAll(item.action, "\\\"", "\"");
-                item.action = replaceAll(item.action, "\\\\", "\\");
-            } else if (key == "description" && val.size() >= 2) {
-                item.description = val.substr(1, val.size() - 2);
-            } else if (key == "aliases" && val.front() == '[') {
-                // Parse array of strings
-                static const std::regex STR_RE(R"foo("([^"]+)")foo");
-                auto sBegin = std::sregex_iterator(val.begin(), val.end(), STR_RE);
-                auto sEnd   = std::sregex_iterator();
-                for (auto sIt = sBegin; sIt != sEnd; ++sIt) {
-                    item.aliases.push_back((*sIt)[1].str());
+            if (pos < len && clean[pos] == '"') {
+                std::string propVal = parseString();
+                if (propKey == "label") item.label = propVal;
+                else if (propKey == "icon") item.icon = propVal;
+                else if (propKey == "action") item.action = propVal;
+                else if (propKey == "description") item.description = propVal;
+                else if (propKey == "target") item.target = propVal;
+                else if (propKey == "provider") item.provider = propVal;
+                else if (propKey == "when") item.when = propVal;
+                else if (propKey == "checked") item.checked = propVal;
+                else if (propKey == "parent") item.parent = propVal;
+                else if (propKey == "title") item.title = propVal;
+                else if (propKey == "iconFont") item.iconFont = propVal;
+            } else if (pos < len && clean[pos] == '[') {
+                ++pos; // skip '['
+                while (pos < len) {
+                    skipWs();
+                    if (pos >= len || clean[pos] == ']') {
+                        if (pos < len) ++pos;
+                        break;
+                    }
+                    if (clean[pos] == '"') {
+                        std::string elem = parseString();
+                        if (propKey == "aliases") item.aliases.push_back(elem);
+                    } else {
+                        ++pos;
+                    }
+                }
+            } else {
+                int depth = 0;
+                while (pos < len) {
+                    char c = clean[pos];
+                    if (c == '{' || c == '[') ++depth;
+                    else if (c == '}' || c == ']') {
+                        if (depth == 0) break;
+                        --depth;
+                    } else if (c == ',' && depth == 0) break;
+                    ++pos;
                 }
             }
         }
 
-        // Only keep actionable entries
-        if (!item.action.empty()) {
-            out[id] = item;
+        if (item.parent.empty()) {
+            size_t lastDot = item.id.rfind('.');
+            if (lastDot != std::string::npos) {
+                item.parent = item.id.substr(0, lastDot);
+            } else {
+                item.parent = "root";
+            }
         }
+        if (item.id == "root")
+            item.parent = "";
+
+        if (!item.action.empty())
+            item.kind = "action";
+        else if (!item.target.empty())
+            item.kind = "link";
+        else
+            item.kind = "menu";
+
+        if (item.label.empty())
+            item.label = item.id;
+
+        item.category = "Omarchy Menu";
+
+        if (outMap.find(item.id) == outMap.end()) {
+            item.order = static_cast<int>(outOrder.size());
+            outOrder.push_back(item.id);
+        } else {
+            item.order = outMap[item.id].order;
+        }
+        outMap[item.id] = item;
     }
 }
 
@@ -605,9 +795,10 @@ static void reloadMenuIfNeeded() {
         return;
 
     g_menuItems.clear();
-    parseMenuFile(sysPath, g_menuItems);
+    g_menuItemOrder.clear();
+    parseMenuFile(sysPath, g_menuItems, g_menuItemOrder);
     if (!userPath.empty())
-        parseMenuFile(userPath, g_menuItems);
+        parseMenuFile(userPath, g_menuItems, g_menuItemOrder);
 
     g_menuSystemMtime = sysMtime;
     g_menuUserMtime   = userMtime;
@@ -618,33 +809,86 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
     std::lock_guard<std::mutex> lock(g_menuMutex);
 
     std::vector<SSearchItem> matches;
+
     if (rawQuery.empty()) {
-        static const std::vector<std::pair<std::string, std::pair<std::string, std::pair<std::string, std::string>>>> ROOT_DEFAULTS = {
-            {"Lock Screen", {"system.lock", {"omarchy-system-lock", ""}}},
-            {"Screenshot", {"trigger.capture.screenshot", {"omarchy-capture-screenshot", ""}}},
-            {"Nightlight", {"trigger.toggle.nightlight", {"omarchy-toggle-nightlight", "󰔎"}}},
-            {"Theme Switcher", {"style.theme", {"omarchy-theme-switcher", "󰸌"}}},
-            {"Background", {"style.background", {"omarchy-theme-bg-switcher", ""}}},
-            {"Screensaver", {"system.screensaver", {"omarchy-launch-screensaver force", "󱄄"}}},
-            {"Suspend", {"system.suspend", {"systemctl suspend", "󰒲"}}},
-            {"Reboot", {"system.reboot", {"omarchy-system-reboot", "󰜉"}}},
-            {"Shutdown", {"system.shutdown", {"omarchy-system-shutdown", "󰐥"}}},
-        };
-        for (const auto& [name, meta] : ROOT_DEFAULTS) {
-            SSearchItem it;
-            it.kind          = EItemKind::Action;
-            it.id            = "omarchy:" + meta.first;
-            it.name          = name;
-            it.actionCommand = meta.second.first;
-            it.icon          = meta.second.second;
-            it.category      = "Omarchy Menu";
-            it.description   = meta.second.first;
-            matches.push_back(std::move(it));
+        // Browse mode: show children of g_menuCurrentRoute
+        if (g_menuCurrentRoute != "root") {
+            SSearchItem backItem;
+            backItem.kind        = EItemKind::Back;
+            backItem.id          = "__back__";
+            backItem.name        = "‹ Back";
+            backItem.category    = "Omarchy Menu";
+            backItem.icon        = "go-previous";
+
+            std::string parentTitle = "Omarchy Menu";
+            auto curIt = g_menuItems.find(g_menuCurrentRoute);
+            if (curIt != g_menuItems.end() && !curIt->second.parent.empty() && curIt->second.parent != "root") {
+                auto pIt = g_menuItems.find(curIt->second.parent);
+                if (pIt != g_menuItems.end())
+                    parentTitle = pIt->second.label;
+            }
+            backItem.description = "Up to " + parentTitle;
+            matches.push_back(std::move(backItem));
+        }
+
+        for (const auto& id : g_menuItemOrder) {
+            auto it = g_menuItems.find(id);
+            if (it == g_menuItems.end()) continue;
+            const auto& raw = it->second;
+
+            if (raw.parent != g_menuCurrentRoute) continue;
+            if (!raw.when.empty() && !evaluateWhen(raw.when)) continue;
+
+            SSearchItem item;
+            item.id       = raw.id;
+            item.name     = raw.label;
+            item.category = "Omarchy Menu";
+
+            if (raw.kind == "menu") {
+                item.kind        = EItemKind::Menu;
+                item.icon        = raw.icon.empty() ? "folder" : raw.icon;
+                item.description = raw.description.empty() ? "Submenu ›" : raw.description + " ›";
+            } else if (raw.kind == "link") {
+                item.kind        = EItemKind::Menu;
+                item.id          = raw.target.empty() ? raw.id : raw.target;
+                item.icon        = raw.icon.empty() ? "folder" : raw.icon;
+                item.description = "Submenu ›";
+            } else {
+                item.kind          = EItemKind::Action;
+                item.icon          = raw.icon.empty() ? "system-run" : raw.icon;
+                item.description   = raw.description.empty() ? raw.action : raw.description;
+                item.actionCommand = raw.action;
+            }
+
+            matches.push_back(std::move(item));
             if (matches.size() >= limit) break;
         }
+
+        if (matches.empty()) {
+            static const std::vector<std::pair<std::string, std::pair<std::string, std::string>>> ROOT_DEFAULTS = {
+                {"Lock Screen", {"system.lock", "omarchy-system-lock"}},
+                {"Screenshot", {"trigger.capture.screenshot", "omarchy-capture-screenshot"}},
+                {"Nightlight", {"trigger.toggle.nightlight", "omarchy-toggle-nightlight"}},
+                {"Theme Switcher", {"style.theme", "omarchy-theme-switcher"}},
+                {"Shutdown", {"system.shutdown", "omarchy-system-shutdown"}},
+            };
+            for (const auto& [name, meta] : ROOT_DEFAULTS) {
+                SSearchItem it;
+                it.kind          = EItemKind::Action;
+                it.id            = meta.first;
+                it.name          = name;
+                it.actionCommand = meta.second;
+                it.icon          = "system-run";
+                it.category      = "Omarchy Menu";
+                it.description   = meta.second;
+                matches.push_back(std::move(it));
+            }
+        }
+
         return matches;
     }
 
+    // Search mode: match query across all items
     std::string query;
     for (char c : rawQuery) query += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
@@ -655,30 +899,33 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
     std::vector<ScoredItem> scored;
 
     for (const auto& [_, it] : g_menuItems) {
+        if (it.id == "root") continue;
+        if (!it.when.empty() && !evaluateWhen(it.when)) continue;
+
         int score = 0;
         std::string lowerLabel;
         for (char c : it.label) lowerLabel += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-        if (lowerLabel == query) score += 100;
-        else if (lowerLabel.find(query) == 0) score += 50;
-        else if (lowerLabel.find(query) != std::string::npos) score += 30;
+        if (lowerLabel == query) score += 120;
+        else if (lowerLabel.find(query) == 0) score += 70;
+        else if (lowerLabel.find(query) != std::string::npos) score += 40;
 
         for (const auto& al : it.aliases) {
             std::string lowerAl;
             for (char c : al) lowerAl += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (lowerAl == query) score += 80;
-            else if (lowerAl.find(query) == 0) score += 40;
-            else if (lowerAl.find(query) != std::string::npos) score += 20;
+            if (lowerAl == query) score += 100;
+            else if (lowerAl.find(query) == 0) score += 60;
+            else if (lowerAl.find(query) != std::string::npos) score += 30;
         }
 
         std::string lowerId;
         for (char c : it.id) lowerId += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (lowerId.find(query) != std::string::npos) score += 15;
+        if (lowerId.find(query) != std::string::npos) score += 20;
 
         if (!it.description.empty()) {
             std::string lowerDesc;
             for (char c : it.description) lowerDesc += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (lowerDesc.find(query) != std::string::npos) score += 10;
+            if (lowerDesc.find(query) != std::string::npos) score += 15;
         }
 
         if (score > 0) {
@@ -687,19 +934,30 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
     }
 
     std::sort(scored.begin(), scored.end(), [](const auto& a, const auto& b) {
-        return a.score > b.score;
+        if (a.score != b.score) return a.score > b.score;
+        return a.item->order < b.item->order;
     });
 
     for (size_t i = 0; i < std::min(limit, scored.size()); ++i) {
         const auto* raw = scored[i].item;
         SSearchItem item;
-        item.kind          = EItemKind::Action;
-        item.id            = "omarchy:" + raw->id;
-        item.name          = raw->label;
-        item.description   = raw->description.empty() ? raw->action : raw->description;
-        item.icon          = raw->icon.empty() ? "system-run" : raw->icon;
-        item.category      = raw->category;
-        item.actionCommand = raw->action;
+        item.id   = raw->id;
+        item.name = raw->label;
+        item.category = "Omarchy Menu";
+        item.icon = raw->icon.empty() ? "system-run" : raw->icon;
+
+        std::string breadcrumb = parentPathFor(g_menuItems, raw->id);
+
+        if (raw->kind == "menu" || raw->kind == "link") {
+            item.kind        = EItemKind::Menu;
+            item.description = breadcrumb.empty() ? "Submenu" : breadcrumb + " (Submenu)";
+            if (raw->kind == "link" && !raw->target.empty()) item.id = raw->target;
+        } else {
+            item.kind          = EItemKind::Action;
+            item.description   = breadcrumb.empty() ? raw->description : breadcrumb;
+            item.actionCommand = raw->action;
+        }
+
         matches.push_back(std::move(item));
     }
 
@@ -1007,6 +1265,14 @@ void query(const std::string& text) {
 }
 
 bool activate(const SSearchItem& item) {
+    if (item.kind == EItemKind::Menu) {
+        navigateMenu(item.id);
+        return false;
+    }
+    if (item.kind == EItemKind::Back) {
+        navigateMenuBack();
+        return false;
+    }
     if (item.kind == EItemKind::Calculator) {
         CProcess proc("/usr/bin/wl-copy", {item.actionCommand});
         return proc.runAsync();

@@ -485,7 +485,8 @@ struct SSearchSection {
 
 inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSearchRow>& rows) {
     std::vector<SSearchSection> out;
-    out.push_back({"Omarchy Menu", "system-run", {}, 0, false, 0});
+    std::string menuTitle = OmarchySearch::menuCurrentRouteTitle();
+    out.push_back({menuTitle.empty() ? "Omarchy Menu" : menuTitle, "system-run", {}, 0, false, 0});
     out.push_back({"Files & Folders", "folder", {}, 0, false, 1});
     out.push_back({"AI & Tools", "utilities-terminal", {}, 0, false, 2});
 
@@ -502,21 +503,28 @@ inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSea
 }
 
 // Activating a result runs the corresponding app, Omarchy action, agent prompt,
-// calculator copy, or file open.
+// calculator copy, or file open. Submenu navigation returns false so the overview
+// stays open while drilling down into the hierarchy.
 inline bool activateSearchResult(int index) {
     const auto RESULTS = overviewSearchRows();
     if (index < 0 || index >= sc<int>(RESULTS.size()))
         return false;
 
     const auto& ROW = RESULTS[index];
-    if (ROW.omarchy)
+    if (ROW.omarchy) {
+        if (ROW.omarchy->kind == OmarchySearch::EItemKind::Menu || ROW.omarchy->kind == OmarchySearch::EItemKind::Back) {
+            OmarchySearch::activate(*ROW.omarchy);
+            g_search.nav.selection = 0;
+            return false;
+        }
         return OmarchySearch::activate(*ROW.omarchy);
-    else if (ROW.app)
+    } else if (ROW.app) {
         AppSearch::launch(*ROW.app, ScrollOverview::Config::getTerminal());
-    else
+        return true;
+    } else {
         SearchProviders::activate(ROW.provider, g_search.query.text);
-
-    return true;
+        return true;
+    }
 }
 
 // OVERVIEW_CPP_SPEC §5 F2, and §13.7 X18's open-window half.
@@ -971,7 +979,7 @@ inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHL
     if (sections.empty() || !monitor)
         return;
 
-    const size_t MAX_ROWS = 5;
+    const size_t MAX_ROWS = 8;
     for (auto& sec : sections) {
         if (sec.rows.size() > MAX_ROWS) {
             sec.rows.resize(MAX_ROWS);
@@ -979,18 +987,47 @@ inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHL
     }
 }
 
+inline float overviewResultsWidthTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections) {
+    if (!monitor)
+        return 0.F;
+
+    size_t k = 0;
+    for (const auto& s : sections) {
+        if (!s.rows.empty())
+            ++k;
+    }
+    if (k == 0)
+        return 0.F;
+
+    const float PAD_L = 14.F;
+    const float DIV_GAPL = 14.F;
+    const float INSP_WL = 270.F;
+    const float COL_WL_BASE = 290.F;
+
+    float naturalWL = (PAD_L * 2.F) + (sc<float>(k) * COL_WL_BASE) + (sc<float>(k) * DIV_GAPL) + INSP_WL;
+    const float MAX_SPANWL = overviewResultsSpanW(monitor);
+    return std::min(naturalWL, MAX_SPANWL);
+}
+
 inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections) {
     if (sections.empty() || !monitor)
         return 0.F;
 
     size_t maxRows = 0;
+    size_t activeCols = 0;
     for (const auto& sec : sections) {
-        maxRows = std::max(maxRows, sec.rows.size());
+        if (!sec.rows.empty()) {
+            ++activeCols;
+            maxRows = std::max(maxRows, sec.rows.size());
+        }
     }
-    const size_t VISIBLE_ROWS = std::clamp<size_t>(maxRows, 1, 5);
-    const float CARD_H = 30.F + (sc<float>(VISIBLE_ROWS) * 32.F) + 16.F;
+    if (activeCols == 0 || maxRows == 0)
+        return 0.F;
 
-    const float BUDGET = std::min(230.F, sc<float>(monitor->m_size.y) * 0.28F);
+    const size_t VISIBLE_ROWS = std::clamp<size_t>(maxRows, 1, 8);
+    const float CARD_H = 28.F + (sc<float>(VISIBLE_ROWS) * 36.F) + 28.F + (OVERVIEW_RESULT_PANELGAPL * 2.F);
+
+    const float BUDGET = std::min(360.F, sc<float>(monitor->m_size.y) * 0.42F);
     return std::min(CARD_H, BUDGET);
 }
 

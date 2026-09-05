@@ -420,6 +420,8 @@ class CScrollOverview : public IOverview {
     PHLANIMVAR<float>                reflowPacer;
     // X21/X23: eased height of the search results band in the layout stack.
     PHLANIMVAR<float>                resultsBand;
+    // Eased width of the unified search results container block.
+    PHLANIMVAR<float>                resultsWidth;
     // X50: eased 0..1 dock factor for the search pill. 1 = results are on
     // screen and the pill has left the scaled card for the top of the monitor.
     PHLANIMVAR<float>                searchDock;

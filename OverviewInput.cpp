@@ -384,6 +384,16 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                         SResultDrag{.desktopId = ROW->desktopId, .icon = ROW->icon, .start = lastMousePosLocal, .startedAt = Time::steadyNow(), .index = ROW->index};
                     return;
                 }
+                if (g_search.layout.pill.containsPoint(lastMousePosLocal)) {
+                    g_search.query.active = true;
+                    g_search.nav.zone = EOverviewNavZone::Search;
+                    g_search.nav.selection = -1;
+                    damage();
+                    return;
+                }
+                if (g_search.layout.containerBox.width > 1.F && g_search.layout.containerBox.containsPoint(lastMousePosLocal)) {
+                    return;
+                }
             }
 
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -731,12 +741,22 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             case XKB_KEY_Down:
             case XKB_KEY_KP_Down:
                 if (g_search.nav.zone != EOverviewNavZone::Result) {
+                    g_search.query.active = true;
                     if (!g_search.layout.hits.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
                         g_search.nav.selection         = g_search.layout.hits[0].index;
                         g_search.nav.explicitSelection = true;
                         damage();
                         break;
+                    } else {
+                        const auto RESULTS = overviewSearchRows();
+                        if (!RESULTS.empty()) {
+                            g_search.nav.zone              = EOverviewNavZone::Result;
+                            g_search.nav.selection         = 0;
+                            g_search.nav.explicitSelection = true;
+                            damage();
+                            break;
+                        }
                     }
                 }
                 moveSelection("down");
@@ -775,26 +795,14 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             case XKB_KEY_KP_Enter: {
                 const auto RESULTS = overviewSearchRows();
 
-                // X61. Return means "activate what is selected", and WHAT that is
-                // depends on the zone. A desktop needs nothing done to it:
-                // arrowing onto a strip cell already switched the viewport, so
-                // closing simply lands there. A tile needs nothing either --
-                // closeOnWindow is exactly what close() focuses. Only a result
-                // has to be run, which is why this is the only branch here.
-                //
-                // The fallback is unchanged: with no explicit selection and no
-                // window matching the query, Return takes the top result. It is
-                // suppressed in the Desktop zone, where the user has said where
-                // they want to go and launching an app instead would be a
-                // surprise.
                 int launchIdx = -1;
                 if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
                     launchIdx = g_search.nav.selection;
                 else if (g_search.nav.zone != EOverviewNavZone::Desktop && !RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
                     launchIdx = 0;
 
-                activateSearchResult(launchIdx);
-                close();
+                if (activateSearchResult(launchIdx))
+                    close();
                 break;
             }
             default: return;

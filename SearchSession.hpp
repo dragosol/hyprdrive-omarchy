@@ -216,6 +216,8 @@ struct SSearchLayout {
         bool        canQuickLook = false;
     } inspector;
 
+    CBox              containerBox;
+    std::vector<CBox> dividers;
     std::vector<SCard> cards;
 };
 

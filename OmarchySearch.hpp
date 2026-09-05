@@ -10,6 +10,8 @@ namespace OmarchySearch {
 enum class EItemKind : uint8_t {
     App,
     Action,      // Omarchy menu action / toggle / command
+    Menu,        // Omarchy submenu (drills down into route)
+    Back,        // Back to parent menu
     Agent,       // AI Coding Agent chat launcher (/grok, /agy, etc.)
     Calculator,  // Instant arithmetic calculation
     File,        // File search result
@@ -22,7 +24,7 @@ struct SSearchItem {
     std::string name;
     std::string description;
     std::string icon;
-    std::string category;     // "Apps", "Omarchy", "Agents", "Calculator", "Files", "Settings"
+    std::string category;     // "Apps", "Omarchy Menu", "AI Agent", "Calculator", "Files", "Settings"
     std::string actionCommand;// shell command or executable
     std::string filePath;     // absolute path for files
     uint64_t    fileSizeBytes = 0;
@@ -45,6 +47,14 @@ std::vector<SSearchItem> searchAgents(const std::string& query);
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
 std::vector<SSearchItem> searchMenu(const std::string& query, size_t limit = 10);
 std::vector<SSearchItem> fileResults();
+
+// Menu hierarchy navigation
+void navigateMenu(const std::string& routeId);
+bool navigateMenuBack();
+bool canNavigateMenuBack();
+std::string menuCurrentRoute();
+std::string menuCurrentRouteTitle();
+void resetMenuRoute();
 
 // Activate an item (runs command, launches agent, copies calc, or opens file)
 bool activate(const SSearchItem& item);

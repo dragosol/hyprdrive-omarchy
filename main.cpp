@@ -327,6 +327,7 @@ static void resetCompose();
 void resetSearchSession() {
     g_search.reset();
     SearchLetters::g_searchLetters.reset();
+    OmarchySearch::resetMenuRoute();
     Membership::bump("search session reset");
     resetCompose(); // a sequence abandoned last time must not eat the first key
     SearchProviders::query("");
@@ -653,8 +654,15 @@ static bool handleSearchPress(uint32_t keycode) {
             return true;
         }
         resetCompose();
+        // If in Result zone and in a subroute, ESC goes back up to parent
+        if (g_search.nav.zone == EOverviewNavZone::Result && OmarchySearch::canNavigateMenuBack()) {
+            OmarchySearch::navigateMenuBack();
+            g_search.nav.selection = 0;
+            afterQueryEdit();
+            return true;
+        }
         // X5, GNOME-style: the first ESC drops the filter, the next one leaves.
-        if (!g_search.query.active) {
+        if (!g_search.query.active && g_search.query.text.empty()) {
             for (const auto& overview : scrollOverviews())
                 if (overview)
                     overview->close();
@@ -662,21 +670,28 @@ static bool handleSearchPress(uint32_t keycode) {
         }
         g_search.query.text.clear();
         g_search.query.active = false;
+        g_search.nav.zone = EOverviewNavZone::Tile;
+        g_search.nav.selection = -1;
         afterQueryEdit();
         return true;
     }
 
-    // Typing any character while in Result zone shifts focus back to Search bar
-    if (g_search.nav.zone == EOverviewNavZone::Result) {
-        g_search.nav.zone              = EOverviewNavZone::Search;
-        g_search.nav.selection         = -1;
-        g_search.nav.explicitSelection = false;
-    }
-
     if (keycode == EVDEV_KEY_BACKSPACE) {
         resetCompose();
-        if (!g_search.query.active)
+        if (g_search.nav.zone == EOverviewNavZone::Result && g_search.query.text.empty()) {
+            if (OmarchySearch::navigateMenuBack()) {
+                g_search.nav.selection = 0;
+                afterQueryEdit();
+                return true;
+            }
+        }
+        if (!g_search.query.active && g_search.query.text.empty())
             return true;
+        if (g_search.nav.zone == EOverviewNavZone::Result) {
+            g_search.nav.zone              = EOverviewNavZone::Search;
+            g_search.nav.selection         = -1;
+            g_search.nav.explicitSelection = false;
+        }
         popCodepoint(g_search.query.text);
         afterQueryEdit();
         return true;
@@ -685,6 +700,13 @@ static bool handleSearchPress(uint32_t keycode) {
     const SSearchKey KEY = searchKeyFor(keycode);
     if (!KEY.consume)
         return false;
+
+    // Typing any character while in Result zone shifts focus back to Search bar
+    if (g_search.nav.zone == EOverviewNavZone::Result) {
+        g_search.nav.zone              = EOverviewNavZone::Search;
+        g_search.nav.selection         = -1;
+        g_search.nav.explicitSelection = false;
+    }
 
     if (KEY.starts)
         g_search.query.active = true;
