@@ -30,6 +30,7 @@
 using namespace Hyprutils::String;
 
 #include "globals.hpp"
+#include "SearchLetters.hpp"
 
 #include "Compat.hpp"
 #include "AppSearch.hpp"
@@ -291,6 +292,10 @@ static bool openOverview(PHLMONITOR monitor) {
     if (!ensureScrollOverviewHooks())
         return false;
 
+    // A brand-new overview, not a reopen of one that is still closing.
+    if (scrollOverviews().empty())
+        resetSearchSession();
+
     const bool PREVRENDERINGOVERVIEW = renderingOverview;
     renderingOverview                = true;
     auto overview                    = makeShared<CScrollOverview>(monitor->m_activeWorkspace, false, monitor);
@@ -320,6 +325,7 @@ static void resetCompose();
 // not into either caller.
 void resetSearchSession() {
     g_search.reset();
+    SearchLetters::g_searchLetters.reset();
     Membership::bump("search session reset");
     resetCompose(); // a sequence abandoned last time must not eat the first key
     SearchProviders::query("");
@@ -1194,8 +1200,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     static auto DOCKHOVER = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo&) {
         const auto HIT = monitorUnderCursor();
-        if (!HIT)
+        if (!HIT) {
+            ScrollOverview::Dock::releasePointerFocus();
             return;
+        }
         const auto& [MONITOR, LOCAL] = *HIT;
 
         // X32. The desktop dock reorders too, and its drag needs motion for
@@ -1204,6 +1212,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (ScrollOverview::Dock::dragPending())
             ScrollOverview::Dock::dragMove(MONITOR, LOCAL);
 
+        ScrollOverview::Dock::syncPointerFocus(MONITOR, LOCAL);
         ScrollOverview::Dock::damageIfChanged(MONITOR);
     });
 
@@ -1252,16 +1261,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // the overview's primary navigation, so inside it the overview keeps the
     // tick. Recorded rather than silently dropped.
     static auto DOCKSCROLL = Event::bus()->m_events.input.mouse.axis.listen([](IPointer::SAxisEvent event, Event::SCallbackInfo& info) {
-        // Vertical notches only. A horizontal wheel has no reference behaviour,
-        // and a touchpad's continuous stream is not a notch -- the dead time
-        // would turn it into one arbitrary step per 250ms.
-        if (event.axis != WL_POINTER_AXIS_VERTICAL_SCROLL || event.source != WL_POINTER_AXIS_SOURCE_WHEEL || event.delta == 0.0)
+        // Vertical only. A horizontal wheel has no reference behaviour.
+        // Wheel, finger, and continuous (touchpad) all count: SOURCE_WHEEL
+        // alone left laptop two-finger scrolls going to the window under the
+        // pill. Dead time in Dock::scroll turns a finger stream into steps.
+        if (event.axis != WL_POINTER_AXIS_VERTICAL_SCROLL || event.delta == 0.0)
+            return;
+        if (event.source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT)
             return;
 
         const auto HIT = monitorUnderCursor();
         if (!HIT)
             return;
         const auto& [MONITOR, LOCAL] = *HIT;
+
+        if (ScrollOverview::Dock::occupiesPointer(MONITOR, LOCAL))
+            ScrollOverview::Dock::syncPointerFocus(MONITOR, LOCAL);
 
         if (ScrollOverview::Dock::scroll(MONITOR, LOCAL, event.delta < 0.0))
             info.cancelled = true;
@@ -1314,7 +1329,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     registerRawKeyHooks();
 
     // Reload can drop live window alphas until decorations are recomputed.
-    // Re-apply Omarchy's default-opacity (0.985 0.96) to already-mapped windows.
+    // Re-apply default-opacity (0.985 / 0.85) to already-mapped windows.
     if (Desktop::globalWindowController())
         Desktop::globalWindowController()->updateAllWindowsDecorations();
 
@@ -1340,6 +1355,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pTapSuperButtonHook.reset();
 
     g_unloading = true;
+    ScrollOverview::Dock::releasePointerFocus();
     // FIRST: a flight in the air at unload is a window that is hidden, stashed,
     // or mid-geometry with nothing left to finish it -- the plugin's code IS the
     // thing that would have landed it. hyprpm reloads this plugin in-process, so

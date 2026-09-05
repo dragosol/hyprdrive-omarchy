@@ -1,4 +1,5 @@
 #include "OverviewInternal.hpp"
+#include "SearchLetters.hpp"
 
 #include "Compat.hpp"
 using namespace OvInternal; // opted in here rather than leaked from the header
@@ -76,6 +77,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     applyWorkspaceAnimationOverrides();
     if (sharedStateOwner)
         forceWorkspaceAlphaVisible();
+    ScrollOverview::Dock::releasePointerFocus();
     applyInputConfigOverrides();
     g_pInputManager->unconstrainMouse();
     realtimePreviewTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, realtimePreviewTimerCallback, this);
@@ -473,17 +475,45 @@ float CScrollOverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
     return std::clamp(workspaceInsertFadeProgress->value(), 0.F, 1.F);
 }
 
-// ponytail: E2 keeps the GNOME invariant "the highest-id workspace is empty" by
-// creating the real workspace, not a phantom strip card. The strong ref below is
-// the only thing keeping it alive -- Hyprland reaps empty workspaces the moment
-// nothing owns them -- so closing the overview cleans it up for free.
+// Highest workspace on this monitor that still has windows. Empty desktops
+// after that are the ponytail, not occupied space -- using max-id here made
+// the trailing empty pin every id below it, so emptying the 2nd-last desktop
+// never shrank the strip.
+static WORKSPACEID highestOccupiedWorkspaceID(PHLMONITOR MONITOR) {
+    WORKSPACEID maxOccupied = 0;
+    if (!MONITOR)
+        return maxOccupied;
+
+    for (const auto& w : State::workspaceState()->workspaces()) {
+        const auto WORKSPACE = w.lock();
+        if (!valid(WORKSPACE) || WORKSPACE->m_monitor != MONITOR || WORKSPACE->m_isSpecialWorkspace)
+            continue;
+        if (WORKSPACE->getWindowCount() > 0)
+            maxOccupied = std::max(maxOccupied, WORKSPACE->m_id);
+    }
+
+    return maxOccupied;
+}
+
+// ponytail: E2 keeps the GNOME invariant "the highest occupied workspace is
+// followed by one empty" by creating the real workspace, not a phantom strip
+// card. The strong ref below is the only thing keeping it alive -- Hyprland
+// reaps empty workspaces the moment nothing owns them -- so closing the
+// overview cleans it up for free. Extra empties above occupied+1 are dropped
+// so moving the last window off the 2nd-last desktop shrinks the strip.
 void CScrollOverview::ensureTrailingWorkspace() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing)
         return;
 
-    WORKSPACEID  maxID = 0;
+    const WORKSPACEID maxOccupied = highestOccupiedWorkspaceID(MONITOR);
+    if (maxOccupied <= 0)
+        return;
+
+    const WORKSPACEID trailingID = maxOccupied + 1;
+
     PHLWORKSPACE last;
+    WORKSPACEID  maxID = 0;
     for (const auto& w : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = w.lock();
         if (!valid(WORKSPACE) || WORKSPACE->m_monitor != MONITOR || WORKSPACE->m_isSpecialWorkspace)
@@ -495,18 +525,16 @@ void CScrollOverview::ensureTrailingWorkspace() {
         }
     }
 
-    if (!last)
-        return;
+    if (trailingWorkspace && trailingWorkspace->m_id != trailingID)
+        trailingWorkspace.reset();
 
-    if (last->getWindowCount() == 0) {
-        // Something is already trailing-empty. If it is not ours, stop paying for
-        // ours: two trailing empties is not the GNOME behaviour.
+    if (last && last->m_id == trailingID && last->getWindowCount() == 0) {
         if (trailingWorkspace != last)
             trailingWorkspace.reset();
         return;
     }
 
-    trailingWorkspace = State::workspaceState()->create(maxID + 1, MONITOR->m_id, std::to_string(maxID + 1));
+    trailingWorkspace = State::workspaceState()->create(trailingID, MONITOR->m_id, std::to_string(trailingID));
 }
 
 // ponytail: X3 population parity. The reference grid is indexed by workspace
@@ -564,7 +592,11 @@ void CScrollOverview::ensureNoWorkspaceGaps() {
     }
 
     std::vector<PHLWORKSPACE> kept;
-    const WORKSPACEID         FILLTO = std::min(maxID, GAP_POPULATION_MAX + 1);
+    // Fill holes only below the last occupied desktop. Filling up to the
+    // trailing empty (old maxID) re-created the emptied 2nd-last as a gap
+    // and the strip never shrank.
+    const WORKSPACEID         maxOccupied = highestOccupiedWorkspaceID(MONITOR);
+    const WORKSPACEID         FILLTO      = std::min(maxOccupied > 0 ? maxOccupied : maxID, GAP_POPULATION_MAX + 1);
     for (WORKSPACEID id = 1; id < FILLTO; ++id) {
         if (existing.contains(id)) {
             // Keep paying for the ones we already materialised; anything else is
@@ -4285,12 +4317,65 @@ static void drawSearch(const SSearchLayout& L) {
     const CHyprColor FG = !L.queried ? CHyprColor{1.F, 1.F, 1.F, 0.55F} : (L.emptyResult ? CHyprColor{1.F, 0.45F, 0.45F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 1.F});
 
     const int  FONTPX = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
-    const auto TEX    = OverviewRender::text(L.label, FG, FONTPX, false, "", sc<int>(L.fieldW), L.queried ? 600 : 0);
+    const auto NOW    = Time::steadyNow();
+
+    const float FIELDX = BADGE.x + BADGE.width + L.gap;
+    const CBox  FIELD{FIELDX, PILL.y, L.fieldW, PILL.height};
+
+    const auto ADDLETTER = [&](const SP<Render::ITexture>& tex, const CBox& box, float a) {
+        if (!tex || !tex->ok() || a <= 0.F)
+            return;
+        CTexPassElement::SRenderData data;
+        data.tex     = tex;
+        data.box     = box;
+        data.a       = texFade * a;
+        data.clipBox = FIELD;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+    };
+
+    if (!SearchLetters::g_searchLetters.empty()) {
+        // Serpantinum Input.qml: one texture per codepoint, scale/y/opacity from
+        // the add/remove transitions, packed left with 1 logical px of tracking.
+        const auto  LIVE    = SearchLetters::g_searchLetters.liveGlyphs();
+        const float SPACING = std::max(1.F, SCALE);
+        std::vector<float> widths;
+        widths.reserve(LIVE.size());
+        for (const auto& G : LIVE) {
+            const auto TEX = OverviewRender::text(G, FG, FONTPX, false, "", 0, 600);
+            widths.push_back((TEX && TEX->ok()) ? sc<float>(TEX->m_size.x) : sc<float>(FONTPX) * 0.5F);
+        }
+
+        const auto PLACED = SearchLetters::g_searchLetters.place(widths, SPACING, SCALE, NOW);
+        for (const auto& P : PLACED) {
+            const auto TEX = OverviewRender::text(P.glyph, FG, FONTPX, false, "", 0, 600);
+            if (!TEX || !TEX->ok())
+                continue;
+            const float W  = sc<float>(TEX->m_size.x);
+            const float H  = sc<float>(TEX->m_size.y);
+            const float CX = FIELDX + P.x + W * 0.5F;
+            const float CY = PILL.y + std::round((PILL.height - H) / 2.F) + H * 0.5F + P.y;
+            const float DW = W * P.scale;
+            const float DH = H * P.scale;
+            ADDLETTER(TEX, CBox{CX - DW * 0.5F, CY - DH * 0.5F, DW, DH}, P.opacity);
+        }
+
+        if (L.emptyResult && !LIVE.empty()) {
+            const auto SUFFIX = OverviewRender::text("    no matches", FG, FONTPX, false, "", std::max(1, sc<int>(L.fieldW)), 600);
+            if (SUFFIX && SUFFIX->ok()) {
+                const float X = FIELDX + SearchLetters::g_searchLetters.liveEndX(widths, SPACING);
+                CBox        suffixBox{X, PILL.y + std::round((PILL.height - sc<float>(SUFFIX->m_size.y)) / 2.F), sc<float>(SUFFIX->m_size.x), sc<float>(SUFFIX->m_size.y)};
+                ADDLETTER(SUFFIX, suffixBox, 1.F);
+            }
+        }
+        return;
+    }
+
+    const auto TEX = OverviewRender::text(L.label, FG, FONTPX, false, "", sc<int>(L.fieldW), L.queried ? 600 : 0);
     if (!TEX || !TEX->ok())
         return;
 
     CBox textBox = {
-        BADGE.x + BADGE.width + L.gap,
+        FIELDX,
         PILL.y + std::round((PILL.height - sc<float>(TEX->m_size.y)) / 2.F),
         sc<float>(TEX->m_size.x),
         sc<float>(TEX->m_size.y),
@@ -4386,7 +4471,15 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
 
     // ---- DRAW: out of the published object, so the painter, the pointer and
     // the keyboard are provably looking at the same boxes.
+    SearchLetters::g_searchLetters.sync(g_search.query.text, Time::steadyNow());
     drawSearch(g_search.layout);
+
+    // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor
+    // will not schedule the rest of the pop on its own.
+    if (SearchLetters::g_searchLetters.busy(Time::steadyNow())) {
+        damage();
+        requestInputFrame();
+    }
 }
 
 void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now) {
@@ -5242,7 +5335,16 @@ void CScrollOverview::close() {
     // may survive into the next open as a phantom drop.
     ScrollOverview::Dock::dragCancel();
     ScrollOverview::Dock::setForeignInsert(-1);
-    g_search.endInteraction();
+
+    // Click-to-close and swipe-commit never go through the dispatcher, so a
+    // typed query used to still be in the bar on the next open. Ending the
+    // last overview ends the search session: reopen is empty, and the close
+    // animation unfilters instead of popping hidden windows back after it.
+    // A second monitor still showing the same session must not lose it.
+    if (scrollOverviews().size() <= 1)
+        resetSearchSession();
+    else
+        g_search.endInteraction();
 
     setClosing(true);
 

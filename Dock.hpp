@@ -81,6 +81,16 @@ bool    pillContains(PHLMONITOR monitor, const Vector2D& point);
 // a window title over the dock drops as soon as the pointer is on the dock.
 bool    uiContains(PHLMONITOR monitor, const Vector2D& point);
 
+// Pill, hover-preview plate, or context menu: the pointer is on dock chrome,
+// not on the window painted underneath.
+bool    occupiesPointer(PHLMONITOR monitor, const Vector2D& point);
+
+// While the pointer is on the dock, seat focus leaves the window underneath
+// so wheel/touchpad scroll cycles that icon's windows instead of scrolling
+// the client. Restored when the pointer leaves (or overview/plugin takes over).
+void    syncPointerFocus(PHLMONITOR monitor, const Vector2D& point);
+void    releasePointerFocus();
+
 // X24. A click inside the pill, in the same monitor-local RENDER px as
 // pillContains. An icon min/maxes the app's window on THIS desktop: restore
 // if it is hidden, minimize if it is visible. A window only on another

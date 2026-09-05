@@ -39,8 +39,17 @@ end
 -- hl.config runs at parse time and the plugin:hyprdrive:* keys do not exist
 -- until the .so has registered them, so an unguarded config block throws
 -- "unknown config key" for every property on boot and on reload.
+-- pairs() not ipairs(): omarchy-menu-keybindings scans this file with a stub
+-- `hl` whose __index always returns a value, and ipairs never terminates on
+-- that table. Super+K (the keybindings menu) hung in this loop.
 function hyprdrive_loaded()
-    for _, v in ipairs(hl.get_loaded_plugins() or {}) do
+    local ok, plugins = pcall(function()
+        return hl.get_loaded_plugins()
+    end)
+    if not ok or type(plugins) ~= "table" then
+        return false
+    end
+    for _, v in pairs(plugins) do
         if (type(v) == "table" and v.name or v) == "hyprdrive" then
             return true
         end

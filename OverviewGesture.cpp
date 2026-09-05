@@ -1,6 +1,7 @@
 #include "OverviewGesture.hpp"
 
 #include "Config.hpp"
+#include "IOverview.hpp"
 #include "scrollOverview.hpp"
 
 #include <algorithm>
@@ -43,6 +44,9 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
         if (!ensureScrollOverviewHooks())
             return;
 
+        // Super-tap and the dock button reset the search session; swipe-open
+        // was the remaining door, so a query survived close and came back.
+        resetSearchSession();
         overview = makeShared<CScrollOverview>(MONITOR->m_activeWorkspace, true, MONITOR);
         registerScrollOverview(overview);
         overview->m_swipeClosing = false;

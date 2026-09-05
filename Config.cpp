@@ -577,7 +577,7 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CColorValue>(KEY("dock:background_color"),
                                    "hyprgnomedock: pill hue (alpha 0 = Omarchy terminal background, else misc:background_color; opacity is background_opacity)",
                                    (Hyprlang::INT)0));
-    // -1 follows Omarchy's default-opacity window rule (stock `0.985 0.96`).
+    // -1 follows unfocused default-opacity (0.85), the same glass as idle windows.
     // A pin of 0.19 was Dash-to-Dock glass; without window blur that left
     // the pill almost invisible.
     addKey(makeShared<CFloatValue>(KEY("dock:background_opacity"),
@@ -805,14 +805,12 @@ CHyprColor dockIndicatorColor() {
     return colorFromArgb(ARGB);
 }
 
-// Omarchy's stock window rule is `opacity = "0.985 0.96"` on the
-// default-opacity tag (default/hypr/windows.lua). The dock follows that
-// number, not a live window's current alpha — sampling a window that had
-// lost the rule (or Super+Backspace opaque) copied 1.0 onto the pill.
+// Overview chrome (dock, search, strip, results) follows unfocused window
+// opacity from ~/.config/hypr/windows.lua (`0.985 override 0.85 override`).
 static float omarchyWindowOpacity() {
-    static constexpr float STOCK = 0.985F;
-    const float ACTIVE = std::clamp(getValue<float>("decoration:active_opacity"), 0.F, 1.F);
-    return std::clamp(STOCK * ACTIVE, 0.F, 1.F);
+    static constexpr float STOCK = 0.85F;
+    const float INACTIVE = std::clamp(getValue<float>("decoration:inactive_opacity"), 0.F, 1.F);
+    return std::clamp(STOCK * INACTIVE, 0.F, 1.F);
 }
 
 CHyprColor dockBackgroundColor() {

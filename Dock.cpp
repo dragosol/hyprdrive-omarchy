@@ -63,6 +63,7 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -1216,6 +1217,11 @@ void updateAutohide(PHLMONITOR monitor) {
     // A reversal that catches the pill still on screen does not wait out a
     // delay; see the X77 note below.
     bool       immediate = false;
+
+    const auto BOX   = monitor->logicalBox();
+    const auto POINT = g_pInputManager->getMouseCoordsInternal();
+    const bool ATEDGE = BOX.containsPoint(POINT) && POINT.y >= BOX.y + BOX.h - REVEAL_BAND;
+
     if (R.shown) {
         // Up already: it stays up while the pointer is on it, or while its
         // right-click menu is -- the menu floats ABOVE the pill, so reaching for
@@ -1233,7 +1239,12 @@ void updateAutohide(PHLMONITOR monitor) {
         // pill, so the icon under the pointer would go with it. The return
         // flight holds it for the other half: an icon cannot land in a cell
         // that has left the screen.
-        if (menuOpen() || panelHoldsDock(monitor) || Stacks::holdsDock(monitor) || dragging() || ghostFlying())
+        //
+        // Position at the bottom edge of the monitor holds the dock as well:
+        // the user can trigger the reveal anywhere along the bottom edge, and
+        // holding the cursor there outside the physical dock pill must keep it
+        // visible rather than oscillating (hide/show loop).
+        if (menuOpen() || panelHoldsDock(monitor) || Stacks::holdsDock(monitor) || dragging() || ghostFlying() || ATEDGE)
             want = true;
         else if (CBox reach = slidPill(monitor); !reach.empty()) {
             // X77: the SLID pill, not the resting one. While it is still easing
@@ -1241,7 +1252,7 @@ void updateAutohide(PHLMONITOR monitor) {
             // is actually on screen fell outside the resting box and read as
             // "left the dock" -- which started a hide the user never asked for.
             reach.height += EDGE_MARGIN * monitor->m_scale; // the margin under the pill still counts as on it
-            want = reach.containsPoint((g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale);
+            want = reach.containsPoint((POINT - monitor->m_position) * monitor->m_scale);
         }
     } else {
         // `require-pressure-to-show`, plus a POSITION test that every pointer
@@ -1256,30 +1267,6 @@ void updateAutohide(PHLMONITOR monitor) {
         // deltas, which is not how the user's pointer moves.) Position is the
         // one thing every device agrees on; `show_delay_ms` is what keeps it
         // from being twitchy, and pressure still works for a relative mouse.
-        const auto BOX   = monitor->logicalBox();
-        const auto POINT = g_pInputManager->getMouseCoordsInternal();
-        const bool ATEDGE = BOX.containsPoint(POINT) && POINT.y >= BOX.y + BOX.h - REVEAL_BAND;
-
-        // `require-pressure-to-show`. The reference's switch between the two
-        // reveals, and the one key of X30's four that was never implemented --
-        // which is why `pressure_threshold` could be set to 20, 100 or 5000 and
-        // the same push revealed the dock every time (danglingA ticket x30).
-        //
-        // It was not that the threshold went unread: it was ORed with ATEDGE,
-        // and the band pressure ACCUMULATES in (the bottom EDGE_BAND = 2px) is a
-        // strict subset of the band ATEDGE tests (the bottom REVEAL_BAND = 4px).
-        // `R.pressure >= threshold` could therefore never be true while ATEDGE
-        // was false: the term was unreachable on every device, and the key it
-        // read gated nothing.
-        //
-        // The reference defaults this TRUE. It ships FALSE here, deliberately:
-        // e2aabe8 added the position test because the user reported the reveal
-        // DEAD, and the mechanism it found -- the pressure feed hooks the
-        // RELATIVE motion path while an absolute pointer (a tablet, a VM, most
-        // touch hardware) never emits one -- has not gone away. Defaulting to
-        // the reference's value would hand those users a dock that cannot be
-        // revealed at all. So the shipping default is the behaviour that was
-        // measured to work, and the reference's is one key away.
         const bool PRESSED = R.pressure >= Config::getValue<float>(KEY_PRESSURE);
         want               = Config::getValue<bool>(KEY_REQ_PRESSURE) ? (ATEDGE && PRESSED) : ATEDGE;
 
@@ -1297,10 +1284,13 @@ void updateAutohide(PHLMONITOR monitor) {
         // Being ON the pill that is still on screen counts, and it counts
         // IMMEDIATELY -- `show-delay` belongs to the pressure barrier, not to a
         // pointer that never really left.
+        if (ATEDGE && hiddenFraction(monitor) < 1.F)
+            immediate = true;
+
         if (!want) {
             if (CBox reach = slidPill(monitor); !reach.empty()) {
                 reach.height += EDGE_MARGIN * monitor->m_scale;
-                if (reach.containsPoint((g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale)) {
+                if (reach.containsPoint((POINT - monitor->m_position) * monitor->m_scale)) {
                     want      = true;
                     immediate = true;
                 }
@@ -1796,6 +1786,34 @@ PHLWINDOW frontWindow(const std::vector<PHLWINDOW>& windows) {
     return windows.empty() ? nullptr : windows.front();
 }
 
+// Seat is held while the pointer is on dock chrome so axis events cannot
+// reach the window Hyprland hit-tests underneath (the pill is not a surface).
+bool g_dockSeatHeld = false;
+
+void stealDockSeat() {
+    g_dockSeatHeld = true;
+    if (!g_pSeatManager)
+        return;
+    g_pSeatManager->setPointerFocus(nullptr, {});
+    g_pSeatManager->setKeyboardFocus(nullptr);
+}
+
+void restoreDockSeat() {
+    if (!g_dockSeatHeld)
+        return;
+    g_dockSeatHeld = false;
+
+    const auto WINDOW = Desktop::focusState()->window();
+    if (!WINDOW || !WINDOW->m_isMapped)
+        return;
+
+    SP<CWLSurfaceResource> surf;
+    if (WINDOW->wlSurface())
+        surf = WINDOW->wlSurface()->resource();
+    if (g_pSeatManager && surf)
+        g_pSeatManager->setKeyboardFocus(surf);
+}
+
 // Go to a window on the desktop it belongs to. Preview clicks and "show me
 // that window" must switch there -- never fly the window onto the current
 // desktop (the restore flight comes up from the dock) and never toggle
@@ -1817,6 +1835,11 @@ void activateWindow(const PHLWINDOW& window) {
 
     Desktop::windowState()->raise(window);
     Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
+
+    // Activate restores seat onto the window; take it back if the pointer is
+    // still on the dock so the next tick cycles instead of scrolling the client.
+    if (g_dockSeatHeld)
+        stealDockSeat();
 }
 
 // X33 `scroll-action='cycle-windows'`, transcribed from `_cycleThroughWindows`.
@@ -2520,7 +2543,7 @@ bool uiContains(PHLMONITOR monitor, const Vector2D& point) {
 
 bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
     if (!pillContains(monitor, point))
-        return false;
+        return occupiesPointer(monitor, point); // hover plate / menu: swallow, do not leak
 
     const auto ACTION = Config::getValue<std::string>(KEY_SCROLL_ACTION);
     if (ACTION != "cycle-windows" && ACTION != "switch-workspace")
@@ -2567,6 +2590,8 @@ bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
         return true;
 
     cycleOrActivate(*ITEM, up);
+    if (g_dockSeatHeld)
+        stealDockSeat();
     return true;
 }
 
@@ -3682,6 +3707,31 @@ void dismissHoverPanelNow() {
     g_tip = {};
 }
 
+bool occupiesPointer(PHLMONITOR monitor, const Vector2D& point) {
+    if (!monitor)
+        return false;
+    return pillContains(monitor, point) || panelContains(point) || menuContains(monitor, point);
+}
+
+void syncPointerFocus(PHLMONITOR monitor, const Vector2D& point) {
+    if (monitor && occupiesPointer(monitor, point)) {
+        g_dockSeatHeld = true;
+        stealDockSeat();
+        if (g_pEventLoopManager) {
+            g_pEventLoopManager->doLater([] {
+                if (g_dockSeatHeld)
+                    stealDockSeat();
+            });
+        }
+        return;
+    }
+    restoreDockSeat();
+}
+
+void releasePointerFocus() {
+    restoreDockSeat();
+}
+
 // Z2. A CLICK on a preview goes to that window. The panel floats ABOVE the pill,
 // so every one of these clicks failed the `pillContains` gate both button hooks
 // open with and fell through to whatever window was underneath -- the panel was
@@ -3791,6 +3841,29 @@ void render(PHLMONITOR monitor) {
         return;
 
     const auto MOUSELOCAL = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
+    const auto& MOUSE      = MOUSELOCAL;
+    const auto HOVEREDITEM = std::ranges::find_if(LAYOUT.items, [&](const SItem& item) { return hoverBox(item.iconBox, monitor->m_scale).containsPoint(MOUSE); });
+    const bool HASHOVER    = HOVEREDITEM != LAYOUT.items.end();
+    const bool HOVERAPPS   = !LAYOUT.showApps.empty() && hoverBox(LAYOUT.showApps, monitor->m_scale).containsPoint(MOUSE);
+
+    // Hover previews BEFORE the pill. Live window thumbnails that leak downward
+    // used to paint over the icons (flushPass composites them on top of the
+    // already-queued pill). The panel still sits above the dock; the pill
+    // covers anything that spills into its box.
+    {
+        const bool OVERPANEL   = panelContains(MOUSE);
+        const bool PANELWANTED = (HASHOVER || OVERPANEL) && !g_menu && !dragging() && !dragPending();
+        CBox        panelAnchor;
+        std::string panelClass;
+        std::string panelDesktopId;
+        if (PANELWANTED) {
+            const bool FROMICON = HASHOVER;
+            panelAnchor         = FROMICON ? HOVEREDITEM->iconBox : g_hover.panel->anchor;
+            panelClass          = FROMICON ? HOVEREDITEM->wmClass : g_hover.panel->wmClass;
+            panelDesktopId      = FROMICON ? HOVEREDITEM->desktopId : g_hover.panel->desktopId;
+        }
+        renderHoverPreview(monitor, LAYOUT, panelAnchor, panelClass, panelDesktopId, Time::steadyNow());
+    }
 
     // Y7. Drawn FIRST so the pill's own frost and background land on top of it
     // and the halo only shows where it reaches past the pill's edges.
@@ -3840,14 +3913,6 @@ void render(PHLMONITOR monitor) {
     // (user, 2026-08-03): GNOME lights the hovered app cell with a translucent
     // lighter fill and a slightly stronger outline, and labels it. Mouse coords
     // are global logical; the layout is monitor-local RENDER px.
-    const auto& MOUSE      = MOUSELOCAL; // Y7 already resolved it, above the pill
-    const auto HOVEREDITEM = std::ranges::find_if(LAYOUT.items, [&](const SItem& item) { return hoverBox(item.iconBox, monitor->m_scale).containsPoint(MOUSE); });
-    const bool HASHOVER    = HOVEREDITEM != LAYOUT.items.end();
-
-    // X32. The button's cell lights up like any other, so it reads as clickable
-    // rather than as decoration.
-    const bool HOVERAPPS = !LAYOUT.showApps.empty() && hoverBox(LAYOUT.showApps, monitor->m_scale).containsPoint(MOUSE);
-
     if (HASHOVER || HOVERAPPS) {
         // (user, 2026-08-03) A flat fill, no outline. The radius is CONCENTRIC
         // with the pill rather than a constant: the cell is inset from the pill
@@ -4041,30 +4106,7 @@ void render(PHLMONITOR monitor) {
     // needs, computed once per frame here where the render context is.
     const bool OWNSPASS = scrollOverviewForMonitor(monitor) != nullptr;
 
-    // X47. Over the pill, under the flight -- a window on its way into an icon
-    // must not disappear behind the panel it flies past. Suppressed while the
-    // X28 menu is up (the two plates would stack) and while the dock's own drag
-    // is live (a panel following a dragged icon is noise, not information).
-    //
-    // Y1. The pointer INSIDE the plate wants it too. Hovering no icon is no
-    // longer the same as wanting no panel, which is the whole bug: the panel
-    // floats above the pill, so reaching a preview always leaves every icon box.
-    const bool OVERPANEL   = panelContains(MOUSE);
-    const bool PANELWANTED = (HASHOVER || OVERPANEL) && !g_menu && !dragging() && !dragPending();
-
-    CBox        panelAnchor;
-    std::string panelClass;
-    std::string panelDesktopId;
-    if (PANELWANTED) {
-        // Over the plate but not over an icon: keep the app it is already
-        // showing, so crossing from icon to preview is one continuous panel.
-        const bool FROMICON = HASHOVER;
-        panelAnchor         = FROMICON ? HOVEREDITEM->iconBox : g_hover.panel->anchor;
-        panelClass          = FROMICON ? HOVEREDITEM->wmClass : g_hover.panel->wmClass;
-        panelDesktopId      = FROMICON ? HOVEREDITEM->desktopId : g_hover.panel->desktopId;
-    }
-
-    renderHoverPreview(monitor, LAYOUT, panelAnchor, panelClass, panelDesktopId, NOW);
+    // Hover previews were drawn under the pill, above.
 
     // The menu says the app's name louder than the tooltip does, and the two
     // plates would otherwise sit on top of each other.

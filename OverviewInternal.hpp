@@ -199,8 +199,13 @@ inline CScrollOverview*      g_pointerGrabOverview = nullptr;
 inline void removeOverview(CScrollOverview* overview) {
     const auto PMONITOR = overview ? overview->pMonitor.lock() : PHLMONITOR{};
     unregisterScrollOverview(overview);
-    if (scrollOverviews().empty())
+    if (scrollOverviews().empty()) {
         disableScrollOverviewHooks();
+        // Click-to-close and swipe-down never went through the dispatcher, so
+        // the query lived until the next Super-tap. A fully gone overview
+        // always starts the next one empty.
+        resetSearchSession();
+    }
 
     if (PMONITOR) {
         PMONITOR->recheckSolitary();

@@ -3,11 +3,13 @@
 # spot. `make check` runs this, which is the whole point -- a host test nobody
 # runs is a comment with a build cost.
 #
-# Two of them today:
+# Three of them today:
 #   drop_table_test   ScrollOverview::Drop::resolve(), all 65536 fact
 #                     combinations against the pre-split branch ladder.
 #   geometry_test     ScrollOverview::Geometry -- the overview's transform,
 #                     clamps and box predicates.
+#   search_letters_test  SearchLetters -- Serpantinum Input.qml bounce eases,
+#                     UTF-8 split, prefix/suffix diff, animator state.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -39,5 +41,6 @@ run() {
 run drop_table_test scripts/drop_table_test.cpp
 # shellcheck disable=SC2046
 run geometry_test scripts/geometry_test.cpp OverviewGeometry.cpp $(pkg-config --cflags --libs hyprutils)
+run search_letters_test scripts/search_letters_test.cpp
 
 exit $fail

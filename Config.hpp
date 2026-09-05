@@ -97,7 +97,7 @@ int           getGestureDistance();
 //   dockIndicatorColor()    dock:indicator_color, else highlightColor()
 //   dockBackgroundColor()   dock:background_color, else Omarchy terminal
 //                           background (colors.toml), else misc:background_color
-//                           opacity -1 = Omarchy default-opacity window rule
+//                           opacity -1 = unfocused default-opacity (0.85)
 //   themeFontFamily()       misc:font_family if pinned, else Omarchy
 //                           fontconfig monospace (omarchy font set)
 //   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
