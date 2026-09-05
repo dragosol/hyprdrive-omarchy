@@ -161,6 +161,7 @@ class CScrollOverview : public IOverview {
                              bool dragged = false, float alphaMul = 1.F);
     void   renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now);
     void   renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewScale, const Time::steady_tp& now);
+    float        workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const;
     CBox         stripCellLogicalBox(size_t workspaceIdx) const;
     CBox         stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, float renderScale) const;
     PHLWORKSPACE workspaceAtStripPoint(const Vector2D& point, size_t* hoveredWorkspaceIdx = nullptr) const;

@@ -41,6 +41,7 @@ run() {
 run drop_table_test scripts/drop_table_test.cpp
 # shellcheck disable=SC2046
 run geometry_test scripts/geometry_test.cpp OverviewGeometry.cpp $(pkg-config --cflags --libs hyprutils)
+run strip_scrolling_test scripts/strip_scrolling_test.cpp $(pkg-config --cflags --libs hyprutils)
 run search_letters_test scripts/search_letters_test.cpp
 
 exit $fail

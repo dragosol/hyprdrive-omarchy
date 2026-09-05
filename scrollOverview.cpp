@@ -3428,6 +3428,84 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         renderDropIndicator();
 }
 
+float CScrollOverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
+    if (!workspace || !monitor || monitor->m_size.x <= 0.F || monitor->m_size.y <= 0.F)
+        return 1.0F;
+
+    if (!isWorkspaceScrolling(workspace))
+        return 1.0F;
+
+    const auto ALGO = overviewScrollingAlgorithmForWorkspace(workspace);
+    if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller)
+        return 1.0F;
+
+    if (!ALGO->m_scrollingData->controller->isPrimaryHorizontal())
+        return 1.0F;
+
+    const auto USABLE = ALGO->usableArea();
+    const auto CAMERA_TRANS = ALGO->m_scrollingData->controller->getCameraTranslation(USABLE);
+
+    const SWorkspaceImage* wimgPtr = nullptr;
+    for (const auto& img : images) {
+        if (img && img->pWorkspace == workspace) {
+            wimgPtr = img.get();
+            break;
+        }
+    }
+
+    float minX = sc<float>(monitor->m_position.x) + sc<float>(monitor->m_size.x);
+    float maxX = sc<float>(monitor->m_position.x);
+    size_t tiledCount = 0;
+
+    if (wimgPtr && !wimgPtr->windows.empty()) {
+        for (const auto& winRef : wimgPtr->windows) {
+            const auto WINDOW = getOverviewWindowToShow(winRef.lock());
+            if (!WINDOW || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->m_isFloating)
+                continue;
+
+            const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+            const float LEFT = sc<float>(GEOM.x) - sc<float>(CAMERA_TRANS.x);
+            const float RIGHT = LEFT + sc<float>(GEOM.w);
+
+            minX = std::min(minX, LEFT);
+            maxX = std::max(maxX, RIGHT);
+            tiledCount++;
+        }
+    } else {
+        for (const auto& w : Desktop::windowState()->windows()) {
+            const auto WINDOW = getOverviewWindowToShow(w);
+            if (!WINDOW || WINDOW->m_workspace != workspace || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->m_isFloating)
+                continue;
+
+            const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+            const float LEFT = sc<float>(GEOM.x) - sc<float>(CAMERA_TRANS.x);
+            const float RIGHT = LEFT + sc<float>(GEOM.w);
+
+            minX = std::min(minX, LEFT);
+            maxX = std::max(maxX, RIGHT);
+            tiledCount++;
+        }
+    }
+
+    if (tiledCount == 0)
+        return 1.0F;
+
+    float virtualRight = maxX;
+    const double MAXW = ALGO->m_scrollingData->maxWidth();
+    if (MAXW > 0.0) {
+        const float TAPE_RIGHT = sc<float>(USABLE.x) + sc<float>(MAXW);
+        virtualRight = std::max(virtualRight, TAPE_RIGHT);
+    }
+
+    const float LEFT_MARGIN = std::max(0.F, minX - sc<float>(monitor->m_position.x));
+    const float TOTAL_VIRTUAL_WIDTH = (virtualRight - sc<float>(monitor->m_position.x)) + LEFT_MARGIN;
+
+    if (TOTAL_VIRTUAL_WIDTH <= sc<float>(monitor->m_size.x))
+        return 1.0F;
+
+    return TOTAL_VIRTUAL_WIDTH / sc<float>(monitor->m_size.x);
+}
+
 CBox CScrollOverview::stripCellLogicalBox(size_t workspaceIdx) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || workspaceIdx >= images.size() || images.empty())
@@ -3443,20 +3521,35 @@ CBox CScrollOverview::stripCellLogicalBox(size_t workspaceIdx) const {
     const size_t COUNT  = images.size();
 
     float cellH = BAND - 2.F * PAD;
-    float cellW = cellH * ASPECT;
-    float total = cellW * sc<float>(COUNT) + GAP * sc<float>(COUNT - 1);
+    const float baseW = cellH * ASPECT;
+
+    std::vector<float> cellWidths(COUNT, baseW);
+    float sumCellW = 0.F;
+
+    for (size_t i = 0; i < COUNT; ++i) {
+        const float RATIO = images[i] ? workspaceScrollingSpanRatio(images[i]->pWorkspace, MONITOR) : 1.0F;
+        cellWidths[i] = baseW * RATIO;
+        sumCellW += cellWidths[i];
+    }
+
+    float total = sumCellW + GAP * sc<float>(COUNT - 1);
 
     // Many workspaces must shrink the cells rather than overflow the monitor.
-    if (const float MAXW = sc<float>(MONITOR->m_size.x) - 2.F * PAD; total > MAXW) {
-        cellW = (MAXW - GAP * sc<float>(COUNT - 1)) / sc<float>(COUNT);
-        cellH = cellW / ASPECT;
+    if (const float MAXW = sc<float>(MONITOR->m_size.x) - 2.F * PAD; total > MAXW && sumCellW > 0.F) {
+        const float SCALE_DOWN = (MAXW - GAP * sc<float>(COUNT - 1)) / sumCellW;
+        cellH *= SCALE_DOWN;
+        for (size_t i = 0; i < COUNT; ++i)
+            cellWidths[i] *= SCALE_DOWN;
         total = MAXW;
     }
 
-    if (cellW <= 1.F || cellH <= 1.F)
+    if (cellWidths[workspaceIdx] <= 1.F || cellH <= 1.F)
         return {};
 
-    const float X = sc<float>(MONITOR->m_position.x) + (sc<float>(MONITOR->m_size.x) - total) / 2.F + sc<float>(workspaceIdx) * (cellW + GAP);
+    float currentX = sc<float>(MONITOR->m_position.x) + (sc<float>(MONITOR->m_size.x) - total) / 2.F;
+    for (size_t i = 0; i < workspaceIdx; ++i)
+        currentX += cellWidths[i] + GAP;
+
     // X10: the search row owns the very top; the band starts under it.
     // X60: and the RESULTS sit between the two, so a growing result list pushes
     // the strip down rather than being anchored to the bottom half. This
@@ -3465,7 +3558,7 @@ CBox CScrollOverview::stripCellLogicalBox(size_t workspaceIdx) const {
     const float Y = sc<float>(MONITOR->m_position.y) + overviewSearchLogicalHeight(MONITOR) + overviewResultsLogicalHeight(MONITOR) + PAD +
         (BAND - 2.F * PAD - cellH) / 2.F;
 
-    return CBox{X, Y, cellW, cellH};
+    return CBox{currentX, Y, cellWidths[workspaceIdx], cellH};
 }
 
 // X22: screen-fixed. The strip used to ride the active card, which meant a
@@ -3508,13 +3601,34 @@ PHLWORKSPACE CScrollOverview::stripWorkspaceAt(const Vector2D& point) const {
 // thumbnail of the desktop, not a second copy of the grid. Shared by the render
 // and the D6 hit-test so the two can never disagree about where a mini is.
 CBox CScrollOverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITOR monitor) const {
-    if (!window || !monitor || cell.width <= 0)
+    if (!window || !monitor || cell.width <= 0 || cell.height <= 0)
         return {};
 
-    const float SCALEX = sc<float>(cell.width) / std::max(1.F, sc<float>(monitor->m_size.x));
     const float SCALEY = sc<float>(cell.height) / std::max(1.F, sc<float>(monitor->m_size.y));
     const auto  GEOM   = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
 
+    const auto WORKSPACE = window->m_workspace;
+    const float SPAN_RATIO = workspaceScrollingSpanRatio(WORKSPACE, monitor);
+
+    if (SPAN_RATIO > 1.0F) {
+        const auto ALGO = overviewScrollingAlgorithmForWorkspace(WORKSPACE);
+        Vector2D cameraTrans{};
+        if (ALGO && ALGO->m_scrollingData && ALGO->m_scrollingData->controller)
+            cameraTrans = ALGO->m_scrollingData->controller->getCameraTranslation(ALGO->usableArea());
+
+        const float VIRTUAL_WIDTH = sc<float>(monitor->m_size.x) * SPAN_RATIO;
+        const float SCALEX = sc<float>(cell.width) / std::max(1.F, VIRTUAL_WIDTH);
+        const float UNTRANSLATED_X = sc<float>(GEOM.x) - sc<float>(cameraTrans.x);
+
+        return CBox{
+            sc<float>(cell.x) + (UNTRANSLATED_X - sc<float>(monitor->m_position.x)) * SCALEX,
+            sc<float>(cell.y) + (sc<float>(GEOM.y) - sc<float>(monitor->m_position.y)) * SCALEY,
+            sc<float>(GEOM.w) * SCALEX,
+            sc<float>(GEOM.h) * SCALEY,
+        };
+    }
+
+    const float SCALEX = sc<float>(cell.width) / std::max(1.F, sc<float>(monitor->m_size.x));
     return CBox{
         sc<float>(cell.x) + (sc<float>(GEOM.x) - sc<float>(monitor->m_position.x)) * SCALEX,
         sc<float>(cell.y) + (sc<float>(GEOM.y) - sc<float>(monitor->m_position.y)) * SCALEY,
@@ -3720,7 +3834,7 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(num));
     }
 
-    const float MINIRENDERSCALE = renderScale * sc<float>(CELL.width) / std::max(1.F, sc<float>(monitor->m_size.x) * monitor->m_scale);
+    const float MINIRENDERSCALE = renderScale * sc<float>(CELL.height) / std::max(1.F, sc<float>(monitor->m_size.y) * monitor->m_scale);
 
     for (const auto& windowRef : wimg->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
