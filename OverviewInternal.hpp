@@ -16,6 +16,7 @@
 #include <cstdio>
 
 #include "AppSearch.hpp"
+#include "OmarchySearch.hpp"
 #include "SearchSession.hpp"
 #include "TileChrome.hpp"
 #include "WindowPill.hpp"
@@ -374,14 +375,13 @@ inline constexpr size_t OVERVIEW_PROVIDER_ROW_LIMIT    = 5;
 // is deliberately a snapshot: the list grows across frames as replies land, and
 // a provider that never answers simply never appears.
 struct SSearchRow {
-    std::string              name;
-    // G6/X66: kept apart from the name rather than glued on with spaces. GNOME
-    // draws these as two columns -- a bright name, then a dimmer description --
-    // and one concatenated string cannot be coloured two ways.
-    std::string              description;
-    std::string              icon;
-    const AppSearch::SEntry* app = nullptr;
-    SearchProviders::SResult provider;
+    std::string                  name;
+    std::string                  description;
+    std::string                  icon;
+    const AppSearch::SEntry*     app = nullptr;
+    SearchProviders::SResult     provider;
+    std::optional<OmarchySearch::SSearchItem> omarchy;
+    int                          column = 0; // 0 = Left (Apps, Actions, Calc, Agents), 1 = Right (Files, Settings)
 };
 
 inline std::vector<SSearchRow> overviewSearchRows() {
@@ -391,46 +391,53 @@ inline std::vector<SSearchRow> overviewSearchRows() {
 
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 
-    for (const auto* E : AppSearch::search(g_search.query.text, OVERVIEW_APP_RESULT_LIMIT))
-        rows.push_back({E->name, "", E->icon, E, {}});
+    // 1. Agent Commands (/grok, /agy, /gemini, /claude, etc.)
+    if (OmarchySearch::isAgentQuery(g_search.query.text)) {
+        for (const auto& item : OmarchySearch::searchAgents(g_search.query.text)) {
+            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 0});
+        }
+        return rows;
+    }
 
-    // G5: each provider gets its OWN five rows. Providers arrive in whatever
-    // order they answer, so the count is kept per id rather than by assuming
-    // results() is grouped.
+    // 2. Instant Calculator
+    if (const auto calc = OmarchySearch::evaluateCalculator(g_search.query.text); calc) {
+        rows.push_back({calc->name, calc->description, calc->icon, nullptr, {}, *calc, 0});
+    }
+
+    // 3. Applications (Column 0)
+    for (const auto* E : AppSearch::search(g_search.query.text, OVERVIEW_APP_RESULT_LIMIT))
+        rows.push_back({E->name, "", E->icon, E, {}, std::nullopt, 0});
+
+    // 4. Omarchy Menu Actions & Toggles (Column 0)
+    for (const auto& item : OmarchySearch::searchMenu(g_search.query.text, 8)) {
+        rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 0});
+    }
+
+    // 5. Files (Column 1)
+    for (const auto& f : OmarchySearch::fileResults()) {
+        rows.push_back({f.name, f.description, f.icon, nullptr, {}, f, 1});
+    }
+
+    // 6. D-Bus Search Providers (GNOME Settings, Characters, etc.) (Column 1)
     std::unordered_map<std::string, size_t> perProvider;
     for (const auto& R : SearchProviders::results()) {
         if (perProvider[R.providerDesktopId]++ >= OVERVIEW_PROVIDER_ROW_LIMIT)
             continue;
-        // X66. There used to be a skip here for "the provider for an app we
-        // already list is the same row twice". It threw away EVERY result from
-        // a provider whose own app happened to match the query -- so searching
-        // "e" put Characters and Files in the apps grid and silently deleted
-        // both of their categories, which is the "only icons, no other results"
-        // the user reported. GNOME does not do this: its apps grid and its
-        // provider sections are independent, and its Calculator section lists
-        // "Open in Calculator" whether or not Calculator is also an app match.
-        rows.push_back({R.name, R.description, R.icon, nullptr, R});
+        rows.push_back({R.name, R.description, R.icon, nullptr, R, std::nullopt, 1});
     }
 
-    // G6 needs to know how many a provider ACTUALLY had, so the header can say
-    // how many are not being shown. perProvider counted every result, including
-    // the ones the cap skipped, so it is that total already.
     g_search.query.providerTotals = std::move(perProvider);
     return rows;
 }
 
-// X49. One card per provider. The grouping happens once, here, because the band
-// maths and the render pass have to agree on how many cards there are and how
-// many rows each one holds -- deriving that twice is how a panel ends up taller
-// than the band it was allocated.
+// X49. One card per provider / category.
 struct SSearchSection {
     std::string         title;
     std::string         icon;
     std::vector<size_t> rows;  // indices into the overviewSearchRows() vector
     size_t              total = 0; // G6: how many the provider had, cap included
-    // G5: which of the two layouts this section draws in. Apps are the GRID of
-    // icons; every other provider is a LIST of rows under a G6 header.
     bool                grid = false;
+    int                 column = 0; // 0 = Left, 1 = Right
 };
 
 inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSearchRow>& rows) {
@@ -438,9 +445,45 @@ inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSea
     std::vector<std::string>    keys;
 
     for (size_t i = 0; i < rows.size(); ++i) {
-        // Apps share one key: they are the section the reference puts above the
-        // provider cards, and they have no provider of their own to name.
-        const std::string KEY = rows[i].app ? "" : rows[i].provider.providerDesktopId;
+        std::string KEY;
+        std::string title = "Results";
+        std::string icon  = "system-search";
+        bool        grid  = false;
+        int         col   = rows[i].column;
+
+        if (rows[i].omarchy) {
+            const auto& o = *rows[i].omarchy;
+            if (o.kind == OmarchySearch::EItemKind::Calculator) {
+                KEY   = "calc";
+                title = "Calculator";
+                icon  = "accessories-calculator";
+            } else if (o.kind == OmarchySearch::EItemKind::Agent) {
+                KEY   = "agent";
+                title = "AI Agents";
+                icon  = "utilities-terminal";
+            } else if (o.kind == OmarchySearch::EItemKind::File) {
+                KEY   = "files";
+                title = "Files";
+                icon  = "system-file-manager";
+            } else {
+                KEY   = "omarchy:" + o.category;
+                title = o.category.empty() ? "Omarchy" : o.category;
+                icon  = "system-run";
+            }
+        } else if (rows[i].app) {
+            KEY   = "apps";
+            title = "Applications";
+            icon  = "applications-other";
+            grid  = true;
+        } else {
+            KEY   = rows[i].provider.providerDesktopId;
+            title = KEY;
+            icon  = KEY;
+            if (const auto* ENTRY = AppSearch::entryForId(KEY); ENTRY) {
+                title = ENTRY->name;
+                icon  = ENTRY->icon;
+            }
+        }
 
         if (const auto IT = std::ranges::find(keys, KEY); IT != keys.end()) {
             out[sc<size_t>(IT - keys.begin())].rows.push_back(i);
@@ -450,42 +493,31 @@ inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSea
         keys.push_back(KEY);
         const auto TOTALIT = g_search.query.providerTotals.find(KEY);
 
-        // G6: the header carries the PROVIDER APPLICATION's icon and name,
-        // which is a different app from the one the row itself points at.
-        // entryForId is the only way to reach it, and a provider whose .desktop
-        // is missing keeps its bare id rather than drawing a headerless card.
-        SSearchSection section{.title = "Applications",
-                               .icon  = "applications-other",
-                               .rows  = {i},
-                               .total = TOTALIT == g_search.query.providerTotals.end() ? 0 : TOTALIT->second,
-                               .grid  = KEY.empty()};
-        if (!KEY.empty()) {
-            section.title = KEY;
-            section.icon  = KEY;
-            if (const auto* ENTRY = AppSearch::entryForId(KEY); ENTRY) {
-                section.title = ENTRY->name;
-                section.icon  = ENTRY->icon;
-            }
-        }
+        SSearchSection section{
+            .title  = title,
+            .icon   = icon,
+            .rows   = {i},
+            .total  = TOTALIT == g_search.query.providerTotals.end() ? 0 : TOTALIT->second,
+            .grid   = grid,
+            .column = col,
+        };
         out.push_back(std::move(section));
     }
 
     return out;
 }
 
-
-// X62. Activating a result is ONE act however it was chosen -- Return on the
-// keyboard selection, or a plain click on the row. Sharing the helper is the
-// point: G12 built the drag and left the click undefined, and a second copy of
-// "launch or activate" is how the mouse and the keyboard end up disagreeing
-// about what the selected row does.
+// Activating a result runs the corresponding app, Omarchy action, agent prompt,
+// calculator copy, or file open.
 inline bool activateSearchResult(int index) {
     const auto RESULTS = overviewSearchRows();
     if (index < 0 || index >= sc<int>(RESULTS.size()))
         return false;
 
     const auto& ROW = RESULTS[index];
-    if (ROW.app)
+    if (ROW.omarchy)
+        return OmarchySearch::activate(*ROW.omarchy);
+    else if (ROW.app)
         AppSearch::launch(*ROW.app, ScrollOverview::Config::getTerminal());
     else
         SearchProviders::activate(ROW.provider, g_search.query.text);
@@ -641,6 +673,12 @@ inline bool shouldShowOverviewWindow(const PHLWINDOW& window) {
         return false;
 
     const auto WINDOW = getOverviewWindowToShow(window);
+
+    if (!WINDOW)
+        return false;
+
+    if (WINDOW->m_class == "org.gnome.NautilusPreviewer" || WINDOW->m_initialClass == "org.gnome.NautilusPreviewer")
+        return false;
 
     if (!validMapped(WINDOW))
         return false;
@@ -946,22 +984,38 @@ inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHL
     if (sections.empty() || !monitor)
         return;
 
-    const float SPANWL = overviewResultsSpanW(monitor);
-    // The same ceiling the band target uses, less the gaps it adds back, so the
-    // two cannot disagree about what "fits" means.
-    const float BUDGET = std::max(0.F, (sc<float>(monitor->m_size.y) / 2.F) - overviewSearchLogicalHeight(monitor) - (OVERVIEW_RESULT_PANELGAPL * 2.F));
+    const float SPANWL       = overviewResultsSpanW(monitor);
+    const float INSPECTOR_WL = std::clamp(SPANWL * 0.28F, 280.F, 380.F);
+    const float RESULTS_WL   = std::max(200.F, SPANWL - INSPECTOR_WL - 12.F);
+    const bool  TWO_COLS     = (RESULTS_WL >= 500.F);
+    const float COL_WL       = TWO_COLS ? (RESULTS_WL - 12.F) / 2.F : RESULTS_WL;
+
+    const float BUDGET = std::max(0.F, (sc<float>(monitor->m_size.y) * 0.55F) - overviewSearchLogicalHeight(monitor) - (OVERVIEW_RESULT_PANELGAPL * 2.F));
 
     const auto stackHeight = [&] {
-        float h = sc<float>(sections.size() - 1) * OVERVIEW_RESULT_SECTIONGAPL;
-        for (const auto& SECTION : sections)
-            h += overviewResultsSectionHeight(SECTION, SPANWL);
-        return h;
+        float col0H = 0.F, col1H = 0.F;
+        bool has0 = false, has1 = false;
+        for (const auto& SECTION : sections) {
+            const float w = (TWO_COLS && (SECTION.column == 0 || SECTION.column == 1)) ? COL_WL : RESULTS_WL;
+            const float h = overviewResultsSectionHeight(SECTION, w);
+            if (TWO_COLS && SECTION.column == 1) {
+                col1H += (has1 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
+                has1 = true;
+            } else {
+                col0H += (has0 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
+                has0 = true;
+            }
+        }
+        return std::max(col0H, col1H);
     };
 
     while (stackHeight() > BUDGET) {
-        const auto TALLEST = std::ranges::max_element(sections, {}, [&](const SSearchSection& SECTION) { return overviewResultsSectionHeight(SECTION, SPANWL); });
+        const auto TALLEST = std::ranges::max_element(sections, {}, [&](const SSearchSection& SECTION) {
+            const float w = (TWO_COLS && (SECTION.column == 0 || SECTION.column == 1)) ? COL_WL : RESULTS_WL;
+            return overviewResultsSectionHeight(SECTION, w);
+        });
         if (TALLEST == sections.end() || TALLEST->rows.size() <= 1)
-            break; // every category keeps a row, even if the stack still overflows
+            break;
 
         TALLEST->rows.pop_back();
     }
@@ -971,18 +1025,31 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
     if (sections.empty() || !monitor)
         return 0.F;
 
-    const float SPANWL = overviewResultsSpanW(monitor);
+    const float SPANWL       = overviewResultsSpanW(monitor);
+    const float INSPECTOR_WL = std::clamp(SPANWL * 0.28F, 280.F, 380.F);
+    const float RESULTS_WL   = std::max(200.F, SPANWL - INSPECTOR_WL - 12.F);
+    const bool  TWO_COLS     = (RESULTS_WL >= 500.F);
+    const float COL_WL       = TWO_COLS ? (RESULTS_WL - 12.F) / 2.F : RESULTS_WL;
 
-    float panelH = sc<float>(sections.size() - 1) * OVERVIEW_RESULT_SECTIONGAPL;
-    for (const auto& SECTION : sections)
-        panelH += overviewResultsSectionHeight(SECTION, SPANWL);
+    float col0H = 0.F, col1H = 0.F;
+    bool has0 = false, has1 = false;
+    for (const auto& SECTION : sections) {
+        const float w = (TWO_COLS && (SECTION.column == 0 || SECTION.column == 1)) ? COL_WL : RESULTS_WL;
+        const float h = overviewResultsSectionHeight(SECTION, w);
+        if (TWO_COLS && SECTION.column == 1) {
+            col1H += (has1 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
+            has1 = true;
+        } else {
+            col0H += (has0 ? OVERVIEW_RESULT_SECTIONGAPL : 0.F) + h;
+            has0 = true;
+        }
+    }
 
-    // X60: the band now sits UNDER the search row and above the strip, so the
-    // ceiling is what is left of the top half once the search row has taken its
-    // share -- not the bottom half above the dock. X48's constraint is the one
-    // that survives and it is the reason this cap exists at all: however many
-    // results match, the strip and the tiles stay on screen.
-    const float BUDGET = std::max(0.F, sc<float>(monitor->m_size.y) / 2.F - overviewSearchLogicalHeight(monitor));
+    float panelH = std::max(col0H, col1H);
+    if (panelH < 180.F)
+        panelH = 180.F;
+
+    const float BUDGET = std::max(0.F, (sc<float>(monitor->m_size.y) * 0.55F) - overviewSearchLogicalHeight(monitor));
 
     return std::min(panelH + (OVERVIEW_RESULT_PANELGAPL * 2.F), BUDGET);
 }

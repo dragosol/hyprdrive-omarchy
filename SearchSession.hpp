@@ -194,6 +194,21 @@ struct SSearchLayout {
         size_t             more  = 0;     // G6's "%d more"
         std::vector<SItem> items;
     };
+    struct SInspector {
+        CBox        box;
+        float       alpha = 1.F;
+        bool        visible = false;
+        std::string title;
+        std::string subtitle;
+        std::string icon;
+        std::string category;
+        std::string detail1;
+        std::string detail2;
+        std::string detail3;
+        std::string shortcutHint;
+        bool        canQuickLook = false;
+    } inspector;
+
     std::vector<SCard> cards;
 };
 
@@ -245,6 +260,7 @@ struct SSearchSession {
         // step spends it once there is a result to select. Cleared by the spend,
         // so a deliberate Tab back to the grid (-1) is never overridden.
         bool             selectFirstPending = false;
+        bool             explicitSelection  = false;
 
         EOverviewNavZone zone = EOverviewNavZone::Tile;
 

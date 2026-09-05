@@ -734,17 +734,30 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Tab:
             case XKB_KEY_ISO_Left_Tab: {
-                const auto RESULTS = overviewSearchRows();
-                if (RESULTS.empty())
-                    return;
-
-                // -1 is the grid. Tab walks down the results and back out to it,
-                // so the grid is never unreachable by keyboard.
-                const int COUNT = sc<int>(RESULTS.size());
-                if (KEYSYM == XKB_KEY_ISO_Left_Tab)
-                    g_search.nav.selection = g_search.nav.selection <= -1 ? COUNT - 1 : g_search.nav.selection - 1;
-                else
-                    g_search.nav.selection = g_search.nav.selection >= COUNT - 1 ? -1 : g_search.nav.selection + 1;
+                // Tab toggles keyboard focus between Search Results and open window Tiles
+                if (g_search.nav.zone == EOverviewNavZone::Result) {
+                    g_search.nav.zone         = EOverviewNavZone::Tile;
+                    g_search.nav.keyboardTile = true;
+                    if (const auto CUR = closeOnWindow.lock(); !CUR) {
+                        for (const auto& wimg : images) {
+                            if (!wimg || !wimg->pWorkspace)
+                                continue;
+                            const auto WINS = overviewMainGridWindows(wimg->pWorkspace, pMonitor.lock());
+                            if (!WINS.empty()) {
+                                closeOnWindow = WINS.front();
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    const auto RESULTS = overviewSearchRows();
+                    if (!RESULTS.empty()) {
+                        g_search.nav.zone              = EOverviewNavZone::Result;
+                        g_search.nav.explicitSelection = true;
+                        if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
+                            g_search.nav.selection = 0;
+                    }
+                }
 
                 damage();
                 break;

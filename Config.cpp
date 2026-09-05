@@ -669,9 +669,19 @@ static CHyprColor colorFromArgb(uint32_t argb, float alphaOverride = -1.F) {
     return CHyprColor{sc<float>((argb >> 16) & 0xFF) / 255.F, sc<float>((argb >> 8) & 0xFF) / 255.F, sc<float>(argb & 0xFF) / 255.F, a};
 }
 
-// Omarchy writes the terminal background into colors.toml on `omarchy theme set`
+struct SOmarchyThemeColors {
+    bool     valid       = false;
+    bool     isLight     = false;
+    uint32_t background = 0xFF0c0b0c;
+    uint32_t foreground = 0xFFFAFCFB;
+    uint32_t muted      = 0xFF584e51;
+    uint32_t accent     = 0xFFb59790;
+    uint32_t selection  = 0xFF584e51;
+};
+
+// Omarchy writes the active palette into colors.toml on `omarchy theme set`
 // and reloads Hyprland. Cached on mtime so a frame does not reopen the file.
-static std::optional<uint32_t> omarchyThemeBackgroundRgb() {
+static SOmarchyThemeColors omarchyTheme() {
     const char* const STATE = std::getenv("XDG_STATE_HOME");
     const char* const HOME  = std::getenv("HOME");
     const std::string PATH  = (STATE && *STATE) ? std::string{STATE} + "/omarchy/current/theme/colors.toml" :
@@ -684,35 +694,121 @@ static std::optional<uint32_t> omarchyThemeBackgroundRgb() {
     if (stat(PATH.c_str(), &st) != 0)
         return {};
 
-    static std::string cachedPath;
-    static time_t      cachedMtime = 0;
-    static uint32_t    cachedRgb   = 0;
-    static bool        cachedOk    = false;
+    static std::string         cachedPath;
+    static time_t              cachedMtime = 0;
+    static SOmarchyThemeColors cachedTheme;
 
-    if (cachedOk && cachedPath == PATH && cachedMtime == st.st_mtime)
-        return cachedRgb;
+    if (cachedTheme.valid && cachedPath == PATH && cachedMtime == st.st_mtime)
+        return cachedTheme;
 
-    cachedOk    = false;
+    cachedTheme = {};
     cachedPath  = PATH;
     cachedMtime = st.st_mtime;
 
     std::ifstream in{PATH};
     if (!in)
-        return {};
+        return cachedTheme;
 
-    static const std::regex RE{R"(^\s*background\s*=\s*[\"']?#([0-9A-Fa-f]{6}))"};
-    std::string             line;
+    static const std::regex RE_KEYVAL{R"(^\s*([a-zA-Z0-9_]+)\s*=\s*[\"']?([^\"'\r\n]+)[\"']?)"};
+    static const std::regex RE_HEX{R"(^#?([0-9A-Fa-f]{6}))"};
+
+    std::string line;
+    bool hasBg = false, hasFg = false, hasMuted = false, hasAccent = false, hasSel = false;
+    bool explicitMode = false;
+
     while (std::getline(in, line)) {
         std::smatch match;
-        if (!std::regex_search(line, match, RE))
+        if (!std::regex_search(line, match, RE_KEYVAL))
             continue;
 
-        cachedRgb = 0xFF000000u | sc<uint32_t>(std::strtoul(match[1].str().c_str(), nullptr, 16));
-        cachedOk  = true;
-        return cachedRgb;
+        const auto KEY = match[1].str();
+        const auto VAL = match[2].str();
+
+        if (KEY == "mode") {
+            cachedTheme.isLight = (VAL.find("light") != std::string::npos);
+            explicitMode = true;
+            continue;
+        }
+
+        std::smatch hexMatch;
+        if (std::regex_search(VAL, hexMatch, RE_HEX)) {
+            const uint32_t RGB = 0xFF000000u | sc<uint32_t>(std::strtoul(hexMatch[1].str().c_str(), nullptr, 16));
+            if (KEY == "background") {
+                cachedTheme.background = RGB;
+                hasBg = true;
+            } else if (KEY == "foreground") {
+                cachedTheme.foreground = RGB;
+                hasFg = true;
+            } else if (KEY == "muted") {
+                cachedTheme.muted = RGB;
+                hasMuted = true;
+            } else if (KEY == "accent") {
+                cachedTheme.accent = RGB;
+                hasAccent = true;
+            } else if (KEY == "selection") {
+                cachedTheme.selection = RGB;
+                hasSel = true;
+            }
+        }
     }
 
-    return {};
+    if (!explicitMode && hasBg) {
+        const float r = sc<float>((cachedTheme.background >> 16) & 0xFF) / 255.F;
+        const float g = sc<float>((cachedTheme.background >> 8) & 0xFF) / 255.F;
+        const float b = sc<float>(cachedTheme.background & 0xFF) / 255.F;
+        const float LUMA = (0.2126F * r) + (0.7152F * g) + (0.0722F * b);
+        cachedTheme.isLight = (LUMA > 0.55F);
+    }
+
+    if (!hasFg)
+        cachedTheme.foreground = cachedTheme.isLight ? 0xFF141414u : 0xFFFAFCFBu;
+    if (!hasMuted)
+        cachedTheme.muted = cachedTheme.isLight ? 0xFF606060u : 0xFF8A8588u;
+
+    cachedTheme.valid = true;
+    return cachedTheme;
+}
+
+static std::optional<uint32_t> omarchyThemeBackgroundRgb() {
+    const auto T = omarchyTheme();
+    return T.valid ? std::optional<uint32_t>(T.background) : std::nullopt;
+}
+
+bool isLightTheme() {
+    const auto T = omarchyTheme();
+    if (T.valid)
+        return T.isLight;
+    const auto BG = dockBackgroundColor();
+    const float LUMA = (0.2126F * BG.r) + (0.7152F * BG.g) + (0.0722F * BG.b);
+    return LUMA > 0.55F;
+}
+
+CHyprColor themeForeground() {
+    const auto T = omarchyTheme();
+    if (T.valid)
+        return colorFromArgb(T.foreground, 1.F);
+    return isLightTheme() ? CHyprColor{0.08F, 0.08F, 0.08F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 1.F};
+}
+
+CHyprColor themeMutedText() {
+    const auto T = omarchyTheme();
+    if (T.valid)
+        return colorFromArgb(T.muted, 1.F);
+    return isLightTheme() ? CHyprColor{0.40F, 0.40F, 0.45F, 1.F} : CHyprColor{0.65F, 0.65F, 0.70F, 1.F};
+}
+
+CHyprColor themeAccent() {
+    const auto T = omarchyTheme();
+    if (T.valid)
+        return colorFromArgb(T.accent, 1.F);
+    return highlightColor();
+}
+
+CHyprColor themeSelection() {
+    const auto T = omarchyTheme();
+    if (T.valid)
+        return colorFromArgb(T.selection, 1.F);
+    return highlightColor().modifyA(0.35F);
 }
 
 CHyprColor highlightColor() {

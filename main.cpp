@@ -34,6 +34,7 @@ using namespace Hyprutils::String;
 
 #include "Compat.hpp"
 #include "AppSearch.hpp"
+#include "OmarchySearch.hpp"
 #include "Config.hpp"
 #include "Dock.hpp"
 #include "DockStacks.hpp"
@@ -401,6 +402,7 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
     // and the reach for the keyboard. Costs a respawn per open-after-idle;
     // that is the price of the results being up when the user looks at them.
     SearchProviders::warm();
+    OmarchySearch::init();
 
     for (const auto& monitor : MONITORS) {
         if (!openOverview(monitor))
@@ -602,10 +604,12 @@ static void afterQueryEdit() {
     // X20: every keystroke starts a new provider generation. Non-blocking, so
     // this costs the keystroke nothing; results land over the next frames.
     SearchProviders::query(g_search.query.text);
+    OmarchySearch::query(g_search.query.text);
 
     // The ranking changes under any edit, so a held index would point at a
     // different app than the one the user saw highlighted.
-    g_search.nav.selection = -1;
+    g_search.nav.selection         = -1;
+    g_search.nav.explicitSelection = false;
 
     // ...and the new ranking's TOP result takes the selection instead of the
     // desktops. Deferred to the search render step because the providers have
@@ -727,6 +731,20 @@ static void                registerRawKeyHooks() {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;
+                }
+
+                if (event.keycode == EVDEV_KEY_SPACE) {
+                    if (OmarchySearch::isSushiActive()) {
+                        OmarchySearch::closeSushi();
+                        g_consumedPresses.insert(event.keycode);
+                        info.cancelled = true;
+                        return;
+                    }
+                    if (overviewToggleSushiForSelection()) {
+                        g_consumedPresses.insert(event.keycode);
+                        info.cancelled = true;
+                        return;
+                    }
                 }
 
                 if (handleSearchPress(event.keycode)) {
@@ -1365,6 +1383,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // plugin in-process.
     AppSearch::shutdownIconIndex();
     SearchProviders::shutdown();
+    OmarchySearch::shutdown();
     ScrollOverview::LauncherEntry::stop();
     clearScrollOverviews();
     // The text textures outlive a close now (X51), so unload is where they go --

@@ -115,6 +115,11 @@ std::string   themeFontFamily();
 CHyprColor    dockIndicatorColor();
 CHyprColor    dockBackgroundColor();
 int           dockCornerRadius();
+bool          isLightTheme();
+CHyprColor    themeForeground();
+CHyprColor    themeMutedText();
+CHyprColor    themeAccent();
+CHyprColor    themeSelection();
 
 float         getScale();
 float         getOpenSpeed();

@@ -2830,8 +2830,9 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
                 focusOverviewWorkspace(WORKSPACE, sc<size_t>(best->index));
             break;
         case EOverviewNavZone::Result:
-            g_search.nav.zone      = EOverviewNavZone::Result;
-            g_search.nav.selection = best->index;
+            g_search.nav.zone              = EOverviewNavZone::Result;
+            g_search.nav.selection         = best->index;
+            g_search.nav.explicitSelection = true;
             break;
         case EOverviewNavZone::Tile:
             g_search.nav.zone      = EOverviewNavZone::Tile;
@@ -3815,9 +3816,7 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // type at the overview's own scale, i.e. 250/1600 = 15.6% of a cell's
     // height, DemiBold, foreground at alpha 0.2. Reproduced as a fraction of
     // the strip cell so it tracks the strip instead of a fixed pixel size.
-    // ponytail: white is the colour source. Hyprland exposes no foreground
-    // text colour to inherit -- the same gap renderSearch's FG lives with.
-    const auto NUMTEX = OverviewRender::text(std::to_string(wimg->pWorkspace->m_id), CHyprColor{1.F, 1.F, 1.F, 0.20F},
+    const auto NUMTEX = OverviewRender::text(std::to_string(wimg->pWorkspace->m_id), ScrollOverview::Config::themeForeground().modifyA(0.20F),
                                                     std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
     if (NUMTEX && NUMTEX->ok()) {
         CBox numBox = {
@@ -4098,22 +4097,23 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
     // X49's PROPORTIONS. The cards span what the TILES span -- the monitor
     // inset by the mission-control gap -- instead of the search pill's 436px.
-    // Taken from the grid's own inset rather than picked, so the two stay
-    // aligned if either moves.
     const float SPANWL = overviewResultsSpanW(MONITOR);
     const float SPANXL = sc<float>(MONITOR->m_position.x) + ((sc<float>(MONITOR->m_size.x) - SPANWL) / 2.F);
 
-    // X21: the stack fills the band it was allocated, so its height is the
-    // ANIMATED band minus the gaps.
-    // X60: TOP-anchored, directly under the search row. The stack's HEAD is
-    // pinned there and it grows DOWNWARD, pushing the strip and the tiles ahead
-    // of it -- the reverse of X48, on the user's instruction.
     const float PANELHL = BANDHL - (OVERVIEW_RESULT_PANELGAPL * 2.F);
     const float PANELYL = sc<float>(MONITOR->m_position.y) + out.rowL + OVERVIEW_RESULT_PANELGAPL;
 
-    // G12, and X61's other half: recorded as DRAWN, in draw order, INCLUDING the
-    // rows that are not draggable -- a drop onto one of those still has to be
-    // rejected, and it can only be rejected by something that knows it is there.
+    // Multi-Column + Inspector Layout
+    const float INSPECTOR_WL = std::clamp(SPANWL * 0.28F, 280.F, 380.F);
+    const float COLUMNS_GAPL = 12.F;
+    const float RESULTS_WL   = std::max(200.F, SPANWL - INSPECTOR_WL - COLUMNS_GAPL);
+    const bool  TWO_COLS     = (RESULTS_WL >= 500.F);
+    const float COL_WL       = TWO_COLS ? (RESULTS_WL - COLUMNS_GAPL) / 2.F : RESULTS_WL;
+
+    const float COL0_XL      = SPANXL;
+    const float COL1_XL      = TWO_COLS ? (SPANXL + COL_WL + COLUMNS_GAPL) : SPANXL;
+    const float INSP_XL      = SPANXL + RESULTS_WL + COLUMNS_GAPL;
+
     const auto ADDITEM = [&](const CBox& box, size_t I) {
         out.hits.emplace_back(SSearchRowHit{.box = box, .desktopId = RESULTS[I].app ? RESULTS[I].app->id : "", .icon = RESULTS[I].icon, .index = sc<int>(I)});
         return SSearchLayout::SItem{
@@ -4125,27 +4125,31 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
         };
     };
 
-    float cardYL = PANELYL;
-    for (const auto& SECTION : SECTIONS) {
-        const float CARDHL = overviewResultsSectionHeight(SECTION, SPANWL);
+    float cardYL0 = PANELYL;
+    float cardYL1 = PANELYL;
 
-        // While the band is still easing open the stack is shorter than the full
-        // list, so each card is revealed by how much room the band has actually
-        // made for it.
-        //
-        // User, 2026-08-06: a category FADES IN as it populates instead of
-        // arriving whole. That fade is the same room measurement, which means a
-        // card is faintest exactly when it overhangs the band's foot the most --
-        // so the reveal pays for its own overhang, and it needs no timer, no
-        // per-section state and no second animation to keep in step with the
-        // band.
-        const float ROOML = (PANELYL + PANELHL) - cardYL;
-        if (ROOML <= 0.5F)
+    bool hasCol1Sections = false;
+    for (const auto& S : SECTIONS) {
+        if (S.column == 1) {
+            hasCol1Sections = true;
             break;
+        }
+    }
+
+    for (const auto& SECTION : SECTIONS) {
+        const bool  IS_COL1 = TWO_COLS && SECTION.column == 1;
+        const float CARDXL  = IS_COL1 ? COL1_XL : COL0_XL;
+        const float CARDWL  = (TWO_COLS && (SECTION.column == 0 || hasCol1Sections)) ? COL_WL : RESULTS_WL;
+        float&      cardYL  = IS_COL1 ? cardYL1 : cardYL0;
+
+        const float CARDHL = overviewResultsSectionHeight(SECTION, CARDWL);
+        const float ROOML  = (PANELYL + PANELHL) - cardYL;
+        if (ROOML <= 0.5F)
+            continue;
 
         const float CARDA = std::clamp(ROOML / std::max(1.F, CARDHL), 0.F, 1.F);
 
-        const CBox CARDLOGICAL{SPANXL, cardYL, SPANWL, CARDHL};
+        const CBox CARDLOGICAL{CARDXL, cardYL, CARDWL, CARDHL};
         cardYL += CARDHL + OVERVIEW_RESULT_SECTIONGAPL;
 
         CBox card = getOverviewGlobalBox(CARDLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
@@ -4158,20 +4162,16 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
         cardOut.alpha = CARDA;
         cardOut.grid  = SECTION.grid;
 
-        // G5's GRID layout. Apps are icon cells, not rows, and they carry no G6
-        // header -- the header names a PROVIDER application, and the app results
-        // have none. Centred across the card the way the reference is, so two
-        // matches do not stretch into two half-screen cells.
         if (SECTION.grid) {
-            const size_t COLS   = overviewResultsGridCols(SECTION.rows.size(), SPANWL);
+            const size_t COLS   = overviewResultsGridCols(SECTION.rows.size(), CARDWL);
             const float  GRIDWL = sc<float>(COLS) * OVERVIEW_RESULT_CELLWL;
             const float  GRIDXL = CARDLOGICAL.x + ((sc<float>(CARDLOGICAL.w) - GRIDWL) / 2.F);
 
             for (size_t n = 0; n < SECTION.rows.size(); ++n) {
                 const size_t I    = SECTION.rows[n];
                 const CBox   CELLLOGICAL{GRIDXL + (sc<float>(n % COLS) * OVERVIEW_RESULT_CELLWL),
-                                       sc<float>(CARDLOGICAL.y) + OVERVIEW_RESULT_PANELPADL + (sc<float>(n / COLS) * (OVERVIEW_RESULT_CELLHL + OVERVIEW_RESULT_ROWGAPL)),
-                                       OVERVIEW_RESULT_CELLWL, OVERVIEW_RESULT_CELLHL};
+                                         sc<float>(CARDLOGICAL.y) + OVERVIEW_RESULT_PANELPADL + (sc<float>(n / COLS) * (OVERVIEW_RESULT_CELLHL + OVERVIEW_RESULT_ROWGAPL)),
+                                         OVERVIEW_RESULT_CELLWL, OVERVIEW_RESULT_CELLHL};
 
                 CBox cell = getOverviewGlobalBox(CELLLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
                 cell.round();
@@ -4183,16 +4183,10 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             continue;
         }
 
-        // G6: the provider's name, and beneath it how many results are not being
-        // shown -- truncated by G5's cap or by X64's trim, which is why it counts
-        // against what the provider OFFERED rather than against the cap. GNOME's
-        // "22 more" under Settings is the model.
         cardOut.title = SECTION.title;
         cardOut.icon  = SECTION.icon;
         cardOut.more  = SECTION.total > SECTION.rows.size() ? SECTION.total - SECTION.rows.size() : 0;
 
-        // The rows take the rest of the width, and are centred in the card so a
-        // one-row section sits level with its own header.
         const float ROWSHL = (sc<float>(SECTION.rows.size()) * OVERVIEW_RESULT_ROWHL) + ((sc<float>(SECTION.rows.size()) - 1.F) * OVERVIEW_RESULT_ROWGAPL);
         const float ROWXL  = CARDLOGICAL.x + OVERVIEW_RESULT_PANELPADL + OVERVIEW_RESULT_HEADERWL;
         const float ROWWL  = std::max(1.F, sc<float>(CARDLOGICAL.w) - (OVERVIEW_RESULT_PANELPADL * 2.F) - OVERVIEW_RESULT_HEADERWL);
@@ -4210,13 +4204,61 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
         out.cards.emplace_back(std::move(cardOut));
     }
 
+    // Inspector Card Logical Geometry & Data
+    const CBox INSPLOGICAL{INSP_XL, PANELYL, INSPECTOR_WL, PANELHL};
+    CBox inspCard = getOverviewGlobalBox(INSPLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
+    if (inspCard.width > 1.F && overviewBoxIntersectsMonitor(inspCard, MONITOR)) {
+        inspCard.round();
+        out.inspector.box     = inspCard;
+        out.inspector.visible = true;
+        out.inspector.alpha   = 1.F;
+
+        if (out.selection >= 0 && out.selection < sc<int>(RESULTS.size())) {
+            const auto& ROW = RESULTS[out.selection];
+            out.inspector.title    = ROW.name;
+            out.inspector.subtitle = ROW.description;
+            out.inspector.icon     = ROW.icon;
+
+            if (ROW.omarchy) {
+                const auto& o = *ROW.omarchy;
+                out.inspector.category     = o.category;
+                out.inspector.canQuickLook = o.canQuickLook;
+                if (o.kind == OmarchySearch::EItemKind::File) {
+                    out.inspector.detail1      = "Type: " + o.fileTypeStr;
+                    out.inspector.detail2      = "Size: " + o.fileSizeStr;
+                    out.inspector.detail3      = "Modified: " + o.fileModifiedStr;
+                    out.inspector.shortcutHint = "[Space] Quick Look  [Enter] Open  [Tab] Windows";
+                } else if (o.kind == OmarchySearch::EItemKind::Action) {
+                    out.inspector.detail1      = "Action: " + o.category;
+                    out.inspector.detail2      = "Command: " + o.actionCommand;
+                    out.inspector.shortcutHint = "[Enter] Run Action  [Tab] Windows";
+                } else if (o.kind == OmarchySearch::EItemKind::Agent) {
+                    out.inspector.detail1      = "Agent: " + o.name;
+                    out.inspector.detail2      = "Prompt: " + o.description;
+                    out.inspector.shortcutHint = "[Enter] Launch Agent  [Tab] Windows";
+                } else if (o.kind == OmarchySearch::EItemKind::Calculator) {
+                    out.inspector.detail1      = "Calculation: " + o.description;
+                    out.inspector.detail2      = "Result: " + o.name;
+                    out.inspector.shortcutHint = "[Enter] Copy to Clipboard  [Tab] Windows";
+                }
+            } else if (ROW.app) {
+                out.inspector.category     = "Application";
+                out.inspector.detail1      = "App ID: " + ROW.app->id;
+                out.inspector.detail2      = "Exec: " + ROW.app->exec;
+                out.inspector.shortcutHint = "[Enter] Launch App  [Tab] Windows";
+            } else {
+                out.inspector.category     = "Search Provider";
+                out.inspector.detail1      = "Provider: " + ROW.provider.providerDesktopId;
+                out.inspector.shortcutHint = "[Enter] Open in App  [Tab] Windows";
+            }
+        }
+    }
+
     return out;
 }
 
 // DRAW. Paints the layout and decides nothing: every box it uses was decided
-// above, so the pixels and the hit boxes cannot drift apart. What is still
-// computed here is only what needs a TEXTURE to have been rasterised first --
-// a glyph is centred against its own measured size.
+// above, so the pixels and the hit boxes cannot drift apart.
 static void drawSearch(const SSearchLayout& L) {
     if (!L.drawable)
         return;
@@ -4235,8 +4277,6 @@ static void drawSearch(const SSearchLayout& L) {
     const int BADGEROUND = roundFor(BADGE);
     const auto ACCENT    = ScrollOverview::Config::highlightColor();
 
-    // Same plate as the dock: Omarchy terminal fill, accent border, frost only
-    // if window blur is on. Rounding is decoration:rounding, not the dock's 24.
     OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false);
 
     CRectPassElement::SRectData badgeBg;
@@ -4246,10 +4286,6 @@ static void drawSearch(const SSearchLayout& L) {
     badgeBg.roundingPower = POWER;
     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(badgeBg));
 
-    // Every texture in this pass rides TEXFADE rather than FADE directly. The
-    // section cards below fade in one at a time and there are five ADDTEX call
-    // sites inside that loop: an alpha parameter would have to be remembered at
-    // each of them, a variable cannot be forgotten at any of them.
     float      texFade = FADE;
     const auto ADDTEX  = [&](const auto& tex, const CBox& box) {
         CTexPassElement::SRenderData data;
@@ -4259,10 +4295,7 @@ static void drawSearch(const SSearchLayout& L) {
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
     };
 
-    // U+E8B6 is the Material Symbols "search" glyph. The codepoint is used
-    // directly rather than the "search" ligature, which needs font shaping the
-    // text renderer does not promise.
-    const auto GLYPHTEX = OverviewRender::text("\uE8B6", CHyprColor{1.F, 1.F, 1.F, 0.92F}, std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
+    const auto GLYPHTEX = OverviewRender::text("\uE8B6", ScrollOverview::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
                                                       "Material Symbols Rounded", 0);
     if (GLYPHTEX && GLYPHTEX->ok()) {
         CBox glyphBox = {
@@ -4289,8 +4322,7 @@ static void drawSearch(const SSearchLayout& L) {
 
                 if (ITEM.selected) {
                     CRectPassElement::SRectData sel;
-                    sel.box = CELL;
-                    // Opaque for the same reason the list's selection is.
+                    sel.box           = CELL;
                     sel.color         = ACCENT.modifyA(FADE * CARD.alpha);
                     sel.round         = roundFor(CELL);
                     sel.roundingPower = POWER;
@@ -4306,7 +4338,7 @@ static void drawSearch(const SSearchLayout& L) {
                     ADDTEX(ICONTEX, iconBox.round());
                 }
 
-                const auto CELLTEX = OverviewRender::text(ITEM.name, ITEM.selected ? ScrollOverview::Config::highlightForeground() : CHyprColor{1.F, 1.F, 1.F, 1.F},
+                const auto CELLTEX = OverviewRender::text(ITEM.name, ITEM.selected ? ScrollOverview::Config::highlightForeground() : ScrollOverview::Config::themeForeground(),
                                                           std::max(1, sc<int>(std::round(OVERVIEW_CARD_CELLPX * SCALE))), false, "",
                                                           std::max(1, sc<int>(CELL.width - (PADG * 2.F))), 500);
                 if (CELLTEX && CELLTEX->ok()) {
@@ -4318,8 +4350,6 @@ static void drawSearch(const SSearchLayout& L) {
             continue;
         }
 
-        // G6's header, on the leading edge: the provider's icon at ~32px and its
-        // name beside it, centred against the card's rows.
         float      headIndent = sc<float>(ROWPAD);
         const auto HEADICON   = OverviewRender::appIcon(CARD.icon);
         if (HEADICON && HEADICON->ok()) {
@@ -4331,14 +4361,12 @@ static void drawSearch(const SSearchLayout& L) {
 
         const float HEADWG  = std::round(OVERVIEW_RESULT_HEADERWL * SCALE);
         const int   HEADPX  = std::max(1, sc<int>(std::round(OVERVIEW_CARD_HEADPX * SCALE)));
-        const auto  HEADTEX = OverviewRender::text(CARD.title, CHyprColor{1.F, 1.F, 1.F, 0.95F}, HEADPX, false, "", std::max(1, sc<int>(HEADWG - headIndent) - ROWPAD), 500);
+        const auto  HEADTEX = OverviewRender::text(CARD.title, ScrollOverview::Config::themeForeground().modifyA(0.95F), HEADPX, false, "", std::max(1, sc<int>(HEADWG - headIndent) - ROWPAD), 500);
         const auto  MORETEX = CARD.more == 0 ? nullptr :
-                                               OverviewRender::text(std::to_string(CARD.more) + " more", CHyprColor{1.F, 1.F, 1.F, 0.78F},
+                                               OverviewRender::text(std::to_string(CARD.more) + " more", ScrollOverview::Config::themeMutedText().modifyA(0.85F),
                                                                     std::max(1, sc<int>(std::round(OVERVIEW_CARD_MOREPX * SCALE))), false, "",
                                                                     std::max(1, sc<int>(HEADWG - headIndent) - ROWPAD));
 
-        // Both lines centre as one block, so a section without a count does not
-        // sit at a different height from one with it.
         const float HEADH  = HEADTEX && HEADTEX->ok() ? sc<float>(HEADTEX->m_size.y) : 0.F;
         const float MOREH  = MORETEX && MORETEX->ok() ? sc<float>(MORETEX->m_size.y) : 0.F;
         const float STACKH = HEADH + (MOREH > 0.F ? MOREH + std::round(OVERVIEW_CARD_HEADLINEGAPL * SCALE) : 0.F);
@@ -4359,25 +4387,13 @@ static void drawSearch(const SSearchLayout& L) {
 
             if (ITEM.selected) {
                 CRectPassElement::SRectData sel;
-                sel.box = ROW;
-                // OPAQUE on purpose, and the alpha is the whole point.
-                // This theme's accent (0x77504536) is a dark warm brown that
-                // happens to sit within a few units of the blurred wallpaper
-                // behind the card, so tinting is close to a no-op: measured
-                // 2026-08-01, alpha 0.35 moved the row's mean by 3/255 and 0.85
-                // by only 8/255 -- present but invisible, the same trap as X3's
-                // dark border.
-                // Opaque does not rely on the hue winning. The unselected rows
-                // are frosted and carry the wallpaper's blurred STRUCTURE; the
-                // selected one is flat. That difference holds against any
-                // wallpaper, which a colour delta does not.
+                sel.box           = ROW;
                 sel.color         = ACCENT.modifyA(FADE * CARD.alpha);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
                 g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
             }
 
-            // F3: the app's own icon, left of the name.
             float      textIndent = sc<float>(ROWPAD);
             const auto ICONTEX    = OverviewRender::appIcon(ITEM.icon);
             if (ICONTEX && ICONTEX->ok()) {
@@ -4392,14 +4408,8 @@ static void drawSearch(const SSearchLayout& L) {
                 textIndent += ICOND + std::round(OVERVIEW_CARD_ROWICONGAPL * SCALE);
             }
 
-            // The name, then the description BESIDE it in a dimmer weight --
-            // GNOME's two columns. Glued into one string they could only ever be
-            // one colour, which is what made the rows read flat.
             const int  ROWPX  = std::max(1, sc<int>(std::round(OVERVIEW_CARD_ROWPX * SCALE)));
-
-            // On the selected row the fill is the accent itself, so the type
-            // reads against THAT and not against the card.
-            const auto FG     = ITEM.selected ? ScrollOverview::Config::highlightForeground() : CHyprColor{1.F, 1.F, 1.F, 1.F};
+            const auto FG     = ITEM.selected ? ScrollOverview::Config::highlightForeground() : ScrollOverview::Config::themeForeground();
             const auto ROWTEX = OverviewRender::text(ITEM.name, FG, ROWPX, false, "", std::max(1, sc<int>(ROW.width - textIndent) - ROWPAD), 500);
             if (ROWTEX && ROWTEX->ok()) {
                 CBox rowText{
@@ -4414,7 +4424,8 @@ static void drawSearch(const SSearchLayout& L) {
                     const float DESCX = rowText.x + rowText.width + std::round(OVERVIEW_CARD_DESCGAPL * SCALE);
                     const int   DESCW = sc<int>((ROW.x + ROW.width - sc<float>(ROWPAD)) - DESCX);
                     if (DESCW > sc<int>(std::round(OVERVIEW_CARD_DESCMINL * SCALE))) {
-                        if (const auto DESCTEX = OverviewRender::text(ITEM.description, FG.modifyA(0.78F), ROWPX, false, "", DESCW); DESCTEX && DESCTEX->ok()) {
+                        const auto DESCFG = ITEM.selected ? FG.modifyA(0.85F) : ScrollOverview::Config::themeMutedText();
+                        if (const auto DESCTEX = OverviewRender::text(ITEM.description, DESCFG, ROWPX, false, "", DESCW); DESCTEX && DESCTEX->ok()) {
                             CBox descText{DESCX, ROW.y + std::round((ROW.height - sc<float>(DESCTEX->m_size.y)) / 2.F), sc<float>(DESCTEX->m_size.x), sc<float>(DESCTEX->m_size.y)};
                             ADDTEX(DESCTEX, descText.round());
                         }
@@ -4424,11 +4435,92 @@ static void drawSearch(const SSearchLayout& L) {
         }
     }
 
-    // The pill's own label is not a section: put the alpha back, or it inherits
-    // whatever the last card happened to fade to.
-    texFade = FADE;
+    // Draw Inspector Card (right side)
+    if (L.inspector.visible) {
+        texFade = FADE * L.inspector.alpha;
+        const int   INSPROUND = roundFor(L.inspector.box);
+        const float INSPALPHA = FADE * L.inspector.alpha;
+        OverviewRender::themePlate(L.inspector.box, INSPROUND, POWER, INSPALPHA, true);
 
-    const CHyprColor FG = !L.queried ? CHyprColor{1.F, 1.F, 1.F, 0.55F} : (L.emptyResult ? CHyprColor{1.F, 0.45F, 0.45F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 1.F});
+        const float PADL  = std::round(18.F * SCALE);
+        const float ICOND = std::round(52.F * SCALE);
+
+        // Icon
+        const auto ICONTEX = OverviewRender::appIcon(L.inspector.icon);
+        if (ICONTEX && ICONTEX->ok()) {
+            CBox iconBox{L.inspector.box.x + PADL, L.inspector.box.y + PADL, ICOND, ICOND};
+            ADDTEX(ICONTEX, iconBox.round());
+        }
+
+        // Category Badge
+        float textY = L.inspector.box.y + PADL;
+        const float TEXTX = L.inspector.box.x + PADL + ICOND + std::round(14.F * SCALE);
+        const int   TEXTW = std::max(1, sc<int>(L.inspector.box.width - (TEXTX - L.inspector.box.x) - PADL));
+
+        if (!L.inspector.category.empty()) {
+            const int  BADGEPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
+            const auto BADGETEX = OverviewRender::text(L.inspector.category, ScrollOverview::Config::themeAccent(), BADGEPX, false, "", TEXTW, 600);
+            if (BADGETEX && BADGETEX->ok()) {
+                CBox badgeBox{TEXTX, textY, sc<float>(BADGETEX->m_size.x), sc<float>(BADGETEX->m_size.y)};
+                ADDTEX(BADGETEX, badgeBox.round());
+                textY += sc<float>(BADGETEX->m_size.y) + std::round(4.F * SCALE);
+            }
+        }
+
+        // Title
+        if (!L.inspector.title.empty()) {
+            const int  TITLEPX = std::max(1, sc<int>(std::round(16.F * SCALE)));
+            const auto TITLETEX = OverviewRender::text(L.inspector.title, ScrollOverview::Config::themeForeground(), TITLEPX, false, "", TEXTW, 600);
+            if (TITLETEX && TITLETEX->ok()) {
+                CBox titleBox{TEXTX, textY, sc<float>(TITLETEX->m_size.x), sc<float>(TITLETEX->m_size.y)};
+                ADDTEX(TITLETEX, titleBox.round());
+                textY += sc<float>(TITLETEX->m_size.y) + std::round(4.F * SCALE);
+            }
+        }
+
+        // Subtitle / Path
+        float bodyY = std::max(textY, sc<float>(L.inspector.box.y + PADL + ICOND)) + std::round(16.F * SCALE);
+        const int FULLW = std::max(1, sc<int>(L.inspector.box.width - (PADL * 2.F)));
+
+        if (!L.inspector.subtitle.empty()) {
+            const int  SUBPX = std::max(1, sc<int>(std::round(13.F * SCALE)));
+            const auto SUBTEX = OverviewRender::text(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), SUBPX, false, "", FULLW, 400);
+            if (SUBTEX && SUBTEX->ok()) {
+                CBox subBox{L.inspector.box.x + PADL, bodyY, sc<float>(SUBTEX->m_size.x), sc<float>(SUBTEX->m_size.y)};
+                ADDTEX(SUBTEX, subBox.round());
+                bodyY += sc<float>(SUBTEX->m_size.y) + std::round(10.F * SCALE);
+            }
+        }
+
+        // Details 1, 2, 3
+        const auto drawDetail = [&](const std::string& d) {
+            if (d.empty()) return;
+            const int  DETPX = std::max(1, sc<int>(std::round(12.F * SCALE)));
+            const auto DETTEX = OverviewRender::text(d, ScrollOverview::Config::themeMutedText().modifyA(0.9F), DETPX, false, "", FULLW, 400);
+            if (DETTEX && DETTEX->ok()) {
+                CBox detBox{L.inspector.box.x + PADL, bodyY, sc<float>(DETTEX->m_size.x), sc<float>(DETTEX->m_size.y)};
+                ADDTEX(DETTEX, detBox.round());
+                bodyY += sc<float>(DETTEX->m_size.y) + std::round(6.F * SCALE);
+            }
+        };
+        drawDetail(L.inspector.detail1);
+        drawDetail(L.inspector.detail2);
+        drawDetail(L.inspector.detail3);
+
+        // Bottom Shortcut Hint
+        if (!L.inspector.shortcutHint.empty()) {
+            const int  HINTPX = std::max(1, sc<int>(std::round(12.F * SCALE)));
+            const auto HINTTEX = OverviewRender::text(L.inspector.shortcutHint, ScrollOverview::Config::themeForeground().modifyA(0.85F), HINTPX, false, "", FULLW, 500);
+            if (HINTTEX && HINTTEX->ok()) {
+                const float HINTY = (L.inspector.box.y + L.inspector.box.height) - PADL - sc<float>(HINTTEX->m_size.y);
+                CBox hintBox{L.inspector.box.x + PADL, HINTY, sc<float>(HINTTEX->m_size.x), sc<float>(HINTTEX->m_size.y)};
+                ADDTEX(HINTTEX, hintBox.round());
+            }
+        }
+    }
+
+    texFade = FADE;
+    const CHyprColor FG = !L.queried ? ScrollOverview::Config::themeMutedText().modifyA(0.65F) : (L.emptyResult ? CHyprColor{0.95F, 0.35F, 0.35F, 1.F} : ScrollOverview::Config::themeForeground());
 
     const int  FONTPX = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
     const auto NOW    = Time::steadyNow();
@@ -4583,6 +4675,12 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     g_search.nav.selection = LAYOUT.selection;
     g_search.layout        = std::move(LAYOUT);
 
+    if (QUERIED && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size())) {
+        if (RESULTS[g_search.nav.selection].omarchy && !RESULTS[g_search.nav.selection].omarchy->filePath.empty()) {
+            OmarchySearch::updateSushiIfActive(RESULTS[g_search.nav.selection].omarchy->filePath);
+        }
+    }
+
     // ---- DRAW: out of the published object, so the painter, the pointer and
     // the keyboard are provably looking at the same boxes.
     SearchLetters::g_searchLetters.sync(g_search.query.text, Time::steadyNow());
@@ -4594,6 +4692,20 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         damage();
         requestInputFrame();
     }
+}
+
+bool overviewToggleSushiForSelection() {
+    if (g_search.nav.explicitSelection && g_search.nav.zone == EOverviewNavZone::Result) {
+        const auto RESULTS = overviewSearchRows();
+        if (g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size())) {
+            const auto& ROW = RESULTS[g_search.nav.selection];
+            if (ROW.omarchy && !ROW.omarchy->filePath.empty()) {
+                OmarchySearch::toggleSushi(ROW.omarchy->filePath);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now) {
@@ -5449,6 +5561,7 @@ void CScrollOverview::close() {
     // may survive into the next open as a phantom drop.
     ScrollOverview::Dock::dragCancel();
     ScrollOverview::Dock::setForeignInsert(-1);
+    OmarchySearch::closeSushi();
 
     // Click-to-close and swipe-commit never go through the dispatcher, so a
     // typed query used to still be in the bar on the next open. Ending the

@@ -484,3 +484,5 @@ class CScrollOverview : public IOverview {
     double                           trackpadGestureSettleOffset  = 0.0;
 
 };
+
+bool overviewToggleSushiForSelection();
