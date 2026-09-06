@@ -432,6 +432,9 @@ class CScrollOverview : public IOverview {
     // X75. Used when a toggle catches the previous one mid-flight; see
     // useAnimDirection for why a reversal cannot use either directional curve.
     SP<Hyprutils::Animation::SAnimationPropertyConfig> reverseAnimConfig;
+    // Search panel (band / width / dock). windowsMove is ~400ms and retargets
+    // as columns appear; this is a single ~180ms ease-out to a stable span.
+    SP<Hyprutils::Animation::SAnimationPropertyConfig> searchAnimConfig;
     Time::steady_tp                  lastRealtimePreviewFrame = {};
     Time::steady_tp                  realtimePreviewTimerDue = {};
     wl_event_source*                 realtimePreviewTimer = nullptr;
@@ -488,3 +491,9 @@ class CScrollOverview : public IOverview {
 };
 
 bool overviewToggleSushiForSelection();
+// SPACE while the overview search is up: true if consumed as Quick Look,
+// false if the key should type a space into the query.
+bool overviewHandleSearchSpace();
+// Double-tap Shift: launch a new instance of the selected app even if one
+// is already open. True if the tap was consumed as that launch.
+bool overviewHandleShiftTap();

@@ -50,6 +50,30 @@ enum class EOverviewNavZone : uint8_t {
     Search,
 };
 
+// What SPACE means this keystroke. Typing a query and Quick Look share one
+// key, so the last deliberate act decides:
+//   Typing    -- last key was a query edit, or the pointer is back on the pill.
+//                SPACE is a character. Auto-selecting the first app is NOT this
+//                flipping to Browsing: Enter launches, SPACE still types.
+//   Browsing  -- arrows / Tab landed on a result. SPACE Quick Looks a file.
+//   Hovering  -- the pointer actually moved onto a result row. SPACE Quick
+//                Looks that row's file, even if the query is still focused.
+enum class ESearchIntent : uint8_t {
+    Typing = 0,
+    Browsing,
+    Hovering,
+};
+
+// SPACE is Quick Look only when the user has pointed at a previewable file
+// (hover or keyboard), not merely because a result is auto-selected.
+inline bool overviewSpacePreviews(ESearchIntent intent, bool hoverCanPreview, bool selectionCanPreview) {
+    if (intent == ESearchIntent::Hovering)
+        return hoverCanPreview;
+    if (intent == ESearchIntent::Browsing || selectionCanPreview)
+        return selectionCanPreview;
+    return false;
+}
+
 // X10: the search row above the strip. ponytail: constant 64 logical px
 // (48px pill + 8px margins); make it a config knob if anyone ever asks.
 inline constexpr float OVERVIEW_SEARCH_ROWHL = 64.F, OVERVIEW_SEARCH_DOCKPADL = 8.F;
@@ -70,7 +94,7 @@ inline constexpr float OVERVIEW_PILL_GAPL     = 12.F;  // badge -> text field
 inline constexpr float OVERVIEW_PILL_TAILL    = 20.F;  // text field -> trailing edge
 inline constexpr float OVERVIEW_PILL_FIELDL   = 210.F; // the field at rest
 inline constexpr float OVERVIEW_PILL_FIELDQL  = 360.F; // ...and once a query is typed
-inline constexpr float OVERVIEW_PILL_GLYPHPX  = 22.F;  // the Material Symbols glyph in the badge
+inline constexpr float OVERVIEW_PILL_GLYPHPX  = 22.F;  // FA magnifying glass (Nerd Font U+F002)
 inline constexpr float OVERVIEW_PILL_TEXTPX   = 15.F;  // the query / placeholder
 
 // The full width the pill lays out to. Named because BOTH the layout and the
@@ -199,6 +223,7 @@ struct SSearchLayout {
         bool               grid  = false; // G5: apps are a GRID of cells, providers a LIST of rows
         std::string        title, icon;   // G6's header; empty on a grid card
         size_t             more  = 0;     // G6's "%d more"
+        std::string        emptyHint;     // shown when items is empty ("Searching…", "No files")
         std::vector<SItem> items;
     };
     struct SInspector {
@@ -213,7 +238,11 @@ struct SSearchLayout {
         std::string detail2;
         std::string detail3;
         std::string shortcutHint;
-        bool        canQuickLook = false;
+        std::string shortcutHint2;
+        std::string status;
+        bool        canQuickLook   = false;
+        bool        running        = false;
+        bool        canNewInstance = false;
     } inspector;
 
     CBox              containerBox;
@@ -270,6 +299,11 @@ struct SSearchSession {
         // so a deliberate Tab back to the grid (-1) is never overridden.
         bool             selectFirstPending = false;
         bool             explicitSelection  = false;
+        ESearchIntent    intent             = ESearchIntent::Typing;
+        // Result index the pointer last MOVED onto. -1 when it is not over a
+        // row. Updated only from motion, never from layout: results appearing
+        // under a parked cursor must not steal SPACE from the query.
+        int              hoverIndex         = -1;
 
         EOverviewNavZone zone = EOverviewNavZone::Tile;
 
@@ -282,6 +316,9 @@ struct SSearchSession {
         // cleared by the overview opening and by ANY pointer motion -- whichever
         // device moved last owns the ring.
         bool             keyboardTile = false;
+        // Set by activateSearchResult when Enter should switch to a live window
+        // rather than spawn. close() reads it the same way a tile click does.
+        PHLWINDOWREF     pendingFocus;
     } nav;
 
     // ---- what the pointer is in the middle of ---------------------------

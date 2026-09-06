@@ -143,11 +143,20 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     Animation::mgr()->createAnimation(1.F, workspaceInsertProgress, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(1.F, workspaceInsertFadeProgress, workspaceInsertFadeConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(1.F, reflowPacer, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
-    Animation::mgr()->createAnimation(0.F, resultsBand, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
-    Animation::mgr()->createAnimation(0.F, resultsWidth, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
+
+    searchAnimConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
+    searchAnimConfig->overridden      = true;
+    searchAnimConfig->internalBezier  = OVERVIEW_OPEN_BEZIER;
+    searchAnimConfig->internalSpeed   = 1.8F; // ~180ms; windowsMove is ~400ms and feels stuck
+    searchAnimConfig->internalEnabled = WINDOWSMOVEVALUES ? WINDOWSMOVEVALUES->internalEnabled : 1;
+    searchAnimConfig->internalStyle   = "";
+    searchAnimConfig->pValues         = searchAnimConfig;
+
+    Animation::mgr()->createAnimation(0.F, resultsBand, searchAnimConfig, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(0.F, resultsWidth, searchAnimConfig, AVARDAMAGE_NONE);
     // X50 rides the same config as the band it travels with: the pill lifting on
     // one curve while the panel it uncovers grows on another reads as two events.
-    Animation::mgr()->createAnimation(0.F, searchDock, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(0.F, searchDock, searchAnimConfig, AVARDAMAGE_NONE);
 
     scale->setUpdateCallback([this](auto) { damage(); });
     viewOffset->setUpdateCallback([this](auto) { damage(); });
@@ -2816,12 +2825,16 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
         }
 
         if (curHit) {
+            g_search.nav.explicitSelection = true;
+            g_search.nav.intent            = ESearchIntent::Browsing;
+
             if (UP) {
                 if (curHit->rowInCol == 0) {
                     // Return focus to search bar
                     g_search.nav.zone              = EOverviewNavZone::Search;
                     g_search.nav.selection         = -1;
                     g_search.nav.explicitSelection = false;
+                    g_search.nav.intent            = ESearchIntent::Typing;
                     damage();
                     return true;
                 }
@@ -2851,8 +2864,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
                 for (const auto& hit : g_search.layout.hits)
                     maxCol = std::max(maxCol, hit.column);
 
-                int targetCol = curHit->column + 1;
-                if (targetCol <= maxCol) {
+                for (int targetCol = curHit->column + 1; targetCol <= maxCol; ++targetCol) {
                     const SSearchRowHit* bestHit = nullptr;
                     int bestDiff = 999;
                     for (const auto& hit : g_search.layout.hits) {
@@ -2884,8 +2896,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
                     return true;
                 }
 
-                int targetCol = curHit->column - 1;
-                if (targetCol >= 0) {
+                for (int targetCol = curHit->column - 1; targetCol >= 0; --targetCol) {
                     const SSearchRowHit* bestHit = nullptr;
                     int bestDiff = 999;
                     for (const auto& hit : g_search.layout.hits) {
@@ -2913,6 +2924,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             g_search.nav.zone              = EOverviewNavZone::Result;
             g_search.nav.selection         = g_search.layout.hits[0].index;
             g_search.nav.explicitSelection = true;
+            g_search.nav.intent            = ESearchIntent::Browsing;
             damage();
             return true;
         }
@@ -2944,6 +2956,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             g_search.nav.zone              = EOverviewNavZone::Result;
             g_search.nav.selection         = best->index;
             g_search.nav.explicitSelection = true;
+            g_search.nav.intent            = ESearchIntent::Browsing;
             break;
         case EOverviewNavZone::Tile:
             g_search.nav.zone         = EOverviewNavZone::Tile;
@@ -2955,6 +2968,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             g_search.nav.zone              = EOverviewNavZone::Search;
             g_search.nav.selection         = -1;
             g_search.nav.explicitSelection = false;
+            g_search.nav.intent            = ESearchIntent::Typing;
             break;
     }
 
@@ -4097,6 +4111,8 @@ struct SSearchLayoutInputs {
     float                          dock = 0.F;  // X50: searchDock->value()
     float                          band = 0.F;  // X21/X23: resultsBand->value()
     float                          width = 0.F; // animated container width
+    float                          colW[3] = {};
+    float                          inspectorW = SEARCH_INSP_WL;
     // The published pill row is kept, not recomputed, when the pill culls: that
     // frame has no answer of its own and the grid must not be told it does.
     float                          rowLCarry = OVERVIEW_SEARCH_ROWHL;
@@ -4212,27 +4228,13 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     if (out.selection >= sc<int>(RESULTS.size()))
         out.selection = sc<int>(RESULTS.size()) - 1;
 
-    std::vector<const SSearchSection*> activeSections;
-    for (const auto& sec : SECTIONS) {
-        if (!sec.rows.empty())
-            activeSections.push_back(&sec);
-    }
-
-    if (activeSections.empty())
-        return out;
-
-    const size_t K = activeSections.size();
-    const float PAD_L = 14.F;
-    const float DIV_GAPL = 14.F;
-    const float INSP_WL = 270.F;
-    const float COL_WL_BASE = 290.F;
-
-    float naturalWL = (PAD_L * 2.F) + (sc<float>(K) * COL_WL_BASE) + (sc<float>(K) * DIV_GAPL) + INSP_WL;
+    const float PAD_L      = SEARCH_PAD_L;
+    const float DIV_GAPL   = SEARCH_DIV_GAPL;
     const float MAX_SPANWL = overviewResultsSpanW(MONITOR);
-    float targetWL = std::min(naturalWL, MAX_SPANWL);
 
-    float CONTAINER_WL = (IN.width > 100.F) ? std::min(IN.width, MAX_SPANWL) : targetWL;
-    float COL_WL = std::max(180.F, (CONTAINER_WL - (PAD_L * 2.F) - (sc<float>(K) * DIV_GAPL) - INSP_WL) / sc<float>(K));
+    float CONTAINER_WL = IN.width > 1.F ? std::min(IN.width, MAX_SPANWL) : 0.F;
+    if (CONTAINER_WL < 8.F)
+        return out;
 
     const float CONTAINER_XL = sc<float>(MONITOR->m_position.x) + ((sc<float>(MONITOR->m_size.x) - CONTAINER_WL) / 2.F);
     const float CONTAINER_YL = sc<float>(MONITOR->m_position.y) + out.rowL + OVERVIEW_RESULT_PANELGAPL;
@@ -4267,11 +4269,32 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     const float ROW_HL   = 32.F;
     const float ROW_GAPL = 4.F;
 
-    for (size_t c = 0; c < K; ++c) {
-        const auto* SECTION = activeSections[c];
-        const float COL_XL  = CONTAINER_XL + PAD_L + sc<float>(c) * (COL_WL + DIV_GAPL);
-        const float COL_YL  = CONTAINER_YL + PAD_L;
-        const float COL_HL  = CONTAINER_HL - (PAD_L * 2.F);
+    const SSearchSection* sectionByCol[3] = {};
+    for (const auto& sec : SECTIONS) {
+        if (sec.column >= 0 && sec.column < 3)
+            sectionByCol[sec.column] = &sec;
+    }
+
+    const float INSP_WL = std::clamp(IN.inspectorW, 140.F, std::max(140.F, CONTAINER_WL - (PAD_L * 2.F)));
+    const float INSP_XL = CONTAINER_XL + CONTAINER_WL - PAD_L - INSP_WL;
+    const float COL_MAX_R = INSP_XL - DIV_GAPL;
+
+    float colX        = CONTAINER_XL + PAD_L;
+    int   drawn       = 0;
+    for (int c = 0; c < 3; ++c) {
+        const float COL_WL = IN.colW[c];
+        if (COL_WL < SEARCH_COL_HIDE_WL)
+            continue;
+
+        const auto* SECTION = sectionByCol[c];
+        if (!SECTION)
+            continue;
+
+        const float COL_XL = colX;
+        const float COL_YL = CONTAINER_YL + PAD_L;
+        const float COL_HL = CONTAINER_HL - (PAD_L * 2.F);
+        if (COL_XL + COL_WL > COL_MAX_R + 1.F && COL_MAX_R - COL_XL < SEARCH_COL_HIDE_WL)
+            break;
 
         const CBox COL_LOGICAL{COL_XL, COL_YL, COL_WL, COL_HL};
         CBox colBox = getOverviewGlobalBox(COL_LOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
@@ -4279,11 +4302,13 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
         SSearchLayout::SCard cardOut;
         cardOut.box   = colBox;
-        cardOut.alpha = 1.F;
+        cardOut.alpha = std::clamp(COL_WL / 120.F, 0.F, 1.F);
         cardOut.grid  = false;
         cardOut.title = SECTION->title;
         cardOut.icon  = SECTION->icon;
         cardOut.more  = SECTION->total > SECTION->rows.size() ? SECTION->total - SECTION->rows.size() : 0;
+        if (SECTION->rows.empty())
+            cardOut.emptyHint = (c == 1 && OmarchySearch::fileSearchBusy()) ? "Searching…" : "No items";
 
         for (size_t n = 0; n < SECTION->rows.size(); ++n) {
             const size_t I      = SECTION->rows[n];
@@ -4295,31 +4320,39 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             CBox row = getOverviewGlobalBox(ROWLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
             row.round();
 
-            cardOut.items.emplace_back(ADDITEM(row, I, sc<int>(c), sc<int>(n)));
+            cardOut.items.emplace_back(ADDITEM(row, I, SECTION->column, sc<int>(n)));
         }
 
         out.cards.emplace_back(std::move(cardOut));
+        ++drawn;
 
-        // Vertical divider after each column
         const float DIV_XL = COL_XL + COL_WL + (DIV_GAPL / 2.F);
-        const CBox DIV_LOGICAL{DIV_XL, CONTAINER_YL + PAD_L, 1.F, CONTAINER_HL - (PAD_L * 2.F)};
-        CBox divBox = getOverviewGlobalBox(DIV_LOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
-        divBox.round();
-        divBox.width = std::max(1.F, std::round(1.F * out.scale));
-        out.dividers.push_back(divBox);
+        if (DIV_XL < INSP_XL - 2.F) {
+            const CBox DIV_LOGICAL{DIV_XL, CONTAINER_YL + PAD_L, 1.F, CONTAINER_HL - (PAD_L * 2.F)};
+            CBox divBox = getOverviewGlobalBox(DIV_LOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
+            divBox.round();
+            divBox.width = std::max(1.F, std::round(1.F * out.scale));
+            out.dividers.push_back(divBox);
+        }
+
+        colX += COL_WL + DIV_GAPL;
     }
 
-    // Inspector Card on the right
-    const float INSP_XL = CONTAINER_XL + PAD_L + sc<float>(K) * (COL_WL + DIV_GAPL);
+    if (drawn == 0)
+        return out;
+
     const float INSP_YL = CONTAINER_YL + PAD_L;
     const float INSP_HL = CONTAINER_HL - (PAD_L * 2.F);
 
     const CBox INSP_LOGICAL{INSP_XL, INSP_YL, INSP_WL, INSP_HL};
     CBox inspBox = getOverviewGlobalBox(INSP_LOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
     inspBox.round();
+    if (out.containerBox.width > 1.F)
+        inspBox = inspBox.intersection(out.containerBox);
+    inspBox.round();
 
     out.inspector.box     = inspBox;
-    out.inspector.visible = true;
+    out.inspector.visible = inspBox.width > 8.F && inspBox.height > 8.F;
     out.inspector.alpha   = 1.F;
 
     const int INSP_IDX = (out.selection >= 0 && out.selection < sc<int>(RESULTS.size())) ? out.selection : 0;
@@ -4334,39 +4367,58 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             out.inspector.category     = o.category;
             out.inspector.canQuickLook = o.canQuickLook;
             if (o.kind == OmarchySearch::EItemKind::File) {
-                out.inspector.detail1      = "Type: " + o.fileTypeStr;
-                out.inspector.detail2      = "Size: " + o.fileSizeStr;
-                out.inspector.detail3      = "Modified: " + o.fileModifiedStr;
-                out.inspector.shortcutHint = "[Space] Quick Look  [Enter] Open  [Tab] Windows";
+                out.inspector.detail1      = o.fileTypeStr;
+                out.inspector.detail2      = o.fileSizeStr + "  ·  " + o.fileModifiedStr;
+                out.inspector.detail3      = o.filePath;
+                out.inspector.shortcutHint = "Space  Quick Look";
+                out.inspector.shortcutHint2 = "Enter  Open";
             } else if (o.kind == OmarchySearch::EItemKind::Menu) {
-                out.inspector.detail1      = "Submenu: " + o.id;
-                out.inspector.detail2      = "Press [Enter] to open submenu";
-                out.inspector.shortcutHint = "[Enter] Open Submenu  [Left] Back  [Tab] Windows";
+                out.inspector.detail1      = "Opens this submenu in the left column";
+                out.inspector.shortcutHint = "Enter  Open submenu";
+                out.inspector.shortcutHint2 = "Left  Back";
             } else if (o.kind == OmarchySearch::EItemKind::Back) {
-                out.inspector.detail1      = "Return to parent menu";
-                out.inspector.shortcutHint = "[Enter] Go Back  [Left] Go Back";
+                out.inspector.detail1      = "Return to the parent menu";
+                out.inspector.shortcutHint = "Enter  Go back";
             } else if (o.kind == OmarchySearch::EItemKind::Action) {
-                out.inspector.detail1      = "Action: " + o.name;
-                out.inspector.detail2      = "Command: " + o.actionCommand;
-                out.inspector.shortcutHint = "[Enter] Run Action  [Tab] Windows";
+                out.inspector.detail1      = o.description.empty() ? o.name : o.description;
+                out.inspector.detail2      = o.actionCommand;
+                out.inspector.shortcutHint = "Enter  Run";
             } else if (o.kind == OmarchySearch::EItemKind::Agent) {
-                out.inspector.detail1      = "Agent: " + o.name;
-                out.inspector.detail2      = "Prompt: " + o.description;
-                out.inspector.shortcutHint = "[Enter] Launch Agent  [Tab] Windows";
+                out.inspector.detail1      = o.description;
+                out.inspector.shortcutHint = "Enter  Launch agent";
             } else if (o.kind == OmarchySearch::EItemKind::Calculator) {
-                out.inspector.detail1      = "Calculation: " + o.description;
-                out.inspector.detail2      = "Result: " + o.name;
-                out.inspector.shortcutHint = "[Enter] Copy to Clipboard  [Tab] Windows";
+                out.inspector.detail1      = o.description;
+                out.inspector.detail2      = "Enter copies " + o.actionCommand + " to the clipboard";
+                out.inspector.shortcutHint = "Enter  Copy result";
             }
         } else if (ROW.app) {
-            out.inspector.category     = "Application";
-            out.inspector.detail1      = "App ID: " + ROW.app->id;
-            out.inspector.detail2      = "Exec: " + ROW.app->exec;
-            out.inspector.shortcutHint = "[Enter] Launch App  [Tab] Windows";
+            const auto LIVE = overviewWindowForApp(*ROW.app);
+            out.inspector.category       = "Application";
+            out.inspector.running        = !!LIVE;
+            out.inspector.canNewInstance = !!LIVE;
+            if (!ROW.app->comment.empty())
+                out.inspector.subtitle = ROW.app->comment;
+            else if (!ROW.app->generic.empty())
+                out.inspector.subtitle = ROW.app->generic;
+            if (LIVE) {
+                out.inspector.status = "Open";
+                if (!LIVE->m_title.empty())
+                    out.inspector.detail1 = LIVE->m_title;
+                if (LIVE->m_workspace)
+                    out.inspector.detail2 = "Workspace " + std::to_string(LIVE->m_workspace->m_id);
+                out.inspector.shortcutHint  = "Enter  Switch to window";
+                out.inspector.shortcutHint2 = "Shift×2  New window";
+            } else {
+                out.inspector.status       = "Not running";
+                out.inspector.detail1      = ROW.app->generic;
+                out.inspector.shortcutHint = "Enter  Launch";
+            }
+            out.inspector.detail3 = ROW.app->id;
         } else {
             out.inspector.category     = "Search Provider";
-            out.inspector.detail1      = "Provider: " + ROW.provider.providerDesktopId;
-            out.inspector.shortcutHint = "[Enter] Open in App  [Tab] Windows";
+            out.inspector.detail1      = ROW.provider.providerDesktopId;
+            out.inspector.detail2      = ROW.provider.description;
+            out.inspector.shortcutHint = "Enter  Open";
         }
     }
 
@@ -4411,8 +4463,8 @@ static void drawSearch(const SSearchLayout& L) {
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
     };
 
-    const auto GLYPHTEX = OverviewRender::text("\uE8B6", ScrollOverview::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
-                                                      "Material Symbols Rounded", 0);
+    const auto GLYPHTEX = OverviewRender::text("\uF002", ScrollOverview::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
+                                                      "JetBrainsMono Nerd Font", 0);
     if (GLYPHTEX && GLYPHTEX->ok()) {
         CBox glyphBox = {
             BADGE.x + std::round((BADGE.width - sc<float>(GLYPHTEX->m_size.x)) / 2.F),
@@ -4522,7 +4574,7 @@ static void drawSearch(const SSearchLayout& L) {
 
         if (CARD.items.empty()) {
             const int  EMPTYPX  = std::max(1, sc<int>(std::round(12.F * SCALE)));
-            const auto EMPTYTEX = OverviewRender::text("No items", ScrollOverview::Config::themeMutedText().modifyA(0.45F), EMPTYPX, false, "", sc<int>(CARD.box.width - PADL * 2.F), 400);
+            const auto EMPTYTEX = OverviewRender::text(CARD.emptyHint.empty() ? "No items" : CARD.emptyHint, ScrollOverview::Config::themeMutedText().modifyA(0.45F), EMPTYPX, false, "", sc<int>(CARD.box.width - PADL * 2.F), 400);
             if (EMPTYTEX && EMPTYTEX->ok()) {
                 CBox emptyBox{CARD.box.x + PADL, CARD.box.y + PADL + std::round(30.F * SCALE), sc<float>(EMPTYTEX->m_size.x), sc<float>(EMPTYTEX->m_size.y)};
                 ADDTEX(EMPTYTEX, emptyBox.round());
@@ -4533,88 +4585,91 @@ static void drawSearch(const SSearchLayout& L) {
     // Draw Inspector Card (inside unified block on the right)
     if (L.inspector.visible) {
         texFade = FADE * L.inspector.alpha;
+        const CBox& IBOX = L.inspector.box;
         const float PADL  = std::round(14.F * SCALE);
         const float ICOND = std::round(48.F * SCALE);
+        const float CLIPB = IBOX.y + IBOX.height - PADL;
 
-        // Icon / Glyph
+        const auto ADDINSP = [&](const SP<Render::ITexture>& tex, CBox box) {
+            if (!tex || !tex->ok() || box.width < 1.F)
+                return;
+            CTexPassElement::SRenderData data;
+            data.tex     = tex;
+            data.box     = box;
+            data.a       = texFade;
+            data.clipBox = IBOX;
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        };
+
         const auto ICONTEX = OverviewRender::appIcon(L.inspector.icon);
         if (ICONTEX && ICONTEX->ok()) {
-            CBox iconBox{L.inspector.box.x + PADL, L.inspector.box.y + PADL, ICOND, ICOND};
-            ADDTEX(ICONTEX, iconBox.round());
+            CBox iconBox{IBOX.x + PADL, IBOX.y + PADL, ICOND, ICOND};
+            ADDINSP(ICONTEX, iconBox.round());
         } else if (!L.inspector.icon.empty()) {
             const int  GLYPHPX = std::max(1, sc<int>(std::round(28.F * SCALE)));
             const auto GLYPHTEX = OverviewRender::text(L.inspector.icon, ScrollOverview::Config::themeAccent(), GLYPHPX, false, "", sc<int>(ICOND), 400);
             if (GLYPHTEX && GLYPHTEX->ok()) {
-                CBox glyphBox{L.inspector.box.x + PADL, L.inspector.box.y + PADL, sc<float>(GLYPHTEX->m_size.x), sc<float>(GLYPHTEX->m_size.y)};
-                ADDTEX(GLYPHTEX, glyphBox.round());
+                CBox glyphBox{IBOX.x + PADL, IBOX.y + PADL, sc<float>(GLYPHTEX->m_size.x), sc<float>(GLYPHTEX->m_size.y)};
+                ADDINSP(GLYPHTEX, glyphBox.round());
             }
         }
 
-        // Category Badge
-        float textY = L.inspector.box.y + PADL;
-        const float TEXTX = L.inspector.box.x + PADL + ICOND + std::round(12.F * SCALE);
-        const int   TEXTW = std::max(1, sc<int>(L.inspector.box.width - (TEXTX - L.inspector.box.x) - PADL));
+        float textY = IBOX.y + PADL;
+        const float TEXTX = IBOX.x + PADL + ICOND + std::round(12.F * SCALE);
+        const int   TEXTW = std::max(1, sc<int>(IBOX.width - (TEXTX - IBOX.x) - PADL));
+        const int   FULLW = std::max(1, sc<int>(IBOX.width - (PADL * 2.F)));
+
+        const auto paintWrap = [&](const std::string& s, const CHyprColor& col, int px, int weight, float x, int w, int maxH, float gapAfter) {
+            if (s.empty() || textY + sc<float>(px) > CLIPB)
+                return;
+            const int W = std::max(16, ((w + 15) / 16) * 16);
+            const auto TEX = OverviewRender::textWrapped(s, col, px, W, maxH, false, "", weight);
+            if (!TEX || !TEX->ok())
+                return;
+            CBox box{x, textY, sc<float>(TEX->m_size.x), sc<float>(TEX->m_size.y)};
+            ADDINSP(TEX, box.round());
+            textY += sc<float>(TEX->m_size.y) + gapAfter;
+        };
 
         if (!L.inspector.category.empty()) {
-            const int  BADGEPX = std::max(1, sc<int>(std::round(10.F * SCALE)));
-            const auto BADGETEX = OverviewRender::text(L.inspector.category, ScrollOverview::Config::themeAccent(), BADGEPX, false, "", TEXTW, 600);
-            if (BADGETEX && BADGETEX->ok()) {
-                CBox badgeBox{TEXTX, textY, sc<float>(BADGETEX->m_size.x), sc<float>(BADGETEX->m_size.y)};
-                ADDTEX(BADGETEX, badgeBox.round());
-                textY += sc<float>(BADGETEX->m_size.y) + std::round(3.F * SCALE);
-            }
+            auto catCol = L.inspector.running ? ScrollOverview::Config::themeAccent() : ScrollOverview::Config::themeAccent();
+            paintWrap(L.inspector.category, catCol, std::max(1, sc<int>(std::round(10.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(18.F * SCALE), std::round(3.F * SCALE));
         }
-
-        // Title
-        if (!L.inspector.title.empty()) {
-            const int  TITLEPX = std::max(1, sc<int>(std::round(15.F * SCALE)));
-            const auto TITLETEX = OverviewRender::text(L.inspector.title, ScrollOverview::Config::themeForeground(), TITLEPX, false, "", TEXTW, 600);
-            if (TITLETEX && TITLETEX->ok()) {
-                CBox titleBox{TEXTX, textY, sc<float>(TITLETEX->m_size.x), sc<float>(TITLETEX->m_size.y)};
-                ADDTEX(TITLETEX, titleBox.round());
-                textY += sc<float>(TITLETEX->m_size.y) + std::round(4.F * SCALE);
-            }
+        if (!L.inspector.status.empty()) {
+            const auto STCOL = L.inspector.running ? ScrollOverview::Config::themeAccent() : ScrollOverview::Config::themeMutedText();
+            paintWrap(L.inspector.status, STCOL, std::max(1, sc<int>(std::round(11.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(18.F * SCALE), std::round(3.F * SCALE));
         }
+        paintWrap(L.inspector.title, ScrollOverview::Config::themeForeground(), std::max(1, sc<int>(std::round(15.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(40.F * SCALE),
+                  std::round(4.F * SCALE));
 
-        // Subtitle / Path
-        float bodyY = std::max(textY, sc<float>(L.inspector.box.y + PADL + ICOND)) + std::round(12.F * SCALE);
-        const int FULLW = std::max(1, sc<int>(L.inspector.box.width - (PADL * 2.F)));
+        textY = std::max(textY, sc<float>(IBOX.y + PADL + ICOND)) + std::round(10.F * SCALE);
 
-        if (!L.inspector.subtitle.empty()) {
-            const int  SUBPX = std::max(1, sc<int>(std::round(12.F * SCALE)));
-            const auto SUBTEX = OverviewRender::text(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), SUBPX, false, "", FULLW, 400);
-            if (SUBTEX && SUBTEX->ok()) {
-                CBox subBox{L.inspector.box.x + PADL, bodyY, sc<float>(SUBTEX->m_size.x), sc<float>(SUBTEX->m_size.y)};
-                ADDTEX(SUBTEX, subBox.round());
-                bodyY += sc<float>(SUBTEX->m_size.y) + std::round(8.F * SCALE);
-            }
-        }
+        paintWrap(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), std::max(1, sc<int>(std::round(12.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(48.F * SCALE),
+                  std::round(8.F * SCALE));
+        const auto DETCOL = ScrollOverview::Config::themeMutedText().modifyA(0.9F);
+        const int  DETPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
+        paintWrap(L.inspector.detail1, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, sc<int>(40.F * SCALE), std::round(6.F * SCALE));
+        paintWrap(L.inspector.detail2, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, sc<int>(28.F * SCALE), std::round(6.F * SCALE));
+        paintWrap(L.inspector.detail3, DETCOL.modifyA(0.75F), std::max(1, sc<int>(std::round(10.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE),
+                  std::round(8.F * SCALE));
 
-        // Details 1, 2, 3
-        const auto drawDetail = [&](const std::string& d) {
-            if (d.empty()) return;
-            const int  DETPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
-            const auto DETTEX = OverviewRender::text(d, ScrollOverview::Config::themeMutedText().modifyA(0.9F), DETPX, false, "", FULLW, 400);
-            if (DETTEX && DETTEX->ok()) {
-                CBox detBox{L.inspector.box.x + PADL, bodyY, sc<float>(DETTEX->m_size.x), sc<float>(DETTEX->m_size.y)};
-                ADDTEX(DETTEX, detBox.round());
-                bodyY += sc<float>(DETTEX->m_size.y) + std::round(6.F * SCALE);
-            }
+        float hintY = CLIPB;
+        const int HINTPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
+        const auto HINTCOL = ScrollOverview::Config::themeForeground().modifyA(0.85F);
+        const auto measureHint = [&](const std::string& s) -> float {
+            if (s.empty())
+                return 0.F;
+            const int W = std::max(16, ((FULLW + 15) / 16) * 16);
+            const auto TEX = OverviewRender::textWrapped(s, HINTCOL, HINTPX, W, sc<int>(36.F * SCALE), false, "", 500);
+            return (TEX && TEX->ok()) ? sc<float>(TEX->m_size.y) + std::round(4.F * SCALE) : 0.F;
         };
-        drawDetail(L.inspector.detail1);
-        drawDetail(L.inspector.detail2);
-        drawDetail(L.inspector.detail3);
+        hintY -= measureHint(L.inspector.shortcutHint2);
+        hintY -= measureHint(L.inspector.shortcutHint);
+        if (hintY > textY + std::round(8.F * SCALE))
+            textY = hintY;
 
-        // Bottom Shortcut Hint
-        if (!L.inspector.shortcutHint.empty()) {
-            const int  HINTPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
-            const auto HINTTEX = OverviewRender::text(L.inspector.shortcutHint, ScrollOverview::Config::themeForeground().modifyA(0.85F), HINTPX, false, "", FULLW, 500);
-            if (HINTTEX && HINTTEX->ok()) {
-                const float HINTY = (L.inspector.box.y + L.inspector.box.height) - PADL - sc<float>(HINTTEX->m_size.y);
-                CBox hintBox{L.inspector.box.x + PADL, HINTY, sc<float>(HINTTEX->m_size.x), sc<float>(HINTTEX->m_size.y)};
-                ADDTEX(HINTTEX, hintBox.round());
-            }
-        }
+        paintWrap(L.inspector.shortcutHint, HINTCOL, HINTPX, 500, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE), std::round(4.F * SCALE));
+        paintWrap(L.inspector.shortcutHint2, HINTCOL, HINTPX, 500, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE), 0.F);
     }
 
     texFade = FADE;
@@ -4688,7 +4743,7 @@ static void drawSearch(const SSearchLayout& L) {
 }
 
 // OVERVIEW_CPP_SPEC §5 F1 + §13.4 X2. The search bar: a field carrying an
-// accent badge with the Material "search" glyph, a placeholder while empty,
+// accent badge with a Nerd Font magnifying glass, a placeholder while empty,
 // and a fixed field width that widens once a query is typed. Rounding, border,
 // fill and frost come from the Hyprland theme (decoration:rounding, blur,
 // general:border_size, col.inactive_border) rather than a forced capsule.
@@ -4715,7 +4770,9 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         return;
 
     // ---- ANIMATE: re-aim the search animations from this frame's results.
-    const bool QUERIED = g_search.query.active || !g_search.query.text.empty() || g_search.nav.zone == EOverviewNavZone::Result;
+    // Results exist only once there is query text. An empty bar (including
+    // compose-active or a Down into "browse") must not raise the results block.
+    const bool QUERIED = !g_search.query.text.empty();
 
     const size_t MATCHES = !g_search.query.text.empty() ? matchingWindowCount() : 0;
     const auto   RESULTS = QUERIED ? overviewSearchRows() : std::vector<SSearchRow>{};
@@ -4726,16 +4783,36 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     auto SECTIONS = overviewSearchSections(RESULTS);
     overviewTrimSectionsToFit(SECTIONS, monitor);
 
+    // Typing arms first-app selection; results land over the next frames, so
+    // the spend lives here -- once, on the first frame that actually has an
+    // Omarchy/apps row. Not Browsing: auto-select is for Enter, not SPACE.
+    if (g_search.nav.selectFirstPending) {
+        const int FIRST = overviewFirstAppIndex(RESULTS);
+        if (FIRST >= 0) {
+            g_search.nav.selection         = FIRST;
+            g_search.nav.zone              = EOverviewNavZone::Result;
+            g_search.nav.selectFirstPending = false;
+            g_search.nav.explicitSelection = false;
+        }
+    }
+
     const float TARGET = QUERIED ? overviewResultsBandTarget(monitor, SECTIONS) : 0.F;
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 
     const float WIDTH_TARGET = QUERIED ? overviewResultsWidthTarget(monitor, SECTIONS) : 0.F;
+    // Grow from the pill, not from 0: a 0→span ease spends its first frames
+    // on an invisible sliver, then pops. Warp onto the pill width once.
+    if (WIDTH_TARGET > 50.F && resultsWidth->value() < 50.F)
+        resultsWidth->setValueAndWarp(std::min(WIDTH_TARGET, overviewPillTargetWL(true)));
     if (std::abs(resultsWidth->goal() - WIDTH_TARGET) > 0.5F)
         *resultsWidth = WIDTH_TARGET;
 
     if (const float DOCKGOAL = QUERIED && !EMPTYRESULT && !RESULTS.empty() ? 1.F : 0.F; std::abs(searchDock->goal() - DOCKGOAL) > 0.01F)
         *searchDock = DOCKGOAL;
+
+    const uint8_t COL_MASK = QUERIED ? overviewSearchColMask(SECTIONS) : 0;
+    const auto    COL_TGT  = overviewSearchColWidths(resultsWidth->value(), COL_MASK);
 
     // ---- LAYOUT: the animated values are sampled once, right here.
     const SSearchLayoutInputs IN{
@@ -4746,6 +4823,8 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         .dock        = searchDock->value(),
         .band        = resultsBand->value(),
         .width       = resultsWidth->value(),
+        .colW        = {COL_TGT.col[0], COL_TGT.col[1], COL_TGT.col[2]},
+        .inspectorW  = COL_TGT.inspector,
         .rowLCarry   = g_search.layout.rowL,
         .query       = g_search.query.text,
         .queried     = QUERIED,
@@ -4778,18 +4857,58 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     }
 }
 
+static const std::string* searchPreviewPath(const std::vector<SSearchRow>& results, int index) {
+    if (index < 0 || index >= sc<int>(results.size()))
+        return nullptr;
+    const auto& ROW = results[sc<size_t>(index)];
+    if (ROW.omarchy && ROW.omarchy->canQuickLook && !ROW.omarchy->filePath.empty())
+        return &ROW.omarchy->filePath;
+    return nullptr;
+}
+
 bool overviewToggleSushiForSelection() {
-    if (g_search.nav.zone == EOverviewNavZone::Result) {
-        const auto RESULTS = overviewSearchRows();
-        if (g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size())) {
-            const auto& ROW = RESULTS[g_search.nav.selection];
-            if (ROW.omarchy && !ROW.omarchy->filePath.empty()) {
-                OmarchySearch::toggleSushi(ROW.omarchy->filePath);
-                return true;
-            }
-        }
+    const auto        RESULTS = overviewSearchRows();
+    const std::string* PATH   = searchPreviewPath(RESULTS, g_search.nav.selection);
+    if (!PATH)
+        return false;
+    OmarchySearch::toggleSushi(*PATH);
+    return true;
+}
+
+bool overviewHandleSearchSpace() {
+    const auto RESULTS = overviewSearchRows();
+    const std::string* HOVER = searchPreviewPath(RESULTS, g_search.nav.hoverIndex);
+    const std::string* SEL   = searchPreviewPath(RESULTS, g_search.nav.selection);
+    if (!overviewSpacePreviews(g_search.nav.intent, HOVER != nullptr, SEL != nullptr)) {
+        if (OmarchySearch::isSushiActive())
+            OmarchySearch::closeSushi();
+        return false;
     }
-    return false;
+
+    const std::string* PATH = (g_search.nav.intent == ESearchIntent::Hovering && HOVER) ? HOVER : SEL;
+    if (!PATH)
+        return false;
+    OmarchySearch::toggleSushi(*PATH);
+    return true;
+}
+
+bool overviewHandleShiftTap() {
+    if (g_search.query.text.empty())
+        return false;
+
+    const auto RESULTS = overviewSearchRows();
+    int        idx     = g_search.nav.selection;
+    if (idx < 0 || idx >= sc<int>(RESULTS.size()))
+        idx = overviewFirstAppIndex(RESULTS);
+    if (idx < 0 || idx >= sc<int>(RESULTS.size()) || !RESULTS[sc<size_t>(idx)].app)
+        return false;
+
+    AppSearch::launch(*RESULTS[sc<size_t>(idx)].app, ScrollOverview::Config::getTerminal());
+    for (const auto& overview : scrollOverviews()) {
+        if (overview)
+            overview->close();
+    }
+    return true;
 }
 
 void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now) {
@@ -6168,12 +6287,10 @@ void CScrollOverview::render() {
 
     if (OmarchySearch::isSushiActive()) {
         for (const auto& w : Desktop::windowState()->windows()) {
-            if (validMapped(w) && OmarchySearch::isOverviewSushiWindow(w->m_class, w->getPID())) {
-                const auto MONITORSCALE = MONITOR->m_scale;
-                const auto WSIZE        = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT) * MONITORSCALE;
-                CBox       wBox         = {(w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - MONITOR->m_position) * MONITORSCALE, WSIZE};
-                wBox.round();
-                renderWindowLive(MONITOR, w, wBox, 1.F, NOW);
+            if (Desktop::View::validMapped(w) && OmarchySearch::isOverviewSushiWindow(w->m_class, w->getPID())) {
+                if (w->m_monitor == MONITOR) {
+                    g_pHyprRenderer->renderWindow(w, MONITOR, NOW, false, Render::RENDER_PASS_ALL, false, false);
+                }
                 break;
             }
         }
@@ -6248,6 +6365,8 @@ void CScrollOverview::render() {
 void CScrollOverview::setClosing(bool closing_) {
     closing = closing_;
     if (closing) {
+        if (OmarchySearch::isSushiActive())
+            OmarchySearch::closeSushi();
         transferSharedStateOwnership();
         inputFramePending = false;
         clearDragPending();

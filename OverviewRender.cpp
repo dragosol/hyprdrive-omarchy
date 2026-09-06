@@ -14,6 +14,7 @@
 #include "Config.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
+#include <hyprgraphics/resource/resources/TextResource.hpp>
 #include "globals.hpp"
 #include <string>
 #include <unordered_map>
@@ -197,8 +198,10 @@ struct STextKey {
     uint32_t    color  = 0;
     int         fontSize = 0;
     int         maxWidth = 0;
+    int         maxHeight = 0;
     int         weight   = 0;
     bool        italic   = false;
+    bool        wrap     = false;
 
     bool        operator==(const STextKey&) const = default;
 };
@@ -206,8 +209,8 @@ struct STextKey {
 struct STextKeyHash {
     size_t operator()(const STextKey& k) const {
         size_t h = std::hash<std::string>{}(k.str);
-        for (const size_t PART : {std::hash<std::string>{}(k.fontFamily), sc<size_t>(k.color), sc<size_t>(k.fontSize), sc<size_t>(k.maxWidth), sc<size_t>(k.weight),
-                                  sc<size_t>(k.italic)})
+        for (const size_t PART : {std::hash<std::string>{}(k.fontFamily), sc<size_t>(k.color), sc<size_t>(k.fontSize), sc<size_t>(k.maxWidth), sc<size_t>(k.maxHeight),
+                                  sc<size_t>(k.weight), sc<size_t>(k.italic), sc<size_t>(k.wrap)})
             h ^= PART + 0x9e3779b9 + (h << 6) + (h >> 2);
         return h;
     }
@@ -219,7 +222,7 @@ static std::unordered_map<STextKey, SP<Render::ITexture>, STextKeyHash> g_textCa
 // windows: the strings asked for are open-ended, so the cache needs a ceiling.
 // Clearing wholesale rather than evicting by age keeps this to one branch --
 // the entries are cheap to rebuild and the cap is far above a frame's worth.
-static constexpr size_t TEXT_CACHE_MAX = 256;
+static constexpr size_t TEXT_CACHE_MAX = 1024;
 
 SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int fontSize, bool italic, const std::string& fontFamily, int maxWidth, int weight) {
     if (str.empty())
@@ -248,6 +251,44 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
     auto       texture = g_pHyprRenderer->renderText(str, color, fontSize, italic, FAMILY, maxWidth, weight);
     Prof::txtNs += std::chrono::duration_cast<std::chrono::nanoseconds>(Prof::clock::now() - T0).count();
     ++Prof::txtCold;
+    g_textCache.emplace(KEY, texture);
+    return texture;
+}
+
+SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color, int fontSize, int maxW, int maxH, bool italic, const std::string& fontFamily, int weight) {
+    if (str.empty() || maxW < 8 || maxH < 8)
+        return nullptr;
+
+    const int W = std::max(16, ((maxW + 15) / 16) * 16);
+    const std::string FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+    const STextKey    KEY{.str        = str,
+                          .fontFamily = FAMILY,
+                          .color      = color.getAsHex(),
+                          .fontSize   = fontSize,
+                          .maxWidth   = W,
+                          .maxHeight  = maxH,
+                          .weight     = weight,
+                          .italic     = italic,
+                          .wrap       = true};
+
+    if (const auto IT = g_textCache.find(KEY); IT != g_textCache.end())
+        return IT->second;
+
+    if (g_textCache.size() >= TEXT_CACHE_MAX)
+        g_textCache.clear();
+
+    Hyprgraphics::CTextResource::STextResourceData data;
+    data.text      = str;
+    data.font      = FAMILY;
+    data.fontSize  = sc<size_t>(std::max(1, fontSize));
+    data.color     = Hyprgraphics::CColor{Hyprgraphics::CColor::SSRGB{color.r, color.g, color.b}};
+    data.maxSize   = Vector2D{sc<double>(W), sc<double>(maxH)};
+    data.ellipsize = true;
+    data.wrap      = true;
+    (void)italic;
+    (void)weight;
+
+    auto texture = g_pHyprRenderer->renderText(std::move(data));
     g_textCache.emplace(KEY, texture);
     return texture;
 }

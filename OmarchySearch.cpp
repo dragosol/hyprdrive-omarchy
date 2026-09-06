@@ -4,6 +4,7 @@
 using namespace Hyprutils::OS;
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -12,18 +13,26 @@ using namespace Hyprutils::OS;
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <poll.h>
 #include <regex>
+#include <spawn.h>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <glib.h>
+#include <systemd/sd-bus.h>
+
+extern char** environ;
 
 namespace fs = std::filesystem;
 
@@ -31,10 +40,20 @@ namespace OmarchySearch {
 
 // ============================================================================
 // Quick Look (GNOME Sushi) State Machine
+// Uses asynchronous sd-bus calls to org.gnome.NautilusPreviewer2 (ShowFile / Close).
+// Zero fork(), zero blocking waits, completely safe in multithreaded compositor.
 // ============================================================================
 static bool        g_sushiActive = false;
-static pid_t       g_sushiPid = 0;
 static std::string g_sushiPath;
+
+static sd_bus* getSushiBus() {
+    static sd_bus* s_bus = nullptr;
+    if (!s_bus) {
+        if (sd_bus_default_user(&s_bus) < 0)
+            s_bus = nullptr;
+    }
+    return s_bus;
+}
 
 bool isSushiActive() {
     return g_sushiActive;
@@ -43,25 +62,23 @@ bool isSushiActive() {
 bool isOverviewSushiWindow(const std::string& windowClass, uint32_t pid) {
     if (!g_sushiActive)
         return false;
-    if (windowClass == "org.gnome.NautilusPreviewer")
-        return true;
-    if (pid > 0 && g_sushiPid > 0 && pid == static_cast<uint32_t>(g_sushiPid))
-        return true;
-    return false;
+    return windowClass == "org.gnome.NautilusPreviewer";
 }
 
 void closeSushi() {
     if (g_sushiActive) {
-        // GNOME Sushi D-Bus Close method
-        system("gdbus call --session --dest org.gnome.NautilusPreviewer --object-path /org/gnome/NautilusPreviewer --method org.gnome.NautilusPreviewer2.Close >/dev/null 2>&1 &");
-        if (g_sushiPid > 0) {
-            kill(g_sushiPid, SIGTERM);
-            int status = 0;
-            waitpid(g_sushiPid, &status, WNOHANG);
+        sd_bus* bus = getSushiBus();
+        if (bus) {
+            sd_bus_message* m = nullptr;
+            if (sd_bus_message_new_method_call(bus, &m, "org.gnome.NautilusPreviewer", "/org/gnome/NautilusPreviewer", "org.gnome.NautilusPreviewer2", "Close") >= 0) {
+                sd_bus_message_set_expect_reply(m, 0);
+                if (sd_bus_send(bus, m, nullptr) >= 0)
+                    sd_bus_flush(bus);
+                sd_bus_message_unref(m);
+            }
         }
     }
     g_sushiActive = false;
-    g_sushiPid = 0;
     g_sushiPath.clear();
 }
 
@@ -76,16 +93,30 @@ void toggleSushi(const std::string& filePath) {
             return; // Toggled off
     }
 
+    GError* err = nullptr;
+    char*   uri = g_filename_to_uri(filePath.c_str(), nullptr, &err);
+    if (!uri) {
+        if (err)
+            g_error_free(err);
+        return;
+    }
+
+    sd_bus* bus = getSushiBus();
+    if (bus) {
+        sd_bus_message* m = nullptr;
+        if (sd_bus_message_new_method_call(bus, &m, "org.gnome.NautilusPreviewer", "/org/gnome/NautilusPreviewer", "org.gnome.NautilusPreviewer2", "ShowFile") >= 0) {
+            if (sd_bus_message_append(m, "ssbs", uri, "", 1, "") >= 0) {
+                sd_bus_message_set_expect_reply(m, 0);
+                if (sd_bus_send(bus, m, nullptr) >= 0)
+                    sd_bus_flush(bus);
+            }
+            sd_bus_message_unref(m);
+        }
+    }
+    g_free(uri);
+
     g_sushiActive = true;
     g_sushiPath   = filePath;
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        execl("/usr/bin/sushi", "sushi", filePath.c_str(), nullptr);
-        _exit(1);
-    } else if (pid > 0) {
-        g_sushiPid = pid;
-    }
 }
 
 void updateSushiIfActive(const std::string& filePath) {
@@ -391,6 +422,26 @@ static std::string replaceAll(std::string str, const std::string& from, const st
     return str;
 }
 
+static SSearchItem agentItem(const SAgentDef& AG, const std::string& prompt) {
+    SSearchItem item;
+    item.kind     = EItemKind::Agent;
+    item.id       = "agent:" + AG.prefix;
+    item.category = "AI Agent";
+    item.icon     = "utilities-terminal";
+    if (prompt.empty()) {
+        item.name          = "/" + AG.prefix + " <prompt>";
+        item.description   = AG.name + " (" + AG.model + ") — " + AG.description;
+        item.actionCommand = replaceAll(AG.commandTemplate, "\"%P%\"", "");
+        item.actionCommand = replaceAll(item.actionCommand, "%P%", "");
+    } else {
+        item.name        = "Ask " + AG.name;
+        item.description = prompt;
+        std::string escPrompt = replaceAll(prompt, "\"", "\\\"");
+        item.actionCommand    = replaceAll(AG.commandTemplate, "%P%", escPrompt);
+    }
+    return item;
+}
+
 std::vector<SSearchItem> searchAgents(const std::string& rawQuery) {
     std::vector<SSearchItem> items;
     if (rawQuery.empty() || rawQuery[0] != '/')
@@ -410,35 +461,30 @@ std::vector<SSearchItem> searchAgents(const std::string& rawQuery) {
     }
 
     std::string lowerToken;
-    for (char c : token) lowerToken += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char c : token)
+        lowerToken += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    const auto& DEFS = agentDefs();
-    for (const auto& AG : DEFS) {
+    for (const auto& AG : agentDefs()) {
         if (!lowerToken.empty() && AG.prefix.find(lowerToken) != 0 && lowerToken != AG.prefix)
             continue;
-
-        SSearchItem item;
-        item.kind     = EItemKind::Agent;
-        item.id       = "agent:" + AG.prefix;
-        item.category = "AI Agent";
-        item.icon     = "utilities-terminal";
-
-        if (prompt.empty()) {
-            item.name        = "/" + AG.prefix + " <prompt>";
-            item.description = AG.name + " (" + AG.model + ") - " + AG.description;
-            item.actionCommand = replaceAll(AG.commandTemplate, "\"%P%\"", "");
-            item.actionCommand = replaceAll(item.actionCommand, "%P%", "");
-        } else {
-            item.name        = "Ask " + AG.name;
-            item.description = prompt;
-            // Escape any quotes in prompt for safety
-            std::string escPrompt = replaceAll(prompt, "\"", "\\\"");
-            item.actionCommand = replaceAll(AG.commandTemplate, "%P%", escPrompt);
-        }
-
-        items.push_back(std::move(item));
+        items.push_back(agentItem(AG, prompt));
     }
+    return items;
+}
 
+std::vector<SSearchItem> promptAllAgents(const std::string& prompt) {
+    std::vector<SSearchItem> items;
+    if (prompt.empty())
+        return items;
+    for (const auto& AG : agentDefs())
+        items.push_back(agentItem(AG, prompt));
+    return items;
+}
+
+std::vector<SSearchItem> agentHelpItems() {
+    std::vector<SSearchItem> items;
+    for (const auto& AG : agentDefs())
+        items.push_back(agentItem(AG, ""));
     return items;
 }
 
@@ -607,20 +653,277 @@ static std::string parentPathFor(const std::unordered_map<std::string, SRawMenuI
     return pathFor(items, it->second.parent);
 }
 
-static bool evaluateWhen(const std::string& when) {
-    if (when.empty()) return true;
-    static std::unordered_map<std::string, bool> memo;
-    static std::chrono::steady_clock::time_point lastCheck;
-    auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastCheck).count() > 10) {
-        memo.clear();
-        lastCheck = now;
+static std::string trimCopy(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
+        s.erase(s.begin());
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
+        s.pop_back();
+    return s;
+}
+
+static std::string expandPath(std::string p) {
+    p = trimCopy(std::move(p));
+    if (p.size() >= 2 && ((p.front() == '"' && p.back() == '"') || (p.front() == '\'' && p.back() == '\'')))
+        p = p.substr(1, p.size() - 2);
+    const char* home = std::getenv("HOME");
+    if (home && !p.empty()) {
+        if (p.starts_with("$HOME"))
+            p.replace(0, 5, home);
+        else if (p.front() == '~')
+            p.replace(0, 1, home);
     }
-    auto it = memo.find(when);
-    if (it != memo.end()) return it->second;
-    std::string cmd = "bash -c \"" + when + "\" >/dev/null 2>&1";
-    bool ok = (system(cmd.c_str()) == 0);
-    memo[when] = ok;
+    return p;
+}
+
+static const std::unordered_set<std::string>& pacmanLocalNames() {
+    static const std::unordered_set<std::string> NAMES = [] {
+        std::unordered_set<std::string> out;
+        std::error_code ec;
+        for (const auto& ent : fs::directory_iterator("/var/lib/pacman/local", ec)) {
+            if (!ent.is_directory(ec))
+                continue;
+            const std::string dir = ent.path().filename().string();
+            const auto r1 = dir.rfind('-');
+            if (r1 == std::string::npos || r1 == 0)
+                continue;
+            const auto r2 = dir.rfind('-', r1 - 1);
+            if (r2 == std::string::npos)
+                continue;
+            out.insert(dir.substr(0, r2));
+        }
+        return out;
+    }();
+    return NAMES;
+}
+
+static bool commandOnPath(const std::string& cmd) {
+    static std::unordered_map<std::string, bool> cache;
+    if (auto it = cache.find(cmd); it != cache.end())
+        return it->second;
+    bool ok = false;
+    if (cmd.find('/') != std::string::npos) {
+        ok = access(cmd.c_str(), X_OK) == 0;
+    } else if (const char* path = std::getenv("PATH")) {
+        std::string paths = path;
+        size_t pos = 0;
+        while (pos <= paths.size()) {
+            const auto sep = paths.find(':', pos);
+            const auto dir = paths.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
+            if (!dir.empty()) {
+                const std::string full = dir + "/" + cmd;
+                if (access(full.c_str(), X_OK) == 0) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (sep == std::string::npos)
+                break;
+            pos = sep + 1;
+        }
+    }
+    cache[cmd] = ok;
+    return ok;
+}
+
+static bool pathExists(const std::string& p) {
+    std::error_code ec;
+    return fs::exists(p, ec);
+}
+
+static bool pathIsFile(const std::string& p) {
+    std::error_code ec;
+    return fs::is_regular_file(p, ec);
+}
+
+static bool pathIsDir(const std::string& p) {
+    std::error_code ec;
+    return fs::is_directory(p, ec);
+}
+
+static bool globExists(const std::string& pattern) {
+    const std::string pat = expandPath(pattern);
+    const auto star = pat.find('*');
+    if (star == std::string::npos)
+        return pathExists(pat);
+    const auto slash = pat.rfind('/', star);
+    const fs::path dir = slash == std::string::npos ? fs::path(".") : fs::path(pat.substr(0, slash));
+    const std::string prefix = pat.substr(slash == std::string::npos ? 0 : slash + 1, star - (slash == std::string::npos ? 0 : slash + 1));
+    const std::string rest = pat.substr(star + 1);
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec))
+        return false;
+    for (const auto& ent : fs::directory_iterator(dir, ec)) {
+        const auto name = ent.path().filename().string();
+        if (!prefix.empty() && !name.starts_with(prefix))
+            continue;
+        if (rest.empty())
+            return true;
+        if (rest.front() == '/') {
+            if (pathExists((ent.path() / rest.substr(1)).string()))
+                return true;
+        } else if (name.ends_with(rest)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool evalTestBracket(std::string inner) {
+    inner = trimCopy(std::move(inner));
+    bool neg = false;
+    if (inner.starts_with("!")) {
+        neg = true;
+        inner = trimCopy(inner.substr(1));
+    }
+    bool ok = false;
+    if (inner.starts_with("-f "))
+        ok = pathIsFile(expandPath(inner.substr(3)));
+    else if (inner.starts_with("-d "))
+        ok = pathIsDir(expandPath(inner.substr(3)));
+    else if (inner.starts_with("-x ")) {
+        const auto p = expandPath(inner.substr(3));
+        ok = access(p.c_str(), X_OK) == 0;
+    } else if (inner.starts_with("-e "))
+        ok = pathExists(expandPath(inner.substr(3)));
+    else if (inner.find("findmnt") != std::string::npos && inner.find("btrfs") != std::string::npos) {
+        std::ifstream mounts("/proc/mounts");
+        std::string line;
+        while (std::getline(mounts, line)) {
+            std::istringstream iss(line);
+            std::string dev, mp, type;
+            if (iss >> dev >> mp >> type && mp == "/" && type == "btrfs") {
+                ok = true;
+                break;
+            }
+        }
+    } else if (inner.find("omarchy-network-status") != std::string::npos && inner.find("wifi") != std::string::npos) {
+        std::error_code ec;
+        for (const auto& ent : fs::directory_iterator("/sys/class/net", ec)) {
+            if (fs::exists(ent.path() / "wireless", ec)) {
+                ok = true;
+                break;
+            }
+        }
+    } else {
+        return true; // unknown [[ ]] — fail open, never fork
+    }
+    return neg ? !ok : ok;
+}
+
+static bool evalWhenAtom(std::string expr) {
+    expr = trimCopy(std::move(expr));
+    if (expr.empty())
+        return true;
+
+    if (expr.starts_with("[[") && expr.ends_with("]]"))
+        return evalTestBracket(expr.substr(2, expr.size() - 4));
+
+    if (expr.starts_with("omarchy-pkg-present ")) {
+        std::istringstream iss(expr.substr(20));
+        std::string pkg;
+        const auto& pkgs = pacmanLocalNames();
+        while (iss >> pkg) {
+            if (!pkgs.contains(pkg))
+                return false;
+        }
+        return true;
+    }
+    if (expr.starts_with("omarchy-cmd-present ")) {
+        std::istringstream iss(expr.substr(20));
+        std::string cmd;
+        while (iss >> cmd) {
+            if (!commandOnPath(cmd))
+                return false;
+        }
+        return true;
+    }
+    if (expr.starts_with("omarchy-toggle-enabled "))
+        return pathIsFile(expandPath("$HOME/.local/state/omarchy/toggles/" + trimCopy(expr.substr(23))));
+    if (expr == "omarchy-hw-laptop") {
+        if (pathExists("/proc/acpi/button/lid"))
+            return true;
+        std::ifstream chassis("/sys/class/dmi/id/chassis_type");
+        int type = 0;
+        if (chassis >> type)
+            return type == 8 || type == 9 || type == 10 || type == 14 || type == 30 || type == 31 || type == 32;
+        return false;
+    }
+    if (expr == "omarchy-hw-webcam") {
+        std::error_code ec;
+        for (const auto& ent : fs::directory_iterator("/dev", ec)) {
+            const auto name = ent.path().filename().string();
+            if (name.starts_with("video") && name.size() > 5 && std::isdigit(static_cast<unsigned char>(name[5])))
+                return true;
+        }
+        return false;
+    }
+    if (expr == "omarchy-hibernation-available")
+        return pathExists("/sys/power/image_size") && pathExists("/etc/mkinitcpio.conf.d/omarchy_resume.conf");
+    if (expr == "omarchy-theme-extras") {
+        std::error_code ec;
+        for (const auto& ent : fs::directory_iterator(expandPath("$HOME/.config/omarchy/themes"), ec)) {
+            if (!ent.is_directory(ec) || ent.is_symlink(ec))
+                continue;
+            if (fs::is_directory(ent.path() / ".git", ec))
+                return true;
+        }
+        return false;
+    }
+    if (expr.starts_with("compgen -G "))
+        return globExists(expr.substr(11));
+    if (expr.starts_with("pgrep ")) {
+        const auto needle = expr.substr(expr.find('\'') == std::string::npos ? expr.rfind(' ') + 1 : expr.find('\'') + 1);
+        std::string want = needle;
+        if (!want.empty() && want.back() == '\'')
+            want.pop_back();
+        if (want.starts_with("^"))
+            want.erase(want.begin());
+        std::error_code ec;
+        for (const auto& ent : fs::directory_iterator("/proc", ec)) {
+            const auto id = ent.path().filename().string();
+            if (id.empty() || !std::isdigit(static_cast<unsigned char>(id.front())))
+                continue;
+            std::ifstream cmd(ent.path() / "cmdline");
+            std::string buf((std::istreambuf_iterator<char>(cmd)), {});
+            if (buf.find(want) != std::string::npos)
+                return true;
+        }
+        return false;
+    }
+    if (expr.starts_with("systemctl is-enabled"))
+        return pathExists("/etc/systemd/system/multi-user.target.wants/sshd.service") ||
+            pathExists("/etc/systemd/system/sshd.service");
+    if (expr.starts_with("flatpak info ")) {
+        const auto app = trimCopy(expr.substr(13));
+        return pathExists("/var/lib/flatpak/app/" + app) || pathExists(expandPath("$HOME/.local/share/flatpak/app/" + app));
+    }
+
+    // Unknown predicate: show the row. Never fork — system()/pacman from the
+    // compositor thread is what froze the overview for seconds on first type.
+    return true;
+}
+
+static bool evalWhenExpr(std::string expr) {
+    expr = trimCopy(std::move(expr));
+    if (expr.empty())
+        return true;
+    const auto andPos = expr.find("&&");
+    if (andPos != std::string::npos)
+        return evalWhenExpr(expr.substr(0, andPos)) && evalWhenExpr(expr.substr(andPos + 2));
+    if (expr.starts_with("!"))
+        return !evalWhenExpr(trimCopy(expr.substr(1)));
+    return evalWhenAtom(expr);
+}
+
+static std::unordered_map<std::string, bool> g_whenCache;
+
+static bool evaluateWhen(const std::string& when) {
+    if (when.empty())
+        return true;
+    if (const auto it = g_whenCache.find(when); it != g_whenCache.end())
+        return it->second;
+    const bool ok = evalWhenExpr(when);
+    g_whenCache[when] = ok;
     return ok;
 }
 
@@ -796,6 +1099,7 @@ static void reloadMenuIfNeeded() {
 
     g_menuItems.clear();
     g_menuItemOrder.clear();
+    g_whenCache.clear();
     parseMenuFile(sysPath, g_menuItems, g_menuItemOrder);
     if (!userPath.empty())
         parseMenuFile(userPath, g_menuItems, g_menuItemOrder);
@@ -970,12 +1274,40 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
 static std::thread             g_fileThread;
 static std::atomic<bool>       g_fileRunning{false};
 static std::atomic<uint64_t>   g_fileGen{0};
+static std::atomic<uint64_t>   g_fileDoneGen{0};
 static std::mutex              g_fileWorkerMutex;
 static std::condition_variable g_fileWorkerCv;
 static std::string             g_fileQueryText;
 
 static std::mutex              g_fileResultsMutex;
 static std::vector<SSearchItem> g_fileResults;
+
+static std::function<void()> g_resultsCb;
+
+void setResultsCallback(std::function<void()> cb) {
+    g_resultsCb = std::move(cb);
+}
+
+static void notifyFileResultsReady() {
+    if (g_resultsCb)
+        g_resultsCb();
+}
+
+static const char* OMARCHY_FIND_EXCLUDES[] = {
+    ".git", "node_modules", ".cache", "__pycache__", ".npm", ".nvm",
+    ".cargo", ".rustup", ".gradle", ".local/share/Trash",
+    ".local/share/flatpak", ".venv", "venv", ".steam",
+    "*Cache*", "Local Storage", "Session Storage", "Service Worker",
+    "blob_storage", "Dawn*", "logs", "*Storage*", "History",
+    "data", "Crashpad", "Dictionaries", "Partitions",
+    "Shared Dictionary", "Backups", "google-chrome*",
+    "microsoft-edge*", "chromium", "BraveSoftware", "mozilla",
+    "dconf", "ibus", "fcitx", "pulse", "procps", ".*.bak.*"
+};
+
+bool fileSearchBusy() {
+    return g_fileGen.load(std::memory_order_acquire) != g_fileDoneGen.load(std::memory_order_acquire);
+}
 
 static std::string formatBytes(uint64_t bytes) {
     if (bytes < 1024) return std::to_string(bytes) + " B";
@@ -1082,121 +1414,226 @@ static int scoreFileItem(const std::string& name, const std::string& path, const
     return total;
 }
 
-static void fileWorkerLoop() {
-    static const char* OMARCHY_FIND_EXCLUDES[] = {
-        ".git", "node_modules", ".cache", "__pycache__", ".npm", ".nvm",
-        ".cargo", ".rustup", ".gradle", ".local/share/Trash",
-        ".local/share/flatpak", ".venv", "venv", ".steam",
-        "*Cache*", "Local Storage", "Session Storage", "Service Worker",
-        "blob_storage", "Dawn*", "logs", "*Storage*", "History",
-        "data", "Crashpad", "Dictionaries", "Partitions",
-        "Shared Dictionary", "Backups", "google-chrome*",
-        "microsoft-edge*", "chromium", "BraveSoftware", "mozilla",
-        "dconf", "ibus", "fcitx", "pulse", "procps", ".*.bak.*"
-    };
+static void killPid(pid_t pid) {
+    if (pid <= 0)
+        return;
+    kill(pid, SIGKILL);
+    int status = 0;
+    waitpid(pid, &status, 0);
+}
 
+// posix_spawn rather than popen: a shell string cannot be killed promptly, and
+// `--follow` walked symlink cycles / network mounts behind every keystroke.
+static pid_t spawnFd(int outFd, const char* home, const std::vector<std::string>& terms) {
+    std::vector<std::string> args;
+    args.reserve(16 + (sizeof(OMARCHY_FIND_EXCLUDES) / sizeof(OMARCHY_FIND_EXCLUDES[0])) * 2 + terms.size());
+    args.emplace_back("fd");
+    args.emplace_back("--color=never");
+    args.emplace_back("--one-file-system");
+    args.emplace_back("-i");
+    args.emplace_back("--no-ignore");
+    args.emplace_back("--max-results");
+    args.emplace_back("50");
+    args.emplace_back("--full-path");
+    for (const auto* exc : OMARCHY_FIND_EXCLUDES) {
+        args.emplace_back("-E");
+        args.emplace_back(exc);
+    }
+    for (size_t t = 1; t < terms.size(); ++t) {
+        args.emplace_back("--and");
+        args.emplace_back(terms[t]);
+    }
+    args.emplace_back("--");
+    args.emplace_back(terms[0]);
+    args.emplace_back(home);
+
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& a : args)
+        argv.push_back(a.data());
+    argv.push_back(nullptr);
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, outFd, STDOUT_FILENO);
+    const int DEVNULL = open("/dev/null", O_WRONLY);
+    if (DEVNULL >= 0) {
+        posix_spawn_file_actions_adddup2(&actions, DEVNULL, STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, DEVNULL);
+    }
+    posix_spawn_file_actions_addclose(&actions, outFd);
+
+    pid_t pid = -1;
+    const int RC = posix_spawnp(&pid, "fd", &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (DEVNULL >= 0)
+        close(DEVNULL);
+    return RC == 0 ? pid : -1;
+}
+
+static void fileWorkerLoop() {
+    uint64_t gen = 0;
     while (g_fileRunning) {
         std::string queryStr;
-        uint64_t    gen = 0;
         {
             std::unique_lock<std::mutex> lock(g_fileWorkerMutex);
             g_fileWorkerCv.wait(lock, [&]() {
                 return !g_fileRunning || g_fileGen > gen;
             });
-            if (!g_fileRunning) break;
+            if (!g_fileRunning)
+                break;
             queryStr = g_fileQueryText;
             gen      = g_fileGen.load();
         }
 
         if (queryStr.size() < 2 || queryStr[0] == '/') {
-            std::lock_guard<std::mutex> lock(g_fileResultsMutex);
-            g_fileResults.clear();
+            {
+                std::lock_guard<std::mutex> lock(g_fileResultsMutex);
+                g_fileResults.clear();
+            }
+            g_fileDoneGen.store(gen, std::memory_order_release);
+            notifyFileResultsReady();
             continue;
         }
 
         const char* home = std::getenv("HOME");
-        if (!home) continue;
+        if (!home) {
+            {
+                std::lock_guard<std::mutex> lock(g_fileResultsMutex);
+                g_fileResults.clear();
+            }
+            g_fileDoneGen.store(gen, std::memory_order_release);
+            notifyFileResultsReady();
+            continue;
+        }
 
         std::vector<std::string> terms;
         std::istringstream iss(queryStr);
         std::string token;
         while (iss >> token) {
             std::string lower;
-            for (char c : token) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            for (char c : token)
+                lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             terms.push_back(lower);
         }
 
-        if (terms.empty())
-            continue;
-
-        // Build fd command identical to Omarchy Find (FindBackend.js)
-        std::string cmd = "fd --color=never -i --no-ignore --follow --max-results 80 --full-path";
-        for (const auto* exc : OMARCHY_FIND_EXCLUDES) {
-            cmd += " -E '";
-            cmd += exc;
-            cmd += "'";
-        }
-
-        if (terms.size() > 1) {
-            for (size_t t = 1; t < terms.size(); ++t) {
-                cmd += " --and '" + terms[t] + "'";
+        if (terms.empty()) {
+            {
+                std::lock_guard<std::mutex> lock(g_fileResultsMutex);
+                g_fileResults.clear();
             }
+            g_fileDoneGen.store(gen, std::memory_order_release);
+            notifyFileResultsReady();
+            continue;
         }
-        cmd += " -- '" + terms[0] + "' '" + home + "'";
 
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if (!pipe) continue;
+        int pipefd[2];
+        if (pipe(pipefd) != 0) {
+            g_fileDoneGen.store(gen, std::memory_order_release);
+            notifyFileResultsReady();
+            continue;
+        }
+
+        const pid_t FD_PID = spawnFd(pipefd[1], home, terms);
+        close(pipefd[1]);
+        if (FD_PID < 0) {
+            close(pipefd[0]);
+            g_fileDoneGen.store(gen, std::memory_order_release);
+            notifyFileResultsReady();
+            continue;
+        }
 
         struct ScoredFile {
-            int score = 0;
+            int         score = 0;
             SSearchItem item;
         };
         std::vector<ScoredFile> scoredFiles;
-        char lineBuf[2048];
-        while (fgets(lineBuf, sizeof(lineBuf), pipe)) {
-            if (gen != g_fileGen.load()) break; // Query changed, abandon
+        std::string             lineBuf;
+        char                    chunk[1024];
+        bool                    abandoned = false;
 
-            size_t len = std::strlen(lineBuf);
-            while (len > 0 && (lineBuf[len - 1] == '\n' || lineBuf[len - 1] == '\r'))
-                lineBuf[--len] = '\0';
-            if (len == 0) continue;
+        pollfd pfd{pipefd[0], POLLIN, 0};
+        while (!abandoned) {
+            if (gen != g_fileGen.load(std::memory_order_relaxed) || !g_fileRunning) {
+                abandoned = true;
+                break;
+            }
+            int pr = poll(&pfd, 1, 20); // 20ms poll
+            if (pr < 0) {
+                if (errno == EINTR)
+                    continue;
+                break;
+            }
+            if (pr == 0) {
+                // Poll timeout, loop around to re-check gen / g_fileRunning
+                continue;
+            }
+            ssize_t n = read(pipefd[0], chunk, sizeof(chunk) - 1);
+            if (n <= 0)
+                break;
+            chunk[n] = '\0';
+            lineBuf.append(chunk, static_cast<size_t>(n));
 
-            std::string path = lineBuf;
-            size_t slash = path.find_last_of('/');
-            std::string name = (slash != std::string::npos) ? path.substr(slash + 1) : path;
-            std::string dir  = (slash != std::string::npos) ? path.substr(0, slash) : "";
+            size_t nl;
+            while ((nl = lineBuf.find('\n')) != std::string::npos) {
+                std::string line = lineBuf.substr(0, nl);
+                lineBuf.erase(0, nl + 1);
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                    line.pop_back();
+                if (line.empty())
+                    continue;
 
-            int score = scoreFileItem(name, path, terms);
-            if (score < 0)
-                score = 10;
+                std::string path = line;
+                size_t slash = path.find_last_of('/');
+                std::string name = (slash != std::string::npos) ? path.substr(slash + 1) : path;
+                std::string dir  = (slash != std::string::npos) ? path.substr(0, slash) : "";
 
-            SSearchItem item;
-            item.kind          = EItemKind::File;
-            item.id            = "file:" + path;
-            item.name          = name;
-            item.description   = dir;
-            item.filePath      = path;
-            item.category      = "Files & Folders";
-            item.actionCommand = path;
+                int score = scoreFileItem(name, path, terms);
+                if (score < 0)
+                    score = 10;
 
-            categorizeFile(path, item);
-            scoredFiles.push_back({score, std::move(item)});
+                SSearchItem item;
+                item.kind          = EItemKind::File;
+                item.id            = "file:" + path;
+                item.name          = name;
+                item.description   = dir;
+                item.filePath      = path;
+                item.category      = "Files & Folders";
+                item.actionCommand = path;
+                item.canQuickLook  = true;
+                scoredFiles.push_back({score, std::move(item)});
+                if (scoredFiles.size() >= 50)
+                    break;
+            }
+            if (scoredFiles.size() >= 50)
+                break;
         }
-        pclose(pipe);
+
+        killPid(FD_PID);
+        close(pipefd[0]);
+
+        if (abandoned || gen != g_fileGen.load(std::memory_order_relaxed)) {
+            continue;
+        }
 
         std::sort(scoredFiles.begin(), scoredFiles.end(), [](const auto& a, const auto& b) {
             return a.score < b.score;
         });
 
         std::vector<SSearchItem> results;
-        for (size_t i = 0; i < std::min<size_t>(30, scoredFiles.size()); ++i) {
+        const size_t KEEP = std::min<size_t>(8, scoredFiles.size());
+        results.reserve(KEEP);
+        for (size_t i = 0; i < KEEP; ++i) {
+            categorizeFile(scoredFiles[i].item.filePath, scoredFiles[i].item);
             results.push_back(std::move(scoredFiles[i].item));
         }
 
-        if (gen == g_fileGen.load()) {
+        {
             std::lock_guard<std::mutex> lock(g_fileResultsMutex);
             g_fileResults = std::move(results);
         }
+        g_fileDoneGen.store(gen, std::memory_order_release);
+        notifyFileResultsReady();
     }
 }
 

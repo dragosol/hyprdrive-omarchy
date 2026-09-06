@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <utility>
 
@@ -23,6 +24,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-compose.h>
 #include <unordered_set>
+#include <sys/eventfd.h>
 #include <hyprland/src/managers/input/trackpad/GestureTypes.hpp>
 #include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
 
@@ -325,6 +327,7 @@ static void resetCompose();
 // still filtered by the query. Anything a new session has to forget goes here,
 // not into either caller.
 void resetSearchSession() {
+    OmarchySearch::closeSushi();
     g_search.reset();
     SearchLetters::g_searchLetters.reset();
     OmarchySearch::resetMenuRoute();
@@ -606,15 +609,20 @@ static void afterQueryEdit() {
     // this costs the keystroke nothing; results land over the next frames.
     SearchProviders::query(g_search.query.text);
     OmarchySearch::query(g_search.query.text);
+    if (OmarchySearch::isSushiActive())
+        OmarchySearch::closeSushi();
 
     // The ranking changes under any edit, so a held index would point at a
     // different app than the one the user saw highlighted.
     g_search.nav.selection         = -1;
     g_search.nav.explicitSelection = false;
+    g_search.nav.intent            = ESearchIntent::Typing;
+    g_search.nav.hoverIndex        = -1;
 
-    // Typing sets focus to Search bar. Down arrow shifts focus to Result zone.
-    g_search.nav.selectFirstPending = false;
-    g_search.nav.zone              = g_search.query.text.empty() ? EOverviewNavZone::Tile : EOverviewNavZone::Search;
+    // Typing arms first-app selection (spent once results exist) and puts
+    // SPACE back to "character". Auto-select is for Enter, not Quick Look.
+    g_search.nav.selectFirstPending = !g_search.query.text.empty();
+    g_search.nav.zone               = g_search.query.text.empty() ? EOverviewNavZone::Tile : EOverviewNavZone::Search;
 
     for (const auto& overview : scrollOverviews()) {
         if (!overview)
@@ -677,6 +685,12 @@ static bool handleSearchPress(uint32_t keycode) {
     }
 
     if (keycode == EVDEV_KEY_BACKSPACE) {
+        if (OmarchySearch::isSushiActive()) {
+            OmarchySearch::closeSushi();
+            for (const auto& overview : scrollOverviews())
+                if (overview)
+                    overview->damage();
+        }
         resetCompose();
         if (g_search.nav.zone == EOverviewNavZone::Result && g_search.query.text.empty()) {
             if (OmarchySearch::navigateMenuBack()) {
@@ -692,7 +706,13 @@ static bool handleSearchPress(uint32_t keycode) {
             g_search.nav.selection         = -1;
             g_search.nav.explicitSelection = false;
         }
+        if (g_search.query.text.empty()) {
+            g_search.query.active = false;
+            return true;
+        }
         popCodepoint(g_search.query.text);
+        if (g_search.query.text.empty())
+            g_search.query.active = false;
         afterQueryEdit();
         return true;
     }
@@ -700,6 +720,13 @@ static bool handleSearchPress(uint32_t keycode) {
     const SSearchKey KEY = searchKeyFor(keycode);
     if (!KEY.consume)
         return false;
+
+    if (OmarchySearch::isSushiActive()) {
+        OmarchySearch::closeSushi();
+        for (const auto& overview : scrollOverviews())
+            if (overview)
+                overview->damage();
+    }
 
     // Typing any character while in Result zone shifts focus back to Search bar
     if (g_search.nav.zone == EOverviewNavZone::Result) {
@@ -716,8 +743,83 @@ static bool handleSearchPress(uint32_t keycode) {
     return true;
 }
 
+// Hyprland's key-repeat timer only fires for focused clients. Search steals
+// seat focus, so Backspace would delete once and then stall until another
+// physical press. Drive repeats ourselves off the compositor loop.
+static wl_event_source* g_searchRepeatTimer = nullptr;
+static uint32_t         g_searchRepeatKey   = ~0u;
+
+static void stopSearchRepeat() {
+    g_searchRepeatKey = ~0u;
+    if (g_searchRepeatTimer)
+        wl_event_source_timer_update(g_searchRepeatTimer, 0);
+}
+
+static int searchRepeatCb(void*) {
+    if (g_searchRepeatKey == ~0u || !overviewAcceptsSearch() || g_consumedPresses.count(g_searchRepeatKey) == 0) {
+        stopSearchRepeat();
+        return 0;
+    }
+    handleSearchPress(g_searchRepeatKey);
+    if (g_searchRepeatKey == EVDEV_KEY_BACKSPACE && g_search.query.text.empty()) {
+        stopSearchRepeat();
+        return 0;
+    }
+    int rate = 25;
+    if (const auto KB = g_pSeatManager ? g_pSeatManager->m_keyboard.lock() : nullptr; KB && KB->m_repeatRate > 0)
+        rate = KB->m_repeatRate;
+    if (g_searchRepeatTimer)
+        wl_event_source_timer_update(g_searchRepeatTimer, std::max(20, 1000 / std::max(1, rate)));
+    return 0;
+}
+
+static void startSearchRepeat(uint32_t keycode) {
+    if (!g_pCompositor)
+        return;
+    if (!g_searchRepeatTimer)
+        g_searchRepeatTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, searchRepeatCb, nullptr);
+    g_searchRepeatKey = keycode;
+    int delay = 600;
+    if (const auto KB = g_pSeatManager ? g_pSeatManager->m_keyboard.lock() : nullptr; KB && KB->m_repeatDelay > 0)
+        delay = KB->m_repeatDelay;
+    wl_event_source_timer_update(g_searchRepeatTimer, std::max(200, delay));
+}
+
+static int              g_fileWakeFd     = -1;
+static wl_event_source* g_fileWakeSource = nullptr;
+
+static int onFileResultsReady(int fd, uint32_t mask, void* data) {
+    uint64_t val = 0;
+    ::read(fd, &val, sizeof(val));
+    for (const auto& overview : scrollOverviews()) {
+        if (!overview)
+            continue;
+        overview->damage();
+        overview->requestInputFrame();
+    }
+    return 0;
+}
+
 static CHyprSignalListener g_pRawKeyHook;
 static CHyprSignalListener g_pTapSuperButtonHook;
+static CHyprSignalListener g_pRenderPreHook;
+static CHyprSignalListener g_pMembOpenHook;
+static CHyprSignalListener g_pMembLateHook;
+static CHyprSignalListener g_pMembCloseHook;
+static CHyprSignalListener g_pMembKillHook;
+static CHyprSignalListener g_pMembGoneHook;
+static CHyprSignalListener g_pMembPinHook;
+static CHyprSignalListener g_pMembFloatHook;
+static CHyprSignalListener g_pMembTitleHook;
+static CHyprSignalListener g_pMembClassHook;
+static CHyprSignalListener g_pMembWsHook;
+static CHyprSignalListener g_pMembFullHook;
+static CHyprSignalListener g_pDockConfigHook;
+static CHyprSignalListener g_pDockHoverHook;
+static CHyprSignalListener g_pDockClickHook;
+static CHyprSignalListener g_pDockScrollHook;
+static CHyprSignalListener g_pDockRenderHook;
+static CHyprSignalListener g_pMonitorGoneHook;
 static bool                g_tapSuperCandidate = false;
 static uint32_t            g_tapSuperPressedAt = 0;
 
@@ -767,17 +869,19 @@ static void                registerRawKeyHooks() {
                 }
 
                 if (event.keycode == EVDEV_KEY_SPACE) {
-                    if (OmarchySearch::isSushiActive()) {
+                    if (overviewAcceptsSearch()) {
+                        if (overviewHandleSearchSpace()) {
+                            for (const auto& overview : scrollOverviews())
+                                if (overview)
+                                    overview->damage();
+                            g_consumedPresses.insert(event.keycode);
+                            info.cancelled = true;
+                            return;
+                        }
+                        // Not a preview: fall through to handleSearchPress and
+                        // type the space into the query.
+                    } else if (OmarchySearch::isSushiActive()) {
                         OmarchySearch::closeSushi();
-                        for (const auto& overview : scrollOverviews())
-                            if (overview)
-                                overview->damage();
-                        g_consumedPresses.insert(event.keycode);
-                        info.cancelled = true;
-                        return;
-                    }
-                    if (g_search.nav.zone == EOverviewNavZone::Result) {
-                        overviewToggleSushiForSelection();
                         for (const auto& overview : scrollOverviews())
                             if (overview)
                                 overview->damage();
@@ -789,6 +893,8 @@ static void                registerRawKeyHooks() {
 
                 if (handleSearchPress(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
+                    if (event.keycode == EVDEV_KEY_BACKSPACE && !g_search.query.text.empty())
+                        startSearchRepeat(event.keycode);
                     info.cancelled = true;
                     return;
                 }
@@ -806,6 +912,8 @@ static void                registerRawKeyHooks() {
                 }
             }
             else if (g_consumedPresses.erase(event.keycode) > 0) {
+                if (event.keycode == g_searchRepeatKey)
+                    stopSearchRepeat();
                 info.cancelled = true;
                 return;
             }
@@ -1196,7 +1304,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         rc<void*>(hkOnMouseMoved));
     g_pScrollMouseMovedHook->hook();
 
-    static auto P = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
+    g_pRenderPreHook = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
         if (const auto overview = scrollOverviewForMonitor(monitor))
             overview->onPreRender();
 
@@ -1226,19 +1334,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // gate reads off one. The plugin's own mutators -- setHidden for a flight,
     // minimize/restore, the search query -- bump at their own call sites, since
     // no event announces them.
-    static auto MEMBOPEN  = Event::bus()->m_events.window.open.listen([](PHLWINDOW) { Membership::bump("window.open"); });
-    static auto MEMBLATE  = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW) { Membership::bump("window.openLate"); });
-    static auto MEMBCLOSE = Event::bus()->m_events.window.close.listen([](PHLWINDOW) { Membership::bump("window.close"); });
-    static auto MEMBKILL  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
-    static auto MEMBGONE  = Event::bus()->m_events.window.destroy.listen([](PHLWINDOWREF) { Membership::bump("window.destroy"); });
-    static auto MEMBPIN   = Event::bus()->m_events.window.pin.listen([](PHLWINDOW) { Membership::bump("window.pin"); });
-    static auto MEMBFLOAT = Event::bus()->m_events.window.floating.listen([](PHLWINDOW) { Membership::bump("window.floating"); });
-    static auto MEMBTITLE = Event::bus()->m_events.window.title.listen([](PHLWINDOW) { Membership::bump("window.title"); });
-    static auto MEMBCLASS = Event::bus()->m_events.window.class_.listen([](PHLWINDOW) { Membership::bump("window.class"); });
-    static auto MEMBWS    = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { Membership::bump("window.moveToWorkspace"); });
-    static auto MEMBFULL  = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW) { Membership::bump("window.fullscreen"); });
+    g_pMembOpenHook  = Event::bus()->m_events.window.open.listen([](PHLWINDOW) { Membership::bump("window.open"); });
+    g_pMembLateHook  = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW) { Membership::bump("window.openLate"); });
+    g_pMembCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) { Membership::bump("window.close"); });
+    g_pMembKillHook  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
+    g_pMembGoneHook  = Event::bus()->m_events.window.destroy.listen([](PHLWINDOWREF) { Membership::bump("window.destroy"); });
+    g_pMembPinHook   = Event::bus()->m_events.window.pin.listen([](PHLWINDOW) { Membership::bump("window.pin"); });
+    g_pMembFloatHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW) { Membership::bump("window.floating"); });
+    g_pMembTitleHook = Event::bus()->m_events.window.title.listen([](PHLWINDOW) { Membership::bump("window.title"); });
+    g_pMembClassHook = Event::bus()->m_events.window.class_.listen([](PHLWINDOW) { Membership::bump("window.class"); });
+    g_pMembWsHook    = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { Membership::bump("window.moveToWorkspace"); });
+    g_pMembFullHook  = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW) { Membership::bump("window.fullscreen"); });
 
-    static auto DOCKCONFIG = Event::bus()->m_events.config.reloaded.listen([] {
+    g_pDockConfigHook = Event::bus()->m_events.config.reloaded.listen([] {
         // FIRST, before anything in this plugin reads a config value this pass:
         // a value the user set under the old plugin:scrolloverview: name is
         // copied onto its plugin:hyprdrive: twin here and nowhere else, so the
@@ -1256,7 +1364,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             ScrollOverview::Dock::damageIfChanged(MONITOR);
     });
 
-    static auto DOCKHOVER = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo&) {
+    g_pDockHoverHook = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo&) {
         const auto HIT = monitorUnderCursor();
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
@@ -1279,7 +1387,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // are swallowed over the pill: the dock is not a window, so a press that
     // reached the window underneath would focus it, and a release that leaked
     // after a swallowed press would leave the pointer stuck.
-    static auto DOCKCLICK = Event::bus()->m_events.input.mouse.button.listen([](IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
+    g_pDockClickHook = Event::bus()->m_events.input.mouse.button.listen([](IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
         const auto HIT = monitorUnderCursor();
         if (!HIT)
             return;
@@ -1292,7 +1400,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         const auto ROLE = event.button == BTN_RIGHT  ? ScrollOverview::DockInput::EButton::Menu
                         : event.button == BTN_MIDDLE ? ScrollOverview::DockInput::EButton::Launch
                         : event.button == BTN_LEFT   ? ScrollOverview::DockInput::EButton::Main
-                                                     : ScrollOverview::DockInput::EButton::Other;
+                        : ScrollOverview::DockInput::EButton::Other;
         const bool PRESSED = event.state == WL_POINTER_BUTTON_STATE_PRESSED;
 
         // Desktop never has a window drag in flight, and lets a menu miss through
@@ -1318,7 +1426,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // The pill is pinned OVER the overview here (§10 clause 6) and the wheel is
     // the overview's primary navigation, so inside it the overview keeps the
     // tick. Recorded rather than silently dropped.
-    static auto DOCKSCROLL = Event::bus()->m_events.input.mouse.axis.listen([](IPointer::SAxisEvent event, Event::SCallbackInfo& info) {
+    g_pDockScrollHook = Event::bus()->m_events.input.mouse.axis.listen([](IPointer::SAxisEvent event, Event::SCallbackInfo& info) {
         // Vertical only. A horizontal wheel has no reference behaviour.
         // Wheel, finger, and continuous (touchpad) all count: SOURCE_WHEEL
         // alone left laptop two-finger scrolls going to the window under the
@@ -1340,7 +1448,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             info.cancelled = true;
     });
 
-    static auto DOCK = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
+    g_pDockRenderHook = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
         if (stage != RENDER_POST_WINDOWS)
             return;
 
@@ -1369,7 +1477,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Flights first: they are settled while the overview is still registered, so
     // an unhidden window is re-added to the draw list it is about to leave with
     // rather than after it.
-    static auto MONITORGONE = Event::bus()->m_events.monitor.removed.listen([](PHLMONITOR monitor) {
+    g_pMonitorGoneHook = Event::bus()->m_events.monitor.removed.listen([](PHLMONITOR monitor) {
         ScrollOverview::Flight::abortAll("monitor-removed");
         dropScrollOverviewsForMonitor(monitor);
         if (monitor)
@@ -1397,6 +1505,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Compat::adoptLegacyFavorites();
     ScrollOverview::Compat::adoptLegacyValues();
 
+    if (g_pCompositor && g_pCompositor->m_wlEventLoop) {
+        g_fileWakeFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (g_fileWakeFd >= 0) {
+            g_fileWakeSource = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, g_fileWakeFd, WL_EVENT_READABLE, onFileResultsReady, nullptr);
+            OmarchySearch::setResultsCallback([]() {
+                if (g_fileWakeFd >= 0) {
+                    uint64_t one = 1;
+                    ::write(g_fileWakeFd, &one, sizeof(one));
+                }
+            });
+        }
+    }
+
     // X51/X52. Build the icon index at LOAD, where a one-off ~10ms pass is
     // invisible, rather than letting the first search pay for it inside a frame
     // that is already trying to paint results.
@@ -1409,8 +1530,40 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    stopSearchRepeat();
+    if (g_searchRepeatTimer) {
+        wl_event_source_remove(g_searchRepeatTimer);
+        g_searchRepeatTimer = nullptr;
+    }
+    OmarchySearch::setResultsCallback(nullptr);
+    if (g_fileWakeSource) {
+        wl_event_source_remove(g_fileWakeSource);
+        g_fileWakeSource = nullptr;
+    }
+    if (g_fileWakeFd >= 0) {
+        close(g_fileWakeFd);
+        g_fileWakeFd = -1;
+    }
     g_pRawKeyHook.reset();
     g_pTapSuperButtonHook.reset();
+    g_pRenderPreHook.reset();
+    g_pMembOpenHook.reset();
+    g_pMembLateHook.reset();
+    g_pMembCloseHook.reset();
+    g_pMembKillHook.reset();
+    g_pMembGoneHook.reset();
+    g_pMembPinHook.reset();
+    g_pMembFloatHook.reset();
+    g_pMembTitleHook.reset();
+    g_pMembClassHook.reset();
+    g_pMembWsHook.reset();
+    g_pMembFullHook.reset();
+    g_pDockConfigHook.reset();
+    g_pDockHoverHook.reset();
+    g_pDockClickHook.reset();
+    g_pDockScrollHook.reset();
+    g_pDockRenderHook.reset();
+    g_pMonitorGoneHook.reset();
 
     g_unloading = true;
     ScrollOverview::Dock::releasePointerFocus();

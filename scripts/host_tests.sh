@@ -43,6 +43,6 @@ run drop_table_test scripts/drop_table_test.cpp
 run geometry_test scripts/geometry_test.cpp OverviewGeometry.cpp $(pkg-config --cflags --libs hyprutils)
 run strip_scrolling_test scripts/strip_scrolling_test.cpp $(pkg-config --cflags --libs hyprutils)
 run search_letters_test scripts/search_letters_test.cpp
-run omarchy_search_test scripts/omarchy_search_test.cpp OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils)
+run omarchy_search_test scripts/omarchy_search_test.cpp OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 
 exit $fail

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <functional>
 
 namespace OmarchySearch {
 
@@ -44,9 +45,15 @@ void query(const std::string& text);
 // Provider queries
 bool isAgentQuery(const std::string& query);
 std::vector<SSearchItem> searchAgents(const std::string& query);
+// Every configured agent, with the typed sentence as the prompt. Used when
+// the query is not a /prefix so the AI column is not a single-vendor default.
+std::vector<SSearchItem> promptAllAgents(const std::string& prompt);
+std::vector<SSearchItem> agentHelpItems();
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
 std::vector<SSearchItem> searchMenu(const std::string& query, size_t limit = 10);
 std::vector<SSearchItem> fileResults();
+bool fileSearchBusy();
+void setResultsCallback(std::function<void()> cb);
 
 // Menu hierarchy navigation
 void navigateMenu(const std::string& routeId);

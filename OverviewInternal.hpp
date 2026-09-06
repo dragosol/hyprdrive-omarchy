@@ -13,6 +13,7 @@
 
 #include "scrollOverview.hpp"
 
+#include <cctype>
 #include <cstdio>
 
 #include "AppSearch.hpp"
@@ -425,49 +426,36 @@ inline std::vector<SSearchRow> overviewSearchRows() {
     }
 
     if (OmarchySearch::isAgentQuery(Q)) {
-        for (const auto& item : OmarchySearch::searchAgents(Q)) {
+        for (const auto& item : OmarchySearch::searchAgents(Q))
             rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
-        }
     } else if (!Q.empty()) {
-        OmarchySearch::SSearchItem aiItem;
-        aiItem.kind = OmarchySearch::EItemKind::Agent;
-        aiItem.id = "agent:agy";
-        aiItem.name = "Ask Antigravity (AGY)";
-        aiItem.description = Q;
-        aiItem.icon = "utilities-terminal";
-        aiItem.category = "AI Agent";
-        aiItem.actionCommand = "omarchy-launch-tui --app-id=org.omarchy.agent agy --dangerously-skip-permissions --prompt-interactive \"" + Q + "\"";
-        rows.push_back({aiItem.name, aiItem.description, aiItem.icon, nullptr, {}, aiItem, 2});
+        for (const auto& item : OmarchySearch::promptAllAgents(Q))
+            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
 
         OmarchySearch::SSearchItem webItem;
-        webItem.kind = OmarchySearch::EItemKind::Action;
-        webItem.id = "web:google";
-        webItem.name = "Search Google";
-        webItem.description = Q;
-        webItem.icon = "web-browser";
-        webItem.category = "Web";
-        webItem.actionCommand = "xdg-open 'https://www.google.com/search?q=" + Q + "'";
+        webItem.kind          = OmarchySearch::EItemKind::Action;
+        webItem.id            = "web:google";
+        webItem.name          = "Search Google";
+        webItem.description   = Q;
+        webItem.icon          = "web-browser";
+        webItem.category      = "Web";
+        std::string qenc;
+        for (unsigned char c : Q) {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+                qenc += static_cast<char>(c);
+            else if (c == ' ')
+                qenc += '+';
+            else {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%%%02X", c);
+                qenc += buf;
+            }
+        }
+        webItem.actionCommand = "xdg-open 'https://www.google.com/search?q=" + qenc + "'";
         rows.push_back({webItem.name, webItem.description, webItem.icon, nullptr, {}, webItem, 2});
     } else {
-        OmarchySearch::SSearchItem agyHelp;
-        agyHelp.kind = OmarchySearch::EItemKind::Agent;
-        agyHelp.id = "agent:agy";
-        agyHelp.name = "/agy <prompt>";
-        agyHelp.description = "DeepMind AGY Coding Agent";
-        agyHelp.icon = "utilities-terminal";
-        agyHelp.category = "AI Agent";
-        agyHelp.actionCommand = "omarchy-launch-tui --app-id=org.omarchy.agent agy";
-        rows.push_back({agyHelp.name, agyHelp.description, agyHelp.icon, nullptr, {}, agyHelp, 2});
-
-        OmarchySearch::SSearchItem grokHelp;
-        grokHelp.kind = OmarchySearch::EItemKind::Agent;
-        grokHelp.id = "agent:grok";
-        grokHelp.name = "/grok <prompt>";
-        grokHelp.description = "xAI Grok Agent";
-        grokHelp.icon = "utilities-terminal";
-        grokHelp.category = "AI Agent";
-        grokHelp.actionCommand = "omarchy-launch-tui --app-id=org.omarchy.agent grok";
-        rows.push_back({grokHelp.name, grokHelp.description, grokHelp.icon, nullptr, {}, grokHelp, 2});
+        for (const auto& item : OmarchySearch::agentHelpItems())
+            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
     }
 
     return rows;
@@ -502,10 +490,43 @@ inline std::vector<SSearchSection> overviewSearchSections(const std::vector<SSea
     return out;
 }
 
+// Mapped window of this desktop entry, if any. Prefer urgent, then a
+// non-minimized instance, so Enter switches instead of spawning a duplicate.
+inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
+    PHLWINDOW best;
+    for (const auto& WINDOW : Desktop::windowState()->windows()) {
+        if (!WINDOW || !WINDOW->m_isMapped)
+            continue;
+        if (WINDOW->isHidden())
+            continue;
+        if (OmarchySearch::isOverviewSushiWindow(WINDOW->m_class, WINDOW->getPID()))
+            continue;
+
+        bool match = false;
+        if (!entry.wmClass.empty() && WINDOW->m_class == entry.wmClass)
+            match = true;
+        else if (AppSearch::idForClass(WINDOW->m_class) == entry.id)
+            match = true;
+        else if (WINDOW->m_class == entry.id)
+            match = true;
+        if (!match)
+            continue;
+
+        if (WINDOW->m_isUrgent)
+            return WINDOW;
+        if (!best)
+            best = WINDOW;
+        else if (ScrollOverview::Minimize::isMinimized(best) && !ScrollOverview::Minimize::isMinimized(WINDOW))
+            best = WINDOW;
+    }
+    return best;
+}
+
 // Activating a result runs the corresponding app, Omarchy action, agent prompt,
 // calculator copy, or file open. Submenu navigation returns false so the overview
-// stays open while drilling down into the hierarchy.
-inline bool activateSearchResult(int index) {
+// stays open while drilling down into the hierarchy. For an already-open app,
+// Enter focuses that window unless newInstance is set (double-tap Shift).
+inline bool activateSearchResult(int index, bool newInstance = false) {
     const auto RESULTS = overviewSearchRows();
     if (index < 0 || index >= sc<int>(RESULTS.size()))
         return false;
@@ -519,6 +540,12 @@ inline bool activateSearchResult(int index) {
         }
         return OmarchySearch::activate(*ROW.omarchy);
     } else if (ROW.app) {
+        if (!newInstance) {
+            if (const auto W = overviewWindowForApp(*ROW.app)) {
+                g_search.nav.pendingFocus = W;
+                return true;
+            }
+        }
         AppSearch::launch(*ROW.app, ScrollOverview::Config::getTerminal());
         return true;
     } else {
@@ -937,6 +964,72 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
     return std::clamp(sc<float>(monitor->m_size.x) * 0.84F, 880.F, std::max(1.F, sc<float>(monitor->m_size.x) - (GAPL * 2.F)));
 }
 
+// Unified search panel: visible columns + inspector fill the container.
+// Empty columns ease to width 0; leftover is split by flex (files take more
+// when present so paths fit).
+inline constexpr float SEARCH_PAD_L        = 14.F;
+inline constexpr float SEARCH_DIV_GAPL     = 14.F;
+inline constexpr float SEARCH_INSP_WL      = 280.F;
+inline constexpr float SEARCH_INSP_MID_WL  = 340.F; // 2 result columns
+inline constexpr float SEARCH_INSP_WIDE_WL = 400.F; // 1 result column
+inline constexpr float SEARCH_COL_FLEX[3]  = {1.F, 1.45F, 1.F};
+inline constexpr float SEARCH_COL_HIDE_WL  = 8.F;
+
+struct SSearchColWidths {
+    float col[3]    = {};
+    float inspector = SEARCH_INSP_WL;
+    float container = 0.F;
+    int   visible   = 0;
+};
+
+inline uint8_t overviewSearchColMask(const std::vector<SSearchSection>& sections) {
+    uint8_t mask = 0;
+    for (const auto& sec : sections) {
+        if (!sec.rows.empty() && sec.column >= 0 && sec.column < 3)
+            mask |= static_cast<uint8_t>(1u << sec.column);
+    }
+    return mask;
+}
+
+inline SSearchColWidths overviewSearchColWidths(float containerWL, uint8_t mask) {
+    SSearchColWidths w;
+    w.container = containerWL;
+    int   n    = 0;
+    float flex = 0.F;
+    for (int i = 0; i < 3; ++i) {
+        if (mask & (1u << i)) {
+            ++n;
+            flex += SEARCH_COL_FLEX[i];
+        }
+    }
+    w.visible = n;
+    if (n == 0 || containerWL < SEARCH_COL_HIDE_WL)
+        return w;
+
+    const float CHROME = (SEARCH_PAD_L * 2.F) + (SEARCH_DIV_GAPL * sc<float>(n));
+    float       insp   = SEARCH_INSP_WL;
+    if (n == 1)
+        insp = SEARCH_INSP_WIDE_WL;
+    else if (n == 2)
+        insp = SEARCH_INSP_MID_WL;
+    const float MIN_COLS = 160.F * sc<float>(n);
+    insp                 = std::min(insp, std::max(200.F, containerWL - CHROME - MIN_COLS));
+    float inner          = containerWL - CHROME - insp;
+    if (inner < 120.F) {
+        insp  = std::clamp(containerWL * 0.28F, 160.F, insp);
+        inner = containerWL - CHROME - insp;
+    }
+    inner         = std::max(0.F, inner);
+    w.inspector   = insp;
+    if (flex <= 0.F)
+        return w;
+    for (int i = 0; i < 3; ++i) {
+        if (mask & (1u << i))
+            w.col[i] = inner * (SEARCH_COL_FLEX[i] / flex);
+    }
+    return w;
+}
+
 // G5: the grid "caps at 6 and at whatever fits the width". The 6 is applied
 // when the rows are gathered; this is the width half.
 inline size_t overviewResultsGridCols(size_t cells, float spanWL) {
@@ -991,22 +1084,20 @@ inline float overviewResultsWidthTarget(PHLMONITOR monitor, const std::vector<SS
     if (!monitor)
         return 0.F;
 
-    size_t k = 0;
+    // Always the full span once any column exists: hiding empty columns and
+    // growing the box as files arrived was the janky expand. Files take the
+    // leftover inside a stable outer width.
+    bool any = false;
     for (const auto& s : sections) {
-        if (!s.rows.empty())
-            ++k;
+        if (!s.rows.empty()) {
+            any = true;
+            break;
+        }
     }
-    if (k == 0)
+    if (!any)
         return 0.F;
 
-    const float PAD_L = 14.F;
-    const float DIV_GAPL = 14.F;
-    const float INSP_WL = 270.F;
-    const float COL_WL_BASE = 290.F;
-
-    float naturalWL = (PAD_L * 2.F) + (sc<float>(k) * COL_WL_BASE) + (sc<float>(k) * DIV_GAPL) + INSP_WL;
-    const float MAX_SPANWL = overviewResultsSpanW(monitor);
-    return std::min(naturalWL, MAX_SPANWL);
+    return overviewResultsSpanW(monitor);
 }
 
 inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections) {
@@ -1014,21 +1105,24 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
         return 0.F;
 
     size_t maxRows = 0;
-    size_t activeCols = 0;
-    for (const auto& sec : sections) {
-        if (!sec.rows.empty()) {
-            ++activeCols;
-            maxRows = std::max(maxRows, sec.rows.size());
-        }
-    }
-    if (activeCols == 0 || maxRows == 0)
-        return 0.F;
+    for (const auto& sec : sections)
+        maxRows = std::max(maxRows, sec.rows.size());
+    if (maxRows == 0)
+        maxRows = 1;
 
     const size_t VISIBLE_ROWS = std::clamp<size_t>(maxRows, 1, 8);
     const float CARD_H = 28.F + (sc<float>(VISIBLE_ROWS) * 36.F) + 28.F + (OVERVIEW_RESULT_PANELGAPL * 2.F);
 
     const float BUDGET = std::min(360.F, sc<float>(monitor->m_size.y) * 0.42F);
     return std::min(CARD_H, BUDGET);
+}
+
+inline int overviewFirstAppIndex(const std::vector<SSearchRow>& rows) {
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (rows[i].column == 0)
+            return sc<int>(i);
+    }
+    return rows.empty() ? -1 : 0;
 }
 
 // The axis helpers. They used to be defined at the bottom of this file with a

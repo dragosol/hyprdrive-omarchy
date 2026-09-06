@@ -31,6 +31,32 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
 
         updateTileHover();
 
+        // Search hover is motion-only: results appearing under a parked cursor
+        // must not steal SPACE from the query. Moving onto the pill puts SPACE
+        // back to typing even if a file is still highlighted for Enter.
+        if (!drag.activeWindow && !resize.activeWindow && !(g_search.pointer.drag && g_search.pointer.drag->live)) {
+            if (g_search.layout.pill.containsPoint(lastMousePosLocal)) {
+                if (g_search.nav.hoverIndex != -1 || g_search.nav.intent == ESearchIntent::Hovering) {
+                    g_search.nav.hoverIndex = -1;
+                    g_search.nav.intent     = ESearchIntent::Typing;
+                    damage();
+                }
+            } else if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW) {
+                if (g_search.nav.hoverIndex != ROW->index) {
+                    g_search.nav.hoverIndex = ROW->index;
+                    g_search.nav.selection  = ROW->index;
+                    g_search.nav.zone       = EOverviewNavZone::Result;
+                    g_search.nav.intent     = ESearchIntent::Hovering;
+                    damage();
+                }
+            } else if (g_search.nav.hoverIndex != -1) {
+                g_search.nav.hoverIndex = -1;
+                if (g_search.nav.intent == ESearchIntent::Hovering)
+                    g_search.nav.intent = g_search.nav.explicitSelection ? ESearchIntent::Browsing : ESearchIntent::Typing;
+                damage();
+            }
+        }
+
         // The dock's hover highlight is the only thing on screen that changes on
         // a bare pointer move over an otherwise idle overview: no tile hover
         // changes there, so nothing else asks for a frame and the highlight would
@@ -353,8 +379,13 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                 // on that selection would; released anywhere else it is the
                 // user changing their mind, which is a no-op. G12's hold stays
                 // the drag gate -- a click is simply what happens without it.
-                if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index))
+                if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index)) {
+                    if (const auto W = g_search.nav.pendingFocus.lock()) {
+                        closeOnWindow = W;
+                        g_search.nav.pendingFocus.reset();
+                    }
                     close();
+                }
 
                 return;
             }
@@ -380,6 +411,9 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
             // panel's to define.
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
                 if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW) {
+                    g_search.nav.selection         = ROW->index;
+                    g_search.nav.zone              = EOverviewNavZone::Result;
+                    g_search.nav.intent            = ESearchIntent::Hovering;
                     g_search.pointer.drag =
                         SResultDrag{.desktopId = ROW->desktopId, .icon = ROW->icon, .start = lastMousePosLocal, .startedAt = Time::steadyNow(), .index = ROW->index};
                     return;
@@ -719,10 +753,15 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
 
         const auto KEYSYM = getOverviewKeysym(event);
         const auto MODS   = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
+        const bool SHIFT_PRESSED = (MODS & HL_MODIFIER_SHIFT) != 0;
+        const auto BASE_MODS     = MODS & ~HL_MODIFIER_SHIFT;
 
-        if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter || KEYSYM == XKB_KEY_Left || KEYSYM == XKB_KEY_KP_Left || KEYSYM == XKB_KEY_Right ||
+        if ((KEYSYM == XKB_KEY_Left || KEYSYM == XKB_KEY_KP_Left || KEYSYM == XKB_KEY_Right ||
              KEYSYM == XKB_KEY_KP_Right || KEYSYM == XKB_KEY_Up || KEYSYM == XKB_KEY_KP_Up || KEYSYM == XKB_KEY_Down || KEYSYM == XKB_KEY_KP_Down) &&
             MODS != 0)
+            return;
+
+        if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter) && BASE_MODS != 0)
             return;
 
         switch (KEYSYM) {
@@ -740,12 +779,12 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Down:
             case XKB_KEY_KP_Down:
-                if (g_search.nav.zone != EOverviewNavZone::Result) {
-                    g_search.query.active = true;
+                if (g_search.nav.zone != EOverviewNavZone::Result && !g_search.query.text.empty()) {
                     if (!g_search.layout.hits.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
                         g_search.nav.selection         = g_search.layout.hits[0].index;
                         g_search.nav.explicitSelection = true;
+                        g_search.nav.intent            = ESearchIntent::Browsing;
                         damage();
                         break;
                     } else {
@@ -754,6 +793,7 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                             g_search.nav.zone              = EOverviewNavZone::Result;
                             g_search.nav.selection         = 0;
                             g_search.nav.explicitSelection = true;
+                            g_search.nav.intent            = ESearchIntent::Browsing;
                             damage();
                             break;
                         }
@@ -778,11 +818,12 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                             }
                         }
                     }
-                } else {
+                } else if (!g_search.query.text.empty()) {
                     const auto RESULTS = overviewSearchRows();
                     if (!RESULTS.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
                         g_search.nav.explicitSelection = true;
+                        g_search.nav.intent            = ESearchIntent::Browsing;
                         if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
                             g_search.nav.selection = 0;
                     }
@@ -793,16 +834,23 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             }
             case XKB_KEY_Return:
             case XKB_KEY_KP_Enter: {
-                const auto RESULTS = overviewSearchRows();
+                if (!g_search.query.text.empty()) {
+                    const auto RESULTS = overviewSearchRows();
 
-                int launchIdx = -1;
-                if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
-                    launchIdx = g_search.nav.selection;
-                else if (g_search.nav.zone != EOverviewNavZone::Desktop && !RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
-                    launchIdx = 0;
+                    int launchIdx = -1;
+                    if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
+                        launchIdx = g_search.nav.selection;
+                    else if (g_search.nav.zone != EOverviewNavZone::Desktop && !RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
+                        launchIdx = 0;
 
-                if (activateSearchResult(launchIdx))
-                    close();
+                    if (activateSearchResult(launchIdx, SHIFT_PRESSED)) {
+                        if (const auto W = g_search.nav.pendingFocus.lock()) {
+                            closeOnWindow = W;
+                            g_search.nav.pendingFocus.reset();
+                        }
+                        close();
+                    }
+                }
                 break;
             }
             default: return;

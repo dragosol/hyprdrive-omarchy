@@ -1,5 +1,6 @@
 #include "../OmarchySearch.hpp"
 #include <cassert>
+#include <chrono>
 #include <iostream>
 #include <cmath>
 
@@ -88,12 +89,45 @@ int main() {
         CHECK(agyResults.front().name.find("AGY") != std::string::npos || agyResults.front().name.find("Antigravity") != std::string::npos);
         CHECK(agyResults.front().category == "AI Agent");
         CHECK(agyResults.front().actionCommand.find("solve this problem") != std::string::npos);
+
+        auto all = OmarchySearch::promptAllAgents("what is the weather today");
+        CHECK(all.size() >= 4);
+        bool hasGrok = false, hasAgy = false, hasGemini = false, hasClaude = false;
+        for (const auto& it : all) {
+            if (it.name.find("Grok") != std::string::npos) hasGrok = true;
+            if (it.name.find("Antigravity") != std::string::npos || it.name.find("AGY") != std::string::npos) hasAgy = true;
+            if (it.name.find("Gemini") != std::string::npos) hasGemini = true;
+            if (it.name.find("Claude") != std::string::npos) hasClaude = true;
+            CHECK(it.description == "what is the weather today");
+            CHECK(it.actionCommand.find("what is the weather today") != std::string::npos);
+        }
+        CHECK(hasGrok);
+        CHECK(hasAgy);
+        CHECK(hasGemini);
+        CHECK(hasClaude);
+        CHECK(all.front().name.find("Grok") != std::string::npos);
     }
 
-    // 3. Omarchy Menu Actions Search
+    // 3. Omarchy Menu Actions Search — must not fork. The old path ran
+    // system("bash -c when") for every menu row on the first query and froze
+    // the compositor for seconds.
     {
+        const auto t0 = std::chrono::steady_clock::now();
         auto menuResults = OmarchySearch::searchMenu("lock", 5);
-        // "lock" or "theme" or "screenshot" or "sound" should match items if default menu exists
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        CHECK(ms < 250);
+        (void)menuResults;
+
+        const auto t1 = std::chrono::steady_clock::now();
+        auto again = OmarchySearch::searchMenu("firefox", 8);
+        const auto ms2 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
+        CHECK(ms2 < 100);
+        (void)again;
+    }
+
+    // 4. File search is idle until a query is issued
+    {
+        CHECK(!OmarchySearch::fileSearchBusy());
     }
 
     std::cout << "omarchy_search_test: " << s_testsPassed << " checks OK" << std::endl;
