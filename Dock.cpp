@@ -2998,7 +2998,8 @@ bool panelUp();
 }
 
 // One outstanding frame request per monitor. See pumpFrame.
-std::unordered_map<MONITORID, bool> g_pumpPending;
+std::unordered_map<MONITORID, bool>     g_pumpPending;
+std::unordered_map<MONITORID, uint64_t> g_pumpSeqs;
 
 // ASK FOR ANOTHER FRAME. Every animation the dock owns runs on a desktop where
 // nothing else is moving, so nothing else damages the monitor -- and a damage
@@ -3034,11 +3035,18 @@ void pumpFrame(PHLMONITOR monitor) {
         return;
 
     g_pumpPending[monitor->m_id] = true;
-    g_pEventLoopManager->doLater([MONITOR = PHLMONITORREF{monitor}, ID = monitor->m_id] {
-        g_pumpPending.erase(ID);
-        if (MONITOR)
-            g_pHyprRenderer->damageMonitor(MONITOR.lock());
-    });
+    if (g_pEventLoopManager) {
+        if (const auto IT = g_pumpSeqs.find(monitor->m_id); IT != g_pumpSeqs.end() && IT->second) {
+            g_pEventLoopManager->removeDoLater(IT->second);
+            g_pumpSeqs.erase(IT);
+        }
+        g_pumpSeqs[monitor->m_id] = g_pEventLoopManager->doLater([MONITOR = PHLMONITORREF{monitor}, ID = monitor->m_id] {
+            g_pumpPending.erase(ID);
+            g_pumpSeqs.erase(ID);
+            if (MONITOR)
+                g_pHyprRenderer->damageMonitor(MONITOR.lock());
+        });
+    }
 }
 
 // AN OUTPUT THAT IS GONE OWNS NO STATE. The dock keeps three maps keyed by
@@ -3055,6 +3063,12 @@ void forgetMonitor(MONITORID id) {
     g_visualStates.erase(id);
     g_reveal.erase(id);
     g_pumpPending.erase(id);
+    if (g_pEventLoopManager) {
+        if (const auto IT = g_pumpSeqs.find(id); IT != g_pumpSeqs.end() && IT->second) {
+            g_pEventLoopManager->removeDoLater(IT->second);
+            g_pumpSeqs.erase(IT);
+        }
+    }
 }
 
 // IS ANYTHING ON THE DOCK STILL MOVING? The one list, in one place.
@@ -3687,7 +3701,6 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         border.borderSize    = BORDERSIZE;
         border.round         = ROUND;
         border.roundingPower = ROUNDPWR;
-        border.window        = PHLWINDOWREF{WINDOW};
         g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
 
         x += WIDTH + PANEL_CELL_GAP * SCALE;
@@ -3730,12 +3743,19 @@ bool occupiesPointer(PHLMONITOR monitor, const Vector2D& point) {
     return pillContains(monitor, point) || panelContains(point) || menuContains(monitor, point);
 }
 
+static uint64_t g_dockSeatDoLaterSeq = 0;
+
 void syncPointerFocus(PHLMONITOR monitor, const Vector2D& point) {
     if (monitor && occupiesPointer(monitor, point)) {
         g_dockSeatHeld = true;
         stealDockSeat();
         if (g_pEventLoopManager) {
-            g_pEventLoopManager->doLater([] {
+            if (g_dockSeatDoLaterSeq) {
+                g_pEventLoopManager->removeDoLater(g_dockSeatDoLaterSeq);
+                g_dockSeatDoLaterSeq = 0;
+            }
+            g_dockSeatDoLaterSeq = g_pEventLoopManager->doLater([] {
+                g_dockSeatDoLaterSeq = 0;
                 if (g_dockSeatHeld)
                     stealDockSeat();
             });
@@ -3746,6 +3766,18 @@ void syncPointerFocus(PHLMONITOR monitor, const Vector2D& point) {
 }
 
 void releasePointerFocus() {
+    if (g_pEventLoopManager) {
+        if (g_dockSeatDoLaterSeq) {
+            g_pEventLoopManager->removeDoLater(g_dockSeatDoLaterSeq);
+            g_dockSeatDoLaterSeq = 0;
+        }
+        for (auto [id, seq] : g_pumpSeqs) {
+            if (seq)
+                g_pEventLoopManager->removeDoLater(seq);
+        }
+        g_pumpSeqs.clear();
+        g_pumpPending.clear();
+    }
     restoreDockSeat();
 }
 

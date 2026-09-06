@@ -882,12 +882,23 @@ bool CScrollOverview::selectAndClose(const PHLWINDOW& window) {
         }
     }
 
-    if (workspaceIdx >= images.size())
-        return false;
+    if (workspaceIdx >= images.size()) {
+        closeOnWindow = window;
+        for (const auto& overview : scrollOverviews()) {
+            if (overview && overview.get() != this)
+                overview->close();
+        }
+        close();
+        return true;
+    }
 
     if (!selectOverviewWindow(window, workspaceIdx, true))
         return false;
 
+    for (const auto& overview : scrollOverviews()) {
+        if (overview && overview.get() != this)
+            overview->close();
+    }
     close();
     return true;
 }

@@ -239,7 +239,8 @@ struct SFlight {
 // Y4/Y5. ONE FLIGHT PER WINDOW, not one flight: "minimize the whole app" is the
 // default click, and the old single-slot version would teleport two windows of
 // a three-window app on an ordinary gesture.
-std::vector<SFlight> g_flights;
+std::vector<SFlight>  g_flights;
+std::vector<uint64_t> g_flightDoLaterSeqs;
 
 void transition(SFlight& flight, const EFlightPhase to, const char* reason) {
     const auto FROM = flight.phase;
@@ -489,10 +490,13 @@ CBox restoreForFlight(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& i
         // Overview path: proxy machinery, window hidden for the flight (the tile
         // and the proxy share a render pipeline, so that seam is clean).
         lease = CHiddenLease{window, monitor};
-        g_pEventLoopManager->doLater([W = PHLWINDOWREF{window}] {
-            if (const auto WIN = W.lock())
-                warpRestoredWindowAnims(WIN);
-        });
+        if (g_pEventLoopManager) {
+            const uint64_t seq = g_pEventLoopManager->doLater([W = PHLWINDOWREF{window}] {
+                if (const auto WIN = W.lock())
+                    warpRestoredWindowAnims(WIN);
+            });
+            g_flightDoLaterSeqs.push_back(seq);
+        }
         return {};
     }
 
@@ -882,6 +886,14 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
 }
 
 void abortAll(const std::string& reason) {
+    if (g_pEventLoopManager) {
+        for (auto seq : g_flightDoLaterSeqs) {
+            if (seq)
+                g_pEventLoopManager->removeDoLater(seq);
+        }
+    }
+    g_flightDoLaterSeqs.clear();
+
     if (g_flights.empty())
         return;
 

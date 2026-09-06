@@ -107,6 +107,8 @@ void registerScrollOverview(const SP<IOverview>& overview) {
 // happened to reproduce. Same doLater the dock already uses.
 static std::vector<SP<IOverview>> g_dyingOverviews;
 
+static uint64_t g_dyingOverviewsSeq = 0;
+
 void unregisterScrollOverview(IOverview* overview) {
     if (!overview)
         return;
@@ -119,8 +121,14 @@ void unregisterScrollOverview(IOverview* overview) {
     g_lastRegistered = activeScrollOverview();
     emitOverviewState();
 
-    if (!g_dyingOverviews.empty() && g_pEventLoopManager)
-        g_pEventLoopManager->doLater([] { g_dyingOverviews.clear(); });
+    if (!g_dyingOverviews.empty() && g_pEventLoopManager) {
+        if (g_dyingOverviewsSeq)
+            g_pEventLoopManager->removeDoLater(g_dyingOverviewsSeq);
+        g_dyingOverviewsSeq = g_pEventLoopManager->doLater([] {
+            g_dyingOverviewsSeq = 0;
+            g_dyingOverviews.clear();
+        });
+    }
 }
 
 // P0. See the declaration in IOverview.hpp for the defect. The teardown goes
@@ -161,6 +169,11 @@ void dropScrollOverviewsForMonitor(PHLMONITOR monitor) {
 }
 
 void clearScrollOverviews() {
+    if (g_dyingOverviewsSeq && g_pEventLoopManager) {
+        g_pEventLoopManager->removeDoLater(g_dyingOverviewsSeq);
+        g_dyingOverviewsSeq = 0;
+    }
+    g_dyingOverviews.clear();
     auto overviews = std::move(g_scrollOverviews);
     g_scrollOverviews.clear();
     g_lastRegistered.reset();

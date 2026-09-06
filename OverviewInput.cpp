@@ -834,22 +834,39 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             }
             case XKB_KEY_Return:
             case XKB_KEY_KP_Enter: {
-                if (!g_search.query.text.empty()) {
+                if (!g_search.query.text.empty() && g_search.nav.zone != EOverviewNavZone::Tile && g_search.nav.zone != EOverviewNavZone::Desktop) {
                     const auto RESULTS = overviewSearchRows();
 
                     int launchIdx = -1;
                     if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
                         launchIdx = g_search.nav.selection;
-                    else if (g_search.nav.zone != EOverviewNavZone::Desktop && !RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
+                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
                         launchIdx = 0;
 
-                    if (activateSearchResult(launchIdx, SHIFT_PRESSED)) {
+                    if (launchIdx >= 0 && activateSearchResult(launchIdx, SHIFT_PRESSED)) {
                         if (const auto W = g_search.nav.pendingFocus.lock()) {
                             closeOnWindow = W;
                             g_search.nav.pendingFocus.reset();
                         }
+                        for (const auto& overview : scrollOverviews()) {
+                            if (overview && overview.get() != this)
+                                overview->close();
+                        }
                         close();
+                        break;
                     }
+                    if (g_search.nav.zone == EOverviewNavZone::Result)
+                        break;
+                }
+
+                if (const auto TARGET = closeOnWindow.lock()) {
+                    selectAndClose(TARGET);
+                } else {
+                    for (const auto& overview : scrollOverviews()) {
+                        if (overview && overview.get() != this)
+                            overview->close();
+                    }
+                    close();
                 }
                 break;
             }
