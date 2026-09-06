@@ -1181,8 +1181,11 @@ void updateAutohide(PHLMONITOR monitor) {
     // timer. Keep `from` at the current fraction so a later handoff (overview
     // gone) continues from wherever the swipe or scale animation left the pill.
     if (const auto OV = scrollOverviewForMonitor(monitor); OV && Config::getValue<bool>(KEY_AUTOHIDE)) {
-        R.from      = 1.F - OV->openProgress();
-        R.shown     = true;
+        R.from = 1.F - OV->openProgress();
+        // Visual is driven by openProgress while the overview exists. Pinning
+        // shown=true here made a gesture close hand off as "hidden, but going
+        // visible", so the pill bounced up once then autohide hid it again.
+        R.shown     = false;
         R.changedAt = Time::steadyNow();
         R.pending   = false;
         R.pressure  = 0.F;
@@ -3675,8 +3678,6 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     const auto  MOUSE      = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
     const int   BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
     const auto  ACCENT     = ScrollOverview::Config::highlightColor();
-    const auto  INACTIVE   = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
-    const int   ROUND      = sc<int>(std::round(ScrollOverview::Config::themeRounding() * SCALE));
     const float ROUNDPWR   = ScrollOverview::Config::themeRoundingPower();
 
     float x = sc<float>(DRAWN.x) + PAD;
@@ -3687,17 +3688,16 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false);
         g_hover.cells.emplace_back(cell, PHLWINDOWREF{WINDOW});
 
+        // Theme inactive_border is often fully transparent (Omarchy border_size
+        // 0), which is why Gemini's ring was queued and still invisible. Same
+        // accent the pill uses, thinner when the cell is not hovered.
         const bool IS_HOVERED = !g_hover.panel->out && cell.containsPoint(MOUSE);
+        const int  ROUND      = std::clamp(sc<int>(std::round(ScrollOverview::Config::themeRounding() * SCALE)), 0,
+                                           std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
         CBorderPassElement::SBorderData border;
-        border.box           = cell.copy().round();
-        if (IS_HOVERED) {
-            border.grad1.reset(ACCENT.modifyA(ALPHA));
-        } else if (!INACTIVE.m_colors.empty()) {
-            border.grad1 = INACTIVE;
-        } else {
-            border.grad1 = WINDOW->m_realBorderColor;
-        }
-        border.a             = ALPHA;
+        border.box = cell.copy().round();
+        border.grad1.reset(ACCENT.modifyA(IS_HOVERED ? ALPHA : ALPHA * 0.55F));
+        border.a             = 1.F;
         border.borderSize    = BORDERSIZE;
         border.round         = ROUND;
         border.roundingPower = ROUNDPWR;

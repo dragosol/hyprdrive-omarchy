@@ -1,6 +1,7 @@
 #pragma once
 #include "globals.hpp"
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
+#include <hyprland/src/render/pass/Pass.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
 
 class COverviewBlurPassElement : public IPassElement {
@@ -113,6 +114,41 @@ class COverviewShadowPassElement : public IPassElement {
 
     const char*                   passName() override {
         return "COverviewShadowPassElement";
+    }
+
+  private:
+    SData data;
+};
+
+// Dock hover thumbnails at RENDER_POST_WINDOWS share Hyprland's pass. A second
+// CSurfacePassElement for the same window keeps the REAL bounding box (scale is
+// a draw-time hint), so pass simplify treats it as occluding the desktop copy
+// and the live window vanishes. This wrapper's box is the cell, it does not
+// occlude, and it draws the nested pass only when the real window is already on
+// the framebuffer.
+class CDockLivePreviewPassElement : public IPassElement {
+  public:
+    struct SData {
+        UP<Render::CRenderPass> pass;
+        CBox                    box;
+    };
+
+    CDockLivePreviewPassElement(SData&& data_);
+    ~CDockLivePreviewPassElement() override = default;
+
+    std::vector<UP<IPassElement>> draw() override;
+    ePassElementType              type() override {
+        return EK_CUSTOM;
+    }
+    bool                          needsLiveBlur() override;
+    bool                          needsPrecomputeBlur() override;
+    std::optional<CBox>           boundingBox() override;
+    CRegion                       opaqueRegion() override;
+    bool                          disableSimplification() override;
+    bool                          undiscardable() override;
+
+    const char*                   passName() override {
+        return "CDockLivePreviewPassElement";
     }
 
   private:

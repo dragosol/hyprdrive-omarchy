@@ -2960,6 +2960,8 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
         case EOverviewNavZone::Desktop:
             g_search.nav.zone      = EOverviewNavZone::Desktop;
             g_search.nav.selection = -1;
+            g_search.nav.keyboardTile = false;
+            TileChrome::setHovered(PHLWINDOW{}, false);
             if (const auto WORKSPACE = images[sc<size_t>(best->index)]->pWorkspace; WORKSPACE)
                 focusOverviewWorkspace(WORKSPACE, sc<size_t>(best->index));
             break;
@@ -2968,18 +2970,23 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             g_search.nav.selection         = best->index;
             g_search.nav.explicitSelection = true;
             g_search.nav.intent            = ESearchIntent::Browsing;
+            g_search.nav.keyboardTile      = false;
+            TileChrome::setHovered(PHLWINDOW{}, false);
             break;
         case EOverviewNavZone::Tile:
             g_search.nav.zone         = EOverviewNavZone::Tile;
             g_search.nav.selection    = -1;
             closeOnWindow             = best->window;
             g_search.nav.keyboardTile = true;
+            TileChrome::setHovered(best->window, false);
             break;
         case EOverviewNavZone::Search:
             g_search.nav.zone              = EOverviewNavZone::Search;
             g_search.nav.selection         = -1;
             g_search.nav.explicitSelection = false;
             g_search.nav.intent            = ESearchIntent::Typing;
+            g_search.nav.keyboardTile      = false;
+            TileChrome::setHovered(PHLWINDOW{}, false);
             break;
     }
 

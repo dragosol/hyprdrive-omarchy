@@ -211,7 +211,7 @@ static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITO
     if (rounding <= 0)
         return;
 
-    auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
+    auto& passElements = g_pHyprRenderer->currentPass().m_passElements;
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         const auto& passElement = passElements[i];
         if (!passElement.element)
@@ -929,45 +929,62 @@ void renderOverviewWindow(const SRenderParams& params) {
         modif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, S);
         modif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, Vector2D{OFFX, OFFY});
 
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
+        auto queuePreview = [&]() {
+            g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
 
-        // Z1. renderWindow draws at the window's position PLUS its workspace's
-        // m_renderOffset, but the transform above is computed from the position
-        // alone -- so a window whose workspace is parked off-screen was drawn a
-        // whole monitor away from the cell and clipped to nothing. The offset is
-        // zero until a workspace has been switched away from with an animation,
-        // which is why the preview worked until the user swapped desktops and
-        // then never again. The overview path below already neutralizes it; this
-        // is the same neutralization, restored the same way.
-        const auto     PREVIEWWS      = WINDOW->m_workspace;
-        const bool     OVERRIDEOFFSET = PREVIEWWS && !WINDOW->m_pinned;
-        const Vector2D PREVIOUSOFFSET = OVERRIDEOFFSET ? PREVIEWWS->m_renderOffset->value() : Vector2D{};
-        if (OVERRIDEOFFSET)
-            PREVIEWWS->m_renderOffset->value() = {};
-        auto restorePreviewOffset = Hyprutils::Utils::CScopeGuard([&] {
-            if (OVERRIDEOFFSET && PREVIEWWS)
-                PREVIEWWS->m_renderOffset->value() = PREVIOUSOFFSET;
-        });
+            // Z1. renderWindow draws at the window's position PLUS its workspace's
+            // m_renderOffset, but the transform above is computed from the position
+            // alone -- so a window whose workspace is parked off-screen was drawn a
+            // whole monitor away from the cell and clipped to nothing. The offset is
+            // zero until a workspace has been switched away from with an animation,
+            // which is why the preview worked until the user swapped desktops and
+            // then never again. The overview path below already neutralizes it; this
+            // is the same neutralization, restored the same way.
+            const auto     PREVIEWWS      = WINDOW->m_workspace;
+            const bool     OVERRIDEOFFSET = PREVIEWWS && !WINDOW->m_pinned;
+            const Vector2D PREVIOUSOFFSET = OVERRIDEOFFSET ? PREVIEWWS->m_renderOffset->value() : Vector2D{};
+            if (OVERRIDEOFFSET)
+                PREVIEWWS->m_renderOffset->value() = {};
+            auto restorePreviewOffset = Hyprutils::Utils::CScopeGuard([&] {
+                if (OVERRIDEOFFSET && PREVIEWWS)
+                    PREVIEWWS->m_renderOffset->value() = PREVIOUSOFFSET;
+            });
 
-        const size_t firstElement = g_pHyprRenderer->m_renderPass.m_passElements.size();
-        // standalone: no decorate path side effects; content only. Rounding is
-        // forced below so the cell still reads as a rounded thumbnail.
-        g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, false, true);
-        roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement);
-        // Clip every surface of this window to the preview cell so nothing bleeds.
-        {
-            auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
+            auto&            passElements = g_pHyprRenderer->currentPass().m_passElements;
+            const size_t     firstElement = passElements.size();
+            // standalone: no decorate path side effects; content only. Rounding is
+            // forced below so the cell still reads as a rounded thumbnail.
+            g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, false, true);
+            roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement);
+            // Clip every surface of this window to the preview cell so nothing bleeds.
             for (size_t i = firstElement; i < passElements.size(); ++i) {
                 auto* surface = dc<CSurfacePassElement*>(passElements[i].element.get());
                 if (!surface || surface->m_data.pWindow != WINDOW)
                     continue;
                 surface->m_data.clipBox = params.windowBox;
             }
+
+            g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+        };
+
+        if (params.ownsRenderPass) {
+            queuePreview();
+            OverviewRender::flushPass(MONITOR);
+            return;
         }
 
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
-        if (params.ownsRenderPass)
-            OverviewRender::flushPass(MONITOR);
+        // Hover previews share Hyprland's POST_WINDOWS pass. Queuing a second
+        // copy of an on-desktop window there lets pass simplify drop the real
+        // draw (same untransformed box) so the window vanishes while hovered.
+        auto nested = makeUnique<Render::CRenderPass>();
+        {
+            auto restorePass = g_pHyprRenderer->redirectPass(nested.get());
+            queuePreview();
+        }
+        g_pHyprRenderer->addPassElement(makeUnique<CDockLivePreviewPassElement>(CDockLivePreviewPassElement::SData{
+            .pass = std::move(nested),
+            .box  = params.windowBox,
+        }));
         return;
     }
 

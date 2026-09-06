@@ -346,3 +346,57 @@ std::optional<CBox> COverviewShadowPassElement::boundingBox() {
 CRegion COverviewShadowPassElement::opaqueRegion() {
     return {};
 }
+
+CDockLivePreviewPassElement::CDockLivePreviewPassElement(SData&& data_) : data(std::move(data_)) {
+    ;
+}
+
+std::vector<UP<IPassElement>> CDockLivePreviewPassElement::draw() {
+    if (!data.pass)
+        return {};
+
+    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!MONITOR)
+        return {};
+
+    const auto SAVEDCLIP  = g_pHyprRenderer->m_renderData.clipBox;
+    const auto SAVEDMODIF = g_pHyprRenderer->m_renderData.renderModif;
+    auto       restore    = Hyprutils::Utils::CScopeGuard([SAVEDCLIP, SAVEDMODIF] {
+        g_pHyprRenderer->m_renderData.clipBox     = SAVEDCLIP;
+        g_pHyprRenderer->m_renderData.renderModif = SAVEDMODIF;
+    });
+
+    if (data.box.width >= 1 && data.box.height >= 1)
+        g_pHyprRenderer->m_renderData.clipBox = data.box;
+
+    data.pass->render(CRegion{CBox{{}, MONITOR->m_transformedSize}});
+    return {};
+}
+
+bool CDockLivePreviewPassElement::needsLiveBlur() {
+    return false;
+}
+
+bool CDockLivePreviewPassElement::needsPrecomputeBlur() {
+    return false;
+}
+
+std::optional<CBox> CDockLivePreviewPassElement::boundingBox() {
+    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!MONITOR)
+        return std::nullopt;
+
+    return data.box.copy().scale(1.F / MONITOR->m_scale).round();
+}
+
+CRegion CDockLivePreviewPassElement::opaqueRegion() {
+    return {};
+}
+
+bool CDockLivePreviewPassElement::disableSimplification() {
+    return true;
+}
+
+bool CDockLivePreviewPassElement::undiscardable() {
+    return true;
+}

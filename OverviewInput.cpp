@@ -818,14 +818,17 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                             }
                         }
                     }
+                    TileChrome::setHovered(closeOnWindow.lock(), false);
                 } else if (!g_search.query.text.empty()) {
                     const auto RESULTS = overviewSearchRows();
                     if (!RESULTS.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
                         g_search.nav.explicitSelection = true;
                         g_search.nav.intent            = ESearchIntent::Browsing;
+                        g_search.nav.keyboardTile      = false;
                         if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
                             g_search.nav.selection = 0;
+                        TileChrome::setHovered(PHLWINDOW{}, false);
                     }
                 }
 
