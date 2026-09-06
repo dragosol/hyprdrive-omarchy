@@ -826,13 +826,6 @@ void forcePreviewVisible(const PHLWINDOW& window) {
         WORKSPACE->m_alpha->setValueAndWarp(1.F);
         *WORKSPACE->m_alpha = 1.F;
     }
-
-    window->wlSurface()->resource()->breadthfirst(
-        [](SP<CWLSurfaceResource> surface, const Vector2D&, void*) {
-            if (const auto HLSURFACE = Desktop::View::CWLSurface::fromResource(surface); HLSURFACE)
-                HLSURFACE->m_visibleRegion = {};
-        },
-        nullptr);
 }
 
 // The whole difference between a live preview and a stale one. A client draws
@@ -3665,13 +3658,37 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     g_hover.cells.clear();
     g_hover.cells.reserve(windows.size());
 
+    const auto  MOUSE      = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
+    const int   BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+    const auto  ACCENT     = ScrollOverview::Config::highlightColor();
+    const auto  INACTIVE   = ScrollOverview::Config::getValue<::Config::CGradientValueData>("general:col.inactive_border");
+    const int   ROUND      = sc<int>(std::round(ScrollOverview::Config::themeRounding() * SCALE));
+    const float ROUNDPWR   = ScrollOverview::Config::themeRoundingPower();
+
     float x = sc<float>(DRAWN.x) + PAD;
     for (const auto& WINDOW : windows) {
         const float WIDTH = AVAIL * previewAspect(WINDOW) / std::max(sum, 0.01F);
 
         CBox cell{std::round(x), std::round(sc<float>(DRAWN.y) + PAD), std::round(WIDTH), std::round(CELLH)};
-        renderLivePreview(monitor, WINDOW, cell, now);
+        renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false);
         g_hover.cells.emplace_back(cell, PHLWINDOWREF{WINDOW});
+
+        const bool IS_HOVERED = !g_hover.panel->out && cell.containsPoint(MOUSE);
+        CBorderPassElement::SBorderData border;
+        border.box           = cell.copy().round();
+        if (IS_HOVERED) {
+            border.grad1.reset(ACCENT.modifyA(ALPHA));
+        } else if (!INACTIVE.m_colors.empty()) {
+            border.grad1 = INACTIVE;
+        } else {
+            border.grad1 = WINDOW->m_realBorderColor;
+        }
+        border.a             = ALPHA;
+        border.borderSize    = BORDERSIZE;
+        border.round         = ROUND;
+        border.roundingPower = ROUNDPWR;
+        border.window        = PHLWINDOWREF{WINDOW};
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
 
         x += WIDTH + PANEL_CELL_GAP * SCALE;
     }

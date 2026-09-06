@@ -1,4 +1,5 @@
 #include "../OmarchySearch.hpp"
+#include "../SearchIntent.hpp"
 #include <cassert>
 #include <chrono>
 #include <iostream>
@@ -128,6 +129,21 @@ int main() {
     // 4. File search is idle until a query is issued
     {
         CHECK(!OmarchySearch::fileSearchBusy());
+    }
+
+    // 5. Space handling: typing intent must never trigger Quick Look
+    {
+        // While typing, space is always a space character
+        CHECK(!overviewSpacePreviews(ESearchIntent::Typing, true, true, true));
+        CHECK(!overviewSpacePreviews(ESearchIntent::Typing, false, false, false));
+        // While browsing, auto-selected file must not swallow space
+        CHECK(!overviewSpacePreviews(ESearchIntent::Browsing, true, true, false));
+        // Explicitly selected file can trigger preview with space
+        CHECK(overviewSpacePreviews(ESearchIntent::Browsing, false, true, true));
+        CHECK(!overviewSpacePreviews(ESearchIntent::Browsing, false, false, true));
+        // Hovering a previewable file triggers preview
+        CHECK(overviewSpacePreviews(ESearchIntent::Hovering, true, false, false));
+        CHECK(!overviewSpacePreviews(ESearchIntent::Hovering, false, true, true));
     }
 
     std::cout << "omarchy_search_test: " << s_testsPassed << " checks OK" << std::endl;

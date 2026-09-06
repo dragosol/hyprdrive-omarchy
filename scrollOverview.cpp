@@ -4879,7 +4879,7 @@ bool overviewHandleSearchSpace() {
     const auto RESULTS = overviewSearchRows();
     const std::string* HOVER = searchPreviewPath(RESULTS, g_search.nav.hoverIndex);
     const std::string* SEL   = searchPreviewPath(RESULTS, g_search.nav.selection);
-    if (!overviewSpacePreviews(g_search.nav.intent, HOVER != nullptr, SEL != nullptr)) {
+    if (!overviewSpacePreviews(g_search.nav.intent, HOVER != nullptr, SEL != nullptr, g_search.nav.explicitSelection)) {
         if (OmarchySearch::isSushiActive())
             OmarchySearch::closeSushi();
         return false;

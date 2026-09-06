@@ -50,29 +50,7 @@ enum class EOverviewNavZone : uint8_t {
     Search,
 };
 
-// What SPACE means this keystroke. Typing a query and Quick Look share one
-// key, so the last deliberate act decides:
-//   Typing    -- last key was a query edit, or the pointer is back on the pill.
-//                SPACE is a character. Auto-selecting the first app is NOT this
-//                flipping to Browsing: Enter launches, SPACE still types.
-//   Browsing  -- arrows / Tab landed on a result. SPACE Quick Looks a file.
-//   Hovering  -- the pointer actually moved onto a result row. SPACE Quick
-//                Looks that row's file, even if the query is still focused.
-enum class ESearchIntent : uint8_t {
-    Typing = 0,
-    Browsing,
-    Hovering,
-};
-
-// SPACE is Quick Look only when the user has pointed at a previewable file
-// (hover or keyboard), not merely because a result is auto-selected.
-inline bool overviewSpacePreviews(ESearchIntent intent, bool hoverCanPreview, bool selectionCanPreview) {
-    if (intent == ESearchIntent::Hovering)
-        return hoverCanPreview;
-    if (intent == ESearchIntent::Browsing || selectionCanPreview)
-        return selectionCanPreview;
-    return false;
-}
+#include "SearchIntent.hpp"
 
 // X10: the search row above the strip. ponytail: constant 64 logical px
 // (48px pill + 8px margins); make it a config knob if anyone ever asks.

@@ -966,7 +966,8 @@ void renderOverviewWindow(const SRenderParams& params) {
         }
 
         g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
-        OverviewRender::flushPass(MONITOR);
+        if (params.ownsRenderPass)
+            OverviewRender::flushPass(MONITOR);
         return;
     }
 
