@@ -14,7 +14,6 @@
 #include "Config.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
-#include <hyprgraphics/resource/resources/TextResource.hpp>
 #include "globals.hpp"
 #include <string>
 #include <unordered_map>
@@ -259,38 +258,7 @@ SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color
     if (str.empty() || maxW < 8 || maxH < 8)
         return nullptr;
 
-    const int W = std::max(16, ((maxW + 15) / 16) * 16);
-    const std::string FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
-    const STextKey    KEY{.str        = str,
-                          .fontFamily = FAMILY,
-                          .color      = color.getAsHex(),
-                          .fontSize   = fontSize,
-                          .maxWidth   = W,
-                          .maxHeight  = maxH,
-                          .weight     = weight,
-                          .italic     = italic,
-                          .wrap       = true};
-
-    if (const auto IT = g_textCache.find(KEY); IT != g_textCache.end())
-        return IT->second;
-
-    if (g_textCache.size() >= TEXT_CACHE_MAX)
-        g_textCache.clear();
-
-    Hyprgraphics::CTextResource::STextResourceData data;
-    data.text      = str;
-    data.font      = FAMILY;
-    data.fontSize  = sc<size_t>(std::max(1, fontSize));
-    data.color     = Hyprgraphics::CColor{Hyprgraphics::CColor::SSRGB{color.r, color.g, color.b}};
-    data.maxSize   = Vector2D{sc<double>(W), sc<double>(maxH)};
-    data.ellipsize = true;
-    data.wrap      = true;
-    (void)italic;
-    (void)weight;
-
-    auto texture = g_pHyprRenderer->renderText(std::move(data));
-    g_textCache.emplace(KEY, texture);
-    return texture;
+    return text(str, color, fontSize, italic, fontFamily, maxW, weight);
 }
 
 void clearTextCache() {
