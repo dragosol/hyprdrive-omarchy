@@ -106,6 +106,12 @@ class IOverview : public IOverviewFramePolicy, public IOverviewGeometry {
     virtual void resetSwipe()                = 0;
     virtual void onSwipeUpdate(double delta) = 0;
     virtual void onSwipeEnd()                = 0;
+    // 3-finger workspace swipe while the overview is open: cards follow the
+    // fingers, then settle onto the nearest desktop. Outside overview this is
+    // Hyprland's native workspace swipe.
+    virtual void onWorkspaceSwipeBegin()           = 0;
+    virtual void onWorkspaceSwipeUpdate(double delta) = 0;
+    virtual void onWorkspaceSwipeEnd()             = 0;
 
     // 0 at the desktop, 1 when the overview is fully open. The 3-finger
     // swipe warps this every update; Super-tap animates it. The dock's

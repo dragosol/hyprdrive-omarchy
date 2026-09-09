@@ -79,7 +79,7 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // G12. The hold has to pass BEFORE the distance is even looked at.
         if (g_search.pointer.drag && !g_search.pointer.drag->desktopId.empty()) {
             if (!g_search.pointer.drag->live) {
-                const float HELDMS = ScrollOverview::Config::animElapsedMs(g_search.pointer.drag->startedAt);
+                const float HELDMS = ScrollOverview::Config::realElapsedMs(g_search.pointer.drag->startedAt);
                 if (HELDMS >= G12_HOLD_MS && g_search.pointer.drag->start.distanceSq(lastMousePosLocal) > DRAGTHRESHOLDSQ)
                     g_search.pointer.drag->live = true;
             }
@@ -779,7 +779,7 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Down:
             case XKB_KEY_KP_Down:
-                if (g_search.nav.zone != EOverviewNavZone::Result && !g_search.query.text.empty()) {
+                if (g_search.nav.zone != EOverviewNavZone::Result && (!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack())) {
                     if (!g_search.layout.hits.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
                         g_search.nav.selection         = g_search.layout.hits[0].index;
@@ -819,7 +819,7 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                         }
                     }
                     TileChrome::setHovered(closeOnWindow.lock(), false);
-                } else if (!g_search.query.text.empty()) {
+                } else if (!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) {
                     const auto RESULTS = overviewSearchRows();
                     if (!RESULTS.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
@@ -837,13 +837,14 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             }
             case XKB_KEY_Return:
             case XKB_KEY_KP_Enter: {
-                if (!g_search.query.text.empty() && g_search.nav.zone != EOverviewNavZone::Tile && g_search.nav.zone != EOverviewNavZone::Desktop) {
+                if ((!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) && g_search.nav.zone != EOverviewNavZone::Tile &&
+                    g_search.nav.zone != EOverviewNavZone::Desktop) {
                     const auto RESULTS = overviewSearchRows();
 
                     int launchIdx = -1;
                     if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
                         launchIdx = g_search.nav.selection;
-                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search))
+                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search || OmarchySearch::canNavigateMenuBack()))
                         launchIdx = 0;
 
                     if (launchIdx >= 0 && activateSearchResult(launchIdx, SHIFT_PRESSED)) {
@@ -858,8 +859,10 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                         close();
                         break;
                     }
-                    if (g_search.nav.zone == EOverviewNavZone::Result)
+                    if (g_search.nav.zone == EOverviewNavZone::Result) {
+                        damage();
                         break;
+                    }
                 }
 
                 if (const auto TARGET = closeOnWindow.lock()) {

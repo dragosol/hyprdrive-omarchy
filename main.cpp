@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <expected>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <hyprland/src/Compositor.hpp>
@@ -19,6 +21,7 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
 #include <xkbcommon/xkbcommon.h>
@@ -27,6 +30,15 @@
 #include <sys/eventfd.h>
 #include <hyprland/src/managers/input/trackpad/GestureTypes.hpp>
 #include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/CloseGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/CursorZoomGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/DispatcherGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/FloatGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/FullscreenGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/MoveGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/ResizeGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/SpecialWorkspaceGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/WorkspaceSwipeGesture.hpp>
 
 #include <hyprutils/string/ConstVarList.hpp>
 using namespace Hyprutils::String;
@@ -609,6 +621,8 @@ static void afterQueryEdit() {
     // this costs the keystroke nothing; results land over the next frames.
     SearchProviders::query(g_search.query.text);
     OmarchySearch::query(g_search.query.text);
+    if (!g_search.query.text.empty())
+        OmarchySearch::resetMenuRoute();
     if (OmarchySearch::isSushiActive())
         OmarchySearch::closeSushi();
 
@@ -820,6 +834,7 @@ static CHyprSignalListener g_pDockClickHook;
 static CHyprSignalListener g_pDockScrollHook;
 static CHyprSignalListener g_pDockRenderHook;
 static CHyprSignalListener g_pMonitorGoneHook;
+static CHyprSignalListener g_pClickPreReloadHook;
 static bool                g_tapSuperCandidate = false;
 static uint32_t            g_tapSuperPressedAt = 0;
 
@@ -1017,41 +1032,116 @@ static void* findFnOrThrow(const std::string& name, std::initializer_list<std::s
     return matches[0].address;
 }
 
-// shared core: register / unregister the overview trackpad gesture. used by both the hyprlang
-// keyword and the Lua `hyprdrive.gesture` function so both configure the same gesture system.
-static std::expected<void, std::string> applyOverviewGesture(size_t fingerCount, eTrackpadGestureDirection direction, const std::string& action, uint32_t modMask,
-                                                             float deltaScale, bool disableInhibit) {
+// Register / unregister a trackpad gesture. Used by the hyprlang keyword, the
+// Lua `hyprdrive.gesture` function, and the `hyprdrive:gesture` dispatcher.
+static std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount, eTrackpadGestureDirection direction, const std::string& action, uint32_t modMask, float deltaScale,
+                                                             bool disableInhibit, const std::string& arg) {
     if (fingerCount <= 1 || fingerCount >= 10)
         return std::unexpected(std::format("Invalid value {} for finger count", fingerCount));
 
     if (direction == TRACKPAD_GESTURE_DIR_NONE)
         return std::unexpected("Invalid direction");
 
-    if (action == "overview")
-        return g_pTrackpadGestures->addGesture(makeUnique<COverviewGesture>(direction), fingerCount, direction, modMask, deltaScale, disableInhibit);
+    const auto add = [&](UP<ITrackpadGesture>&& gesture) {
+        return g_pTrackpadGestures->addGesture(std::move(gesture), fingerCount, direction, modMask, deltaScale, disableInhibit);
+    };
 
     if (action == "unset")
         return g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+
+    if (action == "overview")
+        return add(makeUnique<COverviewGesture>(direction));
+
+    if (action == "workspace")
+        return add(makeUnique<COverviewWorkspaceGesture>());
+
+    if (action == "close")
+        return add(makeUnique<CCloseTrackpadGesture>());
+
+    if (action == "fullscreen" || action == "maximize")
+        return add(makeUnique<CFullscreenTrackpadGesture>(action == "maximize" ? "maximize" : (arg.empty() ? "fullscreen" : arg)));
+
+    if (action == "float" || action == "tile")
+        return add(makeUnique<CFloatTrackpadGesture>(action == "tile" ? "tile" : (arg.empty() ? "toggle" : arg)));
+
+    if (action == "move")
+        return add(makeUnique<CMoveTrackpadGesture>());
+
+    if (action == "resize")
+        return add(makeUnique<CResizeTrackpadGesture>());
+
+    if (action == "special")
+        return add(makeUnique<CSpecialWorkspaceGesture>(arg.empty() ? "special" : arg));
+
+    if (action == "zoom") {
+        std::string level = "2";
+        std::string mode  = arg.empty() ? "live" : arg;
+        if (const auto SP = mode.find(' '); SP != std::string::npos) {
+            level = mode.substr(0, SP);
+            mode  = mode.substr(SP + 1);
+        } else if (mode != "live" && mode != "toggle" && mode != "mult") {
+            level = mode;
+            mode  = "live";
+        }
+        return add(makeUnique<CCursorZoomTrackpadGesture>(level, mode));
+    }
+
+    if (action == "dispatcher" || action == "dispatch") {
+        if (arg.empty())
+            return std::unexpected("dispatcher gesture needs an arg, e.g. exec,notify-send hi");
+        std::string dispatcher = arg;
+        std::string data;
+        const auto  SEP = arg.find_first_of(", ");
+        if (SEP != std::string::npos) {
+            dispatcher = arg.substr(0, SEP);
+            data       = arg.substr(SEP + 1);
+            while (!data.empty() && (data.front() == ' ' || data.front() == ','))
+                data.erase(data.begin());
+        }
+        return add(makeUnique<CDispatcherTrackpadGesture>(dispatcher, data));
+    }
+
+    if (action == "keys" || action == "key" || action == "shortcut" || action == "chord") {
+        if (arg.empty())
+            return std::unexpected("keys gesture needs a chord, e.g. CTRL+T or Print");
+        return add(makeUnique<CKeysTrackpadGesture>(arg));
+    }
 
     return std::unexpected(std::format("Invalid gesture: {}", action));
 }
 
 // Lua-facing registrar (hyprdrive.gesture). takes the direction/mods as strings and resolves
-// them the same way the keyword does, then defers to applyOverviewGesture.
+// them the same way the keyword does, then defers to applyTrackpadGesture.
 static SDispatchResult onRegisterOverviewGesture(size_t fingerCount, const std::string& directionStr, const std::string& action, const std::string& mods, float deltaScale,
-                                                 bool disableInhibit) {
+                                                 bool disableInhibit, const std::string& arg) {
     if (g_unloading)
         return {};
 
-    const auto direction = g_pTrackpadGestures->dirForString(directionStr);
+    std::string directionNorm = directionStr;
+    if (directionNorm == "pinch_in" || directionNorm == "pinch-in")
+        directionNorm = "pinchin";
+    else if (directionNorm == "pinch_out" || directionNorm == "pinch-out")
+        directionNorm = "pinchout";
+
+    uint32_t clickMods = 0;
+    if (!mods.empty() && g_pKeybindManager)
+        clickMods = g_pKeybindManager->stringToModMask(mods);
+
+    if (directionNorm == "click" || directionNorm == "tap") {
+        if (action == "unset")
+            removeClickGesture(fingerCount, clickMods);
+        else
+            addClickGesture(fingerCount, action, clickMods, disableInhibit, arg);
+        return {};
+    }
+
+    const auto direction = g_pTrackpadGestures->dirForString(directionNorm);
     if (direction == TRACKPAD_GESTURE_DIR_NONE)
         return {.success = false, .error = std::format("Invalid direction: {}", directionStr)};
 
-    uint32_t modMask = 0;
-    if (!mods.empty() && g_pKeybindManager)
-        modMask = g_pKeybindManager->stringToModMask(mods);
+    const uint32_t modMask = clickMods;
 
-    const auto res = applyOverviewGesture(fingerCount, direction, action, modMask, std::clamp(deltaScale, 0.1F, 10.F), disableInhibit);
+    const auto res = applyTrackpadGesture(fingerCount, direction, action, modMask, std::clamp(deltaScale, 0.1F, 10.F), disableInhibit, arg);
     if (!res)
         return {.success = false, .error = res.error()};
 
@@ -1075,9 +1165,11 @@ static Hyprlang::CParseResult overviewGestureKeyword(const char* LHS, const char
         return result;
     }
 
-    const auto direction = g_pTrackpadGestures->dirForString(data[1]);
+    const std::string DIRSTR = std::string{data[1]};
+    const bool        ISCLICK = DIRSTR == "click" || DIRSTR == "tap";
+    const auto direction = ISCLICK ? TRACKPAD_GESTURE_DIR_NONE : g_pTrackpadGestures->dirForString(data[1]);
 
-    if (direction == TRACKPAD_GESTURE_DIR_NONE) {
+    if (!ISCLICK && direction == TRACKPAD_GESTURE_DIR_NONE) {
         result.setError(std::format("Invalid direction: {}", data[1]).c_str());
         return result;
     }
@@ -1111,12 +1203,109 @@ static Hyprlang::CParseResult overviewGestureKeyword(const char* LHS, const char
         break;
     }
 
-    const auto resultFromGesture = applyOverviewGesture(fingerCount, direction, std::string{data[startDataIdx]}, modMask, deltaScale, disableInhibit);
+    const std::string ACTION = std::string{data[startDataIdx]};
+    std::string       ARG;
+    for (int i = startDataIdx + 1; !data[i].empty(); ++i) {
+        if (!ARG.empty())
+            ARG += ",";
+        ARG += std::string{data[i]};
+    }
+
+    if (ISCLICK) {
+        if (ACTION == "unset")
+            removeClickGesture(fingerCount, modMask);
+        else
+            addClickGesture(fingerCount, ACTION, modMask, disableInhibit, ARG);
+        return result;
+    }
+
+    const auto resultFromGesture = applyTrackpadGesture(fingerCount, direction, ACTION, modMask, deltaScale, disableInhibit, ARG);
 
     if (!resultFromGesture)
         result.setError(resultFromGesture.error().c_str());
 
     return result;
+}
+
+static SDispatchResult onGestureDispatcher(std::string arg) {
+    CConstVarList data(arg, 0, 's', true);
+    const std::string CMD = std::string{data[0]};
+    if (CMD.empty() || CMD == "help") {
+        return {.success = false,
+                .error   = "hyprdrive:gesture add|remove <fingers> <direction> <action> [arg] [mod:KEYS] [scale:N] [disable_inhibit]"};
+    }
+
+    const bool REMOVE = CMD == "remove" || CMD == "unset" || CMD == "del";
+    const bool ADD    = CMD == "add" || CMD == "set";
+    if (!ADD && !REMOVE)
+        return {.success = false, .error = std::format("hyprdrive:gesture: unknown command {}", CMD)};
+
+    size_t fingerCount = 0;
+    try {
+        fingerCount = std::stoul(std::string{data[1]});
+    } catch (...) {
+        return {.success = false, .error = "hyprdrive:gesture: fingers must be an integer"};
+    }
+
+    const std::string DIRSTR = std::string{data[2]};
+    const bool        ISCLICK = DIRSTR == "click" || DIRSTR == "tap";
+    const auto direction = ISCLICK ? TRACKPAD_GESTURE_DIR_NONE : g_pTrackpadGestures->dirForString(data[2]);
+    if (!ISCLICK && direction == TRACKPAD_GESTURE_DIR_NONE)
+        return {.success = false, .error = std::format("Invalid direction: {}", DIRSTR)};
+
+    int      idx            = 3;
+    uint32_t modMask        = 0;
+    float    deltaScale     = 1.F;
+    bool     disableInhibit = false;
+    while (!data[idx].empty()) {
+        const auto TOK = std::string{data[idx]};
+        if (TOK.starts_with("mod:")) {
+            modMask = g_pKeybindManager->stringToModMask(TOK.substr(4));
+            idx++;
+            continue;
+        }
+        if (TOK.starts_with("scale:")) {
+            try {
+                deltaScale = std::clamp(std::stof(TOK.substr(6)), 0.1F, 10.F);
+            } catch (...) {
+                return {.success = false, .error = "invalid scale"};
+            }
+            idx++;
+            continue;
+        }
+        if (TOK == "disable_inhibit") {
+            disableInhibit = true;
+            idx++;
+            continue;
+        }
+        break;
+    }
+
+    const std::string ACTION = REMOVE ? "unset" : std::string{data[idx]};
+    std::string       extra;
+    if (!REMOVE) {
+        for (int i = idx + 1; !data[i].empty(); ++i) {
+            const auto TOK = std::string{data[i]};
+            if (TOK.starts_with("mod:") || TOK.starts_with("scale:") || TOK == "disable_inhibit")
+                continue;
+            if (!extra.empty())
+                extra += " ";
+            extra += TOK;
+        }
+    }
+
+    if (ISCLICK) {
+        if (REMOVE)
+            removeClickGesture(fingerCount, modMask);
+        else
+            addClickGesture(fingerCount, ACTION, modMask, disableInhibit, extra);
+        return {};
+    }
+
+    const auto res = applyTrackpadGesture(fingerCount, direction, ACTION, modMask, deltaScale, disableInhibit, extra);
+    if (!res)
+        return {.success = false, .error = res.error()};
+    return {};
 }
 
 // OVERVIEW_CPP_SPEC §13.9 X24. hyprgnomedock does not exist yet, so this is how
@@ -1346,7 +1535,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pMembWsHook    = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { Membership::bump("window.moveToWorkspace"); });
     g_pMembFullHook  = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW) { Membership::bump("window.fullscreen"); });
 
+    g_pClickPreReloadHook = Event::bus()->m_events.config.preReload.listen([] { clearClickGestures(); });
+
     g_pDockConfigHook = Event::bus()->m_events.config.reloaded.listen([] {
+        attachPadFingerListeners();
         // FIRST, before anything in this plugin reads a config value this pass:
         // a value the user set under the old plugin:scrolloverview: name is
         // copied onto its plugin:hyprdrive: twin here and nowhere else, so the
@@ -1388,6 +1580,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // reached the window underneath would focus it, and a release that leaked
     // after a swallowed press would leave the pointer stuck.
     g_pDockClickHook = Event::bus()->m_events.input.mouse.button.listen([](IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
+        if (handleClickGestureButton(event)) {
+            info.cancelled = true;
+            return;
+        }
+
         const auto HIT = monitorUnderCursor();
         if (!HIT)
             return;
@@ -1490,9 +1687,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Config::registerDispatcher("minimize", ::onMinimizeDispatcher);
     ScrollOverview::Config::registerDispatcher("hotkey", ::onHotkeyDispatcher);
     ScrollOverview::Config::registerDispatcher("stack", ::onStackDispatcher);
+    ScrollOverview::Config::registerDispatcher("gesture", ::onGestureDispatcher);
     ScrollOverview::Config::registerGesture(::onRegisterOverviewGesture, ::overviewGestureKeyword);
     ScrollOverview::Config::registerConfig();
     registerRawKeyHooks();
+    attachPadFingerListeners();
 
     // Reload can drop live window alphas until decorations are recomputed.
     // Re-apply default-opacity (0.985 / 0.85) to already-mapped windows.

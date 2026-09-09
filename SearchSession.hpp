@@ -187,7 +187,7 @@ struct SSearchLayout {
     // which boxes the card put them at.
     struct SItem {
         size_t      hit = 0; // index into hits: this item's box, in draw order
-        std::string name, description, icon;
+        std::string name, description, icon, iconFont;
         bool        selected = false;
     };
 

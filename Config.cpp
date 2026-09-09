@@ -20,10 +20,12 @@
 #include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <initializer_list>
 #include <optional>
 #include <regex>
 #include <string>
 #include <sys/stat.h>
+#include <vector>
 
 extern "C" {
 #include <lauxlib.h>
@@ -321,7 +323,21 @@ int gestureLua(lua_State* L) {
     const bool DISABLE_INHIBIT = lua_toboolean(L, -1);
     lua_pop(L, 1);
 
-    const auto result = g_gestureRegistrar(FINGERS, DIRECTION, ACTION, MODS, SCALE, DISABLE_INHIBIT);
+    lua_getfield(L, 1, "arg");
+    std::string ARG = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    if (ARG.empty()) {
+        lua_getfield(L, 1, "dispatcher");
+        const std::string DISPATCHER = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "data");
+        const std::string DATA = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        if (!DISPATCHER.empty())
+            ARG = DATA.empty() ? DISPATCHER : DISPATCHER + "," + DATA;
+    }
+
+    const auto result = g_gestureRegistrar(FINGERS, DIRECTION, ACTION, MODS, SCALE, DISABLE_INHIBIT, ARG);
     if (!result.success)
         return luaL_error(L, "gesture: %s", result.error.c_str());
 
@@ -400,8 +416,8 @@ static void registerConfigValuesFor() {
     // reaches EVERYTHING through animElapsedMs: the overview's open/close, the
     // dock's hover panel, the minimize flight, tooltips, the bounce, the launch
     // zoom. For watching a frame at a time, and for the stress rig.
-    addKey(makeShared<CFloatValue>(KEY("anim_scale"), "global animation slowdown; 1 = normal, 10 = ten times slower", 1.F,
-                                   SFloatValueOptions{.min = 0.05F, .max = 100.F}));
+    addKey(makeShared<CFloatValue>(KEY("anim_scale"), "global animation slowdown; 1 = normal, 10 = ten times slower, 0 = snap", 1.F,
+                                   SFloatValueOptions{.min = 0.F, .max = 100.F}));
 
     // The overview used to borrow `windowsMove` for its own open and close,
     // which meant one curve for both directions and no way to shape either
@@ -670,14 +686,43 @@ static CHyprColor colorFromArgb(uint32_t argb, float alphaOverride = -1.F) {
 }
 
 struct SOmarchyThemeColors {
-    bool     valid       = false;
-    bool     isLight     = false;
-    uint32_t background = 0xFF0c0b0c;
-    uint32_t foreground = 0xFFFAFCFB;
-    uint32_t muted      = 0xFF584e51;
-    uint32_t accent     = 0xFFb59790;
-    uint32_t selection  = 0xFF584e51;
+    bool     valid           = false;
+    bool     isLight         = false;
+    uint32_t background      = 0xFF0c0b0c;
+    uint32_t foreground      = 0xFFFAFCFB;
+    uint32_t muted           = 0xFF584e51;
+    uint32_t accent          = 0xFFb59790;
+    uint32_t selection       = 0xFF584e51;
+    uint32_t darkForeground  = 0;
+    uint32_t lightForeground = 0;
+    uint32_t urgent          = 0xFFa55555;
+    bool     hasDarkFg       = false;
+    bool     hasLightFg      = false;
+    bool     hasUrgent       = false;
 };
+
+static float relLuma(const CHyprColor& c) {
+    return (0.2126F * c.r) + (0.7152F * c.g) + (0.0722F * c.b);
+}
+
+static float lumaDelta(const CHyprColor& a, const CHyprColor& b) {
+    return std::abs(relLuma(a) - relLuma(b));
+}
+
+static CHyprColor readableOn(const CHyprColor& bg, std::initializer_list<CHyprColor> prefs) {
+    CHyprColor best{};
+    float      bestD = -1.F;
+    for (const auto& p : prefs) {
+        const float d = lumaDelta(p, bg);
+        if (d > bestD) {
+            bestD = d;
+            best  = p;
+        }
+    }
+    if (bestD >= 0.28F)
+        return best;
+    return relLuma(bg) <= 0.55F ? CHyprColor{1.F, 1.F, 1.F, 1.F} : CHyprColor{0.12F, 0.12F, 0.12F, 1.F};
+}
 
 // Omarchy writes the active palette into colors.toml on `omarchy theme set`
 // and reloads Hyprland. Cached on mtime so a frame does not reopen the file.
@@ -748,6 +793,15 @@ static SOmarchyThemeColors omarchyTheme() {
             } else if (KEY == "selection") {
                 cachedTheme.selection = RGB;
                 hasSel = true;
+            } else if (KEY == "dark_foreground") {
+                cachedTheme.darkForeground = RGB;
+                cachedTheme.hasDarkFg      = true;
+            } else if (KEY == "light_foreground") {
+                cachedTheme.lightForeground = RGB;
+                cachedTheme.hasLightFg      = true;
+            } else if (KEY == "red") {
+                cachedTheme.urgent    = RGB;
+                cachedTheme.hasUrgent = true;
             }
         }
     }
@@ -791,10 +845,39 @@ CHyprColor themeForeground() {
 }
 
 CHyprColor themeMutedText() {
-    const auto T = omarchyTheme();
+    const auto T  = omarchyTheme();
+    const auto BG = T.valid ? colorFromArgb(T.background, 1.F) : dockBackgroundColor();
+    const auto FG = themeForeground();
+
+    // `muted` in colors.toml is often a surface/overlay, not body text. Prefer
+    // light_foreground (Omarchy subtext) then dark_foreground, then muted —
+    // whichever still contrasts with the plate.
+    std::vector<CHyprColor> cands;
+    if (T.valid && T.hasLightFg)
+        cands.push_back(colorFromArgb(T.lightForeground, 1.F));
+    if (T.valid && T.hasDarkFg)
+        cands.push_back(colorFromArgb(T.darkForeground, 1.F));
     if (T.valid)
-        return colorFromArgb(T.muted, 1.F);
-    return isLightTheme() ? CHyprColor{0.40F, 0.40F, 0.45F, 1.F} : CHyprColor{0.65F, 0.65F, 0.70F, 1.F};
+        cands.push_back(colorFromArgb(T.muted, 1.F));
+
+    CHyprColor best = FG;
+    float      bestD = -1.F;
+    for (const auto& c : cands) {
+        const float vsBg = lumaDelta(c, BG);
+        if (vsBg < 0.22F)
+            continue;
+        if (vsBg > bestD) {
+            bestD = vsBg;
+            best  = c;
+        }
+    }
+    if (bestD >= 0.22F)
+        return best;
+
+    const CHyprColor MIX{FG.r * 0.72F + BG.r * 0.28F, FG.g * 0.72F + BG.g * 0.28F, FG.b * 0.72F + BG.b * 0.28F, 1.F};
+    if (lumaDelta(MIX, BG) >= 0.22F)
+        return MIX;
+    return FG;
 }
 
 CHyprColor themeAccent() {
@@ -804,11 +887,43 @@ CHyprColor themeAccent() {
     return highlightColor();
 }
 
+CHyprColor themeHeading() {
+    const auto T  = omarchyTheme();
+    const auto BG = T.valid ? colorFromArgb(T.background, 1.F) : dockBackgroundColor();
+    return readableOn(BG, {themeAccent(), themeForeground()});
+}
+
 CHyprColor themeSelection() {
     const auto T = omarchyTheme();
     if (T.valid)
         return colorFromArgb(T.selection, 1.F);
     return highlightColor().modifyA(0.35F);
+}
+
+CHyprColor themeSelectedFill() {
+    const auto T  = omarchyTheme();
+    const auto BG = T.valid ? colorFromArgb(T.background, 1.F) : dockBackgroundColor();
+    const auto SEL = themeSelection();
+    if (lumaDelta(SEL, BG) >= 0.10F)
+        return SEL.modifyA(0.92F);
+    const auto FG = themeForeground();
+    return CHyprColor{FG.r, FG.g, FG.b, 0.18F};
+}
+
+CHyprColor themeSelectedText() {
+    const auto FILL = themeSelectedFill();
+    // Approximate the blended plate: opaque-ish fill vs translucent fg wash.
+    const CHyprColor BG = FILL.a >= 0.6F ? FILL : CHyprColor{
+        FILL.r * FILL.a, FILL.g * FILL.a, FILL.b * FILL.a, 1.F
+    };
+    return readableOn(BG, {themeForeground(), themeAccent()});
+}
+
+CHyprColor themeUrgent() {
+    const auto T = omarchyTheme();
+    if (T.valid && T.hasUrgent)
+        return colorFromArgb(T.urgent, 1.F);
+    return CHyprColor{0.95F, 0.35F, 0.35F, 1.F};
 }
 
 CHyprColor highlightColor() {
@@ -973,14 +1088,26 @@ int getDragThreshold() {
 }
 
 float animScale() {
-    return std::max(0.05F, getValue<float>("plugin:hyprdrive:anim_scale"));
+    return std::max(0.F, getValue<float>("plugin:hyprdrive:anim_scale"));
+}
+
+bool motionEnabled() {
+    return animScale() > 0.F;
+}
+
+float realElapsedMs(const Time::steady_tp& since) {
+    return sc<float>(std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count());
 }
 
 // The ONE place the plugin's clock is read. Dividing here is what makes a single
 // slider stretch every animation at once while every duration constant keeps its
-// real value -- see the note in Config.hpp.
+// real value -- see the note in Config.hpp. Scale 0 is the motion toggle: every
+// ease is already finished, without touching input timers that use realElapsedMs.
 float animElapsedMs(const Time::steady_tp& since) {
-    return sc<float>(std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count()) / animScale();
+    const float SCALE = animScale();
+    if (SCALE <= 0.F)
+        return 1e9F;
+    return realElapsedMs(since) / SCALE;
 }
 
 float getTouchpadScrollFactor() {

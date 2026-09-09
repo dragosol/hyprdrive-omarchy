@@ -486,7 +486,7 @@ DockInput::SClaim handleDesktop(PHLMONITOR monitor, const Vector2D& local, uint3
         return out;
     }
 
-    const bool DOUBLE = g_lastClickWindow.lock() == under && Config::animElapsedMs(g_lastClickWhen) <= DOUBLE_MS &&
+    const bool DOUBLE = g_lastClickWindow.lock() == under && Config::realElapsedMs(g_lastClickWhen) <= DOUBLE_MS &&
         g_lastClickAt.distanceSq(local) <= sc<double>(DOUBLE_SLOP * SCALE) * sc<double>(DOUBLE_SLOP * SCALE);
 
     if (DOUBLE) {

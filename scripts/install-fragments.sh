@@ -55,3 +55,15 @@ if [ -f "$ROOT/hyprdrive.so" ]; then
 else
     echo "install-fragments: no hyprdrive.so -- run make all first, then re-run this" >&2
 fi
+
+PLUGIN_SRC=$ROOT/omarchy-plugin
+PLUGIN_DEST=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/dragos.hyprdrive
+if [ -d "$PLUGIN_SRC" ]; then
+    mkdir -p "$PLUGIN_DEST/bin"
+    install -Dm644 "$PLUGIN_SRC/manifest.json" "$PLUGIN_DEST/manifest.json"
+    install -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
+    install -Dm644 "$PLUGIN_SRC/Model.js" "$PLUGIN_DEST/Model.js"
+    install -Dm644 "$PLUGIN_SRC/README.md" "$PLUGIN_DEST/README.md"
+    install -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
+    echo "omarchy plugin: $PLUGIN_DEST"
+fi

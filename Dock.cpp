@@ -951,10 +951,9 @@ constexpr float EDGE_BAND = 2.F;
 constexpr float REVEAL_BAND = 4.F;
 
 float elapsedMs(const Time::steady_tp& since) {
-    // Every timed thing in the dock already funnels through here -- the hover
-    // panel, the tooltip fade, the bounce, the launch zoom, the autohide slide
-    // and the hotkey overlay -- so routing it through the global scale is the
-    // whole of the slider on this side. Constants keep their real values.
+    // Hover panel, tooltip fade, bounce, launch zoom. Autohide reveal uses
+    // realElapsedMs so Hyprdrive motion off still slides the pill in from the
+    // bottom edge.
     return ScrollOverview::Config::animElapsedMs(since);
 }
 
@@ -1036,7 +1035,7 @@ float hiddenFraction(PHLMONITOR monitor) {
 
     const auto& R  = g_reveal[monitor->m_id];
     const int   MS = std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS));
-    const float E  = revealEase(std::clamp(elapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
+    const float E  = revealEase(std::clamp(ScrollOverview::Config::realElapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
 
     // From wherever it WAS to wherever it is going, which is what makes a
     // reversal continuous instead of a jump to the far end.
@@ -1072,7 +1071,7 @@ bool autohideAnimating(PHLMONITOR monitor) {
     const auto& R = g_reveal[monitor->m_id];
     // X54. A flight counts as animating: the window is mid-air toward the icon
     // and nothing else on an idle desktop would ask for the frames it needs.
-    return R.pending || Flight::any() || elapsedMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
+    return R.pending || Flight::any() || ScrollOverview::Config::realElapsedMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
 }
 
 SLayout baseLayout(PHLMONITOR monitor) {
@@ -1314,7 +1313,7 @@ void updateAutohide(PHLMONITOR monitor) {
         R.pendingSince = Time::steadyNow();
     }
 
-    if (!immediate && elapsedMs(R.pendingSince) < sc<float>(std::max(0, Config::getValue<int>(want ? KEY_SHOW_DELAY : KEY_HIDE_DELAY))))
+    if (!immediate && ScrollOverview::Config::realElapsedMs(R.pendingSince) < sc<float>(std::max(0, Config::getValue<int>(want ? KEY_SHOW_DELAY : KEY_HIDE_DELAY))))
         return;
 
     R.from      = hiddenFraction(monitor);
@@ -3600,7 +3599,10 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         }
 
         // The grace expires: shrink back to the dock's top edge, accelerating.
-        if (g_hover.panel->leaving && elapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
+        // Wall-clock, not animElapsedMs: at anim_scale 0 that clock is already
+        // finished, so leaving an icon for the 8px gap above the pill dismissed
+        // the panel in the same frame and the dock hid under the previews.
+        if (g_hover.panel->leaving && ScrollOverview::Config::realElapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
             const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
 
             g_hover.panel->from      = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
@@ -3670,8 +3672,14 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         sum += previewAspect(WINDOW);
 
     // Y1/Y2. Published for the pointer, which is why it is the DRAWN plate and
-    // the DRAWN cells rather than the settled ones.
+    // the DRAWN cells rather than the settled ones. Stretch the hit box down
+    // through PANEL_GAP to the pill so moving from an icon into the previews
+    // is never a frame of "left the dock". Cells and frost stay on DRAWN.
     g_hover.drawn = DRAWN;
+    if (!g_hover.panel->out) {
+        if (const double LIMIT = layout.pill.y; g_hover.drawn.y + g_hover.drawn.height < LIMIT)
+            g_hover.drawn.height = LIMIT - g_hover.drawn.y;
+    }
     g_hover.cells.clear();
     g_hover.cells.reserve(windows.size());
 

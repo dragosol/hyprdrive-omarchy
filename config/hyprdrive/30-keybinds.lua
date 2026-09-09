@@ -27,8 +27,16 @@ if hyprdrive_loaded() then
     end)
 
     -- 3-finger swipe up opens the overview and follows the fingers; swipe
-    -- down closes it. Reversing mid-gesture undoes the motion. 3-finger
-    -- horizontal stays Omarchy workspace switching. Super tap still toggles.
-    hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
-    hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down" })
+    -- down closes it. Reversing mid-gesture undoes the motion. Super tap
+    -- still toggles. When the settings panel has written 35-gestures.lua it
+    -- owns the whole map (including workspace / close / zoom), so skip these
+    -- factory defaults or they would double-register on reload.
+    local dest = (os.getenv("XDG_CONFIG_HOME") or ((os.getenv("HOME") or "") .. "/.config")) .. "/hypr/hyprdrive"
+    local owned = io.open(dest .. "/35-gestures.lua", "r")
+    if owned then
+        owned:close()
+    else
+        hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
+        hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down" })
+    end
 end

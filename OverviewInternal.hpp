@@ -379,40 +379,60 @@ struct SSearchRow {
     std::string                  name;
     std::string                  description;
     std::string                  icon;
+    std::string                  iconFont;
     const AppSearch::SEntry*     app = nullptr;
     SearchProviders::SResult     provider;
     std::optional<OmarchySearch::SSearchItem> omarchy;
     int                          column = 0; // 0 = Left (Apps, Actions, Calc, Agents), 1 = Right (Files, Settings)
 };
 
+inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry);
+
 inline std::vector<SSearchRow> overviewSearchRows() {
     std::vector<SSearchRow> rows;
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 
-    const std::string& Q = g_search.query.text;
+    const std::string& Q           = g_search.query.text;
+    const bool         MENU_BROWSE = OmarchySearch::canNavigateMenuBack();
 
     // ------------------------------------------------------------------------
     // COLUMN 0: OMARCHY MENU & APPS (Super+Space launcher)
+    // Running apps always lead, so Enter switches to an open window even when
+    // an Omarchy menu row also matches. Menu rows follow (Install still drills
+    // in when no running app is selected). Unopened apps come last.
     // ------------------------------------------------------------------------
-    if (!Q.empty()) {
-        for (const auto* E : AppSearch::search(Q, 6))
-            rows.push_back({E->name, "", E->icon, E, {}, std::nullopt, 0});
+    std::vector<SSearchRow> runningApps, menuRows, otherApps;
+
+    if (!Q.empty() && !MENU_BROWSE) {
+        for (const auto* E : AppSearch::search(Q, 6)) {
+            SSearchRow row{E->name, "", E->icon, "", E, {}, std::nullopt, 0};
+            if (overviewWindowForApp(*E))
+                runningApps.push_back(std::move(row));
+            else
+                otherApps.push_back(std::move(row));
+        }
     }
 
-    for (const auto& item : OmarchySearch::searchMenu(Q, Q.empty() ? 6 : 8)) {
-        rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 0});
-    }
+    const size_t MENU_LIMIT = (Q.empty() || MENU_BROWSE) ? 24 : 8;
+    for (const auto& item : OmarchySearch::searchMenu(Q, MENU_LIMIT))
+        menuRows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 0});
+
+    rows.insert(rows.end(), runningApps.begin(), runningApps.end());
+    rows.insert(rows.end(), menuRows.begin(), menuRows.end());
+    rows.insert(rows.end(), otherApps.begin(), otherApps.end());
 
     // ------------------------------------------------------------------------
     // COLUMN 1: FILES & FOLDERS (Omarchy Find Index)
     // ------------------------------------------------------------------------
-    if (Q.empty()) {
-        for (const auto& f : OmarchySearch::recentFiles()) {
-            rows.push_back({f.name, f.description, f.icon, nullptr, {}, f, 1});
-        }
-    } else {
-        for (const auto& f : OmarchySearch::fileResults()) {
-            rows.push_back({f.name, f.description, f.icon, nullptr, {}, f, 1});
+    if (!MENU_BROWSE) {
+        if (Q.empty()) {
+            for (const auto& f : OmarchySearch::recentFiles()) {
+                rows.push_back({f.name, f.description, f.icon, "", nullptr, {}, f, 1});
+            }
+        } else {
+            for (const auto& f : OmarchySearch::fileResults()) {
+                rows.push_back({f.name, f.description, f.icon, "", nullptr, {}, f, 1});
+            }
         }
     }
 
@@ -421,16 +441,16 @@ inline std::vector<SSearchRow> overviewSearchRows() {
     // ------------------------------------------------------------------------
     if (!Q.empty()) {
         if (const auto calc = OmarchySearch::evaluateCalculator(Q); calc) {
-            rows.push_back({calc->name, calc->description, calc->icon, nullptr, {}, *calc, 2});
+            rows.push_back({calc->name, calc->description, calc->icon, "", nullptr, {}, *calc, 2});
         }
     }
 
     if (OmarchySearch::isAgentQuery(Q)) {
         for (const auto& item : OmarchySearch::searchAgents(Q))
-            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
-    } else if (!Q.empty()) {
+            rows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 2});
+    } else if (!Q.empty() && !MENU_BROWSE) {
         for (const auto& item : OmarchySearch::promptAllAgents(Q))
-            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
+            rows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 2});
 
         OmarchySearch::SSearchItem webItem;
         webItem.kind          = OmarchySearch::EItemKind::Action;
@@ -452,10 +472,10 @@ inline std::vector<SSearchRow> overviewSearchRows() {
             }
         }
         webItem.actionCommand = "xdg-open 'https://www.google.com/search?q=" + qenc + "'";
-        rows.push_back({webItem.name, webItem.description, webItem.icon, nullptr, {}, webItem, 2});
-    } else {
+        rows.push_back({webItem.name, webItem.description, webItem.icon, "", nullptr, {}, webItem, 2});
+    } else if (!MENU_BROWSE) {
         for (const auto& item : OmarchySearch::agentHelpItems())
-            rows.push_back({item.name, item.description, item.icon, nullptr, {}, item, 2});
+            rows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 2});
     }
 
     return rows;
@@ -534,8 +554,29 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
     const auto& ROW = RESULTS[index];
     if (ROW.omarchy) {
         if (ROW.omarchy->kind == OmarchySearch::EItemKind::Menu || ROW.omarchy->kind == OmarchySearch::EItemKind::Back) {
+            const bool DRILL = ROW.omarchy->kind == OmarchySearch::EItemKind::Menu;
             OmarchySearch::activate(*ROW.omarchy);
-            g_search.nav.selection = 0;
+            if (DRILL) {
+                g_search.query.text.clear();
+                g_search.query.active          = false;
+                g_search.nav.zone              = EOverviewNavZone::Result;
+                g_search.nav.explicitSelection = true;
+                g_search.nav.selectFirstPending = false;
+                g_search.nav.intent            = ESearchIntent::Browsing;
+                g_search.nav.hoverIndex        = -1;
+            }
+            // Skip the ‹ Back row so a second Enter launches the first child.
+            const auto NEXT = overviewSearchRows();
+            int        sel  = 0;
+            for (int i = 0; i < sc<int>(NEXT.size()); ++i) {
+                if (NEXT[sc<size_t>(i)].column != 0)
+                    continue;
+                if (NEXT[sc<size_t>(i)].omarchy && NEXT[sc<size_t>(i)].omarchy->kind == OmarchySearch::EItemKind::Back)
+                    continue;
+                sel = i;
+                break;
+            }
+            g_search.nav.selection = sel;
             return false;
         }
         return OmarchySearch::activate(*ROW.omarchy);
@@ -1118,10 +1159,17 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
 }
 
 inline int overviewFirstAppIndex(const std::vector<SSearchRow>& rows) {
+    int firstCol0 = -1;
     for (size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i].column == 0)
+        if (rows[i].column != 0)
+            continue;
+        if (firstCol0 < 0)
+            firstCol0 = sc<int>(i);
+        if (rows[i].app && overviewWindowForApp(*rows[i].app))
             return sc<int>(i);
     }
+    if (firstCol0 >= 0)
+        return firstCol0;
     return rows.empty() ? -1 : 0;
 }
 

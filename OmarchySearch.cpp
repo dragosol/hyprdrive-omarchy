@@ -18,6 +18,7 @@ using namespace Hyprutils::OS;
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <mutex>
 #include <poll.h>
 #include <regex>
@@ -422,12 +423,92 @@ static std::string replaceAll(std::string str, const std::string& from, const st
     return str;
 }
 
+static std::string agentUsageId(const SAgentDef& AG) {
+    if (AG.prefix == "agy")
+        return "antigravity";
+    return AG.prefix;
+}
+
+static std::string agentUsageDir() {
+    if (const char* state = std::getenv("XDG_STATE_HOME"); state && *state)
+        return std::string(state) + "/omarchy/agents/usage";
+    const char* home = std::getenv("HOME");
+    if (!home)
+        return {};
+    return std::string(home) + "/.local/state/omarchy/agents/usage";
+}
+
+static bool jsonFieldTrue(const std::string& body, const char* key) {
+    const std::string needle = std::string("\"") + key + "\"";
+    auto              pos    = body.find(needle);
+    if (pos == std::string::npos)
+        return false;
+    pos = body.find(':', pos + needle.size());
+    if (pos == std::string::npos)
+        return false;
+    ++pos;
+    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])))
+        ++pos;
+    return body.compare(pos, 4, "true") == 0;
+}
+
+static const std::unordered_set<std::string>& readyAgentIds() {
+    static std::unordered_set<std::string> ids;
+    static time_t                          mtime = 0;
+    const std::string                      dir   = agentUsageDir();
+    if (dir.empty())
+        return ids;
+
+    struct stat st {};
+    const time_t nowM = (stat(dir.c_str(), &st) == 0) ? st.st_mtime : 0;
+    if (nowM == mtime && !ids.empty())
+        return ids;
+
+    ids.clear();
+    mtime = nowM;
+    std::error_code ec;
+    for (const auto& ent : fs::directory_iterator(dir, ec)) {
+        if (!ent.is_regular_file(ec))
+            continue;
+        const auto name = ent.path().filename().string();
+        if (!name.ends_with(".json"))
+            continue;
+        std::ifstream f(ent.path());
+        if (!f)
+            continue;
+        std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (!jsonFieldTrue(body, "ready"))
+            continue;
+        ids.insert(name.substr(0, name.size() - 5));
+    }
+    return ids;
+}
+
+static bool agentLoggedIn(const SAgentDef& AG) {
+    return readyAgentIds().contains(agentUsageId(AG));
+}
+
+static std::string agentIconPath(const SAgentDef& AG) {
+    const std::string id = agentUsageId(AG);
+    const char*       home = std::getenv("HOME");
+    std::vector<std::string> cands;
+    if (home)
+        cands.push_back(std::string(home) + "/.config/omarchy/plugins/dragos.agents/assets/" + id + ".svg");
+    cands.push_back("/usr/share/omarchy/shell/plugins/omarchy.agents/assets/" + id + ".svg");
+    std::error_code ec;
+    for (const auto& p : cands) {
+        if (fs::exists(p, ec))
+            return p;
+    }
+    return "utilities-terminal";
+}
+
 static SSearchItem agentItem(const SAgentDef& AG, const std::string& prompt) {
     SSearchItem item;
     item.kind     = EItemKind::Agent;
     item.id       = "agent:" + AG.prefix;
     item.category = "AI Agent";
-    item.icon     = "utilities-terminal";
+    item.icon     = agentIconPath(AG);
     if (prompt.empty()) {
         item.name          = "/" + AG.prefix + " <prompt>";
         item.description   = AG.name + " (" + AG.model + ") — " + AG.description;
@@ -467,6 +548,9 @@ std::vector<SSearchItem> searchAgents(const std::string& rawQuery) {
     for (const auto& AG : agentDefs()) {
         if (!lowerToken.empty() && AG.prefix.find(lowerToken) != 0 && lowerToken != AG.prefix)
             continue;
+        const bool exact = lowerToken == AG.prefix;
+        if (!exact && !agentLoggedIn(AG))
+            continue;
         items.push_back(agentItem(AG, prompt));
     }
     return items;
@@ -476,16 +560,32 @@ std::vector<SSearchItem> promptAllAgents(const std::string& prompt) {
     std::vector<SSearchItem> items;
     if (prompt.empty())
         return items;
-    for (const auto& AG : agentDefs())
+    for (const auto& AG : agentDefs()) {
+        if (!agentLoggedIn(AG))
+            continue;
         items.push_back(agentItem(AG, prompt));
+    }
     return items;
 }
 
 std::vector<SSearchItem> agentHelpItems() {
     std::vector<SSearchItem> items;
-    for (const auto& AG : agentDefs())
+    for (const auto& AG : agentDefs()) {
+        if (!agentLoggedIn(AG))
+            continue;
         items.push_back(agentItem(AG, ""));
+    }
     return items;
+}
+
+bool isGlyphIcon(const std::string& icon) {
+    if (icon.empty() || icon.front() == '/')
+        return false;
+    for (unsigned char c : icon) {
+        if (c >= 0x80)
+            return true;
+    }
+    return false;
 }
 
 // ============================================================================
@@ -644,6 +744,26 @@ static std::string pathFor(const std::unordered_map<std::string, SRawMenuItem>& 
         result += labels[i];
     }
     return result;
+}
+
+static void applyMenuVisuals(SSearchItem& item, const SRawMenuItem& raw) {
+    item.icon     = raw.icon;
+    item.iconFont = raw.iconFont;
+    if (item.icon.empty()) {
+        std::string cur   = raw.parent;
+        int         guard = 0;
+        while (item.icon.empty() && !cur.empty() && cur != "root" && guard++ < 16) {
+            auto it = g_menuItems.find(cur);
+            if (it == g_menuItems.end())
+                break;
+            item.icon = it->second.icon;
+            if (item.iconFont.empty())
+                item.iconFont = it->second.iconFont;
+            cur = it->second.parent;
+        }
+    }
+    if (item.icon.empty())
+        item.icon = (raw.kind == "action") ? "system-run" : "folder";
 }
 
 static std::string parentPathFor(const std::unordered_map<std::string, SRawMenuItem>& items, const std::string& id) {
@@ -1147,19 +1267,17 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
             item.id       = raw.id;
             item.name     = raw.label;
             item.category = "Omarchy Menu";
+            applyMenuVisuals(item, raw);
 
             if (raw.kind == "menu") {
                 item.kind        = EItemKind::Menu;
-                item.icon        = raw.icon.empty() ? "folder" : raw.icon;
                 item.description = raw.description.empty() ? "Submenu ›" : raw.description + " ›";
             } else if (raw.kind == "link") {
                 item.kind        = EItemKind::Menu;
                 item.id          = raw.target.empty() ? raw.id : raw.target;
-                item.icon        = raw.icon.empty() ? "folder" : raw.icon;
                 item.description = "Submenu ›";
             } else {
                 item.kind          = EItemKind::Action;
-                item.icon          = raw.icon.empty() ? "system-run" : raw.icon;
                 item.description   = raw.description.empty() ? raw.action : raw.description;
                 item.actionCommand = raw.action;
             }
@@ -1245,10 +1363,10 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
     for (size_t i = 0; i < std::min(limit, scored.size()); ++i) {
         const auto* raw = scored[i].item;
         SSearchItem item;
-        item.id   = raw->id;
-        item.name = raw->label;
+        item.id       = raw->id;
+        item.name     = raw->label;
         item.category = "Omarchy Menu";
-        item.icon = raw->icon.empty() ? "system-run" : raw->icon;
+        applyMenuVisuals(item, *raw);
 
         std::string breadcrumb = parentPathFor(g_menuItems, raw->id);
 

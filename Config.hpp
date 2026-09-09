@@ -17,7 +17,7 @@ namespace ScrollOverview::Config {
 using TDispatcher       = SDispatchResult (*)(std::string);
 using TGestureKeyword   = Hyprlang::CParseResult (*)(const char* LHS, const char* RHS);
 using TGestureRegistrar   = SDispatchResult (*)(size_t fingerCount, const std::string& direction, const std::string& action, const std::string& mods, float deltaScale,
-                                                bool disableInhibit);
+                                                bool disableInhibit, const std::string& arg);
 
 enum class ELayout {
     VERTICAL,
@@ -119,7 +119,11 @@ bool          isLightTheme();
 CHyprColor    themeForeground();
 CHyprColor    themeMutedText();
 CHyprColor    themeAccent();
+CHyprColor    themeHeading();
 CHyprColor    themeSelection();
+CHyprColor    themeSelectedFill();
+CHyprColor    themeSelectedText();
+CHyprColor    themeUrgent();
 
 float         getScale();
 float         getOpenSpeed();
@@ -133,16 +137,23 @@ int           getDragThreshold();
 
 // GLOBAL ANIMATION SPEED (user, 2026-08-06). One multiplier over every timed
 // thing in the plugin. 1.0 is the shipped feel; 10.0 runs everything at a tenth
-// speed so a single frame can be looked at properly.
+// speed so a single frame can be looked at properly. 0 snaps: every in-flight
+// ease completes on the next sample (Hyprdrive motion toggle).
 //
 // Deliberately applied at the ONE place elapsed time is measured, not by editing
 // durations: every constant in the codebase keeps its real, meaningful value
 // (GNOME's 400ms minimize stays the number 400 and can still be checked against
 // the host), and nothing has to be un-edited afterwards.
 float         animScale();
+bool          motionEnabled();
+
+// Wall-clock ms. Input timing (double-click, drag-hold) must not ride animScale
+// -- at 0 that clock jumps to infinity and would swallow clicks.
+float         realElapsedMs(const Time::steady_tp& since);
 
 // Milliseconds since `since`, DIVIDED by animScale -- so a clock that runs slow
 // makes every duration comparison downstream stretch, with no other changes.
+// Scale 0 returns a huge elapsed so every duration comparison is already done.
 float         animElapsedMs(const Time::steady_tp& since);
 float         getDragMiniScale();
 int           getDragMiniMs();

@@ -157,6 +157,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // X50 rides the same config as the band it travels with: the pill lifting on
     // one curve while the panel it uncovers grows on another reads as two events.
     Animation::mgr()->createAnimation(0.F, searchDock, searchAnimConfig, AVARDAMAGE_NONE);
+    syncPluginAnimEnabled();
 
     scale->setUpdateCallback([this](auto) { damage(); });
     viewOffset->setUpdateCallback([this](auto) { damage(); });
@@ -2550,6 +2551,16 @@ void CScrollOverview::finishWorkspaceScrollFollow() {
         }
     }
 
+    // Slow swipes often stop short of halfway. Commit from ~28% of a pitch
+    // toward a neighbour instead of requiring the card to become nearest.
+    const double DRAG = axisValue(viewOffset->value(), layout);
+    if (targetIdx == viewportCurrentWorkspace && std::abs(DRAG) >= 0.28 * LOGICALPITCH) {
+        if (DRAG > 0 && viewportCurrentWorkspace + 1 < images.size())
+            targetIdx = viewportCurrentWorkspace + 1;
+        else if (DRAG < 0 && viewportCurrentWorkspace > 0)
+            targetIdx = viewportCurrentWorkspace - 1;
+    }
+
     if (targetIdx == viewportCurrentWorkspace) {
         *viewOffset = Vector2D{};
         return;
@@ -4279,6 +4290,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             .name        = RESULTS[I].name,
             .description = RESULTS[I].description,
             .icon        = RESULTS[I].icon,
+            .iconFont    = RESULTS[I].iconFont,
             .selected    = (g_search.nav.zone == EOverviewNavZone::Result && sc<int>(I) == out.selection),
         };
     };
@@ -4520,7 +4532,7 @@ static void drawSearch(const SSearchLayout& L) {
         }
 
         const int  HEADPX  = std::max(1, sc<int>(std::round(12.F * SCALE)));
-        const auto HEADTEX = OverviewRender::text(CARD.title, ScrollOverview::Config::themeAccent(), HEADPX, false, "", std::max(1, sc<int>(CARD.box.width - headIndent - PADL)), 600);
+        const auto HEADTEX = OverviewRender::text(CARD.title, ScrollOverview::Config::themeHeading(), HEADPX, false, "", std::max(1, sc<int>(CARD.box.width - headIndent - PADL)), 600);
         if (HEADTEX && HEADTEX->ok()) {
             CBox headText{CARD.box.x + headIndent, CARD.box.y + PADL, sc<float>(HEADTEX->m_size.x), sc<float>(HEADTEX->m_size.y)};
             ADDTEX(HEADTEX, headText.round());
@@ -4529,7 +4541,7 @@ static void drawSearch(const SSearchLayout& L) {
         if (CARD.more > 0) {
             const int   MOREPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
             std::string moreStr = "+" + std::to_string(CARD.more);
-            const auto  MORETEX = OverviewRender::text(moreStr, ScrollOverview::Config::themeMutedText().modifyA(0.85F), MOREPX, false, "", 100, 500);
+            const auto  MORETEX = OverviewRender::text(moreStr, ScrollOverview::Config::themeMutedText(), MOREPX, false, "", 100, 500);
             if (MORETEX && MORETEX->ok()) {
                 CBox moreBox{(CARD.box.x + CARD.box.width) - PADL - sc<float>(MORETEX->m_size.x), CARD.box.y + PADL, sc<float>(MORETEX->m_size.x), sc<float>(MORETEX->m_size.y)};
                 ADDTEX(MORETEX, moreBox.round());
@@ -4543,7 +4555,8 @@ static void drawSearch(const SSearchLayout& L) {
             if (ITEM.selected) {
                 CRectPassElement::SRectData sel;
                 sel.box           = ROW;
-                sel.color         = ScrollOverview::Config::highlightColor().modifyA(0.30F * FADE * CARD.alpha);
+                const auto SELFILL = ScrollOverview::Config::themeSelectedFill();
+                sel.color          = SELFILL.modifyA(SELFILL.a * FADE * CARD.alpha);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
                 g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
@@ -4552,24 +4565,27 @@ static void drawSearch(const SSearchLayout& L) {
             const float ROWPAD     = std::round(6.F * SCALE);
             float       textIndent = ROWPAD;
 
-            const auto  ICONTEX = OverviewRender::appIcon(ITEM.icon);
-            const float ICOND   = std::round(18.F * SCALE);
-            if (ICONTEX && ICONTEX->ok()) {
+            const float ICOND = std::round(18.F * SCALE);
+            if (OmarchySearch::isGlyphIcon(ITEM.icon)) {
+                const int         GLYPHPX = std::max(1, sc<int>(std::round(16.F * SCALE)));
+                const std::string FAMILY  = ITEM.iconFont.empty() ? "JetBrainsMono Nerd Font" : ITEM.iconFont;
+                const auto        GLYPHTEX =
+                    OverviewRender::text(ITEM.icon, ITEM.selected ? ScrollOverview::Config::themeSelectedText() : ScrollOverview::Config::themeForeground(), GLYPHPX, false,
+                                         FAMILY, sc<int>(ICOND + std::round(8.F * SCALE)), 400);
+                if (GLYPHTEX && GLYPHTEX->ok()) {
+                    CBox glyphBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - sc<float>(GLYPHTEX->m_size.y)) / 2.F), sc<float>(GLYPHTEX->m_size.x),
+                                  sc<float>(GLYPHTEX->m_size.y)};
+                    ADDTEX(GLYPHTEX, glyphBox.round());
+                    textIndent += std::max(ICOND, sc<float>(GLYPHTEX->m_size.x)) + std::round(8.F * SCALE);
+                }
+            } else if (const auto ICONTEX = OverviewRender::appIcon(ITEM.icon); ICONTEX && ICONTEX->ok()) {
                 CBox iconBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - ICOND) / 2.F), ICOND, ICOND};
                 ADDTEX(ICONTEX, iconBox.round());
                 textIndent += ICOND + std::round(8.F * SCALE);
-            } else if (!ITEM.icon.empty()) {
-                const int  GLYPHPX = std::max(1, sc<int>(std::round(14.F * SCALE)));
-                const auto GLYPHTEX = OverviewRender::text(ITEM.icon, ITEM.selected ? ScrollOverview::Config::highlightColor() : ScrollOverview::Config::themeForeground(), GLYPHPX, false, "", sc<int>(ICOND), 400);
-                if (GLYPHTEX && GLYPHTEX->ok()) {
-                    CBox glyphBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - sc<float>(GLYPHTEX->m_size.y)) / 2.F), sc<float>(GLYPHTEX->m_size.x), sc<float>(GLYPHTEX->m_size.y)};
-                    ADDTEX(GLYPHTEX, glyphBox.round());
-                    textIndent += sc<float>(GLYPHTEX->m_size.x) + std::round(8.F * SCALE);
-                }
             }
 
             const int  ROWPX  = std::max(1, sc<int>(std::round(13.F * SCALE)));
-            const auto FG     = ITEM.selected ? ScrollOverview::Config::highlightForeground() : ScrollOverview::Config::themeForeground();
+            const auto FG     = ITEM.selected ? ScrollOverview::Config::themeSelectedText() : ScrollOverview::Config::themeForeground();
             const auto ROWTEX = OverviewRender::text(ITEM.name, FG, ROWPX, false, "", std::max(1, sc<int>(ROW.width - textIndent) - sc<int>(ROWPAD)), 500);
             if (ROWTEX && ROWTEX->ok()) {
                 CBox rowText{ROW.x + textIndent, ROW.y + std::round((ROW.height - sc<float>(ROWTEX->m_size.y)) / 2.F), sc<float>(ROWTEX->m_size.x), sc<float>(ROWTEX->m_size.y)};
@@ -4579,7 +4595,7 @@ static void drawSearch(const SSearchLayout& L) {
                     const float DESCX = rowText.x + rowText.width + std::round(8.F * SCALE);
                     const int   DESCW = sc<int>((ROW.x + ROW.width - ROWPAD) - DESCX);
                     if (DESCW > sc<int>(std::round(24.F * SCALE))) {
-                        const auto DESCFG = ITEM.selected ? FG.modifyA(0.80F) : ScrollOverview::Config::themeMutedText().modifyA(0.85F);
+                        const auto DESCFG = ITEM.selected ? FG : ScrollOverview::Config::themeMutedText();
                         const int  DESCPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
                         if (const auto DESCTEX = OverviewRender::text(ITEM.description, DESCFG, DESCPX, false, "", DESCW); DESCTEX && DESCTEX->ok()) {
                             CBox descText{DESCX, ROW.y + std::round((ROW.height - sc<float>(DESCTEX->m_size.y)) / 2.F), sc<float>(DESCTEX->m_size.x), sc<float>(DESCTEX->m_size.y)};
@@ -4592,7 +4608,7 @@ static void drawSearch(const SSearchLayout& L) {
 
         if (CARD.items.empty()) {
             const int  EMPTYPX  = std::max(1, sc<int>(std::round(12.F * SCALE)));
-            const auto EMPTYTEX = OverviewRender::text(CARD.emptyHint.empty() ? "No items" : CARD.emptyHint, ScrollOverview::Config::themeMutedText().modifyA(0.45F), EMPTYPX, false, "", sc<int>(CARD.box.width - PADL * 2.F), 400);
+            const auto EMPTYTEX = OverviewRender::text(CARD.emptyHint.empty() ? "No items" : CARD.emptyHint, ScrollOverview::Config::themeMutedText(), EMPTYPX, false, "", sc<int>(CARD.box.width - PADL * 2.F), 400);
             if (EMPTYTEX && EMPTYTEX->ok()) {
                 CBox emptyBox{CARD.box.x + PADL, CARD.box.y + PADL + std::round(30.F * SCALE), sc<float>(EMPTYTEX->m_size.x), sc<float>(EMPTYTEX->m_size.y)};
                 ADDTEX(EMPTYTEX, emptyBox.round());
@@ -4625,7 +4641,7 @@ static void drawSearch(const SSearchLayout& L) {
             ADDINSP(ICONTEX, iconBox.round());
         } else if (!L.inspector.icon.empty()) {
             const int  GLYPHPX = std::max(1, sc<int>(std::round(28.F * SCALE)));
-            const auto GLYPHTEX = OverviewRender::text(L.inspector.icon, ScrollOverview::Config::themeAccent(), GLYPHPX, false, "", sc<int>(ICOND), 400);
+            const auto GLYPHTEX = OverviewRender::text(L.inspector.icon, ScrollOverview::Config::themeHeading(), GLYPHPX, false, "", sc<int>(ICOND), 400);
             if (GLYPHTEX && GLYPHTEX->ok()) {
                 CBox glyphBox{IBOX.x + PADL, IBOX.y + PADL, sc<float>(GLYPHTEX->m_size.x), sc<float>(GLYPHTEX->m_size.y)};
                 ADDINSP(GLYPHTEX, glyphBox.round());
@@ -4650,11 +4666,11 @@ static void drawSearch(const SSearchLayout& L) {
         };
 
         if (!L.inspector.category.empty()) {
-            auto catCol = L.inspector.running ? ScrollOverview::Config::themeAccent() : ScrollOverview::Config::themeAccent();
+            auto catCol = ScrollOverview::Config::themeHeading();
             paintWrap(L.inspector.category, catCol, std::max(1, sc<int>(std::round(10.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(18.F * SCALE), std::round(3.F * SCALE));
         }
         if (!L.inspector.status.empty()) {
-            const auto STCOL = L.inspector.running ? ScrollOverview::Config::themeAccent() : ScrollOverview::Config::themeMutedText();
+            const auto STCOL = L.inspector.running ? ScrollOverview::Config::themeHeading() : ScrollOverview::Config::themeMutedText();
             paintWrap(L.inspector.status, STCOL, std::max(1, sc<int>(std::round(11.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(18.F * SCALE), std::round(3.F * SCALE));
         }
         paintWrap(L.inspector.title, ScrollOverview::Config::themeForeground(), std::max(1, sc<int>(std::round(15.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(40.F * SCALE),
@@ -4664,16 +4680,16 @@ static void drawSearch(const SSearchLayout& L) {
 
         paintWrap(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), std::max(1, sc<int>(std::round(12.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(48.F * SCALE),
                   std::round(8.F * SCALE));
-        const auto DETCOL = ScrollOverview::Config::themeMutedText().modifyA(0.9F);
+        const auto DETCOL = ScrollOverview::Config::themeMutedText();
         const int  DETPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
         paintWrap(L.inspector.detail1, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, sc<int>(40.F * SCALE), std::round(6.F * SCALE));
         paintWrap(L.inspector.detail2, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, sc<int>(28.F * SCALE), std::round(6.F * SCALE));
-        paintWrap(L.inspector.detail3, DETCOL.modifyA(0.75F), std::max(1, sc<int>(std::round(10.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE),
+        paintWrap(L.inspector.detail3, DETCOL, std::max(1, sc<int>(std::round(10.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE),
                   std::round(8.F * SCALE));
 
         float hintY = CLIPB;
         const int HINTPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
-        const auto HINTCOL = ScrollOverview::Config::themeForeground().modifyA(0.85F);
+        const auto HINTCOL = ScrollOverview::Config::themeMutedText();
         const auto measureHint = [&](const std::string& s) -> float {
             if (s.empty())
                 return 0.F;
@@ -4691,7 +4707,7 @@ static void drawSearch(const SSearchLayout& L) {
     }
 
     texFade = FADE;
-    const CHyprColor FG = !L.queried ? ScrollOverview::Config::themeMutedText().modifyA(0.65F) : (L.emptyResult ? CHyprColor{0.95F, 0.35F, 0.35F, 1.F} : ScrollOverview::Config::themeForeground());
+    const CHyprColor FG = !L.queried ? ScrollOverview::Config::themeMutedText() : (L.emptyResult ? ScrollOverview::Config::themeUrgent() : ScrollOverview::Config::themeForeground());
 
     const int  FONTPX = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
     const auto NOW    = Time::steadyNow();
@@ -4788,9 +4804,9 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         return;
 
     // ---- ANIMATE: re-aim the search animations from this frame's results.
-    // Results exist only once there is query text. An empty bar (including
-    // compose-active or a Down into "browse") must not raise the results block.
-    const bool QUERIED = !g_search.query.text.empty();
+    // Results exist once there is query text, or while browsing an Omarchy
+    // submenu after Enter (query is cleared so children are listed).
+    const bool QUERIED = !g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack();
 
     const size_t MATCHES = !g_search.query.text.empty() ? matchingWindowCount() : 0;
     const auto   RESULTS = QUERIED ? overviewSearchRows() : std::vector<SSearchRow>{};
@@ -5443,6 +5459,7 @@ bool CScrollOverview::shouldSuppressRenderDamage() const {
 }
 
 void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
+    syncPluginAnimEnabled();
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return;
@@ -6416,7 +6433,26 @@ EOverviewPhase CScrollOverview::phase() const {
 // swap has to happen BEFORE the new target is assigned: the animation reads its
 // config when it is re-aimed, so setting it afterwards would shape the next
 // transition rather than this one.
+void CScrollOverview::syncPluginAnimEnabled() {
+    // Overview open/close is a Hyprland animated variable with a COPIED
+    // internalEnabled, so plugin:hyprdrive:anim_scale 0 would otherwise still
+    // ease the overview while dock flights snap. Refresh every frame so a live
+    // panel toggle takes effect on an already-open overview.
+    const int ON = ScrollOverview::Config::motionEnabled() ? 1 : 0;
+    const auto set = [ON](const SP<Hyprutils::Animation::SAnimationPropertyConfig>& cfg) {
+        if (cfg)
+            cfg->internalEnabled = ON;
+    };
+    set(openAnimConfig);
+    set(closeAnimConfig);
+    set(reverseAnimConfig);
+    set(searchAnimConfig);
+    set(workspaceInsertFadeConfig);
+    set(workspaceRemoveFadeConfig);
+}
+
 void CScrollOverview::useAnimDirection(bool opening) {
+    syncPluginAnimEnabled();
     // X75 (user, 2026-08-06): spamming Super "seems to have a decel+reverse
     // thing going on, I want it to immediately reverse at the same inverse
     // momentum it was going at".
@@ -6573,6 +6609,46 @@ float CScrollOverview::openProgress() const {
         return 0.F;
 
     return overviewGridProgress(scale->value());
+}
+
+void CScrollOverview::onWorkspaceSwipeBegin() {
+    trackpadWorkspaceFollowing = true;
+    trackpadTapeFollowing      = false;
+    // Logical units, same as viewOffset — a slow swipe must not have to cover
+    // a full card width on the pad.
+    trackpadScrollAccum = viewOffset ? axisValue(viewOffset->value(), layout) : 0.0;
+}
+
+void CScrollOverview::onWorkspaceSwipeUpdate(double delta) {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || !viewOffset)
+        return;
+
+    const float SCALE = std::max<float>(scale->value(), 0.01F);
+    const float PITCH = getWorkspaceLogicalPitch(MONITOR, SCALE, layout);
+    // gesture_distance px on the pad = one desktop. Linear in finger travel,
+    // not velocity, so a slow swipe still reaches the next workspace.
+    const float DIST  = std::max(80.F, sc<float>(ScrollOverview::Config::getGestureDistance()));
+
+    trackpadWorkspaceFollowing = true;
+    trackpadScrollAccum += delta * (PITCH / DIST);
+
+    double minOffset = 0.0;
+    double maxOffset = 0.0;
+    for (size_t i = 0; i < images.size(); ++i) {
+        if (!images[i] || !images[i]->pWorkspace)
+            continue;
+        const double WORKSPACEOFFSET = workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, PITCH);
+        minOffset                    = std::min(minOffset, WORKSPACEOFFSET);
+        maxOffset                    = std::max(maxOffset, WORKSPACEOFFSET);
+    }
+    trackpadScrollAccum = std::clamp(trackpadScrollAccum, minOffset, maxOffset);
+    viewOffset->setValueAndWarp(axisOffsetVector(sc<float>(trackpadScrollAccum), layout));
+    damage();
+}
+
+void CScrollOverview::onWorkspaceSwipeEnd() {
+    finishWorkspaceScrollFollow();
 }
 
 void CScrollOverview::onSwipeUpdate(double delta) {

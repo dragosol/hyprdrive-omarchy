@@ -132,6 +132,9 @@ class CScrollOverview : public IOverview {
     void         resetSwipe() override;
     void         onSwipeUpdate(double delta) override;
     void         onSwipeEnd() override;
+    void         onWorkspaceSwipeBegin() override;
+    void         onWorkspaceSwipeUpdate(double delta) override;
+    void         onWorkspaceSwipeEnd() override;
     float        openProgress() const override;
 
     // close without a selection
@@ -271,6 +274,7 @@ class CScrollOverview : public IOverview {
     void   scheduleRealtimePreviewFrame();
     void   suspendInputListeners();
     void   useAnimDirection(bool opening);
+    void   syncPluginAnimEnabled();
     void   activateSubmapIfConfigured();
     void   restoreSubmapIfActive();
     bool   dispatchSubmapMouseClick(uint32_t button);

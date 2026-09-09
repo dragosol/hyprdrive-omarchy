@@ -92,21 +92,18 @@ int main() {
         CHECK(agyResults.front().actionCommand.find("solve this problem") != std::string::npos);
 
         auto all = OmarchySearch::promptAllAgents("what is the weather today");
-        CHECK(all.size() >= 4);
-        bool hasGrok = false, hasAgy = false, hasGemini = false, hasClaude = false;
+        // Sentence queries only list agents that are installed and logged in
+        // (usage record with ready:true), not the full catalog.
+        CHECK(all.size() < 8);
         for (const auto& it : all) {
-            if (it.name.find("Grok") != std::string::npos) hasGrok = true;
-            if (it.name.find("Antigravity") != std::string::npos || it.name.find("AGY") != std::string::npos) hasAgy = true;
-            if (it.name.find("Gemini") != std::string::npos) hasGemini = true;
-            if (it.name.find("Claude") != std::string::npos) hasClaude = true;
             CHECK(it.description == "what is the weather today");
             CHECK(it.actionCommand.find("what is the weather today") != std::string::npos);
+            CHECK(it.kind == OmarchySearch::EItemKind::Agent);
         }
-        CHECK(hasGrok);
-        CHECK(hasAgy);
-        CHECK(hasGemini);
-        CHECK(hasClaude);
-        CHECK(all.front().name.find("Grok") != std::string::npos);
+
+        CHECK(OmarchySearch::isGlyphIcon("\uF249"));
+        CHECK(!OmarchySearch::isGlyphIcon("folder"));
+        CHECK(!OmarchySearch::isGlyphIcon("/usr/share/pixmaps/x.svg"));
     }
 
     // 3. Omarchy Menu Actions Search — must not fork. The old path ran
@@ -124,6 +121,32 @@ int main() {
         const auto ms2 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
         CHECK(ms2 < 100);
         (void)again;
+
+        auto installHits = OmarchySearch::searchMenu("install", 8);
+        std::string installId;
+        for (const auto& it : installHits) {
+            if (it.name == "Install" && it.kind == OmarchySearch::EItemKind::Menu) {
+                installId = it.id;
+                CHECK(!it.icon.empty());
+                CHECK(OmarchySearch::isGlyphIcon(it.icon));
+                break;
+            }
+        }
+        CHECK(!installId.empty());
+        OmarchySearch::navigateMenu(installId);
+        auto kids = OmarchySearch::searchMenu("", 24);
+        bool hasBack = false, hasPackage = false;
+        for (const auto& it : kids) {
+            if (it.kind == OmarchySearch::EItemKind::Back)
+                hasBack = true;
+            if (it.name == "Package") {
+                hasPackage = true;
+                CHECK(!it.icon.empty());
+            }
+        }
+        CHECK(hasBack);
+        CHECK(hasPackage);
+        OmarchySearch::resetMenuRoute();
     }
 
     // 4. File search is idle until a query is issued

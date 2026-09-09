@@ -25,6 +25,7 @@ struct SSearchItem {
     std::string name;
     std::string description;
     std::string icon;
+    std::string iconFont;     // nerd-font family for menu glyphs; empty = JetBrainsMono Nerd Font
     std::string category;     // "Apps", "Omarchy Menu", "AI Agent", "Calculator", "Files", "Settings"
     std::string actionCommand;// shell command or executable
     std::string filePath;     // absolute path for files
@@ -45,9 +46,9 @@ void query(const std::string& text);
 // Provider queries
 bool isAgentQuery(const std::string& query);
 std::vector<SSearchItem> searchAgents(const std::string& query);
-// Every configured agent, with the typed sentence as the prompt. Used when
-// the query is not a /prefix so the AI column is not a single-vendor default.
+// Logged-in agents only, with the typed sentence as the prompt.
 std::vector<SSearchItem> promptAllAgents(const std::string& prompt);
+bool                     isGlyphIcon(const std::string& icon);
 std::vector<SSearchItem> agentHelpItems();
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
 std::vector<SSearchItem> searchMenu(const std::string& query, size_t limit = 10);

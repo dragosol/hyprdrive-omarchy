@@ -20,7 +20,7 @@ Prefix: `plugin:hyprdrive:`
 | `gesture_distance` | int | `200` | >= 1 | gesture distance in pixels |
 | `col_highlight` | color/gradient | `rgba(0, 0, 0, 0)` |  | colour of the selection/hover highlights; unset falls back to general:col.active_border |
 | `scale` | float | `0.82` | 0.1 .. 0.9 | overview scale |
-| `anim_scale` | float | `1` | 0.05 .. 100 | global animation slowdown; 1 = normal, 10 = ten times slower |
+| `anim_scale` | float | `1` | 0 .. 100 | global animation slowdown; 1 = normal, 10 = ten times slower, 0 = snap |
 | `open_speed` | float | `2.6` | 0.1 .. 20 | overview open duration, tenths of a second |
 | `close_speed` | float | `1.9` | 0.1 .. 20 | overview close duration, tenths of a second |
 | `workspace_gap` | int | `40` | >= 0 | gap between overview workspaces |
