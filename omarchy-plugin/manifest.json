@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "dragos.hyprdrive",
+  "name": "Hyprdrive",
+  "version": "1.5.0",
+  "author": "dragos",
+  "license": "MIT",
+  "description": "Hyprdrive control panel: overview and dock toggles, a full trackpad gesture editor, texture quality, and AC/battery profiles.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Hyprdrive",
+    "description": "Overview, dock, gestures, textures, and power profiles.",
+    "category": "System",
+    "aliases": ["hyprdrive", "overview", "dock", "gestures", "trackpad"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

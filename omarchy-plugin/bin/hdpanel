@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Hyprdrive Omarchy panel back end.
+
+Live preview is `hyprctl keyword`. Durable writes land in
+~/.config/hypr/hyprdrive/40-panel.lua (keys) and 35-gestures.lua (gestures).
+AC/battery profiles live in ~/.local/state/hyprdrive/panel.json.
+"""
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))) / "hyprdrive"
+STORE = STATE / "panel.json"
+FRAGDIR = pathlib.Path(os.environ.get("HYPRDRIVE_FRAGMENTS", os.path.expanduser("~/.config/hypr/hyprdrive")))
+PANEL_FRAG = "40-panel.lua"
+GESTURE_FRAG = "35-gestures.lua"
+BEGIN = "-- BEGIN raw-snippet (hand edits below survive regeneration)"
+END = "-- END raw-snippet"
+
+PLUGIN = "plugin:hyprdrive:"
+
+KEY_META = [
+    # Overview / motion
+    {"key": "animations:enabled", "kind": "bool", "group": "overview", "label": "Compositor animations"},
+    {"key": PLUGIN + "anim_scale", "kind": "float", "group": "overview", "label": "Hyprdrive animation scale", "min": 0, "max": 10, "step": 0.05},
+    {"key": PLUGIN + "open_speed", "kind": "float", "group": "overview", "label": "Overview open speed", "min": 0.1, "max": 20, "step": 0.1},
+    {"key": PLUGIN + "close_speed", "kind": "float", "group": "overview", "label": "Overview close speed", "min": 0.1, "max": 20, "step": 0.1},
+    {"key": PLUGIN + "tap_super", "kind": "bool", "group": "overview", "label": "Tap Super to toggle overview"},
+    {"key": PLUGIN + "scale", "kind": "float", "group": "overview", "label": "Overview scale", "min": 0.1, "max": 0.9, "step": 0.01},
+    {"key": PLUGIN + "mission_control", "kind": "bool", "group": "overview", "label": "Mission Control grid"},
+    # Dock
+    {"key": PLUGIN + "dock:enabled", "kind": "bool", "group": "dock", "label": "Show dock"},
+    {"key": PLUGIN + "dock:corner_radius", "kind": "int", "group": "dock", "label": "Dock corner radius", "min": 0, "max": 64, "step": 1},
+    {"key": PLUGIN + "dock:autohide", "kind": "bool", "group": "dock", "label": "Autohide dock"},
+    {"key": PLUGIN + "dock:icon_size", "kind": "int", "group": "dock", "label": "Icon size", "min": 8, "max": 128, "step": 1},
+    {"key": PLUGIN + "dock:minimize_ms", "kind": "int", "group": "dock", "label": "Minimize flight (ms)", "min": 0, "max": 2000, "step": 10},
+    {"key": PLUGIN + "dock:autohide_ms", "kind": "int", "group": "dock", "label": "Autohide slide (ms)", "min": 0, "max": 2000, "step": 10},
+    {"key": PLUGIN + "dock:show_apps_button", "kind": "bool", "group": "dock", "label": "Show Applications button"},
+    {"key": PLUGIN + "dock:show_favorites", "kind": "bool", "group": "dock", "label": "Pinned favorites"},
+    # Textures
+    {"key": PLUGIN + "prefilter_below", "kind": "float", "group": "textures", "label": "Mipmap prefilter below", "min": 0, "max": 1, "step": 0.05},
+    {"key": PLUGIN + "live_layer_frost", "kind": "bool", "group": "textures", "label": "Live layer frost"},
+    {"key": PLUGIN + "blur", "kind": "bool", "group": "textures", "label": "Overview wallpaper blur"},
+    {"key": PLUGIN + "dock:blur_size", "kind": "int", "group": "textures", "label": "Dock blur size (-1 follow)", "min": -1, "max": 64, "step": 1},
+    {"key": PLUGIN + "dock:blur_passes", "kind": "int", "group": "textures", "label": "Dock blur passes (-1 follow)", "min": -1, "max": 10, "step": 1},
+]
+
+DEFAULT_GESTURES = [
+    {"fingers": 3, "direction": "up", "action": "overview", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    {"fingers": 3, "direction": "down", "action": "overview", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    {"fingers": 3, "direction": "horizontal", "action": "workspace", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    {"fingers": 4, "direction": "down", "action": "close", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    {"fingers": 4, "direction": "up", "action": "fullscreen", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    {"fingers": 2, "direction": "pinchout", "action": "zoom", "mods": "", "scale": 1, "disable_inhibit": False, "arg": "live"},
+    {"fingers": 3, "direction": "click", "action": "overview", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    {"fingers": 4, "direction": "click", "action": "close", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+]
+
+ACTIONS = [
+    {"value": "overview", "label": "Overview (follow fingers)"},
+    {"value": "workspace", "label": "Workspace swipe"},
+    {"value": "close", "label": "Close window"},
+    {"value": "fullscreen", "label": "Fullscreen"},
+    {"value": "maximize", "label": "Maximize"},
+    {"value": "float", "label": "Float / tile"},
+    {"value": "move", "label": "Move window"},
+    {"value": "resize", "label": "Resize window"},
+    {"value": "special", "label": "Special workspace"},
+    {"value": "zoom", "label": "Cursor zoom (pinch)"},
+    {"value": "dispatcher", "label": "Hyprland dispatcher"},
+    {"value": "keys", "label": "Send key / chord"},
+]
+
+DIRECTIONS = ["up", "down", "left", "right", "vertical", "horizontal", "swipe", "pinch", "pinchin", "pinchout", "click"]
+
+# Hyprland's own gesture table. Overview follow-the-fingers and workspace (so
+# an open overview can pan desktops instead of running the native swipe) stay
+# on hyprdrive.gesture. Native close/fullscreen/etc. still use hl.gesture.
+NATIVE_ACTIONS = {"close", "fullscreen", "float", "move", "resize", "special"}
+DIR_ALIASES = {
+    "pinch_in": "pinchin",
+    "pinch-in": "pinchin",
+    "pinch_out": "pinchout",
+    "pinch-out": "pinchout",
+}
+
+
+def _env():
+    env = dict(os.environ)
+    run = env.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+    sig = env.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not sig or not (pathlib.Path(run) / "hypr" / sig / ".socket.sock").exists():
+        d = pathlib.Path(run) / "hypr"
+        sigs = sorted((p for p in d.glob("*") if (p / ".socket.sock").exists()),
+                      key=lambda p: p.stat().st_mtime, reverse=True) if d.is_dir() else []
+        if not sigs:
+            return None
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = sigs[0].name
+    env["XDG_RUNTIME_DIR"] = run
+    return env
+
+
+def hyprctl(*args):
+    env = _env()
+    if env is None:
+        return None
+    try:
+        r = subprocess.run(["hyprctl", *args], capture_output=True, text=True, timeout=20, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0:
+        return None
+    if "can't work" in text or text.lstrip().startswith("error:"):
+        return None
+    return r.stdout
+
+
+def hyprctl_run(*args):
+    env = _env()
+    if env is None:
+        return None
+    try:
+        return subprocess.run(["hyprctl", *args], capture_output=True, text=True, timeout=20, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def getoption(key):
+    out = hyprctl("getoption", key, "-j")
+    if not out:
+        return None
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return None
+    for k in ("bool", "int", "float", "str", "gradient", "vec2", "css", "custom", "data"):
+        if k in d:
+            return d[k]
+    return None
+
+
+# Omarchy looknfeel.lua sets these as overridden leaves. animations.enabled
+# alone does not clear them, so compositor-off has to disable each one and
+# compositor-on has to restore the shipped curves.
+OMARCHY_ANIM_LEAVES = [
+    ("global", True, 10, "default", None),
+    ("border", True, 5.39, "easeOutQuint", None),
+    ("windows", True, 3.79, "easeOutQuint", None),
+    ("windowsIn", True, 4.1, "easeOutQuint", "popin 87%"),
+    ("windowsOut", True, 1.49, "linear", "popin 87%"),
+    ("fadeIn", True, 1.73, "almostLinear", None),
+    ("fadeOut", True, 1.46, "almostLinear", None),
+    ("fade", True, 3.03, "quick", None),
+    ("fadeSwitch", False, None, None, None),
+    ("layers", True, 3.81, "easeOutQuint", None),
+    ("layersIn", True, 4, "easeOutQuint", "fade"),
+    ("layersOut", True, 1.5, "linear", "fade"),
+    ("fadeLayersIn", True, 1.79, "almostLinear", None),
+    ("fadeLayersOut", True, 1.39, "almostLinear", None),
+    ("workspaces", False, None, None, None),
+    ("specialWorkspace", True, 3, "easeOutQuint", "slidevert"),
+]
+
+
+def eval_lua(code):
+    r = hyprctl_run("eval", code)
+    if r is None:
+        return False
+    text = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0 or text.lstrip().startswith("error:"):
+        sys.stderr.write(text if text.endswith("\n") else text + "\n")
+        return False
+    return True
+
+
+def anim_leaf_lua(leaf, enabled, speed=None, curve=None, style=None):
+    fields = ["leaf = %s" % lua_lit(leaf), "enabled = %s" % lua_lit(bool(enabled))]
+    if enabled and speed is not None:
+        fields.append("speed = %s" % lua_lit(speed))
+        if curve:
+            fields.append("bezier = %s" % lua_lit(curve))
+        if style:
+            fields.append("style = %s" % lua_lit(style))
+    return "hl.animation({ %s })" % ", ".join(fields)
+
+
+# Extra leaves Omarchy does not override; disable them explicitly so they
+# cannot keep animating via inherit-as-true (internalEnabled -1).
+DISABLE_EXTRA_LEAVES = ("windowsMove",)
+
+
+def compositor_anim_lua(enabled, restore_leaves):
+    lines = ["hl.config({ animations = { enabled = %s } })" % lua_lit(bool(enabled))]
+    if enabled and restore_leaves:
+        for leaf, on, speed, curve, style in OMARCHY_ANIM_LEAVES:
+            lines.append(anim_leaf_lua(leaf, on, speed, curve, style))
+    elif not enabled:
+        for leaf, on, speed, curve, style in OMARCHY_ANIM_LEAVES:
+            lines.append(anim_leaf_lua(leaf, False))
+        for leaf in DISABLE_EXTRA_LEAVES:
+            lines.append(anim_leaf_lua(leaf, False))
+    return "\n".join(lines)
+
+
+def apply_live_many(pairs):
+    """Omarchy uses the Lua config parser; hyprctl keyword is a no-op. eval hl.config."""
+    anim = None
+    rest = []
+    for key, value in pairs:
+        if key == "animations:enabled":
+            anim = bool(value)
+        else:
+            rest.append((key, value))
+    if rest:
+        tree = {}
+        for key, value in rest:
+            nest_set(tree, key, value)
+        if not eval_lua("hl.config(%s)" % emit_table(tree, 0)):
+            return False
+    if anim is not None:
+        # Live on must restore leaves because looknfeel.lua is not re-run.
+        if not eval_lua(compositor_anim_lua(anim, restore_leaves=True)):
+            return False
+    return True
+
+
+def apply_live(key, value):
+    return apply_live_many([(key, value)])
+
+
+def on_battery():
+    root = pathlib.Path("/sys/class/power_supply")
+    if not root.is_dir():
+        return False
+    for p in root.iterdir():
+        t = (p / "type").read_text().strip() if (p / "type").exists() else ""
+        if t == "Mains" and (p / "online").exists():
+            return (p / "online").read_text().strip() == "0"
+    for p in root.iterdir():
+        t = (p / "type").read_text().strip() if (p / "type").exists() else ""
+        if t == "Battery" and (p / "status").exists():
+            if (p / "status").read_text().strip() == "Discharging":
+                return True
+    return False
+
+
+def load_store():
+    if STORE.exists():
+        try:
+            return json.loads(STORE.read_text())
+        except ValueError:
+            pass
+    return {
+        "keys": {},
+        "gestures": None,
+        "profiles": {"ac": {}, "battery": {}},
+        "profileMode": "auto",
+        "roundedRadius": 24,
+    }
+
+
+def save_store(s):
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = STORE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(s, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, STORE)
+
+
+def lua_lit(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return repr(v) if isinstance(v, float) else str(int(v))
+    s = str(v).replace("\\", "\\\\").replace("'", "\\'")
+    return "'" + s + "'"
+
+
+def nest_set(tree, dotted, value):
+    parts = dotted.split(":")
+    cur = tree
+    for p in parts[:-1]:
+        cur = cur.setdefault(p, {})
+    cur[parts[-1]] = value
+
+
+def emit_table(obj, indent=8):
+    pad = " " * indent
+    if isinstance(obj, dict):
+        lines = ["{"]
+        for k, v in obj.items():
+            if isinstance(v, dict):
+                lines.append("%s%s = %s," % (pad + "    ", k, emit_table(v, indent + 4)))
+            else:
+                lines.append("%s%s = %s," % (pad + "    ", k, lua_lit(v)))
+        lines.append(pad + "}")
+        return "\n".join(lines)
+    return lua_lit(obj)
+
+
+def compose_fragment(machine, existing_path):
+    raw = ""
+    if existing_path.exists():
+        text = existing_path.read_text()
+        b = next((i for i, l in enumerate(text.splitlines()) if l.strip().startswith("-- BEGIN raw-snippet")), None)
+        if b is not None:
+            lines = text.splitlines()
+            e = next((i for i in range(b + 1, len(lines)) if lines[i].strip() == END), None)
+            if e is not None:
+                raw = "\n".join(lines[b + 1:e])
+    return machine.rstrip("\n") + "\n\n" + BEGIN + "\n" + raw.strip("\n") + ("\n" if raw.strip("\n") else "") + END + "\n"
+
+
+def write_panel_fragment(store):
+    keys = dict(store.get("keys", {}))
+    anim = keys.pop("animations:enabled", None)
+    body = [
+        "-- hyprdrive fragment 40-panel -- Omarchy settings panel.",
+        "-- MACHINE-OWNED above the raw-snippet marker.",
+    ]
+    # animations.enabled is a compositor key. Keep it (and leaf disables)
+    # outside hyprdrive_loaded() so a reload cannot re-enable Omarchy's
+    # looknfeel leaves before the plugin guard runs.
+    if anim is not None:
+        body.append("hl.config({ animations = { enabled = %s } })" % lua_lit(bool(anim)))
+        if not anim:
+            for leaf, on, speed, curve, style in OMARCHY_ANIM_LEAVES:
+                body.append(anim_leaf_lua(leaf, False))
+            for leaf in DISABLE_EXTRA_LEAVES:
+                body.append(anim_leaf_lua(leaf, False))
+    tree = {}
+    for k, v in keys.items():
+        nest_set(tree, k, v)
+    if tree:
+        body.append("if hyprdrive_loaded() then")
+        body.append("    hl.config(%s)" % emit_table(tree, 4))
+        body.append("end")
+    body.append("")
+    FRAGDIR.mkdir(parents=True, exist_ok=True)
+    path = FRAGDIR / PANEL_FRAG
+    path.write_text(compose_fragment("\n".join(body), path))
+    return path
+
+
+def lua_direction(direction):
+    d = str(direction or "up")
+    return DIR_ALIASES.get(d, d)
+
+
+def hyprland_direction(direction):
+    # Hyprland 0.56.2 labels scale<1 as PINCH_OUT (fingers together). Swap so
+    # the panel's pinchin/pinchout match what the user actually does.
+    d = lua_direction(direction)
+    if d == "pinchin":
+        return "pinchout"
+    if d == "pinchout":
+        return "pinchin"
+    return d
+
+
+def gesture_fields(g, include_arg=True):
+    fields = [
+        "fingers = %d" % int(g.get("fingers", 3)),
+        "direction = %s" % lua_lit(hyprland_direction(g.get("direction", "up"))),
+        "action = %s" % lua_lit(g.get("action", "overview")),
+    ]
+    if g.get("mods"):
+        fields.append("mods = %s" % lua_lit(g["mods"]))
+    if include_arg and g.get("arg"):
+        fields.append("arg = %s" % lua_lit(g["arg"]))
+    scale = g.get("scale", 1)
+    if scale not in (1, 1.0):
+        fields.append("scale = %s" % lua_lit(scale))
+    if g.get("disable_inhibit"):
+        fields.append("disable_inhibit = true")
+    return fields
+
+
+def write_gesture_fragment(gestures):
+    native, plugin, workspace = [], [], []
+    for g in gestures:
+        action = str(g.get("action") or "overview")
+        direction = str(g.get("direction") or "")
+        if direction in ("click", "tap"):
+            plugin.append(g)
+        elif action == "workspace":
+            workspace.append(g)
+        elif action in NATIVE_ACTIONS:
+            native.append(g)
+        else:
+            plugin.append(g)
+
+    lines = [
+        "-- hyprdrive fragment 35-gestures -- panel-owned trackpad gestures.",
+        "-- Native Hyprland actions (close, fullscreen, ...) use hl.gesture.",
+        "-- Overview follow and workspace (overview pan + desktop swipe) stay on hyprdrive.gesture.",
+        "-- MACHINE-OWNED above the raw-snippet marker.",
+    ]
+    for g in native:
+        lines.append("pcall(function() hl.gesture({ %s }) end)" % ", ".join(gesture_fields(g, include_arg=bool(g.get("arg")))))
+    if workspace:
+        lines.append("if hyprdrive_loaded() then")
+        for g in workspace:
+            lines.append("    pcall(function() hl.plugin.hyprdrive.gesture({ %s }) end)" % ", ".join(gesture_fields(g)))
+        lines.append("else")
+        for g in workspace:
+            lines.append("    pcall(function() hl.gesture({ %s }) end)" % ", ".join(gesture_fields(g, include_arg=False)))
+        lines.append("end")
+    if plugin:
+        lines.append("if hyprdrive_loaded() then")
+        for g in plugin:
+            lines.append("    pcall(function() hl.plugin.hyprdrive.gesture({ %s }) end)" % ", ".join(gesture_fields(g)))
+        lines.append("end")
+    lines.append("")
+    FRAGDIR.mkdir(parents=True, exist_ok=True)
+    path = FRAGDIR / GESTURE_FRAG
+    path.write_text(compose_fragment("\n".join(lines), path))
+    return path
+
+
+def coerce(meta, value):
+    kind = meta["kind"]
+    if kind == "bool":
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+    if kind == "int":
+        return int(float(value))
+    if kind == "float":
+        return float(value)
+    return str(value)
+
+
+def live_keys():
+    out = {}
+    for meta in KEY_META:
+        v = getoption(meta["key"])
+        if v is not None:
+            out[meta["key"]] = v
+    return out
+
+
+def dump():
+    store = load_store()
+    live = live_keys()
+    gestures = store.get("gestures")
+    if not gestures:
+        gestures = [dict(g) for g in DEFAULT_GESTURES]
+    else:
+        gestures = [dict(g) for g in gestures]
+        seen = {(int(g.get("fingers", 0)), str(g.get("direction") or "")) for g in gestures}
+        for g in DEFAULT_GESTURES:
+            if g["direction"] == "click" and (g["fingers"], "click") not in seen:
+                gestures.append(dict(g))
+    return {
+        "keys": live,
+        "owned": store.get("keys", {}),
+        "gestures": gestures,
+        "gesturesOwned": store.get("gestures") is not None,
+        "profiles": store.get("profiles", {"ac": {}, "battery": {}}),
+        "profileMode": store.get("profileMode", "auto"),
+        "roundedRadius": store.get("roundedRadius", 24),
+        "onBattery": on_battery(),
+        "meta": KEY_META,
+        "actions": ACTIONS,
+        "directions": DIRECTIONS,
+    }
+
+
+def cmd_dump(_args):
+    json.dump(dump(), sys.stdout, indent=1)
+    sys.stdout.write("\n")
+    return 0
+
+
+def set_keys(pairs, preview=False):
+    coerced = []
+    for key, value in pairs:
+        meta = next((m for m in KEY_META if m["key"] == key), None)
+        if meta is None:
+            raise SystemExit("hdpanel: unknown key %s" % key)
+        coerced.append((key, coerce(meta, value)))
+    if not apply_live_many(coerced):
+        raise SystemExit("hdpanel: live apply failed")
+    if preview:
+        return coerced
+    store = load_store()
+    store.setdefault("keys", {})
+    for key, value in coerced:
+        store["keys"][key] = value
+        if key == PLUGIN + "dock:corner_radius" and int(value) > 0:
+            store["roundedRadius"] = int(value)
+    save_store(store)
+    write_panel_fragment(store)
+    return coerced
+
+
+def cmd_set(args):
+    if len(args) < 2 or len(args) % 2 != 0:
+        raise SystemExit("hdpanel: set KEY VALUE [KEY VALUE ...]")
+    pairs = list(zip(args[0::2], args[1::2]))
+    coerced = set_keys(pairs, preview=False)
+    print(json.dumps({"ok": True, "keys": {k: v for k, v in coerced}}))
+    return 0
+
+
+def cmd_preview(args):
+    if len(args) < 2 or len(args) % 2 != 0:
+        raise SystemExit("hdpanel: preview KEY VALUE [KEY VALUE ...]")
+    pairs = list(zip(args[0::2], args[1::2]))
+    coerced = set_keys(pairs, preview=True)
+    print(json.dumps({"ok": True, "preview": True, "keys": {k: v for k, v in coerced}}))
+    return 0
+
+
+def cmd_gestures_set(args):
+    raw = args[0] if args else sys.stdin.read()
+    gestures = json.loads(raw)
+    if not isinstance(gestures, list):
+        raise SystemExit("hdpanel: gestures-set expects a JSON array")
+    for g in gestures:
+        if isinstance(g, dict) and g.get("direction"):
+            g["direction"] = lua_direction(g["direction"])
+    store = load_store()
+    store["gestures"] = gestures
+    save_store(store)
+    write_gesture_fragment(gestures)
+    # Re-parse so native hl.gesture and hyprdrive.gesture replace the previous map.
+    if hyprctl("reload") is None:
+        raise SystemExit("hdpanel: wrote gestures but hyprctl reload failed")
+    print(json.dumps({"ok": True, "count": len(gestures)}))
+    return 0
+
+
+def snapshot_keys():
+    live = live_keys()
+    store = load_store()
+    live.update(store.get("keys", {}))
+    return live
+
+
+def cmd_profile_save(args):
+    name = args[0]
+    if name not in ("ac", "battery"):
+        raise SystemExit("hdpanel: profile is ac or battery")
+    store = load_store()
+    store.setdefault("profiles", {})[name] = snapshot_keys()
+    save_store(store)
+    print(json.dumps({"ok": True, "profile": name, "keys": len(store["profiles"][name])}))
+    return 0
+
+
+def apply_profile(name):
+    store = load_store()
+    prof = store.get("profiles", {}).get(name) or {}
+    if not prof:
+        return 0
+    pairs = []
+    for k, v in prof.items():
+        meta = next((m for m in KEY_META if m["key"] == k), None)
+        if meta is None:
+            continue
+        v = coerce(meta, v)
+        pairs.append((k, v))
+        store.setdefault("keys", {})[k] = v
+    if pairs and not apply_live_many(pairs):
+        raise SystemExit("hdpanel: profile apply failed")
+    save_store(store)
+    write_panel_fragment(store)
+    return len(pairs)
+
+
+def cmd_profile_apply(args):
+    name = args[0]
+    if name == "auto":
+        name = "battery" if on_battery() else "ac"
+    n = apply_profile(name)
+    print(json.dumps({"ok": True, "profile": name, "applied": n, "onBattery": on_battery()}))
+    return 0
+
+
+def cmd_profile_mode(args):
+    mode = args[0]
+    if mode not in ("auto", "ac", "battery"):
+        raise SystemExit("hdpanel: profile-mode is auto, ac, or battery")
+    store = load_store()
+    store["profileMode"] = mode
+    save_store(store)
+    if mode == "auto":
+        apply_profile("battery" if on_battery() else "ac")
+    else:
+        apply_profile(mode)
+    print(json.dumps({"ok": True, "profileMode": mode, "onBattery": on_battery()}))
+    return 0
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print("hdpanel dump|set|preview|gestures-set|profile-save|profile-apply|profile-mode")
+        return 0
+    cmd = argv[1]
+    args = argv[2:]
+    fn = {
+        "dump": cmd_dump,
+        "set": cmd_set,
+        "preview": cmd_preview,
+        "gestures-set": cmd_gestures_set,
+        "profile-save": cmd_profile_save,
+        "profile-apply": cmd_profile_apply,
+        "profile-mode": cmd_profile_mode,
+    }.get(cmd)
+    if not fn:
+        raise SystemExit("hdpanel: unknown command %s" % cmd)
+    return fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

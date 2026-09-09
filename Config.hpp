@@ -85,6 +85,9 @@ void setValue(const std::string& name, const T& value) {
 }
 
 int           getGestureDistance();
+float         getGestureDetent();
+bool          getGestureDetentLabel();
+std::string   getGestureDetentSound();
 
 // Appearance is Hyprland's. Plugin keys that are unset (alpha 0 / -1) read the
 // compositor's live values, so a theme that reloads Hyprland retints every

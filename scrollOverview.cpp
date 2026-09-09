@@ -2,6 +2,12 @@
 #include "SearchLetters.hpp"
 
 #include "Compat.hpp"
+
+// The detent tick spawns through CProcess::runAsync. Included explicitly rather
+// than leaned on transitively: this is the only user in this TU, and a silent
+// loss of the transitive path would fail at the one call site that matters.
+#include <hyprutils/os/Process.hpp>
+#include <unistd.h> // access(X_OK) on the detent sound before spawning it
 using namespace OvInternal; // opted in here rather than leaked from the header
 
 // The definition behind the global declaration in OverviewInternal.hpp. One real
@@ -3423,14 +3429,30 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
         const int  BORDERSIZE  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
         const auto ACCENT      = ScrollOverview::Config::highlightColor();
 
+        // While the workspace drag is running, the card the detent is settling
+        // on wears a heavier ring. FOCUS is 1 on a card centre and 0 at the
+        // midpoint between two, so the weight grows into the detent rather than
+        // flicking on at the crossing -- which is what makes it read as the pad
+        // catching rather than as a redraw.
+        const float FOCUS = trackpadDetentActive && workspaceIdx == trackpadDetentWorkspace ? std::clamp(trackpadDetentFocus, 0.F, 1.F) : 0.F;
+
         CBorderPassElement::SBorderData border;
         border.box           = WORKSPACEBOX.copy().round();
         border.grad1.reset(ACCENT.modifyA(1.F));
         border.a             = WORKSPACEALPHA;
-        border.borderSize    = BORDERSIZE;
+        // Ceil, not round: at BORDERSIZE 1 a 0.6x growth rounds back to 1 and
+        // the whole effect disappears on a thin-border theme.
+        border.borderSize    = BORDERSIZE + sc<int>(std::ceil(FOCUS * sc<float>(BORDERSIZE)));
         border.round         = CARDROUND.rounding;
         border.roundingPower = CARDROUND.power;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+
+        // The NUMBER is not drawn here. This is the background pass -- it runs
+        // before the card's own windows -- so a label written here is painted
+        // over by every window on the desktop it is naming, and TileChrome's
+        // app icon straddles the tile's bottom edge exactly where a
+        // bottom-anchored plate lands. See renderDetentBadge, which draws it
+        // centred on the card in a pass of its own after the windows.
     }
 }
 
@@ -3977,7 +3999,10 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // the strip cell so it tracks the strip instead of a fixed pixel size.
     const auto NUMTEX = OverviewRender::text(std::to_string(wimg->pWorkspace->m_id), ScrollOverview::Config::themeForeground().modifyA(0.20F),
                                                     std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
-    if (NUMTEX && NUMTEX->ok()) {
+    // Only the cell the badge is sitting on fades, and only while it is there.
+    const float NUMFADE = restingNumberFade(workspaceIdx);
+    // Faded fully out: no quad, no pass element.
+    if (NUMFADE > 0.01F && NUMTEX && NUMTEX->ok()) {
         CBox numBox = {
             CELL.x + std::round((sc<float>(CELL.width) - sc<float>(NUMTEX->m_size.x)) / 2.F),
             CELL.y + std::round((sc<float>(CELL.height) - sc<float>(NUMTEX->m_size.y)) / 2.F),
@@ -3988,7 +4013,7 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
         CTexPassElement::SRenderData num;
         num.tex = NUMTEX;
         num.box = numBox.round();
-        num.a   = FADE;
+        num.a   = FADE * NUMFADE;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(num));
     }
 
@@ -4028,8 +4053,150 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // ponytail: no slide between cells. The reference animates x/y because
     // its indicator is one moving item; here the cell rects are already
     // laid out, so the border simply draws on whichever cell is active.
-    if (monitor->m_activeWorkspace && wimg->pWorkspace->m_id == monitor->m_activeWorkspace->m_id) {
+    // ponytail: the compositor's active workspace does not move until a
+    // 3-finger pan COMMITS on release, so reading it here left the strip
+    // marking the desktop the pan started from for the whole gesture -- the
+    // one part of the overview that visibly did not follow the fingers.
+    // Follow the detent while one is running; it is the same index the card
+    // ring and the badge use, so all three move together.
+    const bool ISACTIVE = trackpadDetentActive ? workspaceIdx == trackpadDetentWorkspace :
+                                                 (monitor->m_activeWorkspace && wimg->pWorkspace->m_id == monitor->m_activeWorkspace->m_id);
+    if (ISACTIVE) {
         renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
+    }
+}
+
+namespace {
+    // The strip cell already carries a faint resting number at 15.6% of its
+    // height. The badge is the same glyph at the size the gesture deserves --
+    // near the full cell -- so the two read as one thing turning up rather
+    // than two numbers on one card.
+    constexpr float DETENT_BADGE_FRACTION = 0.70F;
+    // How solid the coloured glyph sits ON TOP of its own frost. Below 1 so the
+    // blurred backdrop reads through the digit -- that is what makes it frosted
+    // glass rather than a flat number.
+    constexpr float DETENT_BADGE_GLYPH_A  = 0.62F;
+    // How long the resting numbers take to get out of the way and come back.
+    // Shorter than the badge's own 420ms entrance on purpose: the cell should
+    // already be clear by the time the popped number is readable, otherwise the
+    // two are briefly legible at once, which is the juxtaposition being avoided.
+    constexpr float RESTING_NUMBER_FADE_MS = 160.F;
+}
+
+bool CScrollOverview::detentBadgeVisible() const {
+    return trackpadDetentActive && ScrollOverview::Config::getGestureDetentLabel() && trackpadDetentWorkspace < images.size() &&
+        images[trackpadDetentWorkspace] && images[trackpadDetentWorkspace]->pWorkspace;
+}
+
+void CScrollOverview::updateRestingFade() {
+    const size_t NONE   = std::numeric_limits<size_t>::max();
+    const size_t TARGET = detentBadgeVisible() ? trackpadDetentWorkspace : NONE;
+
+    if (TARGET != restingFadeCell) {
+        // The cell being vacated takes over the fade-IN slot, so the number the
+        // badge just uncovered comes back rather than snapping on behind it.
+        restingFadePrevCell = restingFadeCell;
+        restingFadeCell     = TARGET;
+        restingFadeAt       = Time::steadyNow();
+    }
+
+    // Mid-fade the compositor has no other reason to draw -- the fade BACK in
+    // runs after the gesture has ended, so there is no finger left to schedule
+    // frames. Same pairing renderDetentBadge and renderSearch use.
+    if (SearchLetters::msSince(Time::steadyNow(), restingFadeAt) < RESTING_NUMBER_FADE_MS) {
+        damage();
+        requestInputFrame();
+    }
+}
+
+float CScrollOverview::restingNumberFade(size_t workspaceIdx) const {
+    if (workspaceIdx != restingFadeCell && workspaceIdx != restingFadePrevCell)
+        return 1.F;
+
+    const float MS = SearchLetters::msSince(Time::steadyNow(), restingFadeAt);
+    const float E  = SearchLetters::easeOutCubic(SearchLetters::clamp01(MS / RESTING_NUMBER_FADE_MS));
+
+    // The badged cell goes 1 -> 0; the one just vacated comes 0 -> 1.
+    return workspaceIdx == restingFadeCell ? 1.F - E : E;
+}
+
+void CScrollOverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
+    if (!monitor || !detentBadgeVisible())
+        return;
+
+    // No strip, nothing to draw on.
+    if (overviewStripLogicalHeight(monitor) <= 0.F)
+        return;
+
+    // Same driver the strip itself fades on, so the badge cannot outlive the
+    // row it is sitting on when the overview is toggled shut mid-drag.
+    const float FADE = overviewGridProgress(renderScale);
+    if (FADE < 0.01F)
+        return;
+
+    const auto& wimg = images[trackpadDetentWorkspace];
+
+    const auto CELL = stripCellBox(trackpadDetentWorkspace, monitor, renderScale);
+    if (CELL.width < 1.0 || CELL.height < 1.0)
+        return;
+
+    const auto NAME = wimg->pWorkspace->m_name.empty() ? std::to_string(wimg->pWorkspace->m_id) : wimg->pWorkspace->m_name;
+    const int  SIZE = std::max(1, sc<int>(std::round(sc<float>(CELL.height) * DETENT_BADGE_FRACTION)));
+    const auto TEX  = OverviewRender::text(NAME, ScrollOverview::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
+    if (!TEX || !TEX->ok())
+        return;
+
+    const float MS   = SearchLetters::msSince(Time::steadyNow(), trackpadDetentBornAt);
+    const auto  POSE = SearchLetters::entrancePose(MS);
+
+    // Scale about the glyph's own centre; POSE.y is logical px, +down, so it
+    // takes the render scale exactly like the search field's letters do.
+    const float TW = sc<float>(TEX->m_size.x) * POSE.scale;
+    const float TH = sc<float>(TEX->m_size.y) * POSE.scale;
+
+    const double CX = CELL.x + CELL.width / 2.0;
+    const double CY = CELL.y + CELL.height / 2.0 + sc<double>(POSE.y) * sc<double>(renderScale);
+
+    const float A = FADE * POSE.opacity;
+
+    // FROST THE NUMBER ITSELF -- no plate, no box.
+    //
+    // blurAlphaMatte masks the blur to a texture's ALPHA, so handing it the
+    // glyph makes the frost take the shape of the digit rather than a rectangle
+    // behind it. blurredBG is the same precomputed overview blur the strip
+    // panel and the search chrome sample (captured before the strip, so it is
+    // already on hand here). The glyph is then composited over its own frost at
+    // DETENT_BADGE_GLYPH_A, which is what keeps the theme colour on it.
+    //
+    // blurA is full while `a` is not: the frost stays solid while the colour
+    // layer stays translucent, so the digit reads as glass rather than paint.
+    CTexPassElement::SRenderData label;
+    label.tex                   = TEX;
+    label.box                   = CBox{std::round(CX - TW / 2.0), std::round(CY - TH / 2.0), TW, TH};
+    label.a                     = A * DETENT_BADGE_GLYPH_A;
+    label.blur                  = true;
+    label.blurA                 = A;
+    label.blurredBG             = OverviewRender::frameChromeBlur();
+    label.blurAlphaMatte        = TEX;
+    // The badge is drawn after the strip, so the optimised (precomputed) path
+    // would sample a capture that predates it. Force the real thing.
+    label.blockBlurOptimization = true;
+    // blurAlphaMatte alone left the blur covering the glyph's bounding BOX
+    // (photographed: the page text behind smeared in a rectangle). Discarding
+    // fully-transparent fragments is the other half -- it should clip both the
+    // texture and the blur under it to the inked pixels.
+    label.discardActive         = true;
+    label.discardMode           = DISCARD_ALPHA;
+    label.discardOpacity        = 0.f;
+    label.ignoreAlpha           = 0.f;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(label)));
+
+    // The pop is timestamped, not a PHLANIMVAR: if the finger stops mid-drag
+    // the compositor has no reason to schedule the rest of it. Same pairing
+    // renderSearch uses for the letter bounce.
+    if (MS < SearchLetters::ENTRANCE_MS) {
+        damage();
+        requestInputFrame();
     }
 }
 
@@ -4069,6 +4236,7 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
     style.round = CARDROUND.rounding;
     style.power = CARDROUND.power;
     style.fade  = FADE;
+    updateRestingFade();
     // ponytail: the inner radius is the reference's verysmall:large ratio
     // (8:23) applied to whatever the outer radius resolves to, rather than a
     // literal 8. E8-c pinned the outer radius to the live desktop curve, so a
@@ -6298,6 +6466,7 @@ void CScrollOverview::render() {
         }
     }
 
+
     OverviewRender::flushPass(MONITOR);
 
     // X92 / X97. Blur the overview main FB (cards + tiles) into a PRIVATE FB.
@@ -6305,14 +6474,25 @@ void CScrollOverview::render() {
     // plugin:scrolloverview:blur (that only means wallpaper backdrop blur and
     // defaults false). X96 made strip sample this FB; gating on the wallpaper
     // option wiped strip + search-result frost entirely.
+    // The detent badge frosts the digit itself, and does so whatever the theme
+    // does with window blur -- the same stance the overview BACKDROP already
+    // takes, which blurs the wallpaper even when Omarchy windows do not. So the
+    // capture has to run for the badge as well, with the flag forced for its
+    // duration exactly as updateBackdropBlurCache forces it around its own.
     if (ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
         OverviewRender::captureFrameChromeBlur(MONITOR);
-    else
+    else if (detentBadgeVisible()) {
+        ScrollOverview::Config::setValue("decoration:blur:enabled", true);
+        auto restoreBlur = Hyprutils::Utils::CScopeGuard([] { ScrollOverview::Config::setValue("decoration:blur:enabled", false); });
+        OverviewRender::captureFrameChromeBlur(MONITOR);
+    } else
         OverviewRender::clearFrameChromeBlur();
 
     {
         Prof::Timer PROFSTRIP{Prof::stripNs, Prof::stripCalls};
         renderStrip(MONITOR, SCALE, NOW);
+        // On top of the cell the strip just drew, including its minis.
+        renderDetentBadge(MONITOR, SCALE);
     }
     // X87: search (and its frost) under the drag proxy. Previously renderSearch
     // ran after renderDraggedWindow, so the pill painted over the window you
@@ -6611,12 +6791,81 @@ float CScrollOverview::openProgress() const {
     return overviewGridProgress(scale->value());
 }
 
+namespace {
+    // Detent warp across one card-to-card interval, u in [0,1].
+    //
+    //   g(u)  = u - (K/2pi) * sin(2pi*u)
+    //   g'(u) = 1 - K * cos(2pi*u)
+    //
+    // g(0) = 0 and g(1) = 1 EXACTLY, because sin(0) = sin(2pi) = 0. That is the
+    // load-bearing property: an interval costs the same finger travel warped or
+    // unwarped, so the detent buys stickiness without spending pad runway. The
+    // travel is merely redistributed -- slow at the two ends (the card centres),
+    // fast through the middle (the gap).
+    //
+    // Monotonic while |K| < 1. Config clamps to 0.9; at K = 1, g'(0) = 0 and the
+    // cards stop dead under a moving finger.
+    double detentWarp(double u, double k) {
+        if (k <= 0.0)
+            return u;
+
+        constexpr double TWO_PI = 6.283185307179586;
+        return u - (k / TWO_PI) * std::sin(TWO_PI * u);
+    }
+
+    // A flick can cross several boundaries between two frames. One spawn per
+    // crossing then overlaps into a rattle instead of reading as separate
+    // detents, so ticks are floored to this spacing and the extras are dropped.
+    constexpr int64_t DETENT_TICK_MIN_MS = 55;
+}
+
 void CScrollOverview::onWorkspaceSwipeBegin() {
     trackpadWorkspaceFollowing = true;
     trackpadTapeFollowing      = false;
     // Logical units, same as viewOffset — a slow swipe must not have to cover
     // a full card width on the pad.
     trackpadScrollAccum = viewOffset ? axisValue(viewOffset->value(), layout) : 0.0;
+
+    // The raw accumulator starts where the cards already are. Seeding it from
+    // the warped value is correct here and only here: at swipe start the two
+    // agree, because the previous swipe ended settled on a card.
+    trackpadDetentRaw       = trackpadScrollAccum;
+    trackpadDetentActive    = true;
+    trackpadDetentFocus     = 0.F;
+    trackpadDetentWorkspace = viewportCurrentWorkspace;
+    trackpadDetentBornAt    = Time::steadyNow();
+    // Seeded to the card under the finger, NOT to "none": otherwise the first
+    // update fires a tick for a boundary the user has not crossed yet.
+    trackpadDetentTickedIdx = viewportCurrentWorkspace;
+}
+
+void CScrollOverview::maybeTickDetent(size_t workspaceIdx) {
+    if (workspaceIdx == trackpadDetentTickedIdx)
+        return;
+
+    trackpadDetentTickedIdx = workspaceIdx;
+
+    const auto CMD = ScrollOverview::Config::getGestureDetentSound();
+    // Missing or non-executable is silent, not an error: the default names a
+    // path that only some machines have, and a detent is not worth a failed
+    // spawn per boundary on the ones that do not.
+    if (CMD.empty() || ::access(CMD.c_str(), X_OK) != 0)
+        return;
+
+    const auto NOW = Time::steadyNow();
+    if (trackpadDetentLastTick.time_since_epoch().count() != 0 &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(NOW - trackpadDetentLastTick).count() < DETENT_TICK_MIN_MS)
+        return;
+
+    trackpadDetentLastTick = NOW;
+
+    // runAsync, and a binary rather than a shell string: this runs on the
+    // compositor thread inside a gesture update, so it may not fork and it may
+    // not wait. The config value is an executable path, not a command line --
+    // a shell here would be a process that cannot be killed promptly, which is
+    // the same reason OmarchySearch spawns the way it does.
+    Hyprutils::OS::CProcess process(CMD, {});
+    process.runAsync();
 }
 
 void CScrollOverview::onWorkspaceSwipeUpdate(double delta) {
@@ -6631,23 +6880,85 @@ void CScrollOverview::onWorkspaceSwipeUpdate(double delta) {
     const float DIST  = std::max(80.F, sc<float>(ScrollOverview::Config::getGestureDistance()));
 
     trackpadWorkspaceFollowing = true;
-    trackpadScrollAccum += delta * (PITCH / DIST);
 
-    double minOffset = 0.0;
-    double maxOffset = 0.0;
+    // The card offsets are NOT a uniform lattice. workspaceOverviewLogicalOffset
+    // adds each neighbour pair's overflow (EXTRAINTERVAL) on top of the pitch,
+    // so cells genuinely differ in width. Snapping to multiples of PITCH would
+    // therefore walk off the cards the moment one workspace overflows, and the
+    // drift would grow with distance from the active one. Snap to the real
+    // offsets instead, and carry the image index along so the highlight knows
+    // which card it landed on.
+    std::vector<std::pair<double, size_t>> stops;
+    stops.reserve(images.size());
     for (size_t i = 0; i < images.size(); ++i) {
         if (!images[i] || !images[i]->pWorkspace)
             continue;
-        const double WORKSPACEOFFSET = workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, PITCH);
-        minOffset                    = std::min(minOffset, WORKSPACEOFFSET);
-        maxOffset                    = std::max(maxOffset, WORKSPACEOFFSET);
+        stops.emplace_back(sc<double>(workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, PITCH)), i);
     }
-    trackpadScrollAccum = std::clamp(trackpadScrollAccum, minOffset, maxOffset);
+
+    if (stops.empty()) {
+        // No cards to detent against. Keep the old linear behaviour rather than
+        // dividing by an empty span.
+        trackpadScrollAccum += delta * (PITCH / DIST);
+        trackpadDetentRaw   = trackpadScrollAccum;
+        trackpadDetentFocus = 0.F;
+        viewOffset->setValueAndWarp(axisOffsetVector(sc<float>(trackpadScrollAccum), layout));
+        damage();
+        return;
+    }
+
+    std::sort(stops.begin(), stops.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // The finger drives the RAW accumulator; the warp is applied on the way out.
+    // Accumulating into the warped value would feed the curve its own output
+    // every frame and compound it into a stall.
+    trackpadDetentRaw = std::clamp(trackpadDetentRaw + delta * (PITCH / DIST), stops.front().first, stops.back().first);
+
+    // Bracket the raw offset by the two cards it lies between.
+    size_t hi = 0;
+    while (hi < stops.size() && stops[hi].first < trackpadDetentRaw)
+        ++hi;
+
+    const size_t HIIDX = std::min(hi, stops.size() - 1);
+    const size_t LOIDX = HIIDX == 0 ? 0 : HIIDX - 1;
+    const double LO    = stops[LOIDX].first;
+    const double HI    = stops[HIIDX].first;
+    const double SPAN  = HI - LO;
+
+    double u = 0.0;
+    if (SPAN > 1e-6) {
+        u                   = std::clamp((trackpadDetentRaw - LO) / SPAN, 0.0, 1.0);
+        trackpadScrollAccum = LO + SPAN * detentWarp(u, sc<double>(ScrollOverview::Config::getGestureDetent()));
+    } else
+        trackpadScrollAccum = trackpadDetentRaw;
+
     viewOffset->setValueAndWarp(axisOffsetVector(sc<float>(trackpadScrollAccum), layout));
+
+    // The nearer card takes the highlight. Focus is 1 on a centre and 0 at the
+    // midpoint, so the ring and the pill fade with the motion instead of
+    // snapping on at the crossing.
+    const size_t NEAREST = u > 0.5 ? HIIDX : LOIDX;
+    // Re-arm the pop ONLY on a change: re-stamping every frame would hold the
+    // entrance at t=0 and the number would never finish growing.
+    if (stops[NEAREST].second != trackpadDetentWorkspace)
+        trackpadDetentBornAt = Time::steadyNow();
+    trackpadDetentWorkspace = stops[NEAREST].second;
+    trackpadDetentFocus     = sc<float>(1.0 - 2.0 * std::min(u, 1.0 - u));
+    trackpadDetentActive    = true;
+
+    maybeTickDetent(stops[NEAREST].second);
+
     damage();
 }
 
 void CScrollOverview::onWorkspaceSwipeEnd() {
+    // Drop the highlight and the pill with the gesture. finishWorkspaceScrollFollow
+    // animates the settle from trackpadScrollAccum, which is already the warped
+    // value the cards are sitting at, so the release does not jump.
+    trackpadDetentActive    = false;
+    trackpadDetentFocus     = 0.F;
+    trackpadDetentTickedIdx = std::numeric_limits<size_t>::max();
+
     finishWorkspaceScrollFollow();
 }
 
@@ -6658,6 +6969,21 @@ void CScrollOverview::onSwipeUpdate(double delta) {
 
     const bool  DISMISS = m_swipeClosing || closing;
     const float PERC    = DISMISS ? 1.0 - std::clamp(delta / sc<double>(DISTANCE), 0.0, 1.0) : std::clamp(delta / sc<double>(DISTANCE), 0.0, 1.0);
+
+    // MOTION OFF: this path warps every frame to follow the finger, so it is not
+    // a Hyprland animated assignment and syncPluginAnimEnabled has nothing here
+    // to disable -- the progressive scale IS the animation, and it survived
+    // anim_scale 0 for exactly that reason.
+    //
+    // Snap to whichever end the gesture is past rather than committing on the
+    // first event: the swipe stays cancellable (reverse under halfway and it
+    // snaps back to the desktop), while the overview itself only ever appears
+    // fully open or fully gone. onSwipeEnd's 0.35/0.65 thresholds then see a
+    // clean 0 or 1 and resolve the same way they always did.
+    if (!ScrollOverview::Config::motionEnabled()) {
+        scale->setValueAndWarp(PERC >= 0.5F ? ScrollOverview::Config::getScale() : 1.F);
+        return;
+    }
 
     scale->setValueAndWarp(hyprlerp(1.F, ScrollOverview::Config::getScale(), PERC));
 }

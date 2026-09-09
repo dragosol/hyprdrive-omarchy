@@ -12,6 +12,7 @@
 #include <hyprland/src/render/Framebuffer.hpp>
 #include <hyprland/src/render/types.hpp>
 #include <chrono>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -159,6 +160,16 @@ class CScrollOverview : public IOverview {
     void   renderBackdropBlurCache(PHLMONITOR monitor, float alpha = 1.F);
     void   renderWorkspaceBackground(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
     void   renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
+    void   renderDetentBadge(PHLMONITOR monitor, float renderScale);
+    // Whether renderDetentBadge will put a number on the strip this frame. The
+    // resting numbers read it too, so they cannot disagree about it.
+    bool   detentBadgeVisible() const;
+    // Re-aims the resting-number fade at whichever cell the badge is on now.
+    // Mutates the fade's clock, so: once per frame.
+    void   updateRestingFade();
+    // Alpha for ONE cell's resting number. Only the badged cell fades; its
+    // predecessor eases back in behind the badge as it moves along the strip.
+    float  restingNumberFade(size_t workspaceIdx) const;
     bool   hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const;
     void   renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox = nullptr,
                              bool dragged = false, float alphaMul = 1.F);
@@ -196,6 +207,7 @@ class CScrollOverview : public IOverview {
     void   trackpadSwipeLayout(const PHLWORKSPACE target, const double delta);
     void   trackpadSwipeWorkspace(const double delta);
     void   finishWorkspaceScrollFollow();
+    void   maybeTickDetent(size_t workspaceIdx);
     double trackpadWorkspaceScrollOffset(PHLMONITOR monitor, float renderScale);
     bool   scrollStepAllowed(uint32_t timeMs);
     bool   selectOverviewWindow(PHLWINDOW window, size_t workspaceIdx, bool syncFocus = false);
@@ -491,6 +503,35 @@ class CScrollOverview : public IOverview {
     bool                             trackpadTapeFollowing        = false;
     bool                             trackpadGestureSettlePending = false;
     double                           trackpadGestureSettleOffset  = 0.0;
+
+    // DETENT STATE for the 3-finger workspace drag.
+    //
+    // trackpadDetentRaw is the UNWARPED accumulator and is the only thing the
+    // finger drives. trackpadScrollAccum keeps holding the warped value, because
+    // finishWorkspaceScrollFollow() and every other reader want the offset the
+    // cards are actually at. Accumulating into the warped value instead would
+    // feed the curve its own output every frame and compound it.
+    double                           trackpadDetentRaw       = 0.0;
+    bool                             trackpadDetentActive    = false;
+    // Card the drag is currently settling on, and how settled: 1 at a card
+    // centre, 0 at the midpoint between two. Drives both the highlight and the
+    // pill, so they share one number and cannot disagree.
+    size_t                           trackpadDetentWorkspace = 0;
+    float                            trackpadDetentFocus     = 0.F;
+    // When trackpadDetentWorkspace last CHANGED. The strip badge spawns off
+    // this with the search field's per-letter entrance, so landing on a new
+    // desktop re-pops the number instead of cross-fading it.
+    Time::steady_tp                  trackpadDetentBornAt;
+    // Cross-fade state for the resting strip numbers. Only two cells are ever
+    // in motion: the one the badge just landed on (fading OUT) and the one it
+    // just left (fading back IN). Everything else is simply lit.
+    size_t                           restingFadeCell     = std::numeric_limits<size_t>::max();
+    size_t                           restingFadePrevCell = std::numeric_limits<size_t>::max();
+    Time::steady_tp                  restingFadeAt;
+    // Index the last tick fired for. size_t max = none yet, so the first
+    // settle after a swipe begins does not fire a spurious tick.
+    size_t                           trackpadDetentTickedIdx = std::numeric_limits<size_t>::max();
+    Time::steady_tp                  trackpadDetentLastTick;
 
 };
 

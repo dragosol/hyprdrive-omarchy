@@ -438,6 +438,19 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
 static constexpr uint32_t EVDEV_KEY_LEFTMETA  = 125;
 static constexpr uint32_t EVDEV_KEY_RIGHTMETA = 126;
 
+// Double-tap SHIFT in the search field launches a NEW instance of the selected
+// app. Same argument as tap-SUPER above: a bind on SHIFT_L cannot tell a tap
+// from the SHIFT that is holding down a capital letter, and this is a field the
+// user types capitals into. A tap is a press and release with no other real key
+// between them, so typing "Zen" cancels on the 'z' and never reaches here.
+static constexpr uint32_t EVDEV_KEY_LEFTSHIFT  = 42;
+static constexpr uint32_t EVDEV_KEY_RIGHTSHIFT = 54;
+// A tap must RELEASE within this, or it was a hold.
+static constexpr uint32_t TAP_SHIFT_HOLD_MS = 250;
+// ...and the second tap must land within this of the first, or it is the start
+// of a new pair rather than the end of one.
+static constexpr uint32_t TAP_SHIFT_GAP_MS = 450;
+
 // Only a real key cancels the tap. Modifier and lock keycodes must be ignored:
 // this compositor emits a synthetic CAPSLOCK (58) press/release pair around
 // every key event, which would otherwise cancel every tap before it completed.
@@ -837,6 +850,10 @@ static CHyprSignalListener g_pMonitorGoneHook;
 static CHyprSignalListener g_pClickPreReloadHook;
 static bool                g_tapSuperCandidate = false;
 static uint32_t            g_tapSuperPressedAt = 0;
+static bool                g_tapShiftCandidate = false;
+static uint32_t            g_tapShiftPressedAt = 0;
+// Release time of the last completed SHIFT tap; 0 = no pair in flight.
+static uint32_t            g_tapShiftLastTapMs = 0;
 
 // ONE raw-key listener, and it owns the guard-modifier count, V5's SPACE
 // preview, the search keys, and the SUPER tap. The order is load-bearing at
@@ -934,9 +951,34 @@ static void                registerRawKeyHooks() {
             }
         }
 
+        // DOUBLE-TAP SHIFT -> new instance of the selected app. overviewHandleShiftTap
+        // was written but never wired to a caller, so the gesture had no way to
+        // fire; the timing half of it belongs here, where tap and hold are still
+        // distinguishable.
+        if (event.keycode == EVDEV_KEY_LEFTSHIFT || event.keycode == EVDEV_KEY_RIGHTSHIFT) {
+            if (PRESSED) {
+                g_tapShiftCandidate = true;
+                g_tapShiftPressedAt = event.timeMs;
+            } else if (g_tapShiftCandidate) {
+                g_tapShiftCandidate  = false;
+                const bool WASTAP    = event.timeMs - g_tapShiftPressedAt <= TAP_SHIFT_HOLD_MS;
+                const bool PAIRED    = WASTAP && g_tapShiftLastTapMs != 0 && event.timeMs - g_tapShiftLastTapMs <= TAP_SHIFT_GAP_MS;
+                g_tapShiftLastTapMs  = PAIRED || !WASTAP ? 0 : event.timeMs;
+                if (PAIRED && overviewAcceptsSearch() && overviewHandleShiftTap()) {
+                    info.cancelled = true;
+                    return;
+                }
+            }
+        }
+
         if (!ISSUPER) {
-            if (PRESSED && !isModifierKeycode(event.keycode))
+            if (PRESSED && !isModifierKeycode(event.keycode)) {
                 g_tapSuperCandidate = false; // SUPER is being held as a modifier
+                // ...and so is SHIFT. A real key also breaks a pair in flight,
+                // so tap, type, tap is not a double tap.
+                g_tapShiftCandidate = false;
+                g_tapShiftLastTapMs = 0;
+            }
             return;
         }
 

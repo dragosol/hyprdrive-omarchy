@@ -406,6 +406,33 @@ static void registerConfigValuesFor() {
     using namespace ::Config::Values;
 
     addKey(makeShared<CIntValue>(KEY("gesture_distance"), "gesture distance in pixels", 200, SIntValueOptions{.min = 1}));
+    // MAGNETIC DETENT on the 3-finger workspace drag. The accumulator stays
+    // linear in finger travel; only the value handed to viewOffset is warped,
+    // by g(u) = u - (K/2pi)*sin(2pi*u) across each card-to-card interval.
+    // g(0) = 0 and g(1) = 1 EXACTLY, so a boundary still costs exactly one
+    // interval of pad travel -- the curve redistributes motion inside a cell
+    // and never adds any. That property is the whole point rather than a nicety:
+    // a detent that charged extra travel per workspace would put the far
+    // workspaces off the end of a 110mm pad.
+    // g'(u) = 1 - K*cos(2pi*u), so at K = 0.35 a card centre moves at 0.65x (it
+    // clings) and the midpoint at 1.35x (it releases). Monotonic for |K| < 1,
+    // which is why max is 0.9: at K = 1 the derivative touches zero and the
+    // cards stall dead under a moving finger.
+    addKey(makeShared<CFloatValue>(KEY("gesture_detent"), "magnetic detent strength on the 3-finger workspace drag; 0 = linear", 0.35F,
+                                   SFloatValueOptions{.min = 0.F, .max = 0.9F}));
+    addKey(makeShared<CIntValue>(KEY("gesture_detent_label"), "show the workspace name pill on the card the workspace drag is settling on", 1,
+                                 SIntValueOptions{.min = 0, .max = 1}));
+    // Fired once per boundary crossed, through CProcess::runAsync -- never a
+    // fork on the compositor thread.
+    //
+    // The default names Omarchy's keystroke click, so a machine that has one
+    // gets the detent tick with no config at all and reuses the sound its
+    // capacitive top row already plays rather than introducing a second one.
+    // The path is only spawned if it exists and is executable, so this is
+    // silent rather than noisy-on-stderr everywhere else. Set empty to disable.
+    addKey(makeShared<CStringValue>(KEY("gesture_detent_sound"),
+                                    "executable run once per workspace boundary crossed during the drag; empty = silent, missing file = silent",
+                                    Hyprlang::STRING{"~/.local/bin/keystroke-click"}));
     // Default alpha 0 = unset; highlightColor() then falls back to the theme's
     // border accent, which is what every build before this one used.
     addKey(makeShared<CGradientValue>(KEY("col_highlight"),
@@ -678,6 +705,34 @@ void registerConfig() {
 
 int getGestureDistance() {
     return std::max<int>(1, getValue<int>("plugin:hyprdrive:gesture_distance"));
+}
+
+float getGestureDetent() {
+    // Clamped again here rather than trusted from the key: |K| >= 1 makes the
+    // warp non-monotonic, and a non-monotonic warp means the cards run backwards
+    // mid-drag. Cheap insurance against a hand-edited hyprland.conf.
+    return std::clamp(getValue<float>("plugin:hyprdrive:gesture_detent"), 0.F, 0.9F);
+}
+
+bool getGestureDetentLabel() {
+    return getValue<int>("plugin:hyprdrive:gesture_detent_label") != 0;
+}
+
+std::string getGestureDetentSound() {
+    auto path = getValue<std::string>("plugin:hyprdrive:gesture_detent_sound");
+
+    // Expanded here rather than at the call site: CProcess exec's the path
+    // directly, so there is no shell downstream to expand a ~ later, and the
+    // default has to be able to name a file in the user's home without the
+    // plugin carrying an absolute path for one machine.
+    if (path.starts_with("~/")) {
+        if (const auto* HOME = std::getenv("HOME"); HOME && *HOME)
+            path = std::string{HOME} + path.substr(1);
+        else
+            return {};
+    }
+
+    return path;
 }
 
 static CHyprColor colorFromArgb(uint32_t argb, float alphaOverride = -1.F) {

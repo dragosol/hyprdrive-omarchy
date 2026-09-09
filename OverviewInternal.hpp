@@ -397,9 +397,14 @@ inline std::vector<SSearchRow> overviewSearchRows() {
 
     // ------------------------------------------------------------------------
     // COLUMN 0: OMARCHY MENU & APPS (Super+Space launcher)
-    // Running apps always lead, so Enter switches to an open window even when
-    // an Omarchy menu row also matches. Menu rows follow (Install still drills
-    // in when no running app is selected). Unopened apps come last.
+    // APPS ALWAYS LEAD. Running ones first, so Enter switches to an open window
+    // even when an Omarchy menu row also matches; then apps that are not open
+    // yet; then the menu.
+    //
+    // User: typing "zen" with Zen closed used to put "Zen setup -> Defaults ->
+    // Browser" on top, because menu rows were spliced BETWEEN running and
+    // unopened apps. Searching an app's name is a request for the app, not for
+    // a setting that mentions it -- the setting is still there, one row down.
     // ------------------------------------------------------------------------
     std::vector<SSearchRow> runningApps, menuRows, otherApps;
 
@@ -418,8 +423,8 @@ inline std::vector<SSearchRow> overviewSearchRows() {
         menuRows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 0});
 
     rows.insert(rows.end(), runningApps.begin(), runningApps.end());
-    rows.insert(rows.end(), menuRows.begin(), menuRows.end());
     rows.insert(rows.end(), otherApps.begin(), otherApps.end());
+    rows.insert(rows.end(), menuRows.begin(), menuRows.end());
 
     // ------------------------------------------------------------------------
     // COLUMN 1: FILES & FOLDERS (Omarchy Find Index)
