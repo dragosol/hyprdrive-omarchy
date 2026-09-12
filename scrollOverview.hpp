@@ -243,6 +243,7 @@ class CScrollOverview : public IOverview {
     void      refreshDragOriginalOverviewBoxes();
     void      clearDragPending();
     void      beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOrigin = nullptr);
+    void      beginWindowDragFrom(const PHLWINDOW& window, const CBox& miniOrigin) override;
     void      updateWindowDrag();
     void      endWindowDrag();
     // The three gathering stages of a drop, in the order endWindowDrag() runs
@@ -287,6 +288,21 @@ class CScrollOverview : public IOverview {
     void   suspendInputListeners();
     void   useAnimDirection(bool opening);
     void   syncPluginAnimEnabled();
+    // THE DETACHED SCRATCHPAD CELL (Scratchpad.hpp). Deliberately NOT one of
+    // `images`: a swipe walks that vector, and the requirement is that a swipe
+    // can never land on the scratchpad. It is revealed by a window drag or by
+    // the invisible zone it will occupy, and reached only through these -- which
+    // is also why workspaceAtStripPoint still knows nothing about it.
+    float        scratchpadRevealValue() const;
+    CBox         stripSlotLogicalBox(size_t workspaceIdx, bool scratchSlot, float revealOverride) const;
+    CBox         scratchpadCellLogicalBox(float revealOverride) const;
+    CBox         scratchpadCellBox(PHLMONITOR monitor, float renderScale, float revealOverride) const;
+    CBox         scratchpadZoneLogicalBox() const;
+    bool         scratchpadCellContains(const Vector2D& point) const;
+    PHLWORKSPACE scratchpadCellWorkspace() const;
+    void         updateScratchpadReveal();
+    void         renderScratchpadCell(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& style);
+
     void   activateSubmapIfConfigured();
     void   restoreSubmapIfActive();
     bool   dispatchSubmapMouseClick(uint32_t button);
@@ -352,6 +368,12 @@ class CScrollOverview : public IOverview {
         Vector2D        startMouseLocal         = Vector2D{};
         Vector2D        grabOffsetLocal         = Vector2D{};
         Vector2D        grabRatio               = Vector2D{0.5, 0.5};
+        // Torn out of a dock preview rather than grabbed off a card. The proxy
+        // is then sized by the slot it WOULD get on the card being looked at,
+        // not by the box it had on the desktop it came from -- a window that was
+        // alone on its own desktop would otherwise grow to the whole card, i.e.
+        // bigger than anything else in the overview.
+        bool            fromDockPreview         = false;
         bool            miniOver                = false;
         float           miniFrom                = 0.F;
         Time::steady_tp miniChangedAt           = {};
@@ -441,6 +463,10 @@ class CScrollOverview : public IOverview {
     // X50: eased 0..1 dock factor for the search pill. 1 = results are on
     // screen and the pill has left the scaled card for the top of the monitor.
     PHLANIMVAR<float>                searchDock;
+    // How far the detached scratchpad cell is out (0 hidden, 1 shown). The
+    // strip's own layout reads it, which is what slides the strip left to make
+    // room rather than having the cell overlap it.
+    PHLANIMVAR<float>                scratchpadReveal;
     SP<Hyprutils::Animation::SAnimationPropertyConfig> workspaceInsertFadeConfig;
     SP<Hyprutils::Animation::SAnimationPropertyConfig> workspaceRemoveFadeConfig;
     SP<Hyprutils::Animation::SAnimationPropertyConfig> openAnimConfig;

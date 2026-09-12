@@ -10,6 +10,7 @@
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
@@ -78,6 +79,32 @@ void dropDeadEntries() {
 
 }
 
+bool isStash(const PHLWORKSPACE& workspace) {
+    return workspace && workspace->m_name == STASH_NAME;
+}
+
+void adoptStashedWindows() {
+    dropDeadEntries();
+
+    for (const auto& WINDOW : Desktop::windowState()->windows()) {
+        if (!WINDOW || !WINDOW->m_isMapped || !isStash(WINDOW->m_workspace) || entryFor(WINDOW) != g_entries.end())
+            continue;
+
+        // What it was minimized FROM died with the old ledger, so there is no
+        // honest answer -- the desktop its monitor is showing is the sane home,
+        // and TILED the sane state: the window comes back into the layout rather
+        // than floating over it. Its current box is kept for the floating case,
+        // where restore reads it.
+        const auto MONITOR = WINDOW->m_monitor.lock();
+        const auto HOME    = MONITOR ? MONITOR->m_activeWorkspace : nullptr;
+        if (!HOME || HOME->m_isSpecialWorkspace)
+            continue;
+
+        const auto TARGET = WINDOW->layoutTarget();
+        g_entries.emplace_back(SEntry{WINDOW, HOME->m_id, HOME->m_name, MONITOR->m_id, TARGET ? TARGET->position() : CBox{}, false});
+    }
+}
+
 bool isMinimized(PHLWINDOW window) {
     return window && entryFor(window) != g_entries.end();
 }
@@ -121,7 +148,38 @@ bool minimize(PHLWINDOW window, bool handoffFocus) {
     g_entries.emplace_back(SEntry{window, WORKSPACE->m_id, WORKSPACE->m_name, WORKSPACE->m_monitor ? WORKSPACE->m_monitor->m_id : MONITOR_INVALID,
                                   TARGET->position(), window->m_isFloating});
 
+    const CBox STASHBOX = TARGET->position();
+
     Desktop::globalWindowController()->moveWindowToWorkspace(window, STASHWS);
+
+    // THE STASH IS A TILED WORKSPACE, and that is visible to the user: every new
+    // minimize retiles everything already stashed, so each window there shrinks
+    // as more are added -- and the dock preview, which renders the REAL window,
+    // shrinks with it. A preview that changes size because of something that
+    // happened to an unrelated window is indefensible.
+    //
+    // So a stashed window floats and is pinned to the box it had the instant
+    // before it was minimized. Floating takes it out of the stash's layout
+    // entirely, which is what stops the geometry depending on how many
+    // neighbours it has; the pinned box is what makes a TILED window keep the
+    // size it was tiled at rather than collapsing to some floating default.
+    //
+    // The ledger entry above still records what it REALLY was, so restore puts
+    // the tiled ones back as tiled -- this float is confined to the stash.
+    if (const auto STASHTARGET = window->layoutTarget()) {
+        STASHTARGET->setFloating(true);
+        if (!STASHBOX.empty()) {
+            // rememberFloatingSize BEFORE the position write, and not instead of
+            // it: the target carries a remembered floating size from whenever it
+            // last floated, and a later layout pass will happily reassert that
+            // over a box we merely set once. Measured: a stashed window pinned
+            // at 1420x854 was found at 710x427 a few actions later -- exactly
+            // half, i.e. the remembered size winning. Setting both means the
+            // pin and the memory agree and there is nothing left to drift to.
+            STASHTARGET->rememberFloatingSize(STASHBOX.size());
+            STASHTARGET->setPositionGlobal(STASHBOX);
+        }
+    }
 
     // A stashed window must not keep the keyboard. Measured 2026-08-03 by X33's
     // rig: minimize left focus on the window it had just taken off screen, so
@@ -222,8 +280,30 @@ bool restore(PHLWINDOW window) {
     // ponytail: only floating windows own their box. A tiled window's geometry
     // belongs to the layout, and writing it back would fight the retile.
     if (const auto TARGET = window->layoutTarget(); TARGET) {
+        // Undo the stash's float -- through the LAYOUT MANAGER, not the target.
+        //
+        // ITarget::setFloating is a bare flag write (CWindowTarget::setFloating
+        // in v0.56.2 sets m_isFloating, clears layout flags, unpins, and nothing
+        // else); it never tells the workspace's layout space. The window arrived
+        // here still floating -- the stash floats everything -- so the move above
+        // filed it in this workspace's FLOATING algorithm, and flipping the flag
+        // afterwards left dwindle never knowing it existed: zen came back at full
+        // size on top of or behind foot instead of the tiling opening a slot
+        // (user, 2026-09-12). Target.cpp's own swap has to follow setFloating
+        // with onUpdateSpace() for exactly this reason.
+        //
+        // changeFloatingMode -> CSpace::toggleTargetFloating does the real work:
+        // the algorithm re-files the target, then recalculate() retiles. It is a
+        // TOGGLE, hence the comparison -- a floating restore is already floating
+        // and must not be flipped. An earlier attempt here called
+        // workspace->updateWindows(), which is only the side step inside that
+        // toggle and retiles nothing.
+        if (TARGET->floating() != ENTRY.floating && TARGET->space())
+            g_layoutManager->changeFloatingMode(TARGET);
+
         if (ENTRY.floating && !ENTRY.box.empty())
             TARGET->setPositionGlobal(ENTRY.box);
+
         // Z4: warp for TILED restores too. The re-entered window otherwise
         // draws its first frames easing from a transient pre-retile box
         // (measured: 30k of 427k px) -- but the flight already animated the

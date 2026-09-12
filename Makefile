@@ -64,6 +64,7 @@ PREFIX ?= $(HOME)/.local
 
 install: hyprdrive.so
 	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
+	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
 	bash scripts/install-fragments.sh
 
 clean:

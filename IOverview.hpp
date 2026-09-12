@@ -130,6 +130,13 @@ class IOverview : public IOverviewFramePolicy, public IOverviewGeometry {
     // selection, which is also where X43's raise lives.
     virtual bool selectAndClose(const PHLWINDOW& window) = 0;
 
+    // Start a live window drag from a box that is ALREADY at mini scale -- a
+    // dock preview cell. The window grows out of that box on the way out
+    // instead of popping to full size for a frame, and from then on the gesture
+    // is the ordinary overview window drag: the same shrink at the dock
+    // boundary, the same minimize on a drop back into it.
+    virtual void beginWindowDragFrom(const PHLWINDOW& window, const CBox& miniOrigin) = 0;
+
     PHLMONITORREF pMonitor;
     bool          m_isSwiping    = false;
     // This swipe is dismissing an already-open overview. Distinct from

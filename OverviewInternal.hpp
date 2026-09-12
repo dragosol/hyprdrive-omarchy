@@ -1754,6 +1754,28 @@ inline Vector2D hyprlerp(const Vector2D& from, const Vector2D& to, const float p
     return OvGeom::hyprlerp(from, to, perc);
 }
 
+// THE FULLSCREEN PATH: a fullscreen window on a non-scrolling desktop drawn,
+// hit-tested, navigated and framed ON ITS OWN, its tiled neighbours skipped.
+// That is exactly how such a desktop looks, so it is right when the overview
+// draws a desktop as a scaled picture of itself.
+//
+// It is WRONG in mission control, where every window owns a grid slot --
+// overviewGridWindows has no fullscreen rule, so the neighbours still got their
+// slots and the skip left them as empty holes: "fullscreen apps make the other
+// windows invisible" (user, 2026-09-12). Eight sites each carried their own copy
+// of the test, so the mode was never asked at any of them; this is now the only
+// place it is decided.
+//
+// The fullscreen window when that path applies; null when every window gets its
+// own tile.
+inline PHLWINDOW overviewFullscreenPathWindow(const PHLWORKSPACE& workspace) {
+    if (!workspace || isWorkspaceScrolling(workspace) || ScrollOverview::Config::getMissionControl())
+        return nullptr;
+
+    const auto FULLSCREENWINDOW = getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(workspace));
+    return shouldShowOverviewWindow(FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == workspace ? FULLSCREENWINDOW : nullptr;
+}
+
 } // namespace OvInternal
 
 // The trailing `using namespace OvInternal;` used to live here so the moved code

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
@@ -230,14 +231,41 @@ Panel {
     }
   }
 
+  // The bar icon is hyprdrive's own mark rather than a font glyph (user,
+  // 2026-09-12). It ships as an alpha mask -- white shape, transparent
+  // everywhere else, the triangle notch included -- and is TINTED to the bar's
+  // colour the way the tray tints symbolic icons (Tray.qml), with the exact
+  // colour expression BarIconButton gives its own glyph, so light and dark
+  // themes and the opened state all behave as the glyph they replace did.
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰕰"
     tooltipText: "Hyprdrive"
     active: root.opened
     onPressed: function(b) { root.toggle() }
+
+    iconComponent: Component {
+      Item {
+        Image {
+          id: mark
+          anchors.fill: parent
+          source: Qt.resolvedUrl("hyprdrive-icon.png")
+          sourceSize: Qt.size(128, 128)
+          fillMode: Image.PreserveAspectFit
+          smooth: true
+          mipmap: true
+          visible: false
+        }
+
+        MultiEffect {
+          anchors.fill: mark
+          source: mark
+          colorization: 1.0
+          colorizationColor: button.active && button.useActiveColor ? button.activeColor : button.foreground
+        }
+      }
+    }
   }
 
   KeyboardPanel {

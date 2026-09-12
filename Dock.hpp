@@ -49,6 +49,15 @@ struct SItem {
     bool        stack    = false;
     std::string stackPath;          // absolute, no trailing slash
     bool        stackDir = false;   // a folder fans; a file just opens
+
+    // THE SCRATCHPAD (Scratchpad.hpp). Not an app and not a location: it owns
+    // no window class and no desktop id, so `scratchpadName` is its handle the
+    // way `uri` is a location's, and its click TOGGLES that special workspace
+    // rather than minimizing anything. Nothing is ever stashed from here -- a
+    // window minimized off a scratchpad would come back to a normal desktop and
+    // quietly empty the shelf.
+    bool        scratchpad = false;
+    std::string scratchpadName;
 };
 
 struct SLayout {
@@ -68,6 +77,14 @@ struct SLayout {
 // dock is the only place that knows where the pill actually is this frame,
 // which is also true while it is still sliding out.
 void setWindowDragActive(bool active);
+
+// A native (desktop) window drag that the DOCK started, by tearing a live
+// preview out. It needs its own flag because the dock swallowed the press that
+// began it: Hyprland therefore never entered its own button state machine for
+// that drag, so nothing on its side will end the drag when the button comes up.
+// The dock has to close what it opened.
+bool dockOwnsNativeDrag();
+void clearDockNativeDrag();
 
 // Pure geometry, so a test rig can assert proportions without a frame.
 SLayout layout(PHLMONITOR monitor);
@@ -120,6 +137,23 @@ bool    panelClick(PHLMONITOR monitor, const Vector2D& point, bool release);
 // overview asks this before refusing.
 bool    isPreviewing(const PHLWINDOW& window);
 
+// A window retiled onto a workspace NOBODY IS LOOKING AT. It has a new size,
+// but its client has not drawn at that size yet and the overview refuses its
+// frame callbacks (its tile is off screen), so the strip preview shows the old
+// buffer letterboxed inside the new frame. noteRetiled opens a bounded window of
+// real frames so the client can commit once at the new size and then go quiet
+// again -- deliberately NOT "always render", which would keep every off-screen
+// desktop live for nothing.
+void    noteRetiled(const PHLWINDOW& window);
+bool    isRetiling(const PHLWINDOW& window);
+
+// ...and ASK for the frame. Permitting the callback is only half of it: on a
+// desktop nobody is looking at, nothing requests a frame in the first place, so
+// the client sits on the buffer it already has and the preview stays a still at
+// the old size. This is the same presentFeedback the dock previews drive for
+// exactly that reason.
+void    pumpRetiled(const PHLWINDOW& window, PHLMONITOR monitor, const Time::steady_tp& now);
+
 // X33. A wheel tick over the pill, `up` for one notch away from the user.
 // `scroll_action` decides: `cycle-windows` steps through the windows of the icon
 // under the pointer, `switch-workspace` moves to the neighbouring workspace from
@@ -166,6 +200,14 @@ void unpin(const std::string& desktopId);
 //
 // Returns whether the gesture was a DROP. False is "this was a click after all"
 // (X16's recovery: a release near its own press), and the caller runs click().
+// PRESS FEEDBACK. A held left button on an icon eases it down a little, as if
+// pressed into the pill, and the release springs it back. Tracked apart from the
+// drag state: dragBegin only follows APPS, and the trash, a stack and the
+// scratchpad squish too. Every left release ends it (DockInput::handlePill),
+// as do a drag going live and dragCancel, so an icon can never stay shrunk.
+void pressBegin(PHLMONITOR monitor, const Vector2D& point);
+void pressEnd();
+
 bool dragBegin(PHLMONITOR monitor, const Vector2D& point);
 bool dragMove(PHLMONITOR monitor, const Vector2D& point);
 bool dragRelease(PHLMONITOR monitor, const Vector2D& point);

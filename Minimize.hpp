@@ -10,6 +10,18 @@
 namespace ScrollOverview::Minimize {
 
 bool                   isMinimized(PHLWINDOW window);
+// Whether this workspace IS the stash. Scratchpad.hpp needs the question asked
+// in exactly one place: every OTHER special workspace is a scratchpad, and
+// confusing the two would have the dock offering to "hide" the stash, or have a
+// restore drag a window out of the user's scratchpad.
+bool                   isStash(const PHLWORKSPACE& workspace);
+
+// Re-adopt windows found on the stash with no ledger entry. The ledger lives in
+// plugin memory, so a plugin RELOAD wipes it while the compositor keeps every
+// stashed window exactly where it was -- stranded on special:minimized, which is
+// never shown, with the dock reporting "nothing is minimized" (measured
+// 2026-09-12). Called once at load.
+void                   adoptStashedWindows();
 // `handoffFocus` false keeps the window focused after it is stashed -- the dock
 // flight wants that, so the flying proxy renders the window BRIGHT (Zen and
 // other focus-themed clients darken the instant they lose focus, and a minimize

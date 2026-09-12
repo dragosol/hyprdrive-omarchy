@@ -64,6 +64,7 @@ if [ -d "$PLUGIN_SRC" ]; then
     install -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
     install -Dm644 "$PLUGIN_SRC/Model.js" "$PLUGIN_DEST/Model.js"
     install -Dm644 "$PLUGIN_SRC/README.md" "$PLUGIN_DEST/README.md"
+    install -Dm644 "$PLUGIN_SRC/hyprdrive-icon.png" "$PLUGIN_DEST/hyprdrive-icon.png"
     install -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
     echo "omarchy plugin: $PLUGIN_DEST"
 fi

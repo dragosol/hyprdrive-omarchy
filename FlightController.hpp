@@ -67,6 +67,7 @@ const char* kindName(EFlightKind kind);
 void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false);
 void restore(PHLMONITOR monitor, PHLWINDOW window);
 
+
 // Is the dock in the middle of anything? Autohide holds the pill out for a
 // flight, and the render loop asks before deciding whether to keep asking for
 // frames.

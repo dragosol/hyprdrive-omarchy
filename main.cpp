@@ -52,6 +52,8 @@ using namespace Hyprutils::String;
 #include "Config.hpp"
 #include "Dock.hpp"
 #include "DockStacks.hpp"
+#include <hyprland/src/layout/LayoutManager.hpp>
+
 #include "FlightController.hpp"
 #include "DockInput.hpp"
 #include "LauncherEntry.hpp"
@@ -63,6 +65,7 @@ using namespace Hyprutils::String;
 #include "OverviewRender.hpp"
 #include "SearchProviders.hpp"
 #include "WindowPill.hpp"
+#include "Placement.hpp"
 
 // Methods
 static CFunctionHook* g_pScrollRenderWorkspaceHook = nullptr;
@@ -503,6 +506,21 @@ static bool isGuardModifierKeycode(uint32_t keycode) {
 // for the rest of the session.
 static std::unordered_set<uint32_t> g_heldGuardKeys;
 
+// Keys that belong to the whole desktop, never to the search field: PRINT (and
+// SYSRQ, which is what ALT+PRINT resolves to) and the XF86 family -- volume,
+// brightness, media, mic mute, keyboard light. The overview-owns-the-keyboard
+// catch-all lets these past so Omarchy's own binds still fire; the overview
+// borrows those binds into its submap while it holds it (scrollOverview.cpp,
+// borrowGlobalPassthroughBinds).
+static bool isGlobalPassthroughKeycode(uint32_t keycode) {
+    const auto STATE = activeXkbState();
+    if (!STATE)
+        return false;
+
+    const xkb_keysym_t SYM = xkb_state_key_get_one_sym(STATE, keycode + 8);
+    return SYM == XKB_KEY_Print || SYM == XKB_KEY_Sys_Req || (SYM >= 0x1008FF00 && SYM <= 0x1008FFFF);
+}
+
 static bool overviewAcceptsSearch() {
     return std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && !overview->isClosing(); });
 }
@@ -934,7 +952,9 @@ static void                registerRawKeyHooks() {
                 // Overview owns the keyboard: a key that is not search input
                 // still must not reach the window or a layer-shell bar.
                 // Arrows/Tab/Return are left for CScrollOverview::onKeyboardKey.
-                if (overviewAcceptsSearch() && !isModifierKeycode(event.keycode) &&
+                // PRINT and the XF86 keys are the exception: they are desktop
+                // keys, not query keys, and Omarchy's binds must still see them.
+                if (overviewAcceptsSearch() && !isModifierKeycode(event.keycode) && !isGlobalPassthroughKeycode(event.keycode) &&
                     event.keycode != 15 && event.keycode != 28 && event.keycode != 96 &&
                     event.keycode != 103 && event.keycode != 105 && event.keycode != 106 &&
                     event.keycode != 108) {
@@ -1642,6 +1662,39 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
                         : ScrollOverview::DockInput::EButton::Other;
         const bool PRESSED = event.state == WL_POINTER_BUTTON_STATE_PRESSED;
 
+        // A window dragged back onto the dock goes home the way it does in the
+        // overview: the whole minimize FLIGHT -- shrink into the icon, bounce on
+        // landing -- and not a silent snap. This is new because the premise
+        // below used to hold: before the dock tear-out there was no such thing
+        // as a window drag on the plain desktop, so there was nothing to catch.
+        if (!PRESSED && ROLE == ScrollOverview::DockInput::EButton::Main && ScrollOverview::Dock::dockOwnsNativeDrag() && g_layoutManager &&
+            g_layoutManager->dragController()) {
+            const auto TARGET  = g_layoutManager->dragController()->target();
+            const auto DRAGGED = TARGET ? TARGET->window() : PHLWINDOW{};
+            const bool ONDOCK  = ScrollOverview::Dock::pillContains(MONITOR, LOCAL);
+
+            // END IT OURSELVES. The dock swallowed the press that started this
+            // drag, so Hyprland never entered its own button state machine for
+            // it and nothing on its side will let go -- the button came up and
+            // the window kept following the pointer until the NEXT click.
+            g_layoutManager->dragController()->dragEnd();
+            ScrollOverview::Dock::clearDockNativeDrag();
+            const auto ANCHOR = ScrollOverview::Placement::takeDragAnchor();
+
+            // Dropped back onto the dock: the whole minimize flight, same as the
+            // overview does, rather than a silent snap.
+            if (ONDOCK && DRAGGED)
+                ScrollOverview::Flight::minimize(MONITOR, DRAGGED, true); // bounce at the drop, Z10
+            // Anywhere else: dragEnd just tiled it off the CURSOR (the window under
+            // it, the side it was on). Re-file it the way opening it would --
+            // AFTER dragEnd, which is also what has lowered the drag flag.
+            else if (DRAGGED)
+                ScrollOverview::Placement::retileAsNew(DRAGGED, ANCHOR);
+
+            info.cancelled = true;
+            return;
+        }
+
         // Desktop never has a window drag in flight, and lets a menu miss through
         // (its menu may have no drawn geometry to hit-test); a let-through miss
         // then falls into the pill ladder, exactly as the overview's own dock does.
@@ -1732,6 +1785,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Config::registerDispatcher("gesture", ::onGestureDispatcher);
     ScrollOverview::Config::registerGesture(::onRegisterOverviewGesture, ::overviewGestureKeyword);
     ScrollOverview::Config::registerConfig();
+    // After a reload, windows are still parked on the stash with no ledger entry
+    // behind them; without this they can never be restored.
+    ScrollOverview::Minimize::adoptStashedWindows();
     registerRawKeyHooks();
     attachPadFingerListeners();
 
@@ -1828,6 +1884,24 @@ APICALL EXPORT void PLUGIN_EXIT() {
 
     if (g_pTrackpadGestures)
         g_pTrackpadGestures->clearGestures();
+
+    // LAST, and it is the difference between unloading and killing the session.
+    //
+    // The four types below are defined IN THIS SHARED OBJECT (OverviewPassElement.hpp).
+    // A queued one that outlives the dlclose leaves Hyprland's render pass holding a
+    // vtable in freed memory, and the next frame's CRenderPass::clear() runs its
+    // destructor through that vtable. `hyprctl plugin unload` SEGV'd the compositor
+    // twice on 2026-09-12 doing exactly this -- both cores identical, and both name
+    // it outright: beginRender -> Render::CRenderPass::clear() -> a call to an
+    // address in no mapped region, with hyprdrive.so already gone from the map.
+    //
+    // Hyprland cannot know these types, so the plugin has to take them back out
+    // before its code goes away. The trackpad gestures above are the same hazard,
+    // and clearGestures() is what already answers it for them.
+    if (g_pHyprRenderer) {
+        for (const char* TYPE : {"COverviewBlurPassElement", "COverviewSplitBorderPassElement", "COverviewShadowPassElement", "CDockLivePreviewPassElement"})
+            g_pHyprRenderer->m_renderPass.removeAllOfType(TYPE);
+    }
 
     HyprlandAPI::reloadConfig(); // re-adds built-in gestures cleared above
 }

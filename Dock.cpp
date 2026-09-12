@@ -20,6 +20,9 @@
 #undef protected
 #undef private
 
+#include <hyprland/src/desktop/state/GlobalWindowController.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
+
 #include "Dock.hpp"
 
 #include "Compat.hpp"
@@ -94,6 +97,8 @@
 // Included AFTER the private-access blocks, like OverviewChrome, because the
 // flight code needs the same m_Value / m_realPosition access this TU has.
 #include "FlightController.hpp"
+#include "Scratchpad.hpp"
+#include "Placement.hpp"
 
 namespace ScrollOverview::Dock {
 
@@ -743,6 +748,20 @@ std::vector<SItem> dockItems() {
             .icon      = AppSearch::iconForClass(RUNNING[i]),
             .desktopId = runningIds[i],
             .running   = true,
+        });
+    }
+
+    // The scratchpad sits after the apps and BEFORE the locations: it holds
+    // windows, so it belongs with the app icons rather than out among the
+    // shelf. One slot per populated scratchpad, and it disappears with its last
+    // window -- the same "only what is running" rule the app icons follow.
+    for (const auto& WORKSPACE : Scratchpad::populated()) {
+        out.emplace_back(SItem{
+            .icon           = Scratchpad::iconName(),
+            .running        = true,
+            .locationName   = Scratchpad::label(WORKSPACE),
+            .scratchpad     = true,
+            .scratchpadName = Scratchpad::shortName(WORKSPACE),
         });
     }
 
@@ -1582,6 +1601,13 @@ void renderNumberOverlay(PHLMONITOR monitor, const SItem& item, int index) {
 // is the only source. Ordered so a running app is still named by its class,
 // which is what X27 measured.
 std::string itemName(const SItem& item) {
+    // The SCRATCHPAD carries no class, no desktop id and no uri, so every lookup
+    // below answered with an empty string and its icon was the one slot in the
+    // pill that showed no label at all on hover (user, 2026-09-12). Its name is
+    // its own, the same way a location's is.
+    if (item.scratchpad)
+        return item.locationName;
+
     // X35. A location's name is its own -- no class to look it up by, and the
     // desktop-entry fallback below would answer "Files" for every one of them.
     if (!item.uri.empty())
@@ -1823,6 +1849,12 @@ void activateWindow(const PHLWINDOW& window) {
         return;
     }
 
+    // A window parked on a SCRATCHPAD: pull that workspace up first. Focusing
+    // it with the scratchpad down left the window focused but invisible, so the
+    // icon (and a preview click) looked like it had done nothing at all.
+    if (const auto SCRATCH = Scratchpad::workspaceFor(window))
+        Scratchpad::show(SCRATCH);
+
     if (const auto WORKSPACE = window->m_workspace; WORKSPACE && !WORKSPACE->m_isSpecialWorkspace) {
         if (const auto MONITOR = WORKSPACE->m_monitor.lock(); MONITOR && MONITOR->m_activeWorkspace != WORKSPACE)
             MONITOR->changeWorkspace(WORKSPACE, false, true, false);
@@ -1991,6 +2023,15 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     // V11 V4. A STACK opens its fan or its grid rather than launching --
     // tested before the location branch, because a stack carries a uri too.
     // A pinned FILE has nothing to fan, and Stacks::open opens it instead.
+    // The scratchpad's own icon: toggling the workspace is the WHOLE action.
+    // There is no app to launch, nothing to stash, and no second instance to
+    // spawn -- tested first because it carries neither a class nor a uri and
+    // would otherwise fall through every branch below to launchApp.
+    if (item.scratchpad) {
+        Scratchpad::toggle(Scratchpad::byShortName(item.scratchpadName));
+        return;
+    }
+
     if (item.stack) {
         Stacks::open(monitor, item, item.iconBox);
         return;
@@ -2008,6 +2049,22 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
         const auto CYCLE = !here.empty() ? here : itemWindows(item);
         cycleThroughWindows(itemCycleKey(item), false, CYCLE);
         return;
+    }
+
+    // "Click it again and it goes away", for an app that lives in the
+    // scratchpad. Its windows are not on any desktop, so `here` is empty and
+    // the branches below would focus a window that is already up -- the click
+    // read as doing nothing. Scoped to the scratchpad SHOWN on this monitor and
+    // to an app entirely inside it: an app with a window out on a desktop too
+    // keeps the ordinary rules, because that window is what a click is about.
+    if (here.empty()) {
+        if (const auto SHOWN = Scratchpad::shownOn(monitor)) {
+            const auto ALL = itemWindows(item);
+            if (!ALL.empty() && std::ranges::all_of(ALL, [&](const auto& window) { return Scratchpad::workspaceFor(window) == SHOWN; })) {
+                Scratchpad::hide(SHOWN);
+                return;
+            }
+        }
     }
 
     // Window on THIS desktop: minimize/maximize that window. Never spawn a
@@ -2441,8 +2498,31 @@ struct SDockGhostFlight {
 // caret -- a foreign drag keeps its state in the search panel and only ever
 // hands the dock an index to draw, so the two sources cannot both think they
 // own the gesture. One struct, so a reader can see there are exactly two.
+// Tearing a LIVE PREVIEW out of the hover panel. Separate from SDockDrag on
+// purpose: that one carries a desktop id and can end in a reorder or a launch,
+// this one carries a WINDOW that already exists and can only ever end in that
+// window landing on a desktop. `home` is the cell it was picked up from, which
+// is also the ghost's size -- the preview keeps the size it had in the panel
+// all the way to the drop, so the growth starts from something the eye has
+// already been looking at.
+struct SPanelDrag {
+    PHLWINDOWREF window;
+    Vector2D     start;
+    CBox         home;
+    Vector2D     grab;
+    Vector2D     at;
+    bool         live = false;
+    // ONE RENDER OF ONE SURFACE. A live preview is the real window scaled into
+    // the cell at draw time (X91/dockLivePreview), so a dock-drawn ghost would
+    // be a SECOND render of the same surface while the window is also drawn as
+    // itself -- the thing the previews were built to avoid, and what made an
+    // earlier ghost jitter. There is no ghost now: past the threshold the drag
+    // IS the window, owned by the overview drag or by Hyprland's own.
+};
+
 struct SDockDragState {
     std::optional<SDockDrag>        drag;
+    std::optional<SPanelDrag>       panel;
     std::optional<SDockGhostFlight> ghostHome; // V3, the cancel above
     int                             foreignInsert = -1;
 };
@@ -2787,6 +2867,142 @@ void unpin(const std::string& desktopId) {
         writeFavorites();
 }
 
+// No overview open: the desktop half of the tear-out. Move the window to the
+// desktop being looked at, then hand the gesture to HYPRLAND'S OWN window drag
+// -- the same MBIND_MOVE a SUPER+drag starts -- so from the hand holding the
+// button it simply is that gesture from here on.
+//
+// The window is parked at the cell's size first so it GROWS into full size as
+// the drag pulls away from the dock, which is the dock's shrink played
+// backwards. m_Value and not the goal, for restoreForFlight's reason: the
+// layout's target has to stay where the drag is going to put it.
+// Set while a desktop drag started life as a dock tear-out. See Dock.hpp.
+bool g_dockNativeDrag = false;
+
+void beginDesktopTearOut(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& home) {
+    if (!monitor || !window)
+        return;
+
+    // FIRST, before the move and the focus below change it: the window the user
+    // was working in is what the drop tiles beside (Placement.hpp).
+    Placement::noteDragAnchor(Desktop::focusState()->window());
+
+    if (const auto ACTIVE = monitor->m_activeWorkspace; ACTIVE && window->m_workspace != ACTIVE)
+        Desktop::globalWindowController()->moveWindowToWorkspace(window, ACTIVE);
+
+    const float SCALE = std::max(monitor->m_scale, 0.01F);
+    if (home.width >= 1.0 && home.height >= 1.0 && window->m_realSize && window->m_realPosition) {
+        window->m_realPosition->m_Value = Vector2D{home.x / SCALE + monitor->m_position.x, home.y / SCALE + monitor->m_position.y};
+        window->m_realSize->m_Value     = Vector2D{std::max(4.0, home.width / SCALE), std::max(4.0, home.height / SCALE)};
+    }
+
+    Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+
+    if (const auto TARGET = window->layoutTarget(); TARGET && g_layoutManager && g_layoutManager->dragController()) {
+        g_layoutManager->dragController()->dragBegin(TARGET, MBIND_MOVE);
+        g_dockNativeDrag = true;
+    }
+}
+
+// PRESS FEEDBACK (Dock.hpp). The icon, and only the icon, eases down while the
+// button is held and springs back on release -- the running dot and the badge
+// stay where they are, the same stance Y8's hop takes.
+//
+// A QUICK CLICK still shows the whole squish. Press and release a few ms apart
+// would otherwise barely move the icon before it came back, so the spring-back
+// waits for the press-in to finish (upAt) and the click reads as a click.
+constexpr float PRESS_SCALE  = 0.88F; // "slightly": enough to feel, not to jump
+constexpr float PRESS_IN_MS  = 90.F;
+constexpr float PRESS_OUT_MS = 170.F;
+// One frame's grace past the spring-back's end before the state is dropped, so
+// the last frame drawn is the one at full size, not the one just short of it.
+constexpr float PRESS_TAIL_MS = 34.F;
+
+struct SPress {
+    std::string     subject; // tooltipSubject() of the pressed icon; "show-apps" for that button
+    Time::steady_tp since    = Time::steadyNow();
+    bool            released = false;
+    Time::steady_tp upAt     = Time::steadyNow(); // when the spring-back starts
+};
+
+std::optional<SPress> g_press;
+
+// 0 at rest, 1 fully pressed in.
+float pressDepth(const std::string& subject) {
+    if (!g_press || g_press->subject != subject)
+        return 0.F;
+
+    const float IN = houseEase(true, std::clamp(elapsedMs(g_press->since) / PRESS_IN_MS, 0.F, 1.F));
+    if (!g_press->released)
+        return IN;
+
+    // upAt can still be in the future: a quick click finishing its press-in.
+    const float SINCEUP = elapsedMs(g_press->upAt);
+    if (SINCEUP < 0.F)
+        return IN;
+
+    // Coming back to rest is an ARRIVAL, so it decelerates too.
+    return 1.F - houseEase(true, std::clamp(SINCEUP / PRESS_OUT_MS, 0.F, 1.F));
+}
+
+bool pressAnimating() {
+    if (!g_press)
+        return false;
+
+    // Held and fully in: nothing moves, so nothing needs a frame.
+    if (!g_press->released)
+        return elapsedMs(g_press->since) < PRESS_IN_MS;
+
+    if (elapsedMs(g_press->upAt) >= PRESS_OUT_MS + PRESS_TAIL_MS) {
+        g_press.reset();
+        return false;
+    }
+
+    return true;
+}
+
+// The box scaled about its own centre -- the icon presses INTO its cell rather
+// than shrinking toward a corner. Rotation (X31's wiggle) is left as it is.
+CBox pressedBox(CBox box, float depth) {
+    if (depth <= 0.001F)
+        return box;
+
+    const double SCALE = 1.0 - depth * (1.0 - PRESS_SCALE);
+    const double CX    = box.x + box.width / 2.0;
+    const double CY    = box.y + box.height / 2.0;
+    box.width *= SCALE;
+    box.height *= SCALE;
+    box.x = CX - box.width / 2.0;
+    box.y = CY - box.height / 2.0;
+    return box;
+}
+
+void pressBegin(PHLMONITOR monitor, const Vector2D& point) {
+    g_press.reset();
+    if (!monitor)
+        return;
+
+    const auto LAYOUT = layout(monitor);
+
+    std::string subject;
+    if (const auto ITEM = std::ranges::find_if(LAYOUT.items, [&](const SItem& item) { return hoverBox(item.iconBox, monitor->m_scale).containsPoint(point); });
+        ITEM != LAYOUT.items.end())
+        subject = tooltipSubject(*ITEM);
+    else if (!LAYOUT.showApps.empty() && hoverBox(LAYOUT.showApps, monitor->m_scale).containsPoint(point))
+        subject = "show-apps";
+
+    if (!subject.empty())
+        g_press = SPress{.subject = subject, .since = Time::steadyNow()};
+}
+
+void pressEnd() {
+    if (!g_press || g_press->released)
+        return;
+
+    g_press->released = true;
+    g_press->upAt     = std::max(Time::steadyNow(), g_press->since + std::chrono::milliseconds(sc<int>(PRESS_IN_MS)));
+}
+
 bool dragBegin(PHLMONITOR monitor, const Vector2D& point) {
     g_dockDrag.drag.reset();
 
@@ -2808,7 +3024,61 @@ bool dragBegin(PHLMONITOR monitor, const Vector2D& point) {
 }
 
 bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
-    if (!g_dockDrag.drag || !monitor)
+    if (!monitor)
+        return false;
+
+    // A preview being torn out owns the motion; it goes live on the same
+    // threshold the icon drag uses, so the two gestures cannot feel different.
+    if (g_dockDrag.panel) {
+        g_dockDrag.panel->at = point;
+        if (!g_dockDrag.panel->live) {
+            const float T = dragThresholdPx(monitor);
+            if (g_dockDrag.panel->start.distanceSq(point) <= T * T)
+                return false;
+
+            // HAND OFF, and stop owning the gesture. Past the threshold this is
+            // the REAL window being dragged -- not a ghost of it -- so the dock
+            // gets out of the way entirely and the drag machinery that already
+            // knows how to shrink at the dock boundary and minimize on a drop
+            // back into it takes over. The dock's job was to say which window
+            // and from which box.
+            const auto WINDOW = g_dockDrag.panel->window.lock();
+            const CBox HOME   = g_dockDrag.panel->home;
+            g_dockDrag.panel.reset();
+            if (!WINDOW)
+                return false;
+
+            dismissHoverPanelNow();
+
+            // A MINIMIZED window is stashed: it sits on the stash workspace with
+            // no tile, so the overview's drag refuses it (shouldShowOverviewWindow
+            // / layoutTarget both fail) and the desktop's has no target to hand
+            // Hyprland -- which is why tearing one out did nothing whatsoever.
+            // Un-stash it first and the rest of the gesture is the ordinary one.
+            // The dock panel lists minimized windows on purpose (itemWindows
+            // includes them, so a minimized window is reachable from its icon),
+            // so this is a case the tear-out has to answer for, not reject.
+            if (Minimize::isMinimized(WINDOW))
+                Minimize::restore(WINDOW);
+
+            if (const auto OVERVIEW = scrollOverviewForMonitor(monitor)) {
+                OVERVIEW->beginWindowDragFrom(WINDOW, HOME); // grows out of the cell
+                // IMMEDIATELY, not on the next frame. The overview syncs this
+                // flag once per frame (scrollOverview.cpp, end of render), and a
+                // release that lands before that frame would be claimed by the
+                // dock's own ladder instead of ending the drag -- leaving
+                // drag.activeWindow set forever. A window held in that state is
+                // excluded from the overview's tiles (it is meant to be drawn as
+                // the drag proxy), so it goes invisible with no way back.
+                setWindowDragActive(true);
+            } else
+                beginDesktopTearOut(monitor, WINDOW, HOME);
+            return true;
+        }
+        return true;
+    }
+
+    if (!g_dockDrag.drag)
         return false;
 
     g_dockDrag.drag->at = point;
@@ -2819,11 +3089,18 @@ bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
             return false;
 
         g_dockDrag.drag->live = true;
+        // Past the threshold it is a DRAG: the ghost carries the icon now, and
+        // the cell it left must not stay pressed in behind it.
+        pressEnd();
     }
 
     g_dockDrag.drag->insert = dropIndexAt(monitor, point);
     return true;
 }
+
+// Defined down with the panel code (it needs panelContains/panelCellAt), but
+// dragRelease sits above that and has to hand a live tear-out off to it.
+bool panelDragRelease(PHLMONITOR monitor, const Vector2D& point);
 
 // V3. The release, resolved. Everything below the ladder is the SAME code X32
 // ran; what is new is that a drop which leaves the pill now has somewhere to go
@@ -2833,6 +3110,9 @@ bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
 // the caller runs its click ladder -- which is the X16 recovery X32 wrote, kept
 // where it was in the order.
 bool dragRelease(PHLMONITOR monitor, const Vector2D& point) {
+    if (g_dockDrag.panel)
+        return panelDragRelease(monitor, point);
+
     if (!g_dockDrag.drag)
         return false;
 
@@ -2926,15 +3206,17 @@ bool dragRelease(PHLMONITOR monitor, const Vector2D& point) {
 }
 
 void dragCancel() {
+    pressEnd();
     g_dockDrag.drag.reset();
+    g_dockDrag.panel.reset();
 }
 
 bool dragPending() {
-    return g_dockDrag.drag.has_value();
+    return g_dockDrag.drag.has_value() || g_dockDrag.panel.has_value();
 }
 
 bool dragging() {
-    return g_dockDrag.drag && g_dockDrag.drag->live;
+    return (g_dockDrag.drag && g_dockDrag.drag->live) || (g_dockDrag.panel && g_dockDrag.panel->live);
 }
 
 void setForeignInsert(int index) {
@@ -3107,6 +3389,11 @@ bool needsFrames(PHLMONITOR monitor, const SLayout& layout) {
     if (overlayUp())
         return true;
 
+    // The press squish, and above all its spring-back, which runs after the
+    // button came up with no pointer motion left to repaint it.
+    if (pressAnimating())
+        return true;
+
     // Y2. A pointer resting on an icon emits no motion, so nothing else would
     // ask for the frames the tooltip fade needs. renderTooltip clears the name
     // when its exit finishes, so a settled tooltip answers false here.
@@ -3253,6 +3540,14 @@ bool damageIfChanged(PHLMONITOR monitor) {
 // keybind-driven minimize never armed a flight at all -- which is why every rig
 // pointed at the dispatcher measured "no animation", and why the diagnostic log
 // came back EMPTY rather than wrong.
+bool dockOwnsNativeDrag() {
+    return g_dockNativeDrag;
+}
+
+void clearDockNativeDrag() {
+    g_dockNativeDrag = false;
+}
+
 void setWindowDragActive(bool active) {
     g_flight.windowDragActive = active;
 }
@@ -3446,6 +3741,11 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
 struct SPanel {
     std::string     wmClass;
     std::string     desktopId;
+    // Non-empty when the panel belongs to the SCRATCHPAD's slot rather than an
+    // app's. That slot has no class to remember, and the distinction also
+    // decides whether the cells wear the "in scratchpad" label: on the
+    // scratchpad's own panel every cell would say it.
+    std::string     scratchpadName;
     CBox            anchor;                          // the icon it belongs to
     CBox            target;                          // where it settles
     CBox            from;                            // where the current move started
@@ -3456,6 +3756,12 @@ struct SPanel {
     bool            leaving   = false;               // inside the grace period
     Time::steady_tp leftAt    = Time::steadyNow();
 };
+
+// How far a parked window's preview is darkened, and the label's point size.
+// The dim is deep enough to read as "not here" against the live thumbnails
+// beside it without hiding which window it is.
+constexpr float PANEL_PARKED_DIM = 0.45F;
+constexpr float PANEL_PARKED_PT  = 11.F;
 
 // The hover panel: the state it is in, and -- Y1/Y2 -- the geometry it was
 // actually DRAWN at last frame, plus the cell each window landed in.
@@ -3510,14 +3816,21 @@ bool sameBox(const CBox& a, const CBox& b) {
 
 // The windows an icon previews. itemWindows already includes minimized ones,
 // which is what makes a minimized window reachable from its own icon.
-std::vector<PHLWINDOW> panelWindows(const std::string& wmClass, const std::string& desktopId = {}) {
-    if (wmClass.empty() && desktopId.empty())
+std::vector<PHLWINDOW> panelWindows(const std::string& wmClass, const std::string& desktopId = {}, const std::string& scratchpadName = {}) {
+    std::vector<PHLWINDOW> out;
+
+    // The scratchpad's slot previews a WORKSPACE. Its windows have nothing in
+    // common but where they are parked, so there is no class to ask for them.
+    if (!scratchpadName.empty())
+        out = Scratchpad::windowsOn(Scratchpad::byShortName(scratchpadName));
+    else if (!wmClass.empty() || !desktopId.empty()) {
+        SItem item;
+        item.wmClass   = wmClass;
+        item.desktopId = desktopId;
+        out            = itemWindows(item);
+    } else
         return {};
 
-    SItem item;
-    item.wmClass   = wmClass;
-    item.desktopId = desktopId;
-    auto out       = itemWindows(item);
     std::erase_if(out, [](const auto& window) { return !window || !window->m_isMapped || !window->wlSurface() || !window->wlSurface()->resource(); });
     if (out.size() > PANEL_MAX)
         out.resize(PANEL_MAX);
@@ -3561,8 +3874,8 @@ CBox panelRiseOrigin(const SLayout& layout, const CBox& anchor) {
 // Pass an empty class when nothing is hovered; like the tooltip, the panel
 // outlives the hover so that it can animate AWAY instead of blinking out.
 void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& wmClass, const std::string& desktopId,
-                        const Time::steady_tp& now) {
-    auto       windows = panelWindows(wmClass, desktopId);
+                        const std::string& scratchpadName, const Time::steady_tp& now) {
+    auto       windows = panelWindows(wmClass, desktopId, scratchpadName);
     const bool WANT    = !windows.empty();
 
     if (WANT) {
@@ -3571,11 +3884,12 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         if (!g_hover.panel) {
             // Rises off the dock's top edge, decelerating into place. Growing
             // from the icon box itself painted the live thumbnails over the pill.
-            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
+            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .scratchpadName = scratchpadName, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
         } else {
             g_hover.panel->leaving = false;
             g_hover.panel->wmClass = wmClass;
             g_hover.panel->desktopId = desktopId;
+            g_hover.panel->scratchpadName = scratchpadName;
             g_hover.panel->anchor  = anchor;
 
             // Caught mid-dismissal, or moved to another icon: in both cases the
@@ -3616,7 +3930,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
 
         // The panel keeps drawing the LAST app's windows while it dismisses --
         // the pointer has already left, so nothing else names them.
-        windows = panelWindows(g_hover.panel->wmClass);
+        windows = panelWindows(g_hover.panel->wmClass, g_hover.panel->desktopId, g_hover.panel->scratchpadName);
         if (windows.empty()) {
             g_hover.panel.reset();
             forgetPanelGeometry();
@@ -3695,6 +4009,37 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         CBox cell{std::round(x), std::round(sc<float>(DRAWN.y) + PAD), std::round(WIDTH), std::round(CELLH)};
         renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false);
         g_hover.cells.emplace_back(cell, PHLWINDOWREF{WINDOW});
+
+        // A window parked on a SCRATCHPAD is not one of the app's ordinary
+        // windows, and the preview says so rather than leaving the user to
+        // wonder why clicking it slides a workspace in. Suppressed on the
+        // scratchpad's own panel, where every cell would carry the same label.
+        if (g_hover.panel->scratchpadName.empty() && Scratchpad::holdsWindow(WINDOW)) {
+            const int DIMROUND = std::clamp(sc<int>(std::round(ScrollOverview::Config::themeRounding() * SCALE)), 0,
+                                            std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
+
+            CRectPassElement::SRectData dim;
+            dim.box           = cell.copy().round();
+            dim.color         = CHyprColor{0.F, 0.F, 0.F, PANEL_PARKED_DIM * ALPHA};
+            dim.round         = DIMROUND;
+            dim.roundingPower = ROUNDPWR;
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(dim));
+
+            // Deliberately NOT a theme colour, and that is the whole point of
+            // the label: it is read over a DARKENED thumbnail, and a dark
+            // theme's own foreground is the one colour that disappears there.
+            if (const auto TEX = OverviewRender::text("in scratchpad", CHyprColor{1.F, 1.F, 1.F, 0.96F}, std::max(1, sc<int>(std::round(PANEL_PARKED_PT * SCALE))),
+                                                      false, "", sc<int>(cell.width));
+                TEX && TEX->ok()) {
+                CTexPassElement::SRenderData label;
+                label.tex = TEX;
+                label.box = CBox{std::round(sc<float>(cell.x) + (sc<float>(cell.width) - sc<float>(TEX->m_size.x)) / 2.F),
+                                 std::round(sc<float>(cell.y) + (sc<float>(cell.height) - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x),
+                                 sc<float>(TEX->m_size.y)};
+                label.a   = ALPHA;
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(label));
+            }
+        }
 
         // Theme inactive_border is often fully transparent (Omarchy border_size
         // 0), which is why Gemini's ring was queued and still invisible. Same
@@ -3807,6 +4152,43 @@ void releasePointerFocus() {
 // took the compositor down mid-session rather than failing the build.
 // Y11. Asked by CScrollOverview::shouldAllowSurfaceFrame. See the comment there
 // for why a preview cannot keep itself alive without it.
+// Longer than PREVIEWING_MS: that one covers a preview being actively redrawn
+// every frame, so it is refreshed constantly. This fires ONCE at the drop and
+// has to outlast a browser's reflow, which is several frames, not one.
+constexpr float                                       RETILED_MS = 1500.F;
+std::vector<std::pair<PHLWINDOWREF, Time::steady_tp>> g_retiled;
+
+void noteRetiled(const PHLWINDOW& window) {
+    if (!window)
+        return;
+
+    std::erase_if(g_retiled, [&](const auto& e) { return !e.first.lock() || realElapsedMs(e.second) >= RETILED_MS; });
+    for (auto& e : g_retiled) {
+        if (e.first.lock() == window) {
+            e.second = Time::steadyNow();
+            return;
+        }
+    }
+    g_retiled.emplace_back(PHLWINDOWREF{window}, Time::steadyNow());
+}
+
+bool isRetiling(const PHLWINDOW& window) {
+    if (!window)
+        return false;
+
+    return std::ranges::any_of(g_retiled, [&](const auto& e) { return e.first.lock() == window && realElapsedMs(e.second) < RETILED_MS; });
+}
+
+void pumpRetiled(const PHLWINDOW& window, PHLMONITOR monitor, const Time::steady_tp& now) {
+    if (!window || !monitor || !isRetiling(window))
+        return;
+
+    if (!window->wlSurface() || !window->wlSurface()->resource())
+        return;
+
+    presentPreview(window, monitor, now);
+}
+
 bool isPreviewing(const PHLWINDOW& window) {
     if (!window)
         return false;
@@ -3814,12 +4196,73 @@ bool isPreviewing(const PHLWINDOW& window) {
     return std::ranges::any_of(g_previewed, [&](const auto& e) { return e.first.lock() == window && realElapsedMs(e.second) < PREVIEWING_MS; });
 }
 
-bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
-    if (!monitor || !panelContains(point))
+// A live preview let go of. Near where it was picked up it is still the click
+// it always was; anywhere off the dock it is the window itself, landing.
+bool panelDragRelease(PHLMONITOR monitor, const Vector2D& point) {
+    if (!g_dockDrag.panel)
         return false;
 
-    if (!release)
+    const auto DRAG = *g_dockDrag.panel;
+    g_dockDrag.panel.reset();
+
+    const auto WINDOW = DRAG.window.lock();
+    if (!WINDOW || !monitor)
         return true;
+
+    // The only release that still reaches here is a press that never became a
+    // drag -- past the threshold the gesture was handed to the window drag and
+    // this state was dropped with it. So this is the click it always was.
+
+    // MINIMIZED IS NOT AN ORDINARY SELECTION. A stashed window lives on
+    // special:minimized, which is not one of the overview's cards -- so
+    // selectAndClose falls into its "this window is nowhere in the overview"
+    // branch, sets closeOnWindow and closes; the close then reads
+    // closeOnWindow->m_workspace and lands the viewport ON special:minimized,
+    // which Omarchy slides in VERTICALLY. That is the "comes up from below the
+    // screen" this looked like, and it is exactly the hazard activateWindow's
+    // own comment warns about ("never toggle special:minimized"). activateWindow
+    // guards it; selectAndClose never learned to. Un-stash through the guarded
+    // path first, then just shut the overview.
+    if (Minimize::isMinimized(WINDOW)) {
+        activateWindow(WINDOW); // showOriginalWorkspace + restore, onto a real desktop
+        if (const auto OVERVIEW = scrollOverviewForMonitor(monitor))
+            OVERVIEW->close();
+        return true;
+    }
+
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+        OVERVIEW->selectAndClose(WINDOW);
+    else
+        activateWindow(WINDOW);
+    return true;
+}
+
+bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
+    if (!monitor)
+        return false;
+
+    // A live tear-out answers its own release wherever it lands -- ahead of the
+    // panelContains gate below, because the whole point is that it ends up
+    // somewhere the panel is not.
+    if (release && g_dockDrag.panel)
+        return panelDragRelease(monitor, point);
+
+    if (!panelContains(point))
+        return false;
+
+    if (!release) {
+        // Record what it would take to tear this preview out. NOTHING is
+        // committed here: the drag only goes live once the pointer passes the
+        // threshold, so a press that does not move is still a click.
+        if (const auto CELL = panelCellAt(point)) {
+            g_dockDrag.panel = SPanelDrag{.window = CELL->second,
+                                          .start  = point,
+                                          .home   = CELL->first,
+                                          .grab   = point - Vector2D{CELL->first.x, CELL->first.y},
+                                          .at     = point};
+        }
+        return true;
+    }
 
     const auto CELL = panelCellAt(point);
     if (!CELL)
@@ -3909,17 +4352,26 @@ void render(PHLMONITOR monitor) {
     // covers anything that spills into its box.
     {
         const bool OVERPANEL   = panelContains(MOUSE);
-        const bool PANELWANTED = (HASHOVER || OVERPANEL) && !g_menu && !dragging() && !dragPending();
+        // The ICON drag hides the panel from its first press (it is pulling the
+        // very icon the panel belongs to). A PREVIEW drag must not -- until it
+        // goes live the gesture is still a click, and a panel that blinks away
+        // under the press would make every preview click look broken.
+        const bool ICONDRAG    = g_dockDrag.drag.has_value();
+        const bool TEAROUT     = g_dockDrag.panel && g_dockDrag.panel->live;
+        const bool PANELWANTED = (HASHOVER || OVERPANEL) && !g_menu && !ICONDRAG && !TEAROUT;
         CBox        panelAnchor;
         std::string panelClass;
         std::string panelDesktopId;
+        std::string panelScratchpad;
         if (PANELWANTED) {
             const bool FROMICON = HASHOVER;
             panelAnchor         = FROMICON ? HOVEREDITEM->iconBox : g_hover.panel->anchor;
             panelClass          = FROMICON ? HOVEREDITEM->wmClass : g_hover.panel->wmClass;
             panelDesktopId      = FROMICON ? HOVEREDITEM->desktopId : g_hover.panel->desktopId;
+            panelScratchpad     = FROMICON ? HOVEREDITEM->scratchpadName : g_hover.panel->scratchpadName;
         }
-        renderHoverPreview(monitor, LAYOUT, panelAnchor, panelClass, panelDesktopId, Time::steadyNow());
+        renderHoverPreview(monitor, LAYOUT, panelAnchor, panelClass, panelDesktopId, panelScratchpad, Time::steadyNow());
+
     }
 
     // Y7. Drawn FIRST so the pill's own frost and background land on top of it
@@ -4000,7 +4452,11 @@ void render(PHLMONITOR monitor) {
     }
 
     for (const auto& ITEM : LAYOUT.items) {
-        if (const auto TEX = OverviewRender::appIcon(ITEM.icon); TEX) {
+        // Whitened for the SCRATCHPAD, for the same reason the user asked for it
+        // on Show Applications (2026-08-06, below): the only icon that suits it
+        // is symbolic -- near-black artwork on a dark frosted pill, beside a row
+        // of full-colour app icons. Every other item here brings its own colour.
+        if (const auto TEX = OverviewRender::appIcon(ITEM.icon, ITEM.scratchpad); TEX) {
             CTexPassElement::SRenderData data;
             data.tex = TEX;
             data.box = ITEM.iconBox;
@@ -4024,6 +4480,8 @@ void render(PHLMONITOR monitor) {
             // so the wiggle is one assignment, not a transform stack.
             if (ITEM.running && ITEM.uri.empty() && Config::getValue<bool>(KEY_DANCE_URGENT) && classUrgent(ITEM.wmClass))
                 data.box.rot = wiggleRadians();
+
+            data.box = pressedBox(data.box, pressDepth(tooltipSubject(ITEM)));
 
             data.a = 1.F;
             g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
@@ -4059,7 +4517,7 @@ void render(PHLMONITOR monitor) {
         if (const auto TEX = OverviewRender::appIcon(Config::getValue<std::string>(KEY_SHOW_APPS_ICON), true); TEX) {
             CTexPassElement::SRenderData data;
             data.tex = TEX;
-            data.box = LAYOUT.showApps;
+            data.box = pressedBox(LAYOUT.showApps, pressDepth("show-apps"));
             data.a   = 1.F;
             g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
         }
