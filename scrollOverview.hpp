@@ -659,6 +659,15 @@ class CScrollOverview : public IOverview {
     // is drawing. The draw has already answered "is this on screen"; see
     // shouldAllowSurfaceFrame.
     bool                             askingForDrawnWindow = false;
+
+    // WHAT THE LAST PASS DREW. The render pass records; the event loop wakes.
+    // Membership is also the gate's answer to "is this window on screen": the
+    // pass that drew it knows, and it knows about the strip thumbnail as well as
+    // the card, which is the distinction the card-grid geometry could not make.
+    std::vector<PHLWINDOWREF>        drawnWindows;
+    std::unordered_set<void*>        drawnSet;
+    void                             wakeDrawnWindows(const Time::steady_tp& now);
+    bool                             wantsWakes() const;
     bool                             usesSubmapKeybinds = false;
     bool                             submapActive = false;
     uint32_t                         submapMouseClickButton = 0;

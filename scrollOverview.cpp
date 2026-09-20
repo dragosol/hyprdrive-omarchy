@@ -6838,7 +6838,43 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
 
     forced.forceWindow(window);
     forced.forceWindowSurfaces(window);
-    forced.enterWindowSurfaces(window, monitor);
+
+    // WAKING A CLIENT IS NOT FREE, AND OPEN IS THE WORST MOMENT TO DO IT (user,
+    // 2026-09-19: "the new open makes the animation stutter because it has to
+    // grab all those window frames").
+    //
+    // GNOME never pays this: a Mutter window actor already holds the last
+    // committed buffer as a texture, so its overview scales textures it had and
+    // asks no client for anything. We draw windows live, so opening used to say
+    // "wake up" to every client at once -- un-suspend, wl_surface.enter, frame
+    // callbacks -- and they all decoded and repainted during the 300-400ms the
+    // open animation needed for itself.
+    //
+    // We hold the last buffer too, and that is what the animation draws anyway,
+    // so nothing is lost by waiting: while the overview is still animating,
+    // windows are drawn from what they last committed, exactly as Mutter would.
+    // Once it lands, wakes are spread a few per frame rather than all at once,
+    // so the cost is a couple of frames of ramp instead of one stalled one.
+    // THE RENDER PASS RECORDS; IT DOES NOT WAKE (user, 2026-09-20: separate the
+    // overview animation from the live previews "so they don't conflict").
+    //
+    // Waking a client -- wl_surface.enter, then asking for its next frame -- used
+    // to happen right here, inside the pass that is compositing. That is the same
+    // shape of mistake the search field's letter tick had: work that belongs to
+    // the event loop, done mid-composite, where a scheduleFrame is liable to be
+    // absorbed by the frame already in flight and where it competes with the
+    // animation for the one thread Hyprland composites on.
+    //
+    // Note this is NOT parallelism -- there is no second thread to move to. It is
+    // the same win as the letter tick: the render pass does one job, and the
+    // wake happens between frames where it can be paced and where the frame it
+    // asks for is the NEXT one rather than the one being drawn.
+    //
+    // Membership here is also what the frame gate consults, so "we drew it" and
+    // "it may have frames" stop being two questions answered by two different
+    // pieces of geometry.
+    if (drawnSet.insert(window.get()).second)
+        drawnWindows.emplace_back(window);
 
     // IF WE DREW IT, WE ASK FOR ITS NEXT FRAME (user, 2026-09-19: after
     // switching desktop from the strip, the live window on the previous desktop
@@ -6857,11 +6893,7 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
     // second throttle either: this goes through CWLSurfaceResource::frame like
     // every other request, so shouldAllowSurfaceFrame -- and with it the whole
     // poll/stream gate -- still decides whether the callback is delivered.
-    if (window->wlSurface() && window->wlSurface()->resource()) {
-        askingForDrawnWindow = true;
-        surfaceTreePresent(window->wlSurface()->resource(), monitor, now);
-        askingForDrawnWindow = false;
-    }
+    // (the frame request that used to live here now runs from wakeDrawnWindows)
     // E8-f: renderWindow multiplies the texture by the WORKSPACE alpha, so a
     // workspace sitting at 0 draws this window's border and nothing else. The
     // window's own alpha is already forced per frame right above; forcing the
@@ -7256,7 +7288,7 @@ std::chrono::milliseconds CScrollOverview::previewPulseInterval(const Time::stea
     // frames, so it keeps up with the MONITOR, not with misc:render_unfocused_fps.
     // That setting is a sensible floor for a desktop nobody is looking at; the
     // overview is the one moment every desktop IS being looked at.
-    if (anyPreviewStreaming(now)) {
+    if (anyPreviewStreaming(now) || wantsWakes()) {
         const auto MONITOR = pMonitor.lock();
         const int  HZ      = MONITOR && MONITOR->m_refreshRate > 1 ? sc<int>(MONITOR->m_refreshRate) : 60;
         return std::min(getOverviewIdleFrameInterval(), std::chrono::milliseconds(std::max(1, 1000 / HZ)));
@@ -7277,6 +7309,54 @@ std::chrono::milliseconds CScrollOverview::previewPulseInterval(const Time::stea
     }
 
     return std::max(soonest, getOverviewIdleFrameInterval());
+}
+
+// THE EVENT-LOOP HALF. Runs from the preview pulse, between frames.
+//
+// Two jobs, both deliberately off the render path: tell a client it is on this
+// output, and ask it for its next frame. Held entirely while the overview is
+// still animating -- the pass draws every window from what it last committed
+// while that runs, exactly as Mutter's overview does, so nothing looks stale --
+// and then spread OVERVIEW_WAKES_PER_FRAME at a time so a desktop full of
+// windows ramps over a few frames instead of stalling one.
+void CScrollOverview::wakeDrawnWindows(const Time::steady_tp& now) {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || closing)
+        return;
+
+    if (scale->isBeingAnimated() || viewOffset->isBeingAnimated())
+        return;
+
+    size_t woken = 0;
+    for (const auto& WINDOWREF : drawnWindows) {
+        const auto WINDOW = WINDOWREF.lock();
+        if (!WINDOW)
+            continue;
+
+        const bool ALREADYAWAKE = previewPulses.contains(WINDOW.get());
+        if (!ALREADYAWAKE && woken >= OVERVIEW_WAKES_PER_FRAME)
+            continue;
+
+        if (!ALREADYAWAKE)
+            ++woken;
+
+        forced.enterWindowSurfaces(WINDOW, MONITOR);
+
+        if (WINDOW->wlSurface() && WINDOW->wlSurface()->resource()) {
+            askingForDrawnWindow = true;
+            surfaceTreePresent(WINDOW->wlSurface()->resource(), MONITOR, now);
+            askingForDrawnWindow = false;
+        }
+    }
+}
+
+// Is there anything still to wake? Keeps the pulse at a frame interval through
+// the ramp instead of letting it stretch to the idle floor mid-way.
+bool CScrollOverview::wantsWakes() const {
+    return std::ranges::any_of(drawnWindows, [&](const auto& ref) {
+        const auto WINDOW = ref.lock();
+        return WINDOW && !previewPulses.contains(WINDOW.get());
+    });
 }
 
 void CScrollOverview::prunePreviewPulses() {
@@ -7344,6 +7424,7 @@ int CScrollOverview::realtimePreviewTimerCallback(void* data) {
     } else
         OVERVIEW->sendOverviewFrameCallbacks(NOW);
 
+    OVERVIEW->wakeDrawnWindows(NOW);
     OVERVIEW->prunePreviewPulses();
     OVERVIEW->scheduleMinimumPreviewFrame();
     return 0;
@@ -7746,7 +7827,7 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
     // When the request comes from the draw itself, the geometry question is
     // already answered -- we are painting it right now -- so only the poll/
     // stream gate has anything left to decide.
-    if (askingForDrawnWindow) {
+    if (askingForDrawnWindow || drawnSet.contains(window.get())) {
         if (!previewWantsFrame(window, now)) {
             noteFrameGate(window, "poll-wait(drawn)");
             return false;
@@ -8221,6 +8302,9 @@ void CScrollOverview::close() {
 void CScrollOverview::onPreRender() {
     if (pMonitor)
         pMonitor->m_solitaryClient.reset();
+
+    drawnWindows.clear();
+    drawnSet.clear();
 
     // A grid reflow runs on a wall clock, not a Hyprland animation variable, so
     // nothing else asks for the next frame. Re-arming an animvar hands pacing to

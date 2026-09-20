@@ -1743,6 +1743,11 @@ inline constexpr std::chrono::milliseconds OVERVIEW_PREVIEW_QUIET_TIMEOUT = std:
 // which covers only the retile itself and not a client that reflows a beat later.
 inline constexpr std::chrono::milliseconds OVERVIEW_PREVIEW_MOVE_GRACE   = std::chrono::milliseconds(3000);
 
+// How many clients may be woken in one frame once the open animation has landed.
+// Two is a ramp of a few frames for a busy desktop and is invisible; waking all
+// of them in one frame is the stutter this exists to avoid.
+inline constexpr size_t OVERVIEW_WAKES_PER_FRAME = 2;
+
 // How rarely a completely idle overview will still repaint itself outright.
 // See realtimePreviewTimerCallback: the idle pulse sends frame callbacks
 // without damaging, and this is the floor that keeps the few POLLED things on
