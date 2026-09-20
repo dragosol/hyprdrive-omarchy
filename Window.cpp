@@ -167,6 +167,15 @@ struct SU2PrefilterEntry {
 };
 
 static std::unordered_map<const void*, SU2PrefilterEntry> g_u2PrefilterFBs;
+// Y18. How many prefilter framebuffers may be ALLOCATED in one frame. A cached
+// entry that only needs its copy refreshed does not count: the copy is a blit,
+// the allocation is what stalls under memory pressure.
+static int                                                g_u2PrefilterAllocBudget = 0;
+// ONE, not two: an allocation of a 3440x1440 RGBA framebuffer plus its mipmap
+// chain measured ~6-7 ms on this iGPU under memory pressure, and two of those
+// do not fit in a 10 ms frame on a 100 Hz output. One per frame means a first
+// open sharpens over a dozen frames instead of dropping any.
+static constexpr int                                      U2_PREFILTER_ALLOCS_PER_FRAME = 1;
 // Bumped once per prefiltered surface, not per frame -- Window.cpp has no frame
 // of its own. At ~8 tiles a frame this idle window is roughly a second.
 static uint64_t                                           g_u2PrefilterUse  = 0;
@@ -184,6 +193,10 @@ static void pruneTexturePrefilterCache() {
             entry.fb->release();
         return true;
     });
+}
+
+void resetPrefilterBudget() {
+    g_u2PrefilterAllocBudget = U2_PREFILTER_ALLOCS_PER_FRAME;
 }
 
 static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR monitor, double minify, size_t firstElement) {
@@ -243,6 +256,13 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
             entry.imageDescription != IMAGEDESC;
 
         if (!entry.fb->isAllocated() || entry.fb->m_size != SRC->m_size || entry.fb->m_drmFormat != FBFORMAT) {
+            // Y18. Out of budget: draw this window with plain bilinear for now.
+            // The entry stays dirty and un-allocated, so the next frame picks it
+            // up -- the tile is merely un-prefiltered until then, never wrong.
+            if (g_u2PrefilterAllocBudget <= 0)
+                continue;
+            --g_u2PrefilterAllocBudget;
+
             entry.fb->release();
             if (!entry.fb->alloc(W, H, FBFORMAT))
                 continue;
@@ -972,31 +992,16 @@ void notifySurfaceCommit(const SP<CWLSurfaceResource>& surface) {
         IT->second.dirty = true;
 }
 
-
-// NOT FREED WHEN THE OVERVIEW CLOSES (user, 2026-09-16: "the workspace strip is
-// visibly refreshing its previews ... antialiasing is not present prior to the
-// refresh"). It was, and every open therefore started cold: the minis and tiles
-// drew plain bilinear -- at strip scale, visibly aliased -- until each window's
-// mipmap was rebuilt, and Y18's one-allocation-per-frame budget made that a
-// window-by-window sharpening anyone could watch. Kept, the next open finds
-// every mipmap it drew last time and only re-copies the windows that committed
-// in between (a blit, no allocation). The price is the copies' GPU memory
-// while the overview is down, bounded by the windows that exist: an entry
-// whose surface is gone is dropped here, and one not drawn for a while is
-// dropped by the prune on the next open.
-void trimTexturePrefilterCache() {
-    std::erase_if(g_u2PrefilterFBs, [](auto& kv) {
-        if (kv.second.alive())
-            return false;
-        if (kv.second.fb)
-            kv.second.fb->release();
-        return true;
-    });
-}
-
-// Everything, for plugin unload: the framebuffers are this object's to free
-// while its code and the EGL context are still there.
 void releaseTexturePrefilterCache() {
+    // Y17: the cache is global, but ~CScrollOverview called this per overview --
+    // so on a two-monitor desktop, closing one overview dropped the other's
+    // mipmaps and made it rebuild every one of them on its next frame. Only the
+    // last overview leaving actually frees. (By the time a destructor runs the
+    // overview is already out of scrollOverviews(); OverviewManager parks it in
+    // g_dyingOverviews first.)
+    if (!scrollOverviews().empty())
+        return;
+
     for (auto& [key, entry] : g_u2PrefilterFBs) {
         if (entry.fb)
             entry.fb->release();
@@ -1199,7 +1204,8 @@ void renderOverviewWindow(const SRenderParams& params) {
     const bool   usePrecomputedBlur     = !scaleBlur && shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
     g_pHyprRenderer->renderWindow(params.window, params.monitor, params.now, false, Render::RENDER_PASS_ALL, false, false);
     scaleOverviewSubsurfaceOffsets(params.window, params.window->sizeAnimation()->value(), firstWindowPassElement);
-    prefilterOverviewWindowTextures(params.window, params.monitor,
+    if (params.prefilterAllowed)
+        prefilterOverviewWindowTextures(params.window, params.monitor,
                                     previousWindowSize.x * params.monitor->m_scale > 0.0 ? params.windowBox.width / (previousWindowSize.x * params.monitor->m_scale) : 0.0,
                                     firstWindowPassElement);
     if (!usePrecomputedBlur)
