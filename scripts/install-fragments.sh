@@ -59,6 +59,20 @@ fi
 PLUGIN_SRC=$ROOT/omarchy-plugin
 PLUGIN_DEST=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/dragos.hyprdrive
 if [ -d "$PLUGIN_SRC" ]; then
+    # The Omarchy shell watches this directory with inotify and re-initialises
+    # EVERY installed plugin whenever a loadable source (manifest.json, *.qml,
+    # *.js) is written. Three of the files below are loadable, and they land
+    # within ~2ms of each other, well inside the shell's 150ms reload debounce
+    # -- so the shell reloads against a half-copied plugin, and that reload
+    # spawns ~500 processes (measured). Pause the watcher across the copy and
+    # fire exactly one reload once everything is in place.
+    # See omacom/omarchy#12601 and #11923.
+    RELOAD_PAUSE=$(command -v omarchy-plugin-reload-pause || true)
+    if [ -n "$RELOAD_PAUSE" ]; then
+        "$RELOAD_PAUSE" on >/dev/null
+        trap '"$RELOAD_PAUSE" off >/dev/null 2>&1 || true' EXIT INT TERM
+    fi
+
     mkdir -p "$PLUGIN_DEST/bin"
     install -Dm644 "$PLUGIN_SRC/manifest.json" "$PLUGIN_DEST/manifest.json"
     install -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
@@ -67,4 +81,15 @@ if [ -d "$PLUGIN_SRC" ]; then
     install -Dm644 "$PLUGIN_SRC/hyprdrive-icon.png" "$PLUGIN_DEST/hyprdrive-icon.png"
     install -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
     echo "omarchy plugin: $PLUGIN_DEST"
+
+    if [ -n "$RELOAD_PAUSE" ]; then
+        "$RELOAD_PAUSE" off >/dev/null
+        trap - EXIT INT TERM
+        # Everything is on disk now: one deliberate reload instead of a
+        # mid-copy one. Skipped if the shell is not running.
+        if pgrep -x quickshell >/dev/null 2>&1; then
+            touch "$PLUGIN_DEST/manifest.json"
+            echo "shell reload: 1 (watcher paused during copy)"
+        fi
+    fi
 fi
