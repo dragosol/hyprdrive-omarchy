@@ -35,13 +35,13 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // must not steal SPACE from the query. Moving onto the pill puts SPACE
         // back to typing even if a file is still highlighted for Enter.
         if (!drag.activeWindow && !resize.activeWindow && !(g_search.pointer.drag && g_search.pointer.drag->live)) {
-            if (g_search.layout.pill.containsPoint(lastMousePosLocal)) {
+            if (searchLayoutHere().pill.containsPoint(lastMousePosLocal)) {
                 if (g_search.nav.hoverIndex != -1 || g_search.nav.intent == ESearchIntent::Hovering) {
                     g_search.nav.hoverIndex = -1;
                     g_search.nav.intent     = ESearchIntent::Typing;
                     damage();
                 }
-            } else if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW) {
+            } else if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
                 if (g_search.nav.hoverIndex != ROW->index) {
                     g_search.nav.hoverIndex = ROW->index;
                     g_search.nav.selection  = ROW->index;
@@ -125,7 +125,19 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
 
         info.cancelled = true;
         stealOverviewKeyboard();
-        requestInputFrame();
+
+        // ONLY WHEN SOMETHING WOULD LOOK DIFFERENT. This used to be an
+        // unconditional requestInputFrame(), and AQ_SCHEDULE_CURSOR_MOVE is the
+        // one schedule hkScheduleFrame does not throttle -- so sliding the
+        // cursor across empty overview space repainted the whole overview at
+        // the output's refresh rate on both monitors. Everything that follows
+        // the pointer CONTINUOUSLY is a held gesture and is listed here in its
+        // own right; everything else is discrete and is in the hover signature.
+        // Evaluated first so the signature is updated whichever way this goes.
+        const bool HOVERMOVED = hoverSignatureChanged();
+        if (HOVERMOVED || drag.pendingPrimary || drag.activeWindow || resize.pointerDown || resize.activeWindow || pan.pointerDown || submapMouseClickPending ||
+            (g_search.pointer.drag && g_search.pointer.drag->live))
+            requestInputFrame();
 
         // D6: a drag that STARTS on a strip mini picks up that window, not
         // whatever main tile the band happens to float over. Same ordering as
@@ -379,7 +391,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                 // on that selection would; released anywhere else it is the
                 // user changing their mind, which is a no-op. G12's hold stays
                 // the drag gate -- a click is simply what happens without it.
-                if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index)) {
+                if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index)) {
                     if (const auto W = g_search.nav.pendingFocus.lock()) {
                         closeOnWindow = W;
                         g_search.nav.pendingFocus.reset();
@@ -410,7 +422,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
             // hold makes it a drag, and a plain click over a row is still the
             // panel's to define.
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-                if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW) {
+                if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
                     g_search.nav.selection         = ROW->index;
                     g_search.nav.zone              = EOverviewNavZone::Result;
                     g_search.nav.intent            = ESearchIntent::Hovering;
@@ -418,14 +430,14 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                         SResultDrag{.desktopId = ROW->desktopId, .icon = ROW->icon, .start = lastMousePosLocal, .startedAt = Time::steadyNow(), .index = ROW->index};
                     return;
                 }
-                if (g_search.layout.pill.containsPoint(lastMousePosLocal)) {
+                if (searchLayoutHere().pill.containsPoint(lastMousePosLocal)) {
                     g_search.query.active = true;
                     g_search.nav.zone = EOverviewNavZone::Search;
                     g_search.nav.selection = -1;
                     damage();
                     return;
                 }
-                if (g_search.layout.containerBox.width > 1.F && g_search.layout.containerBox.containsPoint(lastMousePosLocal)) {
+                if (searchLayoutHere().containerBox.width > 1.F && searchLayoutHere().containerBox.containsPoint(lastMousePosLocal)) {
                     return;
                 }
             }
@@ -780,9 +792,9 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             case XKB_KEY_Down:
             case XKB_KEY_KP_Down:
                 if (g_search.nav.zone != EOverviewNavZone::Result && (!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack())) {
-                    if (!g_search.layout.hits.empty()) {
+                    if (!searchLayoutHere().hits.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
-                        g_search.nav.selection         = g_search.layout.hits[0].index;
+                        g_search.nav.selection         = searchLayoutHere().hits[0].index;
                         g_search.nav.explicitSelection = true;
                         g_search.nav.intent            = ESearchIntent::Browsing;
                         damage();
@@ -807,16 +819,14 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 if (g_search.nav.zone == EOverviewNavZone::Result) {
                     g_search.nav.zone         = EOverviewNavZone::Tile;
                     g_search.nav.keyboardTile = true;
-                    if (const auto CUR = closeOnWindow.lock(); !CUR) {
-                        for (const auto& wimg : images) {
-                            if (!wimg || !wimg->pWorkspace)
-                                continue;
-                            const auto WINS = overviewMainGridWindows(wimg->pWorkspace, pMonitor.lock());
-                            if (!WINS.empty()) {
-                                closeOnWindow = WINS.front();
-                                break;
-                            }
-                        }
+                    // The window the overview opened on is still `closeOnWindow`,
+                    // and a query usually hides it -- kept, it made the walk
+                    // start from a tile nobody can see. Keep it only if it is
+                    // on screen; otherwise the first tile in reading order,
+                    // not the first in window-list order (mid-grid).
+                    if (!isNavTile(closeOnWindow.lock())) {
+                        if (const auto FIRST = firstNavTile())
+                            closeOnWindow = FIRST;
                     }
                     TileChrome::setHovered(closeOnWindow.lock(), false);
                 } else if (!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) {

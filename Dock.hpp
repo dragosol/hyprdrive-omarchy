@@ -58,6 +58,19 @@ struct SItem {
     // quietly empty the shelf.
     bool        scratchpad = false;
     std::string scratchpadName;
+
+    // WHAT THE ITEM IS CALLED BY EVERYTHING THAT REMEMBERS IT: the tooltip's
+    // fade, the press squish and DockTilt's hover spring are all keyed on this
+    // one string (Dock.cpp, tooltipSubject). Filled in by dockItems() when the
+    // item is built, because the alternative is rebuilding it -- a prefix and a
+    // concatenation per icon -- inside the render loop of every monitor, every
+    // frame (user, 2026-09-14). Never set it by hand: an item built anywhere
+    // else answers with an empty subject, which is the "no icon" key.
+    std::string subject;
+
+    // 0..1 while the item is arriving (Dock.cpp, "the arrangement"): the icon
+    // grows out of its slot and fades in with it. 1 for every settled item.
+    float       appear = 1.F;
 };
 
 struct SLayout {
@@ -270,6 +283,12 @@ bool damageIfChanged(PHLMONITOR monitor);
 // queued against a removed output never runs, which would leave that monitor's
 // dock latched out of ever requesting another frame.
 void forgetMonitor(MONITORID id);
+
+// WHY THIS DOCK IS ASKING FOR FRAMES, or nullptr when it is not: the name of
+// the needsFrames term that answered. For `hyprdrive:debug frames`, because a
+// monitor repainting with nothing moving is this plugin's most expensive bug
+// class and every previous hunt for one cost a custom build (2026-09-15).
+const char* frameReason(PHLMONITOR monitor);
 
 // X30. Feed the autohide pressure barrier with RELATIVE pointer motion. The
 // bus's mouse.move carries the absolute position, and at the bottom edge the

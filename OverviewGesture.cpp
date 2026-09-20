@@ -3,14 +3,18 @@
 #include "Config.hpp"
 #include "IOverview.hpp"
 #include "scrollOverview.hpp"
+#include "OmarchySearch.hpp"
+#include "SearchProviders.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdarg>
+#include <cstdlib>
 #include <optional>
 #include <ranges>
+#include <string_view>
 #include <vector>
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon.h>
@@ -23,64 +27,83 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 
 COverviewGesture::COverviewGesture(eTrackpadGestureDirection direction) : m_direction(direction) {}
 
+// THE SWIPE OPENS AND CLOSES EVERY MONITOR, like tap-SUPER (user, 2026-09-14:
+// the gesture only opened the monitor under the pointer). Each monitor's
+// overview gets the same delta, so every `scale` holds the same value and each
+// onSwipeEnd reaches the same commit-or-cancel decision: they finish together
+// without having to be told to.
 void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
     ITrackpadGesture::begin(e);
 
     m_lastDelta   = 0.F;
     m_firstUpdate = true;
+    m_overviews.clear();
 
-    const auto MONITOR = Desktop::focusState()->monitor();
-    if (!MONITOR)
+    const auto FOCUSED = Desktop::focusState()->monitor();
+    if (!FOCUSED)
         return;
 
     const bool WANT_CLOSE = m_direction == TRACKPAD_GESTURE_DIR_DOWN;
-    const bool WANT_OPEN  = !WANT_CLOSE; // up, vertical, swipe: open if nothing is up
 
-    auto       overview = scrollOverviewForMonitor(MONITOR);
-
-    if (overview && overview->isClosing()) {
-        dropScrollOverviewsForMonitor(MONITOR);
-        overview.reset();
-        if (WANT_CLOSE) {
-            m_overview.reset();
-            return;
-        }
+    // An overview still animating out cannot be swiped (onSwipeUpdate reads
+    // `closing` and would run backwards). Drop them first, on every monitor --
+    // and before ensureScrollOverviewHooks, because dropping the last one tears
+    // the hooks down.
+    for (const auto& MONITOR : State::monitorState()->monitors()) {
+        if (const auto OVERVIEW = scrollOverviewForMonitor(MONITOR); OVERVIEW && OVERVIEW->isClosing())
+            dropScrollOverviewsForMonitor(MONITOR);
     }
 
-    if (WANT_OPEN) {
-        if (overview) {
-            // Already open: swipe-up does not close. Swipe-down does.
-            m_overview.reset();
+    if (!WANT_CLOSE) {
+        // Already open where the fingers are: swipe-up does not close.
+        if (scrollOverviewForMonitor(FOCUSED))
             return;
-        }
         if (!ensureScrollOverviewHooks())
             return;
 
         // Super-tap and the dock button reset the search session; swipe-open
         // was the remaining door, so a query survived close and came back.
         resetSearchSession();
-        overview = makeShared<CScrollOverview>(MONITOR->m_activeWorkspace, true, MONITOR);
-        registerScrollOverview(overview);
-        overview->m_swipeClosing = false;
-    } else {
-        if (!overview) {
-            m_overview.reset();
-            return;
+        SearchProviders::warm();
+        OmarchySearch::init();
+
+        for (const auto& MONITOR : State::monitorState()->monitors()) {
+            if (!MONITOR || !MONITOR->m_enabled || !MONITOR->m_activeWorkspace || scrollOverviewForMonitor(MONITOR))
+                continue;
+
+            const auto OVERVIEW = makeShared<CScrollOverview>(MONITOR->m_activeWorkspace, true, MONITOR);
+            registerScrollOverview(OVERVIEW);
+            OVERVIEW->m_swipeClosing = false;
+            OVERVIEW->m_isSwiping    = true;
+            m_overviews.emplace_back(OVERVIEW);
         }
-        overview->selectHoveredWorkspace();
-        overview->m_swipeClosing = true;
+        return;
     }
 
-    overview->m_isSwiping = true;
-    m_overview            = overview;
+    // A copy: nothing here should mutate the registry, but close paths do, and
+    // iterating the live vector through one would be a use-after-free.
+    const auto OPEN = scrollOverviews();
+    for (const auto& OVERVIEW : OPEN) {
+        if (!OVERVIEW || OVERVIEW->isClosing())
+            continue;
+
+        // Only the pointer's monitor picks the desktop under it. On the others
+        // the pointer is off-screen, and a side card reaching past the edge
+        // could still be "hovered" and switch that monitor's desktop.
+        if (OVERVIEW->pMonitor.lock() == FOCUSED)
+            OVERVIEW->selectHoveredWorkspace();
+        OVERVIEW->m_swipeClosing = true;
+        OVERVIEW->m_isSwiping    = true;
+        m_overviews.emplace_back(OVERVIEW);
+    }
 }
 
 void COverviewGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
-    const auto OVERVIEW = m_overview.lock();
-    if (!OVERVIEW)
+    if (m_overviews.empty())
         return;
 
     if (m_firstUpdate) {
@@ -94,14 +117,23 @@ void COverviewGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e)
     const float MAX = sc<float>(ScrollOverview::Config::getGestureDistance());
     m_lastDelta     = std::clamp(m_lastDelta, 0.F, MAX);
 
-    OVERVIEW->onSwipeUpdate(m_lastDelta);
+    for (const auto& REF : m_overviews) {
+        if (const auto OVERVIEW = REF.lock())
+            OVERVIEW->onSwipeUpdate(m_lastDelta);
+    }
 }
 
 void COverviewGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
-    const auto OVERVIEW = m_overview.lock();
-    if (OVERVIEW)
+    // Locked up front: onSwipeEnd may close, and closing unregisters.
+    std::vector<SP<IOverview>> driven;
+    for (const auto& REF : m_overviews) {
+        if (const auto OVERVIEW = REF.lock())
+            driven.emplace_back(OVERVIEW);
+    }
+    m_overviews.clear();
+
+    for (const auto& OVERVIEW : driven)
         OVERVIEW->onSwipeEnd();
-    m_overview.reset();
 }
 
 void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
@@ -146,6 +178,46 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     m_native.end(e);
 }
 
+void COverviewScrollGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    ITrackpadGesture::begin(e);
+    m_inOverview = false;
+    m_overview.reset();
+
+    if (const auto OVERVIEW = openScrollOverviewForMonitor(Desktop::focusState()->monitor())) {
+        m_inOverview = true;
+        m_overview   = OVERVIEW;
+        return;
+    }
+
+    m_native.begin(e);
+}
+
+void COverviewScrollGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (m_inOverview) {
+        const auto OVERVIEW = m_overview.lock();
+        if (auto* const SCROLL = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr)
+            // Negated like the workspace swipe: the columns stick to the fingers.
+            SCROLL->onTapeSwipeUpdate(-distance(e));
+        return;
+    }
+
+    m_native.update(e);
+}
+
+void COverviewScrollGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (m_inOverview) {
+        if (const auto OVERVIEW = m_overview.lock()) {
+            if (auto* SCROLL = dynamic_cast<CScrollOverview*>(OVERVIEW.get()))
+                SCROLL->onTapeSwipeEnd();
+        }
+        m_overview.reset();
+        m_inOverview = false;
+        return;
+    }
+
+    m_native.end(e);
+}
+
 bool COverviewWorkspaceGesture::isDirectionSensitive() {
     return true;
 }
@@ -171,7 +243,21 @@ bool                             g_sawSwipeOrPinch       = false;
 Time::steady_tp                  g_lastPadFingersAt{};
 Time::steady_tp                  g_holdBeganAt{};
 
+// OFF unless HYPRDRIVE_CLICK_LOG is set to something other than 0. Every line
+// is an open/write/close of a file on /tmp, and the loudest callers are on the
+// reload and button paths: a config reload alone wrote one line per click
+// gesture re-added and one per pointer device, for a trace nobody reads outside
+// a debugging session. Same shape as FlightController's zdbg, but an env var
+// rather than a key -- the first lines are written before a config exists.
 void clickLog(const char* fmt, ...) {
+    static const bool ENABLED = [] {
+        const char* const V = std::getenv("HYPRDRIVE_CLICK_LOG");
+        return V && *V && std::string_view{V} != "0";
+    }();
+
+    if (!ENABLED)
+        return;
+
     if (FILE* F = fopen("/tmp/hyprdrive-click.log", "a")) {
         va_list ap;
         va_start(ap, fmt);
@@ -323,7 +409,7 @@ bool fireMatchingKeybind(uint32_t modmask, const std::string& key) {
 void fireClickAction(const SClickGesture& g) {
     const auto& A = g.action;
     if (A == "overview") {
-        dispatchNamed("hyprdrive:overview", "toggle");
+        dispatchNamed("hyprdrive:overview", "toggle all"); // every monitor, like tap-SUPER
         return;
     }
     if (A == "workspace") {
@@ -454,12 +540,24 @@ void removeClickGesture(size_t fingers, uint32_t mods) {
     std::erase_if(g_clickGestures, [&](const SClickGesture& g) { return g.fingers == fingers && g.mods == mods; });
 }
 
+// Idempotent, and deliberately so: this is called from the config.reloaded
+// listener, and a reload is not a reason to rebuild anything here. Tearing the
+// listeners down and putting them back cost ~10 signal registrations per
+// pointer device AND zeroed g_padFingers, which threw away a 4-finger hold that
+// was still under the hand -- a theme switch mid-gesture cancelled the gesture.
+// The listeners are attached to the POINTER SET, so that is the only thing that
+// can make them stale; handleClickGestureButton watches the same count.
 void attachPadFingerListeners() {
-    g_padListeners.clear();
-    g_padFingers            = 0;
-    g_attachedPointerCount  = 0;
-    if (!g_pInputManager)
+    if (!g_pInputManager) {
+        g_padListeners.clear();
+        g_attachedPointerCount = 0;
         return;
+    }
+
+    if (!g_padListeners.empty() && g_pInputManager->m_pointers.size() == g_attachedPointerCount)
+        return;
+
+    g_padListeners.clear();
     g_attachedPointerCount = g_pInputManager->m_pointers.size();
     for (auto& ptr : g_pInputManager->m_pointers) {
         if (!ptr)

@@ -31,6 +31,7 @@
 #include "scrollOverview.hpp"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace OvInternal {
@@ -70,9 +71,13 @@ namespace OvInternal {
         std::unordered_map<Desktop::View::CWindow*, SGridReflow>  reflows;
         std::unordered_map<Desktop::View::CWindow*, SGridRelease> releases;
 
-        // Something is still travelling, so the overview needs another frame.
-        // Read and cleared once per pass by the render tail.
-        bool reflowActive = false;
+        // Which OUTPUTS are still travelling, so their overview needs another
+        // frame. One bool for the whole session was wrong with two monitors up:
+        // both overviews render every frame, and whichever onPreRender ran
+        // first consumed and cleared the flag -- so a reflow on the external
+        // monitor pumped the laptop and then stalled itself, and every hover
+        // ease on either output repainted both.
+        std::unordered_set<MONITORID> reflowActive;
 
         // The tile currently being dragged. It gives up its grid slot for the
         // duration so the survivors close the gap it left WHILE it travels --
@@ -84,6 +89,11 @@ namespace OvInternal {
     };
 
     SGridAnimator& grid();
+
+    // "This output still owes a frame", and "take that debt". Free functions so
+    // no caller has to remember that the flag is keyed by output now.
+    void gridSetReflowActive(const PHLMONITOR& monitor);
+    bool gridTakeReflowActive(const PHLMONITOR& monitor);
 
     // The outbound ease starts on the first releasing frame, one frame after the
     // last matching one, so the clock has to outlast the reflow or the tile is
@@ -119,8 +129,11 @@ namespace OvInternal {
 
     // --- layout ---------------------------------------------------------------
     bool overviewGridLayout(const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out);
-    // The slot `window` owns on `monitor`, if it owns one at all.
-    bool overviewGridSlot(const PHLWINDOW& window, PHLMONITOR monitor, CBox& out);
+    // The slot `window` owns on `monitor`, if it owns one at all. `promotedOut`
+    // receives the B2 answer this function had to work out anyway: asking
+    // overviewGridPromoted a second time at the call site re-armed the release
+    // map for a value that cannot have changed in between.
+    bool overviewGridSlot(const PHLWINDOW& window, PHLMONITOR monitor, CBox& out, bool* promotedOut = nullptr);
 
     // --- animation ------------------------------------------------------------
     // 0 while the overview is closed, 1 once it is fully open, so windows travel
@@ -134,6 +147,6 @@ namespace OvInternal {
     // Called from getOverviewWindowBox, i.e. many times per window per frame from
     // render, hit-test and drag alike. Restarting only when the *target* moves
     // keeps it idempotent within a frame, so those call sites cannot disagree.
-    CBox  gridReflowBox(const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom = nullptr, bool promoted = false, bool exiting = false);
+    CBox  gridReflowBox(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom = nullptr, bool promoted = false, bool exiting = false);
 
 } // namespace OvInternal

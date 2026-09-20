@@ -50,10 +50,34 @@ std::vector<SSearchItem> searchAgents(const std::string& query);
 std::vector<SSearchItem> promptAllAgents(const std::string& prompt);
 bool                     isGlyphIcon(const std::string& icon);
 std::vector<SSearchItem> agentHelpItems();
+
+// OMARCHY'S DEFAULT CODING AGENT -- the one `omarchy agent` launches, stored in
+// ~/.config/omarchy/defaults/agent. Search does not keep a default of its own:
+// it reads and writes that file, so the overview, the Omarchy menu's checkmark
+// and `omarchy agent` can never disagree about which agent it is. The default
+// agent's rows lead the AI & Tools column. Ctrl x2 over an agent row sets it
+// (overviewHandleCtrlTap).
+bool canBeDefaultAgent(const SSearchItem& item);
+bool isDefaultAgent(const SSearchItem& item);
+bool setDefaultAgent(const SSearchItem& item);
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
 std::vector<SSearchItem> searchMenu(const std::string& query, size_t limit = 10);
 std::vector<SSearchItem> fileResults();
 bool fileSearchBusy();
+
+// EVERYTHING THE ROW BUILDER READS THAT IS NOT THE QUERY, as one number.
+//
+// Building a row set costs a scored sort of the whole app inventory, two
+// stat()s for the menu, a stat() and two fs::exists per agent and a copy of the
+// file results under a mutex -- and the overview asks for it on every monitor
+// on every frame while a query is up, for an answer that changes only when one
+// of those files does. This is the key a caller memoises on.
+//
+// The filesystem half is re-read at most every 250ms, which is also the ceiling
+// on how long a `omarchy default agent ...` run in a terminal (or a Ctrl x2 in
+// the search field) takes to show up. The file-search worker's own generation
+// is folded in unpolled, so an async result lands on the next frame.
+uint64_t searchInputsGeneration();
 void setResultsCallback(std::function<void()> cb);
 
 // Menu hierarchy navigation

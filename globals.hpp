@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <unistd.h>
 #include <cstdlib>
 #include <string>
 
@@ -32,7 +33,13 @@ float houseEase(bool decel, float t);
 // of the moment complained about, and this is the instrument for that moment.
 namespace Prof {
     inline bool enabled() {
-        static const bool ON = std::getenv("HYPRDRIVE_PROFILE") != nullptr || std::getenv("SCROLLOVERVIEW_PROFILE") != nullptr;
+        // The env vars are read from the COMPOSITOR's environment, so turning
+        // profiling on used to mean a full logout -- which is a poor trade when
+        // the thing to measure is a moment you can reproduce in ten seconds.
+        // The sentinel file is read once per plugin LOAD, so `touch` it and
+        // hot-reload the plugin and the same instrument is live.
+        static const bool ON = std::getenv("HYPRDRIVE_PROFILE") != nullptr || std::getenv("SCROLLOVERVIEW_PROFILE") != nullptr ||
+                               ::access("/tmp/hyprdrive-profile.on", F_OK) == 0;
         return ON;
     }
 
@@ -49,11 +56,13 @@ namespace Prof {
     inline uint64_t    bgNs    = 0, bgCalls    = 0;   // renderWorkspaceBackground walk
     inline uint64_t    liveNs  = 0, liveCalls  = 0;   // renderWorkspaceLive walk (the tiles)
     inline uint64_t    stripNs = 0, stripCalls = 0;   // renderStrip
+    inline float       pillScale = 0.F, fieldWL = 0.F; // diagnostic: drawSearch's layout inputs
+    inline int         retargets = 0;
     inline clock::time_point keyAt{};
     inline bool        pending = false;
     inline uint64_t    frames  = 0;                   // frames since the keystroke
 
-    inline void reset() { txtNs = txtCold = scanNs = scanCalls = matchNs = matchCalls = appNs = appCalls = rowsNs = rowsCalls = srchNs = srchCalls = frameNs = frameCalls = frames = 0; icoResolveNs = icoDecodeNs = icoUploadNs = icoCold = 0; bgNs = bgCalls = liveNs = liveCalls = stripNs = stripCalls = 0; }
+    inline void reset() { retargets = 0; txtNs = txtCold = scanNs = scanCalls = matchNs = matchCalls = appNs = appCalls = rowsNs = rowsCalls = srchNs = srchCalls = frameNs = frameCalls = frames = 0; icoResolveNs = icoDecodeNs = icoUploadNs = icoCold = 0; bgNs = bgCalls = liveNs = liveCalls = stripNs = stripCalls = 0; }
 
     // Accumulates into a counter pair. Reads the clock only while profiling.
     struct Timer {
@@ -130,6 +139,12 @@ namespace Membership {
     }
 
     void bump(const char* why);
+    // The counter bump() moves. Read by anything that caches a per-window
+    // answer -- the dock's item list, the search result rows, the open-window
+    // match count (user, 2026-09-14): every mutator that changes which windows
+    // exist already bumps here, so those caches inherit this bump set instead
+    // of growing a second one nobody would remember to feed.
+    uint64_t generation();
     bool lookup(const void* key, bool& out);
     void store(const void* key, bool member);
     void divergence(const std::string& cls, const std::string& title, bool live);

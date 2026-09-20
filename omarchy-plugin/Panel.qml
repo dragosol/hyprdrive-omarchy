@@ -160,9 +160,16 @@ Panel {
   }
 
   onOpenedChanged: if (opened) dump()
-  onOnBatteryChanged: {
-    if (profileMode === "auto" && ctlPath !== "")
-      runCtl(["profile-apply", "auto"])
+  // A flaky USB-C source flips onBattery several times a second, and every
+  // applied profile rewrites 40-panel.lua (a full Hyprland reload). Apply once
+  // the power state has held still; hdpanel reads the settled state itself.
+  onOnBatteryChanged: if (profileMode === "auto") profileSettle.restart()
+
+  Timer {
+    id: profileSettle
+    interval: 4000
+    onTriggered: if (root.profileMode === "auto" && root.ctlPath !== "")
+      root.runCtl(["profile-apply", "auto"])
   }
 
   implicitWidth: button.implicitWidth
@@ -475,6 +482,24 @@ Panel {
                 checked: Model.asBool(root.k("plugin:hyprdrive:dock:show_favorites", true))
                 foreground: root.foreground
                 onClicked: root.toggleKey("plugin:hyprdrive:dock:show_favorites")
+              }
+
+              PanelSectionHeader { text: "TILT"; foreground: root.foreground }
+              Toggle {
+                width: parent.width
+                label: "Hover tilt"
+                description: "Icons lean toward the pointer in 3D while hovered, and spring flat when it leaves."
+                checked: Model.asBool(root.k("plugin:hyprdrive:dock:hover_tilt", true))
+                foreground: root.foreground
+                onClicked: root.toggleKey("plugin:hyprdrive:dock:hover_tilt")
+              }
+              Toggle {
+                width: parent.width
+                label: "Press tilt"
+                description: "A pressed icon leans in toward where you click, with light on its face. Off keeps the plain squish."
+                checked: Model.asBool(root.k("plugin:hyprdrive:dock:press_tilt", true))
+                foreground: root.foreground
+                onClicked: root.toggleKey("plugin:hyprdrive:dock:press_tilt")
               }
 
               PanelSectionHeader { text: "SIZE"; foreground: root.foreground }

@@ -33,6 +33,13 @@ PHLWINDOW hovered();
 // An ease is still running, so the caller owes another frame.
 bool animating();
 
+// ...and the same question for ONE output. The state map is session-wide
+// because there is one cursor, but the frames it buys are not: with two
+// overviews up, a tile easing on one monitor was asking both of them to
+// repaint. Each state records the output its tile was on when the ease was
+// armed, which is the output that has to draw it.
+bool animatingOn(PHLMONITOR monitor);
+
 // The grid slot, grown by the hover ease and shrunk by the press ease, about its
 // own centre. Render AND the close-button hit-test both go through this: a
 // button placed off the unscaled box lands somewhere the tile is not.

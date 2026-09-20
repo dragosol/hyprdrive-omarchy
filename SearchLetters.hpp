@@ -155,18 +155,44 @@ struct SPlaced {
     bool        dying    = false;
 };
 
+// Where one letter sits in ONE view -- one monitor's search field. Positions are
+// in that view's pixels, and every monitor draws the same letters at its own
+// scale, so a single shared restX was rewritten by each monitor in turn: each
+// write looked like the text moving, restarted the displacement ease, and the
+// whole query shivered between the two monitors' positions every frame (user,
+// 2026-09-14). The letters themselves -- what they are, when they were born and
+// died -- stay shared: that is the query, and there is one query.
+struct SPlacement {
+    int               view    = 0;
+    float             restX   = 0.F;
+    float             fromX   = 0.F;
+    clock::time_point movedAt{};
+};
+
 struct SLetter {
-    std::string                 glyph;
-    clock::time_point           bornAt{};
+    std::string                      glyph;
+    clock::time_point                bornAt{};
     std::optional<clock::time_point> dyingAt;
-    float                       restX   = 0.F;
-    float                       fromX   = 0.F;
-    clock::time_point           movedAt{};
-    bool                        laid    = false;
+    std::vector<SPlacement>          placements; // one per view that has laid it out
+
+    SPlacement* placementIn(int view) {
+        for (auto& P : placements)
+            if (P.view == view)
+                return &P;
+        return nullptr;
+    }
 };
 
 struct SAnimator {
     std::vector<SLetter> letters;
+
+    // DIAGNOSTIC (2026-09-19). How many letters had their displacement ease
+    // RE-AIMED during the last place(). A retarget on a frame where nothing was
+    // typed means the layout input moved under the animation, which restarts a
+    // 260ms OutBack from wherever it had reached -- an ease that never finishes
+    // its curve reads as drag, and the error multiplies along the run because
+    // every letter's target is the sum of the ones before it.
+    int lastRetargets = 0;
 
     void reset() { letters.clear(); }
 
@@ -218,7 +244,7 @@ struct SAnimator {
             std::vector<SLetter> add;
             add.reserve(E.inserted.size());
             for (const auto& G : E.inserted)
-                add.push_back(SLetter{.glyph = G, .bornAt = now, .movedAt = now});
+                add.push_back(SLetter{.glyph = G, .bornAt = now});
             letters.insert(letters.begin() + static_cast<std::ptrdiff_t>(vecI), add.begin(), add.end());
         }
     }
@@ -232,42 +258,48 @@ struct SAnimator {
             }
             if (msSince(now, L.bornAt) < ENTRANCE_MS)
                 return true;
-            if (L.laid && std::abs(L.restX - L.fromX) > 0.05F && msSince(now, L.movedAt) < DISPLACE_MS)
-                return true;
+            for (const auto& P : L.placements)
+                if (std::abs(P.restX - P.fromX) > 0.05F && msSince(now, P.movedAt) < DISPLACE_MS)
+                    return true;
         }
         return false;
     }
 
     // liveWidths[i] is the rendered width of the i-th live glyph. yUnit is the
-    // pill's measured scale so the 10px / -8px hops track the field.
-    std::vector<SPlaced> place(const std::vector<float>& liveWidths, float spacing, float yUnit, clock::time_point now) {
+    // pill's measured scale so the 10px / -8px hops track the field. `view` names
+    // whose pixels those are (the monitor): each view keeps its own positions.
+    std::vector<SPlaced> place(const std::vector<float>& liveWidths, float spacing, float yUnit, clock::time_point now, int view = 0) {
         prune(now);
+        lastRetargets = 0;
         std::vector<SPlaced> out;
         out.reserve(letters.size());
 
         float  x     = 0.F;
         size_t liveI = 0;
         for (auto& L : letters) {
+            SPlacement* P = L.placementIn(view);
             if (!L.dyingAt) {
                 const float W      = liveI < liveWidths.size() ? liveWidths[liveI] : 0.F;
                 const float TARGET = x;
-                if (!L.laid) {
-                    L.restX   = TARGET;
-                    L.fromX   = TARGET;
-                    L.movedAt = now;
-                    L.laid    = true;
-                } else if (std::abs(L.restX - TARGET) > 0.05F) {
-                    const float TDISP = displaceEase(msSince(now, L.movedAt));
-                    L.fromX           = L.fromX + (L.restX - L.fromX) * TDISP;
-                    L.restX           = TARGET;
-                    L.movedAt         = now;
+                if (!P) {
+                    L.placements.push_back(SPlacement{.view = view, .restX = TARGET, .fromX = TARGET, .movedAt = now});
+                    P = &L.placements.back();
+                } else if (std::abs(P->restX - TARGET) > 0.05F) {
+                    ++lastRetargets;
+                    const float TDISP = displaceEase(msSince(now, P->movedAt));
+                    P->fromX          = P->fromX + (P->restX - P->fromX) * TDISP;
+                    P->restX          = TARGET;
+                    P->movedAt        = now;
                 }
                 x += W + spacing;
                 ++liveI;
             }
 
-            const float TDISP = L.laid ? displaceEase(msSince(now, L.movedAt)) : 1.F;
-            const float DRAWX = L.fromX + (L.restX - L.fromX) * TDISP;
+            // A letter already dying before this view ever laid it out has
+            // nowhere of its own to leave from: it leaves from where the live
+            // run ends in this view.
+            const float TDISP = P ? displaceEase(msSince(now, P->movedAt)) : 1.F;
+            const float DRAWX = P ? P->fromX + (P->restX - P->fromX) * TDISP : x;
             const SPose POSE  = L.dyingAt ? exitPose(msSince(now, *L.dyingAt)) : entrancePose(msSince(now, L.bornAt));
 
             out.push_back(SPlaced{

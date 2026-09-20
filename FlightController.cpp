@@ -25,6 +25,7 @@
 
 #include "FlightController.hpp"
 
+#include "AppSearch.hpp"
 #include "Config.hpp"
 #include "Dock.hpp"
 #include "IOverview.hpp"
@@ -47,6 +48,8 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/state/WorkspaceState.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -75,6 +78,9 @@ constexpr const char* KEY_FLIGHT_LOG  = "plugin:hyprdrive:dock:flight_log";
 // its way back through moveWindowToWorkspace + retile + damage, and one held
 // frame still dipped to 7% of the window's area at the z4 gate's frame 232.
 constexpr int LAND_HOLD_FRAMES = 2;
+// How long past its duration a flight may wait for its own monitor to land it
+// before any monitor lands it instead. Far longer than a stalled frame.
+constexpr float FLIGHT_ORPHAN_GRACE_MS = 1500.F;
 
 // The last frame a flight actually put on screen. THIS is what a reversal
 // continues from, and its absence is what "Armed" means -- there is no -1 alpha
@@ -214,6 +220,14 @@ class CHiddenLease {
 struct SFlight {
     uint64_t        id = 0;
     PHLWINDOWREF    window;
+    // THE MONITOR IT FLIES ON. Every box here is in its pixels, and the icon it
+    // aims at is in its dock. Every monitor's dock runs renderFlights, and with
+    // no owner each one advanced and drew every flight: a second copy on the
+    // wrong screen at the wrong coordinates, a driven restore whose real window
+    // was placed by each monitor's offset and scale in turn -- jumping between
+    // two positions every frame -- and a landing hold counted twice a frame
+    // (user, 2026-09-14: minimize and maximize glitch on multiple monitors).
+    MONITORID       monitor = MONITOR_INVALID;
     CBox            from;  // the WINDOW end of the motion, monitor-local RENDER px
     EFlightKind     kind = EFlightKind::MinimizeProxy;
     Time::steady_tp startedAt;
@@ -587,6 +601,7 @@ EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
     // restore only starts from restore(), not from a reversal.
     SFlight next{.id        = g_nextId++,
                  .window    = window,
+                 .monitor   = old.monitor,
                  .from      = old.from,
                  .kind      = restoring ? EFlightKind::RestoreProxy : EFlightKind::MinimizeProxy,
                  .startedAt = Time::steadyNow()};
@@ -608,6 +623,10 @@ EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
 }
 
 // ---------------------------------------------------------------------------
+bool anyOn(PHLMONITOR monitor) {
+    return monitor && std::ranges::any_of(g_flights, [&](const SFlight& f) { return f.monitor == monitor->m_id; });
+}
+
 bool any() {
     return !g_flights.empty();
 }
@@ -627,6 +646,13 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand) {
     // existence, and reverse() performs the unhide + stash.
     if (window && reverse(monitor, window, false) == EReverse::Swapped)
         return;
+
+    // The window's own monitor, whichever dock or keybind asked: the flight
+    // leaves from where the window IS and lands in that monitor's dock.
+    if (window && !Minimize::isMinimized(window)) {
+        if (const auto WINDOWMON = window->m_monitor.lock(); WINDOWMON && WINDOWMON->m_enabled)
+            monitor = WINDOWMON;
+    }
 
     const int  DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
     const bool ANIMATE  = monitor && window && DURATION > 0 && !Minimize::isMinimized(window);
@@ -658,9 +684,9 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand) {
         // the ACKNOWLEDGEMENT of the drop, so it fires now, while the window is
         // still flying in -- not at the landing.
         if (bounceOnLand)
-            ScrollOverview::Dock::armBounce(window->m_class);
+            ScrollOverview::Dock::armBounce(AppSearch::identityClass(window->m_class, window->m_title));
         std::erase_if(g_flights, [&window](const SFlight& f) { return f.window.lock() == window; });
-        SFlight next{.id = g_nextId++, .window = window, .from = from, .kind = EFlightKind::MinimizeProxy, .startedAt = Time::steadyNow()};
+        SFlight next{.id = g_nextId++, .window = window, .monitor = monitor->m_id, .from = from, .kind = EFlightKind::MinimizeProxy, .startedAt = Time::steadyNow()};
         zdbg("phase id=%llu kind=%s ->Armed reason=minimize\n", (unsigned long long)next.id, kindName(next.kind));
         g_flights.emplace_back(std::move(next));
     }
@@ -687,6 +713,21 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
             }
         }
         return;
+    }
+
+    // The monitor it goes BACK to -- its home desktop's -- whichever dock or
+    // keybind asked. Its minimized copy sits on the stash, which lives on one
+    // monitor only and says nothing about where the window belongs.
+    if (window && Minimize::isMinimized(window)) {
+        const auto HOME = Minimize::originalWorkspace(window);
+        for (const auto& w : State::workspaceState()->workspaces()) {
+            const auto WS = w.lock();
+            if (!WS || WS->m_id != HOME || WS->m_isSpecialWorkspace)
+                continue;
+            if (const auto HOMEMON = WS->m_monitor.lock(); HOMEMON && HOMEMON->m_enabled)
+                monitor = HOMEMON;
+            break;
+        }
     }
 
     const int DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
@@ -755,6 +796,7 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
     std::erase_if(g_flights, [&window](const SFlight& f) { return f.window.lock() == window; });
     SFlight next{.id        = g_nextId++,
                  .window    = window,
+                 .monitor   = monitor->m_id,
                  .from      = TO,
                  .kind      = window->isHidden() ? EFlightKind::RestoreProxy : EFlightKind::RestoreDriven,
                  .startedAt = Time::steadyNow()};
@@ -779,9 +821,26 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
 // flight and then drew every flight is the version that broke z5.
 void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady_tp& now, const bool ownsPass) {
     for (auto it = g_flights.begin(); it != g_flights.end();) {
+        // Another monitor's flight: that monitor advances and draws it. Two
+        // ways it could never get there, both settled from here with the same
+        // landing guarantees rather than left holding a hidden window forever:
+        // its monitor is gone, or the flight has been over for a good while and
+        // nothing on its monitor rendered it home.
+        if (!monitor || it->monitor != monitor->m_id) {
+            const auto OWNER = State::monitorState()->query().id(it->monitor).run();
+            const int  DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
+            if (!OWNER || ScrollOverview::Config::realElapsedMs(it->startedAt) > sc<float>(std::max(0, DURATION)) + FLIGHT_ORPHAN_GRACE_MS) {
+                completeAndErase(it, nullptr, OWNER ? "orphaned" : "monitor-gone");
+                continue;
+            }
+            ++it;
+            continue;
+        }
+
         const auto  WINDOW = it->window.lock();
         const float T      = flightProgress(*it);
-        const auto  ITEM   = WINDOW ? std::ranges::find_if(layout.items, [&](const SItem& item) { return item.wmClass == WINDOW->m_class; }) : layout.items.end();
+        const auto  CLASS  = WINDOW ? AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title) : std::string{};
+        const auto  ITEM   = WINDOW ? std::ranges::find_if(layout.items, [&](const SItem& item) { return item.wmClass == CLASS; }) : layout.items.end();
 
         if (!WINDOW || T >= 1.F || ITEM == layout.items.end()) {
             zdbg("flightEnd id=%llu win=%d T=%f item=%d restoring=%d held=%d phase=%s\n", (unsigned long long)it->id, (int)(bool)WINDOW, T, ITEM != layout.items.end(),

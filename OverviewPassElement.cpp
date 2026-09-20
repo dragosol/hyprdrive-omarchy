@@ -147,6 +147,21 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
     // Prefer the private full-mon chrome FB (one dual-kawase for many samplers).
     // Always fall back to live blurMainFramebuffer(a=1, full mon) so a missing
     // capture (or wallpaper-blur-only config) never paints tint-without-frost.
+    //
+    // Y17 (GPU, 2026-09-14): the xray=false path below is a FULL-MONITOR live
+    // kawase per element -- search pill, dock pill, hover panel, menu, stacks
+    // popup and the SUPER-hold pill each pay one. Two fixes were considered and
+    // both rejected:
+    //   (a) restrict the blur to data.box plus a margin -- same X96 hazard as
+    //       the chrome capture; see the long note over
+    //       OverviewRender::captureFrameChromeBlur for why damage-restricted
+    //       kawase cannot be shown pixel-identical by reading Hyprland's code.
+    //   (b) blur once per frame and share it between the elements -- they are
+    //       drawn at different points of the pass and each is meant to frost
+    //       whatever is UNDER IT AT THAT MOMENT, which is precisely what a
+    //       shared capture would destroy (that is what xray=true already is,
+    //       and why these are xray=false in the first place).
+    // Left alone deliberately.
     SP<Render::ITexture> blurred;
     if (data.xray)
         blurred = OverviewRender::frameChromeBlur();
@@ -287,6 +302,12 @@ COverviewShadowPassElement::COverviewShadowPassElement(const SData& data_) : dat
     ;
 }
 
+// Y17 (GPU, 2026-09-14): skipping the shadow at a range below ~2px was
+// considered and NOT taken. renderRoundedShadow at range 1 still paints a
+// one-pixel gradient ring, and on the 2x eDP that is a real pixel, so "range <
+// 2 is invisible" is an assumption rather than a fact -- and the rule for this
+// pass is that the output does not move. The `range <= 0` guard below is the
+// only one that is provably free.
 std::vector<UP<IPassElement>> COverviewShadowPassElement::draw() {
     const auto MONITOR = data.monitor.lock();
     const bool HASVISIBLECOLOR = std::ranges::any_of(data.color.m_colors, [](const CHyprColor& color) { return color.a > 0.F; });
@@ -359,11 +380,29 @@ std::vector<UP<IPassElement>> CDockLivePreviewPassElement::draw() {
     if (!MONITOR)
         return {};
 
-    const auto SAVEDCLIP  = g_pHyprRenderer->m_renderData.clipBox;
-    const auto SAVEDMODIF = g_pHyprRenderer->m_renderData.renderModif;
-    auto       restore    = Hyprutils::Utils::CScopeGuard([SAVEDCLIP, SAVEDMODIF] {
+    // EVERYTHING CRenderPass::render() WRITES ON ITS WAY OUT, not just what we
+    // set going in. This draws a WHOLE PASS from inside one element of the pass
+    // that is currently rendering, and the nested render ends by publishing its
+    // own state as if it were the frame's: finalDamage becomes the nested
+    // pass's region, damage becomes its damage, and -- the one that shows --
+    // m_blurFBShouldRender is set from the NESTED pass's element list, which
+    // holds one window and never precomputes blur. The outer frame had already
+    // decided it needed that framebuffer, so clearing the flag mid-pass left
+    // every window behind the dock drawing its blur from a framebuffer nobody
+    // rendered: chunks of the real window going missing for exactly the frames
+    // a preview was live (user, 2026-09-15: "the actual window is cutting out
+    // when the preview is rendering").
+    const auto SAVEDCLIP   = g_pHyprRenderer->m_renderData.clipBox;
+    const auto SAVEDMODIF  = g_pHyprRenderer->m_renderData.renderModif;
+    const auto SAVEDDAMAGE = g_pHyprRenderer->m_renderData.damage;
+    const auto SAVEDFINAL  = g_pHyprRenderer->m_renderData.finalDamage;
+    const bool SAVEDBLURFB = MONITOR->m_blurFBShouldRender;
+    auto       restore     = Hyprutils::Utils::CScopeGuard([SAVEDCLIP, SAVEDMODIF, SAVEDDAMAGE, SAVEDFINAL, SAVEDBLURFB, MONITOR] {
         g_pHyprRenderer->m_renderData.clipBox     = SAVEDCLIP;
         g_pHyprRenderer->m_renderData.renderModif = SAVEDMODIF;
+        g_pHyprRenderer->m_renderData.damage      = SAVEDDAMAGE;
+        g_pHyprRenderer->m_renderData.finalDamage = SAVEDFINAL;
+        MONITOR->m_blurFBShouldRender             = SAVEDBLURFB;
     });
 
     if (data.box.width >= 1 && data.box.height >= 1)

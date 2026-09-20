@@ -6,6 +6,8 @@
 #include <chrono>
 #include <expected>
 #include <optional>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -50,6 +52,7 @@ using namespace Hyprutils::String;
 #include "AppSearch.hpp"
 #include "OmarchySearch.hpp"
 #include "Config.hpp"
+#include "DockTilt.hpp"
 #include "Dock.hpp"
 #include "DockStacks.hpp"
 #include <hyprland/src/layout/LayoutManager.hpp>
@@ -64,6 +67,7 @@ using namespace Hyprutils::String;
 #include "OverviewGesture.hpp"
 #include "OverviewRender.hpp"
 #include "SearchProviders.hpp"
+#include "Window.hpp"
 #include "WindowPill.hpp"
 #include "Placement.hpp"
 
@@ -183,6 +187,13 @@ static void hkRenderWorkspace(void* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE p
 }
 
 static void hkDamageSurface(void* thisptr, SP<CWLSurfaceResource> surface, double x, double y, double scale) {
+    // Y17 (GPU, 2026-09-14). The overview's U2 prefilter keeps a mipmapped copy
+    // of each surface's texture and no longer rebuilds it per draw; this is the
+    // "that copy is stale" signal. Unconditional, and BEFORE the gate below:
+    // whether a given overview wants the damage reported is a different
+    // question from whether the client's pixels changed.
+    OverviewWindow::notifySurfaceCommit(surface);
+
     const bool HANDLED = scrollOverviews().empty() ||
         std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && overview->blockDamageReporting; }) ||
         std::ranges::all_of(scrollOverviews(), [&surface](const auto& overview) { return !overview || overview->shouldHandleSurfaceDamage(surface); });
@@ -448,6 +459,10 @@ static constexpr uint32_t EVDEV_KEY_RIGHTMETA = 126;
 // between them, so typing "Zen" cancels on the 'z' and never reaches here.
 static constexpr uint32_t EVDEV_KEY_LEFTSHIFT  = 42;
 static constexpr uint32_t EVDEV_KEY_RIGHTSHIFT = 54;
+// Ctrl x2 (set the browsed AI agent as Omarchy's default) is the same gesture
+// with the same timing -- a tap is a tap -- so it shares both constants below.
+static constexpr uint32_t EVDEV_KEY_LEFTCTRL   = 29;
+static constexpr uint32_t EVDEV_KEY_RIGHTCTRL  = 97;
 // A tap must RELEASE within this, or it was a hold.
 static constexpr uint32_t TAP_SHIFT_HOLD_MS = 250;
 // ...and the second tap must land within this of the first, or it is the start
@@ -635,6 +650,82 @@ static SSearchKey searchKeyFor(uint32_t keycode) {
     return {.consume = true, .starts = true, .text = std::string(buf, N)};
 }
 
+// ---------------------------------------------------------------------------
+// THE LETTER TICK (user, 2026-09-19: the pop is "sometimes smooth sometimes
+// it's not", worst on "the trailing characters bouncing").
+//
+// The field's animation was kept alive from INSIDE the render pass: renderSearch
+// ended in `damage(); requestInputFrame();`, and requestInputFrame is a
+// scheduleFrame issued while a frame is already being composited, where it is
+// liable to be absorbed by the one in flight instead of booking the next one.
+//
+// MEASURED, not guessed (49s screen recording plus the in-compositor profile,
+// 3140 frames). Frames dropped, by position in the pop:
+//
+//     f=2-4   (first 65ms)      0.0 - 0.5%
+//     f=6-8   (100-135ms)      15   - 17%
+//     f=9-12                   22   - 29%
+//     f=15-21 (250-350ms)      36   - 39%
+//
+// The head of every pop is clean because the compositor's OWN animation
+// variables -- resultsWidth, searchDock, resultsBand -- are still running and
+// schedule those frames as a side effect. Once they settle, the letters are the
+// only thing still moving and the in-pass request is all that is left, so the
+// tail of every pop loses better than one frame in three. That is why it got
+// worse the more letters were on screen (more tail), why it was periodic rather
+// than constant, and why a held backspace stayed smooth until the end -- the
+// same coupling scrollOverview.cpp's frame-policy comment records from the
+// earlier incarnation, where letters froze outright once the animvars settled.
+//
+// Ticking from the event loop instead: half a 60Hz frame, so a request is
+// always pending before the next vblank, self-sustaining while anything in the
+// field still moves and stopping on its own when nothing does. renderSearch
+// keeps its own call as a belt-and-braces fallback; it is harmless when a tick
+// has already booked the frame.
+static wl_event_source*  g_letterTickTimer = nullptr;
+static constexpr int     LETTER_TICK_MS    = 8;
+
+static int letterTickCb(void*) {
+    const auto NOW     = SearchLetters::clock::now();
+    const bool LETTERS = SearchLetters::g_searchLetters.busy(NOW);
+
+    bool again = false;
+    for (const auto& OVERVIEW : scrollOverviews()) {
+        if (!OVERVIEW)
+            continue;
+
+        const auto MONITOR = OVERVIEW->pMonitor.lock();
+        if (!MONITOR)
+            continue;
+
+        // The letters are one query shared by every view; the width and slide
+        // springs are per monitor, so both questions get asked.
+        if (!LETTERS && !g_search.fieldOn(MONITOR->m_id).busy())
+            continue;
+
+        OVERVIEW->damage();
+        OVERVIEW->requestInputFrame();
+        again = true;
+    }
+
+    if (again && g_letterTickTimer)
+        wl_event_source_timer_update(g_letterTickTimer, LETTER_TICK_MS);
+
+    return 0;
+}
+
+// Armed by the edit, not by the render: the edit is what starts something
+// moving, and it happens off the render pass.
+static void armLetterTick() {
+    if (!g_pCompositor)
+        return;
+
+    if (!g_letterTickTimer)
+        g_letterTickTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, letterTickCb, nullptr);
+
+    wl_event_source_timer_update(g_letterTickTimer, LETTER_TICK_MS);
+}
+
 // The trailing work every edit to the query owes, whatever made the edit.
 static void afterQueryEdit() {
     // The gate reads the query twice -- "is it empty" for the Y9 minimized rule
@@ -647,6 +738,10 @@ static void afterQueryEdit() {
         Prof::keyAt   = Prof::clock::now();
         Prof::pending = true;
     }
+
+    // The pop starts now, so the frames that carry it start now too -- from
+    // here rather than from the render pass. See armLetterTick.
+    armLetterTick();
 
     // X20: every keystroke starts a new provider generation. Non-blocking, so
     // this costs the keystroke nothing; results land over the next frames.
@@ -865,6 +960,8 @@ static CHyprSignalListener g_pDockClickHook;
 static CHyprSignalListener g_pDockScrollHook;
 static CHyprSignalListener g_pDockRenderHook;
 static CHyprSignalListener g_pMonitorGoneHook;
+static CHyprSignalListener g_pScrollCameraActiveHook;
+static CHyprSignalListener g_pScrollCameraMovedHook;
 static CHyprSignalListener g_pClickPreReloadHook;
 static bool                g_tapSuperCandidate = false;
 static uint32_t            g_tapSuperPressedAt = 0;
@@ -872,6 +969,9 @@ static bool                g_tapShiftCandidate = false;
 static uint32_t            g_tapShiftPressedAt = 0;
 // Release time of the last completed SHIFT tap; 0 = no pair in flight.
 static uint32_t            g_tapShiftLastTapMs = 0;
+static bool                g_tapCtrlCandidate  = false;
+static uint32_t            g_tapCtrlPressedAt  = 0;
+static uint32_t            g_tapCtrlLastTapMs  = 0;
 
 // ONE raw-key listener, and it owns the guard-modifier count, V5's SPACE
 // preview, the search keys, and the SUPER tap. The order is load-bearing at
@@ -991,6 +1091,25 @@ static void                registerRawKeyHooks() {
             }
         }
 
+        // DOUBLE-TAP CTRL -> the browsed AI agent becomes Omarchy's default. The
+        // Shift pair's timing and its cancel rule (a real key between the taps
+        // breaks it), so Ctrl+Backspace and every other chord stay chords.
+        if (event.keycode == EVDEV_KEY_LEFTCTRL || event.keycode == EVDEV_KEY_RIGHTCTRL) {
+            if (PRESSED) {
+                g_tapCtrlCandidate = true;
+                g_tapCtrlPressedAt = event.timeMs;
+            } else if (g_tapCtrlCandidate) {
+                g_tapCtrlCandidate = false;
+                const bool WASTAP  = event.timeMs - g_tapCtrlPressedAt <= TAP_SHIFT_HOLD_MS;
+                const bool PAIRED  = WASTAP && g_tapCtrlLastTapMs != 0 && event.timeMs - g_tapCtrlLastTapMs <= TAP_SHIFT_GAP_MS;
+                g_tapCtrlLastTapMs = PAIRED || !WASTAP ? 0 : event.timeMs;
+                if (PAIRED && overviewAcceptsSearch() && overviewHandleCtrlTap()) {
+                    info.cancelled = true;
+                    return;
+                }
+            }
+        }
+
         if (!ISSUPER) {
             if (PRESSED && !isModifierKeycode(event.keycode)) {
                 g_tapSuperCandidate = false; // SUPER is being held as a modifier
@@ -998,6 +1117,8 @@ static void                registerRawKeyHooks() {
                 // so tap, type, tap is not a double tap.
                 g_tapShiftCandidate = false;
                 g_tapShiftLastTapMs = 0;
+                g_tapCtrlCandidate  = false;
+                g_tapCtrlLastTapMs  = 0;
             }
             return;
         }
@@ -1116,6 +1237,9 @@ static std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount,
 
     if (action == "workspace")
         return add(makeUnique<COverviewWorkspaceGesture>());
+
+    if (action == "scroll")
+        return add(makeUnique<COverviewScrollGesture>());
 
     if (action == "close")
         return add(makeUnique<CCloseTrackpadGesture>());
@@ -1287,6 +1411,55 @@ static Hyprlang::CParseResult overviewGestureKeyword(const char* LHS, const char
         result.setError(resultFromGesture.error().c_str());
 
     return result;
+}
+
+// `hyprctl dispatch 'hl.plugin.hyprdrive.debug("frames")'` -- why is each
+// monitor being asked to repaint right now?
+//
+// Why this is permanent rather than another probe build: a monitor that
+// repaints when nothing moves is the most expensive bug class in this plugin
+// (measured 2026-09-15: DP-1 held near 100 fps by a settled overview), and
+// every hunt for one so far has cost a stress rig, a custom build and -- twice
+// -- the user's session. Reading the answer out of the live compositor costs
+// nothing when nobody asks.
+//
+// The report comes back as `.error` so plain `hyprctl dispatch` prints it; a
+// dispatcher has no other way to say anything back. It is also written to the
+// Hyprland log for whoever reads that instead.
+static SDispatchResult onDebugDispatcher(std::string arg) {
+    CConstVarList     data(arg, 0, 's', true);
+    const std::string TOPIC = std::string{data[0]};
+    if (TOPIC != "frames")
+        return {.success = false, .error = "hyprdrive:debug frames"};
+
+    std::string report = "hyprdrive frames:";
+    for (const auto& monitor : State::monitorState()->monitors()) {
+        if (!monitor)
+            continue;
+
+        report += "\n  " + monitor->m_name + std::format(" @{:.2f}Hz: ", monitor->m_refreshRate) + CScrollOverview::frameCadence(monitor->m_id);
+
+        if (const auto OVERVIEW = scrollOverviewForMonitor(monitor)) {
+            report += "\n  " + OVERVIEW->frameDebugLine();
+            continue;
+        }
+
+        std::string line = "\n  " + monitor->m_name + " [desktop]";
+        if (const auto DOCK = ScrollOverview::Dock::frameReason(monitor))
+            line += std::string(" dock:") + DOCK;
+        else
+            line += " idle";
+        report += line;
+    }
+
+    // Also to a file: the report is multi-line and a Lua error goes through
+    // hyprctl's own formatting, so this is the copy that is always readable.
+    const std::string STATEDIR = std::string{std::getenv("HOME") ? std::getenv("HOME") : "/tmp"} + "/.local/state/hyprdrive";
+    std::filesystem::create_directories(STATEDIR);
+    if (std::ofstream out(STATEDIR + "/frames.txt", std::ios::trunc); out.is_open())
+        out << report << "\n";
+
+    return {.success = false, .error = report};
 }
 
 static SDispatchResult onGestureDispatcher(std::string arg) {
@@ -1556,6 +1729,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pScrollMouseMovedHook->hook();
 
     g_pRenderPreHook = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
+        // Throttled inside to a few stat()s every couple of seconds.
+        AppSearch::pollForChanges();
+
         if (const auto overview = scrollOverviewForMonitor(monitor))
             overview->onPreRender();
 
@@ -1597,9 +1773,18 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pMembWsHook    = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { Membership::bump("window.moveToWorkspace"); });
     g_pMembFullHook  = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW) { Membership::bump("window.fullscreen"); });
 
-    g_pClickPreReloadHook = Event::bus()->m_events.config.preReload.listen([] { clearClickGestures(); });
+    // The dock's keys as they stood BEFORE this reload parsed anything. See the
+    // abortAll below for what it is compared against.
+    static uint64_t s_dockKeysBeforeReload = 0;
+
+    g_pClickPreReloadHook = Event::bus()->m_events.config.preReload.listen([] {
+        clearClickGestures();
+        s_dockKeysBeforeReload = ScrollOverview::Config::dockKeyFingerprint();
+    });
 
     g_pDockConfigHook = Event::bus()->m_events.config.reloaded.listen([] {
+        // A no-op unless the pointer set changed -- a reload is not a reason to
+        // drop a touchpad gesture that is still under the hand.
         attachPadFingerListeners();
         // FIRST, before anything in this plugin reads a config value this pass:
         // a value the user set under the old plugin:scrolloverview: name is
@@ -1607,15 +1792,39 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // rest of the codebase only ever knows the new name. ONE RELEASE.
         ScrollOverview::Compat::adoptLegacyValues();
 
+        // `omarchy theme set` writes colors.toml and reloads Hyprland, so the
+        // reload IS the theme change as far as this plugin is concerned. Drop
+        // the palette and font caches here and the new theme is on the next
+        // frame rather than up to half a second later.
+        ScrollOverview::Config::invalidateThemeCache();
+
         // A reload rebuilds the dock's whole layout under whatever is flying,
         // and a flight's boxes are the OLD layout's -- its icon target can move,
         // shrink, or stop existing. Land them first, with the landing every
         // other end of a flight gets, rather than let one chase an icon that is
-        // no longer there. Cheap: with nothing in the air it returns at once.
-        ScrollOverview::Flight::abortAll("config-reload");
+        // no longer there.
+        //
+        // ONLY when a dock key actually moved, though. Every theme switch and
+        // every unrelated `hyprctl reload` came through here and snapped an
+        // in-flight minimize to its end, for a reload that cannot have touched
+        // the layout the flight is aiming at. Taken AFTER adoptLegacyValues so a
+        // value arriving under the old name counts as the change it is.
+        if (const auto DOCKKEYS = ScrollOverview::Config::dockKeyFingerprint(); DOCKKEYS != s_dockKeysBeforeReload) {
+            s_dockKeysBeforeReload = DOCKKEYS;
+            ScrollOverview::Flight::abortAll("config-reload");
+        }
 
         for (const auto& MONITOR : State::monitorState()->monitors())
             ScrollOverview::Dock::damageIfChanged(MONITOR);
+
+        // The reload just overwrote the overrides an OPEN overview installed
+        // (workspace animations, follow_mouse, no_warps) -- without this, a
+        // workspace switch inside the overview plays Hyprland's slide again.
+        // Only the shared-state owner acts; the method self-guards.
+        for (const auto& OVERVIEW : scrollOverviews()) {
+            if (const auto SCROLL = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr)
+                SCROLL->reapplyConfigOverridesAfterReload();
+        }
     });
 
     g_pDockHoverHook = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo&) {
@@ -1769,6 +1978,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Flights first: they are settled while the overview is still registered, so
     // an unhidden window is re-added to the draw list it is about to leave with
     // rather than after it.
+    // Before the desktop is drawn, not after: corrected on the first frame it
+    // would slide the window across the screen instead of simply being right.
+    // See normalizeFittingScrollingOffset.
+    g_pScrollCameraActiveHook = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE workspace) { normalizeScrollingCamera(workspace); });
+    g_pScrollCameraMovedHook  = Event::bus()->m_events.workspace.moveToMonitor.listen([](PHLWORKSPACE workspace, PHLMONITOR) { normalizeScrollingCamera(workspace); });
+    // And whatever is already stuck when the plugin comes up.
+    normalizeAllScrollingCameras();
+
     g_pMonitorGoneHook = Event::bus()->m_events.monitor.removed.listen([](PHLMONITOR monitor) {
         ScrollOverview::Flight::abortAll("monitor-removed");
         dropScrollOverviewsForMonitor(monitor);
@@ -1783,6 +2000,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Config::registerDispatcher("hotkey", ::onHotkeyDispatcher);
     ScrollOverview::Config::registerDispatcher("stack", ::onStackDispatcher);
     ScrollOverview::Config::registerDispatcher("gesture", ::onGestureDispatcher);
+    ScrollOverview::Config::registerDispatcher("debug", ::onDebugDispatcher);
     ScrollOverview::Config::registerGesture(::onRegisterOverviewGesture, ::overviewGestureKeyword);
     ScrollOverview::Config::registerConfig();
     // After a reload, windows are still parked on the stash with no ledger entry
@@ -1832,6 +2050,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
         wl_event_source_remove(g_searchRepeatTimer);
         g_searchRepeatTimer = nullptr;
     }
+    if (g_letterTickTimer) {
+        wl_event_source_remove(g_letterTickTimer);
+        g_letterTickTimer = nullptr;
+    }
     OmarchySearch::setResultsCallback(nullptr);
     if (g_fileWakeSource) {
         wl_event_source_remove(g_fileWakeSource);
@@ -1861,6 +2083,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pDockScrollHook.reset();
     g_pDockRenderHook.reset();
     g_pMonitorGoneHook.reset();
+    g_pScrollCameraActiveHook.reset();
+    g_pScrollCameraMovedHook.reset();
 
     g_unloading = true;
     ScrollOverview::Dock::releasePointerFocus();
@@ -1876,6 +2100,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     OmarchySearch::shutdown();
     ScrollOverview::LauncherEntry::stop();
     clearScrollOverviews();
+    // Outlives every overview on purpose (Window.cpp), so it is freed here.
+    if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})
+        OPENGL->makeEGLCurrent();
+    OverviewWindow::releaseTexturePrefilterCache();
     // The text textures outlive a close now (X51), so unload is where they go --
     // same moment the last overview's destructor used to drop them, and hyprpm
     // reloads this plugin in-process.
@@ -1887,7 +2115,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
 
     // LAST, and it is the difference between unloading and killing the session.
     //
-    // The four types below are defined IN THIS SHARED OBJECT (OverviewPassElement.hpp).
+    // The types below are defined IN THIS SHARED OBJECT (OverviewPassElement.hpp, DockTilt.hpp).
     // A queued one that outlives the dlclose leaves Hyprland's render pass holding a
     // vtable in freed memory, and the next frame's CRenderPass::clear() runs its
     // destructor through that vtable. `hyprctl plugin unload` SEGV'd the compositor
@@ -1899,9 +2127,14 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // before its code goes away. The trackpad gestures above are the same hazard,
     // and clearGestures() is what already answers it for them.
     if (g_pHyprRenderer) {
-        for (const char* TYPE : {"COverviewBlurPassElement", "COverviewSplitBorderPassElement", "COverviewShadowPassElement", "CDockLivePreviewPassElement"})
+        for (const char* TYPE : {"COverviewBlurPassElement", "COverviewSplitBorderPassElement", "COverviewShadowPassElement", "CDockLivePreviewPassElement",
+                                 "CDockTiltPassElement"})
             g_pHyprRenderer->m_renderPass.removeAllOfType(TYPE);
     }
+
+    // After the purge: nothing queued can reach the tilt shader any more, and
+    // its GL program has to go while this object's code is still mapped.
+    ScrollOverview::DockTilt::shutdown();
 
     HyprlandAPI::reloadConfig(); // re-adds built-in gestures cleared above
 }

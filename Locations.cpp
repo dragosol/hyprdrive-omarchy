@@ -51,6 +51,10 @@ namespace {
 
     std::unordered_set<std::string>       g_openLocations;
 
+    // See Locations::generation(). Bumped by the poll below, and only when the
+    // poll actually changed one of the two things a caller can observe.
+    uint64_t                              g_generation = 1;
+
     // The first name a GIcon offers, which is the one the icon theme is asked
     // for. A GFileIcon -- a custom per-directory icon -- has no name at all and
     // falls back: resolving it would mean teaching the render layer about file
@@ -321,6 +325,15 @@ const std::vector<SLocation>& items() {
 
     g_polled = NOW;
     g_have   = true;
+
+    // Compared, not just replaced: the dock's item cache hangs off
+    // generation(), and a poll that re-reads the same mount table and the same
+    // trash must not invalidate it. Copies of a handful of small structs once a
+    // second is nothing; rebuilding the whole dock item model at 1Hz for no
+    // visible change is exactly what this was meant to stop.
+    const auto WEREITEMS = g_items;
+    const auto WEREOPEN  = g_openLocations;
+
     g_items.clear();
 
     // `Locations.getApps()`: removables first, then the trash.
@@ -332,7 +345,18 @@ const std::vector<SLocation>& items() {
 
     readOpenLocations();
 
+    if (g_items != WEREITEMS || g_openLocations != WEREOPEN)
+        ++g_generation;
+
     return g_items;
+}
+
+uint64_t generation() {
+    // items() is what polls, so asking for the generation without asking for
+    // the items would hand back a number from before the poll that the caller's
+    // very next line is about to run.
+    items();
+    return g_generation;
 }
 
 bool openWindows(const std::string& uri) {

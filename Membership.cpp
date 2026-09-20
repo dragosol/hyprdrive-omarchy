@@ -96,6 +96,15 @@ namespace Membership {
         }
     }
 
+    // WHAT THE SNAPSHOT IS KEYED ON, read out. The dock memoizes its item list
+    // on this plus a cheap window-list digest (Dock.cpp, dockItems): every
+    // mutator that can change which windows exist already bumps here, so the
+    // dock gets that whole bump set for free rather than growing a second one
+    // that could drift out of step with this one (user, 2026-09-14).
+    uint64_t generation() {
+        return g_generation;
+    }
+
     // The generation ALWAYS moves -- the cache is keyed on it, so gating this
     // would be gating correctness. Only the bookkeeping that exists to explain a
     // divergence is behind the shadow: `why` is a literal, but assigning it to a

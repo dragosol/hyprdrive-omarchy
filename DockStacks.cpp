@@ -72,6 +72,11 @@ namespace {
         return s;
     }
 
+    // See Stacks::generation(). Moved by reload() when the file actually read
+    // into something different, and by writeStore() for this process's own
+    // edits (whose mtime reload deliberately adopts, so it would not see them).
+    uint64_t g_storeGeneration = 1;
+
     std::vector<std::string> split(const std::string& line, char sep, int maxParts) {
         std::vector<std::string> out;
         size_t                   at = 0;
@@ -98,6 +103,11 @@ namespace {
         return out;
     }
 
+    // The three answers a stack's CELL needs, filled in once per row. Every one
+    // of them touches the filesystem, so this is deliberately on the store's
+    // read path and not on the dock's build path -- see SStack in the header.
+    void decorate(Stacks::SStack& stack);
+
     void reload(SStore& s) {
         std::error_code ec;
         const auto      PATH = storePath();
@@ -106,7 +116,10 @@ namespace {
             // with: a stack is a path on THIS machine and there is no neutral
             // default that is not a guess about the user's home.
             s.loaded = true;
-            s.items.clear();
+            if (!s.items.empty()) {
+                s.items.clear();
+                ++g_storeGeneration;
+            }
             return;
         }
 
@@ -117,6 +130,7 @@ namespace {
         s.loaded = true;
         s.stamp  = WRITTEN;
         s.items.clear();
+        ++g_storeGeneration;
 
         std::ifstream file(PATH);
         std::string   line;
@@ -152,6 +166,7 @@ namespace {
                 .grid       = PARTS[0] == "grid",
                 .sortByTime = PARTS[1] == "mtime",
             });
+            decorate(s.items.back());
         }
     }
 
@@ -168,8 +183,11 @@ namespace {
             for (const auto& S : store().items)
                 out << (S.grid ? "grid" : "fan") << "\t" << (S.sortByTime ? "mtime" : "name") << "\t" << S.path << "\n";
         }
-        // Adopt our own mtime so the next poll does not read our output back.
+        // Adopt our own mtime so the next poll does not read our output back --
+        // which is exactly why the generation has to move HERE as well: reload()
+        // will never notice this write, and the dock's item cache hangs off it.
         store().stamp = std::filesystem::last_write_time(PATH, ec);
+        ++g_storeGeneration;
     }
 
     Stacks::SStack* find(const std::string& path) {
@@ -566,10 +584,34 @@ namespace {
         }
     }
 
+    // The popup no longer asks for a frame just for existing (Stacks::
+    // needsFrames), so every edit that changes what it looks like WITHOUT
+    // moving its entrance has to ask for one itself. All of these arrive on an
+    // input event, never from inside the pass, so a plain damage is legal here.
+    void damagePopupMonitor() {
+        if (!g_popup || !g_pHyprRenderer)
+            return;
+        for (const auto& MONITOR : State::monitorState()->monitors()) {
+            if (MONITOR && MONITOR->m_id == g_popup->monitor)
+                g_pHyprRenderer->damageMonitor(MONITOR);
+        }
+    }
+
     float popupProgress(const SPopup& p) {
         const float MS   = elapsed(p.since);
         const float SPAN = p.leaving ? CLOSE_MS : (OPEN_MS + STAGGER_MS * sc<float>(std::min<size_t>(p.shown, FAN_MAX)));
         return std::clamp(MS / std::max(1.F, SPAN), 0.F, 1.F);
+    }
+
+    // Declared above reload(); defined here, where folderIcon/iconNameForFile
+    // and canonical() are all in scope.
+    void decorate(Stacks::SStack& stack) {
+        std::error_code ec;
+        stack.isDir = std::filesystem::is_directory(stack.path, ec) && !ec;
+        stack.icon  = stack.isDir ? folderIcon(stack.path) : iconNameForFile(stack.path, false);
+
+        const auto SLASH = stack.path.rfind('/');
+        stack.label      = SLASH == std::string::npos ? stack.path : stack.path.substr(SLASH + 1);
     }
 
     void launchPath(const std::string& path) {
@@ -679,6 +721,7 @@ namespace ScrollOverview::Stacks {
             return false;
 
         store().items.emplace_back(SStack{.path = CANON});
+        decorate(store().items.back());
         writeStore();
         return true;
     }
@@ -714,6 +757,7 @@ namespace ScrollOverview::Stacks {
             g_popup->grid  = grid;
             g_popup->since = Time::steadyNow();
             g_popup->scroll = 0.F;
+            damagePopupMonitor();
         }
         return true;
     }
@@ -731,6 +775,7 @@ namespace ScrollOverview::Stacks {
             g_popup->entries    = readDir(g_popup->path, byTime);
             g_popup->shown      = std::min<size_t>(g_popup->entries.size(), FAN_MAX);
             g_popup->hidden     = g_popup->entries.size() - g_popup->shown;
+            damagePopupMonitor();
         }
         return true;
     }
@@ -742,6 +787,13 @@ namespace ScrollOverview::Stacks {
         store().items.clear();
         close();
         writeStore();
+    }
+
+    uint64_t generation() {
+        // all() is what polls, so answering without it would hand back a number
+        // from before a reload the caller's next line is about to see.
+        all();
+        return g_storeGeneration;
     }
 
     std::string iconFor(const std::string& path) {
@@ -815,6 +867,12 @@ namespace ScrollOverview::Stacks {
 
     bool isOpen() {
         return g_popup.has_value() && !g_popup->leaving;
+    }
+
+    MONITORID popupMonitor() {
+        // Not isOpen(): a popup on its way OUT is still being drawn, and the
+        // caller is asking what it has to repaint, not what it can click.
+        return g_popup ? g_popup->monitor : MONITOR_INVALID;
     }
 
     const std::string& openPath() {
@@ -997,15 +1055,36 @@ namespace ScrollOverview::Stacks {
 
         const float SCALE = std::max(monitor->m_scale, 0.01F);
         g_popup->scroll += (up ? -1.F : 1.F) * (GRID_CELL_H + GRID_SPACING) * SCALE * 0.5F;
+        damagePopupMonitor();
         return true;
     }
 
-    bool needsFrames() {
+    bool needsFrames(MONITORID monitor) {
+        // The hop and the shake ride a stack CELL, and every monitor's dock
+        // draws that cell -- so they are answered for all of them.
+        if (animating())
+            return true;
+
+        // Everything below belongs to the POPUP, and render() returns at once
+        // on any monitor that is not its own. Asking globally is what kept the
+        // second monitor at full refresh for a fan it was not drawing (user,
+        // 2026-09-14).
+        if (!g_popup || g_popup->monitor != monitor)
+            return false;
+
         // The ghost follows the pointer, and a pointer that STOPS while the
         // button is still down emits no motion -- so without this the ghost
         // would freeze wherever the hand paused, which is the same class of
         // bug the hover panel's entrance had.
-        return g_popup.has_value() || g_itemDrag.has_value() || animating();
+        if (g_itemDrag.has_value())
+            return true;
+
+        // An OPEN, SETTLED popup is a still image: no hover highlight, no
+        // per-frame content. It used to ask for a frame anyway, for as long as
+        // it was up. The two things that CAN change it while it sits there --
+        // a wheel tick on a grid, and the view/sort rows of its menu -- damage
+        // the monitor themselves now, because nothing else would.
+        return g_popup->leaving || popupProgress(*g_popup) < 1.F;
     }
 
     bool animating() {

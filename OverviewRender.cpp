@@ -16,6 +16,7 @@
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
 #include "globals.hpp"
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace OverviewRender {
@@ -23,7 +24,11 @@ namespace OverviewRender {
 // X92. Private FB holding the overview chrome blur for the rest of the frame.
 // g_frameChromeBlur is always chromeBlurFB->getTexture() when valid — never a
 // transient blurMainFramebuffer() result.
-static SP<Render::IFramebuffer> g_chromeBlurFB;
+//
+// One PER MONITOR: every monitor's overview captures it at the start of its own
+// frame, and the monitors are different sizes -- a single framebuffer was freed
+// and reallocated at the other monitor's size on every frame of both.
+static std::unordered_map<MONITORID, SP<Render::IFramebuffer>> g_chromeBlurFBs;
 static SP<Render::ITexture>     g_frameChromeBlur;
 
 SP<Render::ITexture> frameChromeBlur() {
@@ -34,6 +39,33 @@ void clearFrameChromeBlur() {
     g_frameChromeBlur.reset();
 }
 
+// Y17 (GPU, 2026-09-14). WHY THIS STILL BLURS THE WHOLE MONITOR.
+//
+// Only a handful of boxes sample the result -- the strip plate, the alternate
+// monitor plates, the scratchpad plate, the search results container and the
+// detent badge -- so restricting the kawase to their union plus a margin is the
+// obvious saving. It is NOT taken, and the reason is X96, three screens down in
+// OverviewPassElement::draw: thin damage under-delivered the pass pyramid on a
+// strip/dock/pill compared to a large window surface even with size and passes
+// matching on paper. Reading Hyprland 0.56.2 back (OpenGL.cpp
+// blurFramebufferWithDamage) says why that is not just a margin bug:
+//
+//   * the damage is expanded by size * 2^passes once, then each downsample
+//     pass scissors to damage.scale(1 / 2^i) -- an integer-rounded region, so a
+//     band a few hundred px tall collapses toward nothing at i = 4 and the
+//     deepest passes write fewer texels than a full-screen run does;
+//   * PMIRRORFB/PMIRRORSWAPFB come from getUnusedWorkBuffer(), i.e. a pool
+//     shared with every other blur in the frame, so anything the scissor does
+//     not cover is another consumer's leftovers rather than a stale copy of
+//     this one;
+//   * the prepare and finish passes read those same texels through a LINEAR
+//     filter, so "outside the scissor" leaks inward at the seams.
+//
+// None of that can be proven safe by reading alone, and the rule for this work
+// is that the pixels do not move. So the capture stays full-monitor and is
+// instead SKIPPED ENTIRELY when nothing samples it (scrollOverview.cpp, the
+// overviewGridProgress gate at its call site), which is a whole-frame saving
+// rather than a fractional one and cannot change a pixel.
 void captureFrameChromeBlur(PHLMONITOR monitor) {
     g_frameChromeBlur.reset();
     if (!monitor || !g_pHyprRenderer || !g_pHyprRenderer->m_renderData.currentFB)
@@ -43,6 +75,7 @@ void captureFrameChromeBlur(PHLMONITOR monitor) {
     const auto RENDERSIZE = monitor->m_transformedSize;
     const auto FBFORMAT   = g_pHyprRenderer->m_renderData.currentFB->m_drmFormat;
 
+    auto& g_chromeBlurFB = g_chromeBlurFBs[monitor->m_id];
     if (!g_chromeBlurFB)
         g_chromeBlurFB = g_pHyprRenderer->createFB("hyprdrive_chrome_blur");
 
@@ -125,6 +158,16 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
     // different cache entries. \x01 cannot appear in an icon name.
     const std::string KEY = tintWhite ? iconName + "\x01white" : iconName;
 
+    // What a NAME resolves to changes when the icon index is rebuilt -- an icon
+    // installed after the first lookup, which until then cached as nothing (or
+    // as the generic tile) for the life of the plugin. Dropping the textures is
+    // cheap: there are a few dozen and each is decoded again on first use.
+    static uint64_t cachedIconGen = 0;
+    if (const auto GEN = AppSearch::iconIndexGeneration(); GEN != cachedIconGen) {
+        g_overviewAppIcons.clear();
+        cachedIconGen = GEN;
+    }
+
     if (const auto IT = g_overviewAppIcons.find(KEY); IT != g_overviewAppIcons.end())
         return IT->second;
 
@@ -205,22 +248,81 @@ struct STextKey {
     bool        operator==(const STextKey&) const = default;
 };
 
+// The same key, OWNING NOTHING. text() is called a few hundred times a frame and
+// nearly every one of those is a cache HIT; building the owning STextKey first
+// copied the string AND the family on every one of them -- two heap allocations
+// to look something up. C++20 heterogeneous lookup hashes the views where they
+// lie, so only a genuine insert allocates.
+//
+// std::hash<std::string_view> and std::hash<std::string> are REQUIRED to agree
+// on the same characters, so the view and the owning key land in one bucket.
+struct STextKeyView {
+    std::string_view str;
+    std::string_view fontFamily;
+    uint32_t         color  = 0;
+    int              fontSize = 0;
+    int              maxWidth = 0;
+    int              maxHeight = 0;
+    int              weight   = 0;
+    bool             italic   = false;
+    bool             wrap     = false;
+};
+
+static STextKeyView viewOf(const STextKey& k) {
+    return {k.str, k.fontFamily, k.color, k.fontSize, k.maxWidth, k.maxHeight, k.weight, k.italic, k.wrap};
+}
+
 struct STextKeyHash {
-    size_t operator()(const STextKey& k) const {
-        size_t h = std::hash<std::string>{}(k.str);
-        for (const size_t PART : {std::hash<std::string>{}(k.fontFamily), sc<size_t>(k.color), sc<size_t>(k.fontSize), sc<size_t>(k.maxWidth), sc<size_t>(k.maxHeight),
+    using is_transparent = void;
+
+    size_t operator()(const STextKeyView& k) const {
+        size_t h = std::hash<std::string_view>{}(k.str);
+        for (const size_t PART : {std::hash<std::string_view>{}(k.fontFamily), sc<size_t>(k.color), sc<size_t>(k.fontSize), sc<size_t>(k.maxWidth), sc<size_t>(k.maxHeight),
                                   sc<size_t>(k.weight), sc<size_t>(k.italic), sc<size_t>(k.wrap)})
             h ^= PART + 0x9e3779b9 + (h << 6) + (h >> 2);
         return h;
     }
+
+    size_t operator()(const STextKey& k) const {
+        return (*this)(viewOf(k));
+    }
 };
 
-static std::unordered_map<STextKey, SP<Render::ITexture>, STextKeyHash> g_textCache;
+struct STextKeyEqual {
+    using is_transparent = void;
+
+    bool operator()(const STextKeyView& a, const STextKeyView& b) const {
+        return a.str == b.str && a.fontFamily == b.fontFamily && a.color == b.color && a.fontSize == b.fontSize && a.maxWidth == b.maxWidth && a.maxHeight == b.maxHeight &&
+            a.weight == b.weight && a.italic == b.italic && a.wrap == b.wrap;
+    }
+
+    bool operator()(const STextKey& a, const STextKey& b) const {
+        return a == b;
+    }
+    bool operator()(const STextKey& a, const STextKeyView& b) const {
+        return (*this)(viewOf(a), b);
+    }
+    bool operator()(const STextKeyView& a, const STextKey& b) const {
+        return (*this)(a, viewOf(b));
+    }
+};
+
+static std::unordered_map<STextKey, SP<Render::ITexture>, STextKeyHash, STextKeyEqual> g_textCache;
+// The generation before g_textCache. See text().
+static std::unordered_map<STextKey, SP<Render::ITexture>, STextKeyHash, STextKeyEqual> g_textCacheOld;
 
 // A clock counts up, a search box fills a character at a time, a badge counts
 // windows: the strings asked for are open-ended, so the cache needs a ceiling.
-// Clearing wholesale rather than evicting by age keeps this to one branch --
-// the entries are cheap to rebuild and the cap is far above a frame's worth.
+//
+// TWO GENERATIONS, not a wholesale clear. The clear was one branch and "cheap to
+// rebuild" -- until every result row carries the query ("Ask Grok: typing a
+// longer sentence...") and every monitor renders its own set: a long sentence
+// typed and erased walks straight through 1024 entries, and the clear then threw
+// out every texture on screen at once, so the next frame re-rasterised all of
+// them together -- a hitch that landed mid-erase (user, 2026-09-14). Now a full
+// cache becomes the OLD generation and a hit there is promoted back, so what is
+// still being drawn survives and only strings nobody has asked for in a whole
+// generation are dropped.
 static constexpr size_t TEXT_CACHE_MAX = 1024;
 
 SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int fontSize, bool italic, const std::string& fontFamily, int maxWidth, int weight) {
@@ -229,28 +331,47 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
 
     // Empty family used to rasterise Hyprland's default Sans. Omarchy's font
     // lives on the fontconfig monospace alias (`omarchy font set`); callers
-    // that do not pin a family inherit that.
-    const std::string FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+    // that do not pin a family inherit that. Bound by REFERENCE: themeFontFamily
+    // hands back its cache, and this runs on every probe.
+    const std::string& FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
 
-    const STextKey KEY{.str        = str,
-                       .fontFamily = FAMILY,
-                       .color      = color.getAsHex(),
-                       .fontSize   = fontSize,
-                       .maxWidth   = maxWidth,
-                       .weight     = weight,
-                       .italic     = italic};
+    const STextKeyView KEY{.str        = str,
+                           .fontFamily = FAMILY,
+                           .color      = color.getAsHex(),
+                           .fontSize   = fontSize,
+                           .maxWidth   = maxWidth,
+                           .weight     = weight,
+                           .italic     = italic};
 
     if (const auto IT = g_textCache.find(KEY); IT != g_textCache.end())
         return IT->second;
 
-    if (g_textCache.size() >= TEXT_CACHE_MAX)
+    if (g_textCache.size() >= TEXT_CACHE_MAX) {
+        g_textCacheOld = std::move(g_textCache);
         g_textCache.clear();
+    }
+
+    // Past here the key is being STORED, so this is where it is allowed to own
+    // its strings -- the two generations keep working on owning keys exactly as
+    // before, and a promotion out of the old generation moves the one it has.
+    if (const auto IT = g_textCacheOld.find(KEY); IT != g_textCacheOld.end()) {
+        auto texture = IT->second;
+        g_textCache.insert(g_textCacheOld.extract(IT));
+        return texture;
+    }
 
     const auto T0      = Prof::clock::now();
     auto       texture = g_pHyprRenderer->renderText(str, color, fontSize, italic, FAMILY, maxWidth, weight);
     Prof::txtNs += std::chrono::duration_cast<std::chrono::nanoseconds>(Prof::clock::now() - T0).count();
     ++Prof::txtCold;
-    g_textCache.emplace(KEY, texture);
+    g_textCache.emplace(STextKey{.str        = str,
+                                 .fontFamily = FAMILY,
+                                 .color      = color.getAsHex(),
+                                 .fontSize   = fontSize,
+                                 .maxWidth   = maxWidth,
+                                 .weight     = weight,
+                                 .italic     = italic},
+                        texture);
     return texture;
 }
 
@@ -263,6 +384,7 @@ SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color
 
 void clearTextCache() {
     g_textCache.clear();
+    g_textCacheOld.clear();
 }
 
 void flushPass(PHLMONITOR monitor) {

@@ -7,8 +7,10 @@
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 
@@ -33,19 +35,54 @@ void registerDispatcher(const std::string& name, TDispatcher dispatcher);
 void registerGesture(TGestureRegistrar gestureRegistrar, TGestureKeyword gestureKeyword);
 void registerConfig();
 
+// Keys are spelled as 25-45 character literals at every call site, and the map
+// below is the one thing between a call site and the value. Taking the name as
+// a std::string built a heap allocation per LOOKUP -- several hundred a frame
+// per monitor, all of them for a string that already exists in .rodata. A
+// transparent (heterogeneous) hash and equality let find() hash the characters
+// where they lie; the only std::string that survives is the one a key is first
+// stored under.
+struct SKeyHash {
+    using is_transparent = void;
+
+    size_t operator()(const std::string_view key) const noexcept {
+        return std::hash<std::string_view>{}(key);
+    }
+};
+
+struct SKeyEqual {
+    using is_transparent = void;
+
+    bool operator()(const std::string_view a, const std::string_view b) const noexcept {
+        return a == b;
+    }
+};
+
+// CConfigValue is Hyprland's own caching handle: it holds the pointer-TO-pointer
+// the config manager owns, so one of these survives a reload and costs a double
+// indirection to read. They are created once per key and never erased, and the
+// map stores them by pointer, so the reference handed back stays valid across a
+// rehash -- which is what makes
+//
+//     static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:...");
+//
+// legal at a call site, and is how the per-frame helpers in Config.cpp skip even
+// the hash. Do NOT cache what a handle POINTS AT that way: that pointer moves.
 template <typename T>
-CConfigValue<T>& valueRef(const std::string& name) {
-    static std::unordered_map<std::string, UP<CConfigValue<T>>> values;
+CConfigValue<T>& valueRef(const std::string_view name) {
+    static std::unordered_map<std::string, UP<CConfigValue<T>>, SKeyHash, SKeyEqual> values;
 
-    const auto [it, inserted] = values.try_emplace(name);
-    if (inserted)
-        it->second = makeUnique<CConfigValue<T>>(name);
+    if (const auto IT = values.find(name); IT != values.end())
+        return *IT->second;
 
-    return *it->second;
+    const auto [IT, INSERTED] = values.try_emplace(std::string{name});
+    IT->second                = makeUnique<CConfigValue<T>>(IT->first);
+
+    return *IT->second;
 }
 
 template <typename T>
-T getValue(const std::string& name) {
+T getValue(const std::string_view name) {
     using TValue = std::decay_t<T>;
 
 	if constexpr (std::is_same_v<TValue, ::Config::CGradientValueData>) {
@@ -65,13 +102,33 @@ T getValue(const std::string& name) {
         return *valueRef<TValue>(name);
 }
 
+// The live gradient, NOT a copy. CGradientValueData owns a colour vector, so
+// getValue<CGradientValueData> is a heap allocation every call -- and the
+// overview asks for the highlight and the shadow colour once per card and once
+// per strip cell, per frame. nullptr when the key is not registered.
+//
+// The returned pointer is derived from the config manager on each call and must
+// not outlive the expression that asked for it: a reload moves the value. Cache
+// the HANDLE (the valueRef overload) at a call site, never this pointer.
+inline const ::Config::CGradientValueData* gradientPtr(CConfigValue<::Config::IComplexConfigValue>& ref) {
+    if (!ref.good())
+        return nullptr;
+
+    auto* const PTR = ref.ptr();
+    return PTR ? sc<::Config::CGradientValueData*>(PTR) : nullptr;
+}
+
+inline const ::Config::CGradientValueData* gradientPtr(const std::string_view name) {
+    return gradientPtr(valueRef<::Config::IComplexConfigValue>(name));
+}
+
 template <typename T>
-T* getValuePtr(const std::string& name) {
+T* getValuePtr(const std::string_view name) {
     return valueRef<T>(name).ptr();
 }
 
 template <typename T>
-void setValue(const std::string& name, const T& value) {
+void setValue(const std::string_view name, const T& value) {
     using TValue = std::decay_t<T>;
 
     if constexpr (std::is_same_v<TValue, bool>)
@@ -114,7 +171,7 @@ CHyprColor    highlightColor();
 CHyprColor    highlightForeground();
 int           themeRounding();
 float         themeRoundingPower();
-std::string   themeFontFamily();
+const std::string& themeFontFamily();
 CHyprColor    dockIndicatorColor();
 CHyprColor    dockBackgroundColor();
 int           dockCornerRadius();
@@ -127,6 +184,27 @@ CHyprColor    themeSelection();
 CHyprColor    themeSelectedFill();
 CHyprColor    themeSelectedText();
 CHyprColor    themeUrgent();
+
+// Everything above that reads a FILE -- the Omarchy palette (colors.toml) and
+// the fontconfig monospace alias -- is cached behind a 500ms re-stat, because
+// those sit under per-card colour reads and a stat() per colour per card per
+// frame is thousands of syscalls a second. The poll alone would show a theme
+// change up to half a second late; it never does, because `omarchy theme set`
+// reloads Hyprland and the reload listener calls this first. The poll only
+// covers a file edited underneath a theme that is already current.
+void          invalidateThemeCache();
+
+// A hash over the LIVE values of every plugin:hyprdrive:dock: key. Taken on
+// config.preReload and again on config.reloaded, it answers the only question
+// that reload listener actually has: did this reload move the dock's layout?
+//
+// Enumerated from the registration list, not from a hand-written key list -- a
+// list is a thing to forget, and a dock key added later and left out of it
+// would let a minimize flight chase an icon the new layout has moved. A key
+// whose type is not one of the five the dock uses mixes in a counter instead,
+// so the fingerprint cannot compare equal and the caller falls back to what it
+// did before this existed.
+uint64_t      dockKeyFingerprint();
 
 float         getScale();
 float         getOpenSpeed();
@@ -179,6 +257,6 @@ int           getTapSuperTimeoutMs();
 int          getShadowEnabled();
 int          getShadowRange();
 int          getShadowRenderPower();
-std::optional<::Config::CGradientValueData> getShadowColor();
+const ::Config::CGradientValueData* getShadowColor();
 
 }

@@ -31,6 +31,7 @@
 #undef protected
 #undef private
 #include "Config.hpp"
+#include "IOverview.hpp"
 #include "OverviewPassElement.hpp"
 #include "OverviewRender.hpp"
 
@@ -127,7 +128,63 @@ static float getOverviewWindowTargetOpacity(const PHLWINDOW& window) {
 // busy (20.4% -> 23.9%) for 8 tiles of 2400x1450, which is affordable, so it is
 // left alone. If it ever stops being affordable, the upgrade is to keep the
 // mipmap and skip regeneration while the source texture is unchanged.
-static std::unordered_map<GLuint, SP<Render::IFramebuffer>> g_u2PrefilterFBs;
+//
+// Y17 (GPU, 2026-09-14): it stopped being affordable, and that upgrade is what
+// follows. The old cache was keyed on the GL texture NAME with no notion of
+// "unchanged", which cost three ways:
+//   * the same texture was cleared, re-copied and re-mipmapped once per DRAW --
+//     the tile, its strip mini, the alternate-monitor mini and again for the
+//     other monitor's frame -- four times a frame for one static window;
+//   * nothing ever expired, and a client cycling a dmabuf swapchain retires
+//     texture names that never come back, so the map (and its full-size
+//     framebuffers) grew without bound;
+//   * every ~CScrollOverview released it for ALL overviews, so closing one
+//     monitor's overview threw away the other's mipmaps mid-animation.
+//
+// The cache is now keyed by SURFACE: one entry per surface, shared by all four
+// draws. It is rebuilt only if the source texture object, its size, the target
+// format or the target image description changed, or if the surface COMMITTED
+// since the copy -- notifySurfaceCommit() below, driven from main.cpp's
+// damageSurface hook. That is the same signal the overview already trusts to
+// know a live tile must be repainted (CScrollOverview::shouldHandleSurfaceDamage),
+// so the mipmap can never be staler than the tile it is drawn into. Entries
+// whose surface died, and entries nothing has drawn for a while, are dropped.
+struct SU2PrefilterEntry {
+    SP<Render::IFramebuffer>            fb;
+    WP<CWLSurfaceResource>              surface;
+    WP<Render::ITexture>                srcTex;      // key owner when there is no surface
+    bool                                keyedOnSurface = false;
+    GLuint                              srcTexID       = 0;
+    Vector2D                            srcSize;
+    uint32_t                            format         = 0;
+    NColorManagement::PImageDescription imageDescription;
+    bool                                dirty          = true;
+    uint64_t                            lastUse        = 0;
+
+    bool                                alive() const {
+        return keyedOnSurface ? !surface.expired() : !srcTex.expired();
+    }
+};
+
+static std::unordered_map<const void*, SU2PrefilterEntry> g_u2PrefilterFBs;
+// Bumped once per prefiltered surface, not per frame -- Window.cpp has no frame
+// of its own. At ~8 tiles a frame this idle window is roughly a second.
+static uint64_t                                           g_u2PrefilterUse  = 0;
+static constexpr uint64_t                                 U2_PREFILTER_IDLE = 512;
+
+// Called with the EGL context current (from the render path), so releasing a
+// framebuffer here is safe.
+static void pruneTexturePrefilterCache() {
+    std::erase_if(g_u2PrefilterFBs, [](auto& kv) {
+        auto& entry = kv.second;
+        if (entry.alive() && g_u2PrefilterUse - entry.lastUse <= U2_PREFILTER_IDLE)
+            return false;
+
+        if (entry.fb)
+            entry.fb->release();
+        return true;
+    });
+}
 
 static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR monitor, double minify, size_t firstElement) {
     // ponytail: default 0.55 is just above the measured 0.5 boundary where
@@ -155,44 +212,79 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         if (!SRC || !SRC->m_texID || SRC->m_size.x < 2 || SRC->m_size.y < 2)
             continue;
 
-        const int W = sc<int>(SRC->m_size.x);
-        const int H = sc<int>(SRC->m_size.y);
+        const int  W          = sc<int>(SRC->m_size.x);
+        const int  H          = sc<int>(SRC->m_size.y);
+        const auto SURFACE    = spe->m_data.surface;
+        const auto IMAGEDESC  = g_pHyprRenderer->m_renderData.currentFB ? g_pHyprRenderer->m_renderData.currentFB->imageDescription() : NColorManagement::PImageDescription{};
+        // A surface pass element always carries its surface; the texture is the
+        // fallback key so a hypothetical one without it still gets a mipmap
+        // (rebuilt every draw, exactly as the whole cache used to be).
+        const void* const KEY = SURFACE ? sc<const void*>(SURFACE.get()) : sc<const void*>(SRC.get());
 
-        auto&     fb = g_u2PrefilterFBs[SRC->m_texID];
-        if (!fb)
-            fb = g_pHyprRenderer->createFB("hyprdrive_u2_prefilter");
-        if (!fb)
+        ++g_u2PrefilterUse;
+        if ((g_u2PrefilterUse & 0x3FULL) == 0)
+            pruneTexturePrefilterCache();
+
+        auto& entry = g_u2PrefilterFBs[KEY];
+        if (!entry.fb)
+            entry.fb = g_pHyprRenderer->createFB("hyprdrive_u2_prefilter");
+        if (!entry.fb)
             continue;
-        if (!fb->isAllocated() || fb->m_size != SRC->m_size || fb->m_drmFormat != FBFORMAT) {
-            fb->release();
-            if (!fb->alloc(W, H, FBFORMAT))
+
+        entry.lastUse        = g_u2PrefilterUse;
+        entry.keyedOnSurface = !!SURFACE;
+        entry.surface        = SURFACE;
+        entry.srcTex         = SRC;
+
+        // The source texture object identity is not enough on its own: a client
+        // cycling a small dmabuf swapchain hands back the SAME texture with new
+        // content. The commit flag is what makes this sound.
+        const bool NEEDSCOPY = entry.dirty || !entry.fb->isAllocated() || entry.srcTexID != SRC->m_texID || entry.srcSize != SRC->m_size || entry.format != FBFORMAT ||
+            entry.imageDescription != IMAGEDESC;
+
+        if (!entry.fb->isAllocated() || entry.fb->m_size != SRC->m_size || entry.fb->m_drmFormat != FBFORMAT) {
+            entry.fb->release();
+            if (!entry.fb->alloc(W, H, FBFORMAT))
                 continue;
         }
         if (g_pHyprRenderer->m_renderData.currentFB)
-            fb->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+            entry.fb->setImageDescription(IMAGEDESC);
 
-        const CBox    FULLBOX{0, 0, sc<double>(W), sc<double>(H)};
-        const CRegion FULLDAMAGE{FULLBOX};
-
-        {
-            auto bindPrefilter = g_pHyprRenderer->bindTempFB(fb);
-            g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, FULLDAMAGE);
-            g_pHyprRenderer->draw(CTexPassElement::SRenderData{.tex = SRC, .box = FULLBOX, .damage = FULLDAMAGE}, FULLDAMAGE);
-        }
-
-        const auto MIPPED = fb->getTexture();
+        const auto MIPPED = entry.fb->getTexture();
         if (!MIPPED || !MIPPED->m_texID)
             continue;
 
-        glBindTexture(GL_TEXTURE_2D, MIPPED->m_texID);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        if (glGetError() != GL_NO_ERROR) {
+        if (NEEDSCOPY) {
+            const CBox    FULLBOX{0, 0, sc<double>(W), sc<double>(H)};
+            const CRegion FULLDAMAGE{FULLBOX};
+
+            {
+                auto bindPrefilter = g_pHyprRenderer->bindTempFB(entry.fb);
+                g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, FULLDAMAGE);
+                g_pHyprRenderer->draw(CTexPassElement::SRenderData{.tex = SRC, .box = FULLBOX, .damage = FULLDAMAGE}, FULLDAMAGE);
+            }
+
+            glBindTexture(GL_TEXTURE_2D, MIPPED->m_texID);
+            glGenerateMipmap(GL_TEXTURE_2D);
+            if (glGetError() != GL_NO_ERROR) {
+                glBindTexture(GL_TEXTURE_2D, 0);
+                // Leave the entry dirty: a half-built mipmap must not be reused.
+                entry.dirty = true;
+                continue;
+            }
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
             glBindTexture(GL_TEXTURE_2D, 0);
-            continue;
+
+            entry.dirty            = false;
+            entry.srcTexID         = SRC->m_texID;
+            entry.srcSize          = SRC->m_size;
+            entry.format           = FBFORMAT;
+            entry.imageDescription = IMAGEDESC;
         }
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        MIPPED->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+
+        // Cheap and unconditional: Hyprland re-applies GL_TEXTURE_MIN_FILTER
+        // from this field every time it binds the texture (OpenGL.cpp:1536).
+        MIPPED->minFilter   = GL_LINEAR_MIPMAP_LINEAR;
 
         spe->m_data.texture = MIPPED;
     }
@@ -872,10 +964,42 @@ bool shouldUseBlurFramebuffer(const PHLWINDOW& window, PHLMONITOR monitor, const
          overviewWindowFitsWorkspaceBox(workspaceBox, windowBox) && overviewWorkspaceBoxReadyForPrecomputedBlur(monitor, workspaceBox));
 }
 
+void notifySurfaceCommit(const SP<CWLSurfaceResource>& surface) {
+    if (!surface || g_u2PrefilterFBs.empty())
+        return;
+
+    if (const auto IT = g_u2PrefilterFBs.find(sc<const void*>(surface.get())); IT != g_u2PrefilterFBs.end())
+        IT->second.dirty = true;
+}
+
+
+// NOT FREED WHEN THE OVERVIEW CLOSES (user, 2026-09-16: "the workspace strip is
+// visibly refreshing its previews ... antialiasing is not present prior to the
+// refresh"). It was, and every open therefore started cold: the minis and tiles
+// drew plain bilinear -- at strip scale, visibly aliased -- until each window's
+// mipmap was rebuilt, and Y18's one-allocation-per-frame budget made that a
+// window-by-window sharpening anyone could watch. Kept, the next open finds
+// every mipmap it drew last time and only re-copies the windows that committed
+// in between (a blit, no allocation). The price is the copies' GPU memory
+// while the overview is down, bounded by the windows that exist: an entry
+// whose surface is gone is dropped here, and one not drawn for a while is
+// dropped by the prune on the next open.
+void trimTexturePrefilterCache() {
+    std::erase_if(g_u2PrefilterFBs, [](auto& kv) {
+        if (kv.second.alive())
+            return false;
+        if (kv.second.fb)
+            kv.second.fb->release();
+        return true;
+    });
+}
+
+// Everything, for plugin unload: the framebuffers are this object's to free
+// while its code and the EGL context are still there.
 void releaseTexturePrefilterCache() {
-    for (auto& [id, fb] : g_u2PrefilterFBs) {
-        if (fb)
-            fb->release();
+    for (auto& [key, entry] : g_u2PrefilterFBs) {
+        if (entry.fb)
+            entry.fb->release();
     }
     g_u2PrefilterFBs.clear();
 }
@@ -900,14 +1024,25 @@ void renderOverviewWindow(const SRenderParams& params) {
         const auto MONITOR = params.monitor;
         const auto WINDOW  = params.window;
 
-        const auto REALPOS  = WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
         const auto REALSIZE = WINDOW->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
         if (REALSIZE.x < 1.0 || REALSIZE.y < 1.0)
             return;
 
-        // Real window in monitor-local pixels (same space as params.windowBox).
+        // The window as renderWindow(ignorePosition) will lay it out: at the
+        // PREVIEW MONITOR'S ORIGIN, not where it really is.
+        //
+        // (user, 2026-09-14: "previews on dock are flaky if the apps live outside
+        // of the monitor I'm looking at the dock from"). Drawn at its real
+        // position, a window on another monitor sits outside this monitor's
+        // pixels: the nested pass discards its surfaces as off-screen (their
+        // bounding box ignores the scale/translate modifier), and the draw
+        // clips its damage against that same off-screen box, so the cell stayed
+        // empty -- every frame for one monitor away, and whenever a workspace
+        // animation parked the window off-screen on this one (Z1, below).
+        // Pinned to the origin it is always on-screen before the modifier moves
+        // it into the cell, wherever the window lives.
         const CBox REALPX{
-            (REALPOS - MONITOR->m_position) * MONITOR->m_scale,
+            Vector2D{},
             REALSIZE * MONITOR->m_scale,
         };
         if (REALPX.width < 1.0 || REALPX.height < 1.0 || params.windowBox.width < 1.0 || params.windowBox.height < 1.0)
@@ -932,29 +1067,16 @@ void renderOverviewWindow(const SRenderParams& params) {
         auto queuePreview = [&]() {
             g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
 
-            // Z1. renderWindow draws at the window's position PLUS its workspace's
-            // m_renderOffset, but the transform above is computed from the position
-            // alone -- so a window whose workspace is parked off-screen was drawn a
-            // whole monitor away from the cell and clipped to nothing. The offset is
-            // zero until a workspace has been switched away from with an animation,
-            // which is why the preview worked until the user swapped desktops and
-            // then never again. The overview path below already neutralizes it; this
-            // is the same neutralization, restored the same way.
-            const auto     PREVIEWWS      = WINDOW->m_workspace;
-            const bool     OVERRIDEOFFSET = PREVIEWWS && !WINDOW->m_pinned;
-            const Vector2D PREVIOUSOFFSET = OVERRIDEOFFSET ? PREVIEWWS->m_renderOffset->value() : Vector2D{};
-            if (OVERRIDEOFFSET)
-                PREVIEWWS->m_renderOffset->value() = {};
-            auto restorePreviewOffset = Hyprutils::Utils::CScopeGuard([&] {
-                if (OVERRIDEOFFSET && PREVIEWWS)
-                    PREVIEWWS->m_renderOffset->value() = PREVIOUSOFFSET;
-            });
-
+            // Z1 (a window whose workspace is parked off-screen by a switch
+            // animation was drawn a monitor away and clipped to nothing) needed
+            // the workspace's m_renderOffset zeroed around this call. With
+            // ignorePosition renderWindow never reads the position the offset
+            // is added to, so there is nothing left to neutralize.
             auto&            passElements = g_pHyprRenderer->currentPass().m_passElements;
             const size_t     firstElement = passElements.size();
             // standalone: no decorate path side effects; content only. Rounding is
             // forced below so the cell still reads as a rounded thumbnail.
-            g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, false, true);
+            g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
             roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement);
             // Clip every surface of this window to the preview cell so nothing bleeds.
             for (size_t i = firstElement; i < passElements.size(); ++i) {
@@ -1107,6 +1229,12 @@ void renderOverviewWindow(const SRenderParams& params) {
     if (!fullscreen)
         renderOverviewWindowBorder(params.monitor, params.window, params.windowBox, metrics, params.selected);
 
+    // Y17 (GPU, 2026-09-14): the per-window flush was left alone. It is not
+    // bookkeeping -- the UNDER decorations above depend on being rendered
+    // before their state is restored, the temporary window geometry is undone
+    // by a scope guard the moment this returns, and the blur-size override is
+    // restored with it. Batching windows into one pass would draw all of them
+    // with the last one's state. Not worth the risk for a CPU-side saving.
     if (params.ownsRenderPass)
         OverviewRender::flushPass(params.monitor);
 }

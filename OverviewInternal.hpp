@@ -136,11 +136,12 @@ static_assert(sc<int>(Layout::CORNER_BOTTOMLEFT) == sc<int>(OvGeom::CORNER_BOTTO
 static_assert(sc<int>(Layout::CORNER_BOTTOMRIGHT) == sc<int>(OvGeom::CORNER_BOTTOMRIGHT));
 
 inline float overviewTopChromeBottomL(PHLMONITOR monitor);
+inline uint64_t overviewFrameOn(const PHLMONITOR& monitor);
 
 // Sit the scaled card in the band between the Omarchy top bar and the dock
 // so the padding above the card equals the padding below it. The shift fades
 // with open progress: at scale 1 the desktop still fills the monitor.
-inline Vector2D overviewCardOriginOffset(PHLMONITOR monitor, float overviewScale) {
+inline Vector2D overviewCardOriginOffsetLive(PHLMONITOR monitor, float overviewScale) {
     if (!monitor)
         return {};
 
@@ -165,6 +166,65 @@ inline Vector2D overviewCardOriginOffset(PHLMONITOR monitor, float overviewScale
     const float RANGE = std::max(0.01F, 1.F - OPEN);
     const float T     = std::clamp((1.F - overviewScale) / RANGE, 0.F, 1.F);
     return {0.F, ((TOP + bottom) * 0.5F - MONCY) * T};
+}
+
+// MEMOISED PER DRAWN FRAME, because viewportOf below runs it for EVERY box the
+// overview transforms -- and it walks both top layer lists and makes three
+// config lookups to do it. Measured shape: ~150 layer walks and ~450 lookups
+// per output per frame, for an answer that is the same on all of them.
+//
+// The key is the output, its geometry, the open scale, and THE OUTPUT'S OWN
+// FRAME COUNTER, so within one frame every call agrees by construction. Between
+// frames the answer is held: a hit test then measures against the chrome as it
+// was last DRAWN, which is the chrome the user is pointing at. A layer opening,
+// closing or resizing damages the monitor, so the held value never outlives the
+// frame that would have shown the change.
+//
+// Several scales are live in one frame (the card's, and the much smaller one a
+// strip mini is drawn at), hence a small table rather than one slot.
+inline Vector2D overviewCardOriginOffset(PHLMONITOR monitor, float overviewScale) {
+    if (!monitor)
+        return {};
+
+    struct SOriginMemo {
+        MONITORID id    = MONITOR_INVALID;
+        uint64_t  frame = 0;
+        float     scale = 0.F;
+        Vector2D  pos;
+        Vector2D  size;
+        float     monScale = 0.F;
+        Vector2D  value;
+        bool      filled   = false;
+    };
+
+    static std::array<SOriginMemo, 8> MEMOS;
+    static size_t                     next = 0;
+
+    const uint64_t FRAME = overviewFrameOn(monitor);
+
+    for (const auto& MEMO : MEMOS) {
+        if (!MEMO.filled || MEMO.id != monitor->m_id || MEMO.frame != FRAME || MEMO.scale != overviewScale)
+            continue;
+        if (MEMO.pos != monitor->m_position || MEMO.size != monitor->m_size || MEMO.monScale != monitor->m_scale)
+            continue;
+
+        return MEMO.value;
+    }
+
+    const Vector2D VALUE = overviewCardOriginOffsetLive(monitor, overviewScale);
+
+    auto& slot    = MEMOS[next];
+    next          = (next + 1) % MEMOS.size();
+    slot.id       = monitor->m_id;
+    slot.frame    = FRAME;
+    slot.scale    = overviewScale;
+    slot.pos      = monitor->m_position;
+    slot.size     = monitor->m_size;
+    slot.monScale = monitor->m_scale;
+    slot.value    = VALUE;
+    slot.filled   = true;
+
+    return VALUE;
 }
 
 // Everything the pure transforms need from an output, read once at the boundary.
@@ -388,7 +448,64 @@ struct SSearchRow {
 
 inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry);
 
+inline std::vector<SSearchRow> overviewSearchRowsLive();
+
+// MEMOISED GLOBALLY, not per overview: both outputs show the SAME query, so a
+// two-monitor session was building this twice per frame -- and once is already
+// a scored sort of the whole app inventory, a walk of every window per app hit,
+// two stat()s for the menu, a stat() plus two fs::exists per agent, and a copy
+// of the file results out from under a mutex.
+//
+// Nothing about the SELECTION is in here. The rows are what the query and the
+// system are; which one is highlighted is navigation state and lives in
+// g_search.nav, which is exactly why it can be left out of the key.
+//
+// The empty-query browse path is deliberately NOT memoised: it is the only
+// caller of recentFiles(), which walks the user's directories and has no
+// generation to key on, and it is never on the per-frame path (renderSearch
+// asks for rows only once something is typed or a menu is open).
 inline std::vector<SSearchRow> overviewSearchRows() {
+    const std::string& Q           = g_search.query.text;
+    const bool         MENU_BROWSE = OmarchySearch::canNavigateMenuBack();
+
+    if (Q.empty() && !MENU_BROWSE)
+        return overviewSearchRowsLive();
+
+    struct SRowMemo {
+        std::string query;
+        std::string route;
+        bool        browse  = false;
+        uint64_t    inputs  = 0;
+        uint64_t    members = 0;
+        uint64_t    apps    = 0;
+        bool        filled  = false;
+
+        std::vector<SSearchRow> rows;
+    };
+
+    static SRowMemo MEMO;
+
+    const auto     ROUTE   = OmarchySearch::menuCurrentRoute();
+    const uint64_t INPUTS  = OmarchySearch::searchInputsGeneration();
+    const uint64_t MEMBERS = Membership::generation();
+    const uint64_t APPS    = AppSearch::inventoryGeneration();
+
+    if (MEMO.filled && MEMO.query == Q && MEMO.browse == MENU_BROWSE && MEMO.route == ROUTE && MEMO.inputs == INPUTS && MEMO.members == MEMBERS && MEMO.apps == APPS)
+        return MEMO.rows;
+
+    MEMO.query   = Q;
+    MEMO.route   = ROUTE;
+    MEMO.browse  = MENU_BROWSE;
+    MEMO.inputs  = INPUTS;
+    MEMO.members = MEMBERS;
+    MEMO.apps    = APPS;
+    MEMO.rows    = overviewSearchRowsLive();
+    MEMO.filled  = true;
+
+    return MEMO.rows;
+}
+
+inline std::vector<SSearchRow> overviewSearchRowsLive() {
     std::vector<SSearchRow> rows;
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 
@@ -422,9 +539,9 @@ inline std::vector<SSearchRow> overviewSearchRows() {
     for (const auto& item : OmarchySearch::searchMenu(Q, MENU_LIMIT))
         menuRows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 0});
 
-    rows.insert(rows.end(), runningApps.begin(), runningApps.end());
-    rows.insert(rows.end(), otherApps.begin(), otherApps.end());
-    rows.insert(rows.end(), menuRows.begin(), menuRows.end());
+    rows.insert(rows.end(), std::make_move_iterator(runningApps.begin()), std::make_move_iterator(runningApps.end()));
+    rows.insert(rows.end(), std::make_move_iterator(otherApps.begin()), std::make_move_iterator(otherApps.end()));
+    rows.insert(rows.end(), std::make_move_iterator(menuRows.begin()), std::make_move_iterator(menuRows.end()));
 
     // ------------------------------------------------------------------------
     // COLUMN 1: FILES & FOLDERS (Omarchy Find Index)
@@ -527,12 +644,14 @@ inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
         if (OmarchySearch::isOverviewSushiWindow(WINDOW->m_class, WINDOW->getPID()))
             continue;
 
+        const auto CLASS = AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title);
+
         bool match = false;
-        if (!entry.wmClass.empty() && WINDOW->m_class == entry.wmClass)
+        if (!entry.wmClass.empty() && CLASS == entry.wmClass)
             match = true;
-        else if (AppSearch::idForClass(WINDOW->m_class) == entry.id)
+        else if (AppSearch::idForClass(CLASS) == entry.id)
             match = true;
-        else if (WINDOW->m_class == entry.id)
+        else if (CLASS == entry.id)
             match = true;
         if (!match)
             continue;
@@ -617,10 +736,121 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
 // Counts RENDERED frames, which is the only clock this code actually advances
 // on: an idle overview renders nothing, so a wall-clock "last touched" measures
 // how long the user sat still rather than whether the tile was drawn.
-// ponytail: one counter for all monitors, so a second output would advance it
-// twice per frame and every tile would read as skipped; make it per-monitor if
-// this ever runs on more than one.
-inline uint64_t g_overviewFrame = 0;
+//
+// g_overviewFrame counts every overview's frames and is only good as a "same
+// frame?" key (the search memo below). Anything that asks "was this drawn LAST
+// frame" must count the frames of the monitor that draws it: with two monitors
+// the shared counter advanced once per output, so a tile on the monitor that
+// repainted less often read as skipped, was reseeded off its own desktop and
+// flew back in -- over and over, every reflow, whenever the OTHER monitor was
+// busier (user, 2026-09-14: the search grid flickering on the external monitor
+// while a terminal title spun on the laptop).
+inline uint64_t                                  g_overviewFrame = 0;
+inline std::unordered_map<MONITORID, uint64_t> g_overviewFramesByMonitor;
+
+inline uint64_t overviewFrameOn(const PHLMONITOR& monitor) {
+    if (!monitor)
+        return g_overviewFrame;
+    const auto IT = g_overviewFramesByMonitor.find(monitor->m_id);
+    return IT == g_overviewFramesByMonitor.end() ? 0 : IT->second;
+}
+
+// THE FOUR CONFIG READS THAT ARE ON THE BOX PATH, read once per drawn frame.
+//
+// ScrollOverview::Config::getValue builds a std::string from its key, hashes it
+// and probes an unordered_map, every single call -- and these keys are 30-40
+// characters, so the temporary allocates. getOverviewWindowBox reaches all of
+// them (mission control on/off, the grid gap, the reflow duration, and the
+// strip band the tiles lay out under), and a frame asks for a tile's box 4-6
+// times per tile per output while a pointer motion asks for every tile's.
+// Measured shape: several hundred of these per frame per output, and ~200k a
+// second while the cursor is moving.
+//
+// Keyed on the overview frame counter, which only moves inside render(). A
+// `hyprctl reload` therefore lands on the NEXT frame -- which is the frame the
+// reload damages anyway, so nothing is drawn with a stale value.
+inline bool overviewMissionControlOn() {
+    static uint64_t frame  = 0;
+    static bool     value  = false;
+    static bool     filled = false;
+
+    if (!filled || frame != g_overviewFrame) {
+        frame  = g_overviewFrame;
+        value  = ScrollOverview::Config::getMissionControl();
+        filled = true;
+    }
+
+    return value;
+}
+
+inline int overviewMissionControlGap() {
+    static uint64_t frame  = 0;
+    static int      value  = 0;
+    static bool     filled = false;
+
+    if (!filled || frame != g_overviewFrame) {
+        frame  = g_overviewFrame;
+        value  = ScrollOverview::Config::getMissionControlGap();
+        filled = true;
+    }
+
+    return value;
+}
+
+inline int overviewMissionControlReflowMs() {
+    static uint64_t frame  = 0;
+    static int      value  = 0;
+    static bool     filled = false;
+
+    if (!filled || frame != g_overviewFrame) {
+        frame  = g_overviewFrame;
+        value  = ScrollOverview::Config::getMissionControlReflowMs();
+        filled = true;
+    }
+
+    return value;
+}
+
+// ...and the two clocks. animElapsedMs divides by the anim_scale slider, which
+// is another string-keyed probe, and the grid's reflow and release both read it
+// several times per box. getScale is the open-progress denominator and is read
+// once per box as well.
+inline float overviewAnimScale() {
+    static uint64_t frame  = 0;
+    static float    value  = 1.F;
+    static bool     filled = false;
+
+    if (!filled || frame != g_overviewFrame) {
+        frame  = g_overviewFrame;
+        value  = ScrollOverview::Config::animScale();
+        filled = true;
+    }
+
+    return value;
+}
+
+// Byte-for-byte Config::animElapsedMs, reading the memoised slider.
+inline float overviewAnimElapsedMs(const Time::steady_tp& since) {
+    const float SCALE = overviewAnimScale();
+    if (SCALE <= 0.F)
+        return 1e9F;
+
+    return ScrollOverview::Config::realElapsedMs(since) / SCALE;
+}
+
+inline float overviewOpenScale() {
+    static uint64_t frame  = 0;
+    static float    value  = 0.F;
+    static bool     filled = false;
+
+    if (!filled || frame != g_overviewFrame) {
+        frame  = g_overviewFrame;
+        value  = ScrollOverview::Config::getScale();
+        filled = true;
+    }
+
+    return value;
+}
 
 inline bool overviewSearchMatches(const PHLWINDOW& window) {
     if (g_search.query.text.empty())
@@ -659,7 +889,7 @@ inline bool overviewSearchMatches(const PHLWINDOW& window) {
     std::string haystack = window->m_workspace ? std::format("{}: ", window->m_workspace->m_id) : "";
     haystack += window->m_title + " " + window->m_class;
 
-    if (const auto APPNAME = AppSearch::appNameForClass(window->m_class); !APPNAME.empty())
+    if (const auto APPNAME = AppSearch::appNameForClass(AppSearch::identityClass(window->m_class, window->m_title)); !APPNAME.empty())
         haystack += " " + APPNAME;
 
     const bool MATCHED       = AppSearch::strictMatch(CACHE.text, haystack);
@@ -876,12 +1106,46 @@ inline bool layerHasOverviewAnimation(const PHLLS& layer) {
 // nothing on screen to aim a drag at, and nowhere for D'4's post-drop preview
 // to appear. Minis are real windows rendered small; spec §6 exempts them from
 // frost, so this does not reopen section C.
+// Memoised per output per drawn frame for the reason the mission-control
+// getters above are: overviewStripStackL asks for this THREE times, the grid
+// asks for that stack on every box it places, and each ask is two string-keyed
+// config probes. Same one-frame ceiling on a `hyprctl reload`.
 inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
-    if (!ScrollOverview::Config::getStrip() || !monitor)
+    if (!monitor)
         return 0.F;
 
-    const float H = sc<float>(ScrollOverview::Config::getStripHeight());
-    return H > 1.F && H < sc<float>(monitor->m_size.y) / 2.F ? H : 0.F;
+    struct SBandMemo {
+        MONITORID id     = MONITOR_INVALID;
+        uint64_t  frame  = 0;
+        double    monH   = 0.0;
+        float     value  = 0.F;
+        bool      filled = false;
+    };
+
+    static std::array<SBandMemo, 4> MEMOS;
+    static size_t                   next = 0;
+
+    const uint64_t FRAME = overviewFrameOn(monitor);
+    for (const auto& MEMO : MEMOS) {
+        if (MEMO.filled && MEMO.id == monitor->m_id && MEMO.frame == FRAME && MEMO.monH == monitor->m_size.y)
+            return MEMO.value;
+    }
+
+    float value = 0.F;
+    if (ScrollOverview::Config::getStrip()) {
+        const float H = sc<float>(ScrollOverview::Config::getStripHeight());
+        value         = H > 1.F && H < sc<float>(monitor->m_size.y) / 2.F ? H : 0.F;
+    }
+
+    auto& slot  = MEMOS[next];
+    next        = (next + 1) % MEMOS.size();
+    slot.id     = monitor->m_id;
+    slot.frame  = FRAME;
+    slot.monH   = monitor->m_size.y;
+    slot.value  = value;
+    slot.filled = true;
+
+    return value;
 }
 
 // Strip cells sit in the reserved band with this pad on every side. The panel
@@ -918,7 +1182,7 @@ inline float overviewStripStackL(PHLMONITOR monitor) {
 // from the pill's ACTUAL landed foot, so it is part of the published layout and
 // not a free-standing global.
 inline float overviewSearchLogicalHeight(PHLMONITOR monitor) {
-    return monitor ? g_search.layout.rowL : 0.F;
+    return monitor ? g_search.layoutOn(monitor->m_id).rowL : 0.F;
 }
 
 // X50: how far down the monitor the top chrome reaches, in logical global px.
@@ -996,7 +1260,7 @@ inline constexpr float OVERVIEW_CARD_CELLGAPL     = 4.F;  // that cell's icon ->
 inline constexpr float OVERVIEW_CARD_CELLPX       = 13.F; // that label
 
 inline float overviewResultsLogicalHeight(PHLMONITOR monitor) {
-    return monitor ? std::max(0.F, g_search.layout.bandH) : 0.F;
+    return monitor ? std::max(0.F, g_search.layoutOn(monitor->m_id).bandH) : 0.F;
 }
 
 // The width the result cards span: the monitor inset by the mission-control
@@ -1214,6 +1478,13 @@ inline CBox getOverviewGlobalBox(CBox globalBox, PHLMONITOR monitor, float scale
 // -- X10's occlusion finding stands) while refusing to pan with the desktops.
 inline const Vector2D OVERVIEW_CHROME_NO_PAN = {};
 
+// The pair overviewGridSlot answers with. A single if-init-statement can only
+// declare one thing, and both halves are needed inside the branch.
+struct SGridSlot {
+    CBox slot;
+    bool promoted = false;
+};
+
 inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
                                  bool round = true, const CBox* geometryOverride = nullptr) {
     if (!window)
@@ -1242,10 +1513,14 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         if (const float UNIT = scale * std::max(monitor->m_scale, 0.01F); UNIT > 0.01F && std::abs(offset) > 0.01F)
             home.translate(axisOffsetVector(offset / UNIT, layout));
 
-        geometry = overviewGridLerpBox(geometry, gridReflowBox(window, home, nullptr, false, true), overviewGridProgress(scale));
+        geometry = overviewGridLerpBox(geometry, gridReflowBox(monitor, window, home, nullptr, false, true), overviewGridProgress(scale));
         offset   = 0.F;
-    } else if (CBox slot; overviewGridSlot(window, monitor, slot)) {
-        const bool PROMOTED = overviewGridPromoted(window, monitor);
+    } else if (SGridSlot hit; overviewGridSlot(window, monitor, hit.slot, &hit.promoted)) {
+        // The B2 answer comes back OUT of the slot lookup. It used to be asked
+        // for again here, which re-walked the promotable test and re-armed the
+        // release map for a value the line above had already settled.
+        const CBox& slot     = hit.slot;
+        const bool  PROMOTED = hit.promoted;
 
         // F3-b-i: a promoted tile enters from the place it occupies on its own
         // desktop -- which is exactly the per-workspace offset suppressed below,
@@ -1261,7 +1536,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
             }
         }
 
-        geometry = overviewGridLerpBox(geometry, gridReflowBox(window, slot, enterPtr, PROMOTED), overviewGridProgress(scale));
+        geometry = overviewGridLerpBox(geometry, gridReflowBox(monitor, window, slot, enterPtr, PROMOTED), overviewGridProgress(scale));
 
         // The active card sits at offset 0. A promoted tile must ignore the
         // caller's per-workspace offset or it lands off-screen beside it.
@@ -1429,6 +1704,51 @@ inline std::chrono::milliseconds getOverviewIdleFrameInterval() {
 
 inline constexpr std::chrono::milliseconds OVERVIEW_WINDOW_FRAME_INTERVAL = std::chrono::milliseconds(33);
 
+// ADAPTIVE PREVIEWS (user, 2026-09-19: previews should "update each window frame
+// in the strip once every 2 seconds, and if it does detect a movement ... keep
+// streaming the live window continuously").
+//
+// THE CHANGE DETECTOR IS THE CLIENT, NOT A PIXEL COMPARE. A Wayland client only
+// paints when it is handed a frame callback, and when it does paint it commits
+// damage -- which arrives at shouldHandleSurfaceDamage. So "poll it and see if
+// it changed" is "hand it ONE callback and see whether damage comes back", and
+// costs nothing: no readback, no texture copy, no comparison. Diffing the
+// rendered frames would mean pulling every preview off the GPU twice a second
+// to find out what the client already told us for free.
+//
+// A tile therefore sits in one of two states. POLLING: one frame callback every
+// POLL_INTERVAL, which is the whole cost of a window nobody is watching change.
+// STREAMING: frames at the usual OVERVIEW_WINDOW_FRAME_INTERVAL, entered the
+// moment damage comes back.
+//
+// STREAMING IS HELD FOR QUIET_TIMEOUT FROM THE LAST DAMAGE, NOT FROM THE FIRST
+// (user, 2026-09-19: "if there's any damage on a window it should continue
+// streaming it live for 10 more seconds, during which if there's more damage it
+// should continue extending its streaming time"). Every commit rewrites the
+// window's lastChange, so the hold is a SLIDING ten seconds: a window that keeps
+// painting -- a video, a build log, a spinner -- never falls out of streaming,
+// and one that paints once is carried for ten seconds afterwards in case it was
+// the first frame of something rather than the only one. Ten seconds of 33ms
+// frames is the deliberate price of never showing a still of a window that is
+// actually moving; the poll interval is what keeps the other tiles free.
+inline constexpr std::chrono::milliseconds OVERVIEW_PREVIEW_POLL_INTERVAL = std::chrono::milliseconds(2000);
+inline constexpr std::chrono::milliseconds OVERVIEW_PREVIEW_QUIET_TIMEOUT = std::chrono::milliseconds(10000);
+// EVERY WINDOW IS LIVE FOR THE FIRST FEW SECONDS, whatever the poll says. Two
+// cases, one rule: a window that just arrived on a desktop has to redraw at its
+// new size, and a window this overview is seeing for the FIRST time is one the
+// user has just opened the overview to look at -- a two-second wait would show
+// them the old buffer inside the new frame. CScrollOverview is constructed fresh
+// per open (main.cpp), so previewPulses starts empty and first sight is every
+// window, every time the overview comes up. Longer than the dock's RETILED_MS,
+// which covers only the retile itself and not a client that reflows a beat later.
+inline constexpr std::chrono::milliseconds OVERVIEW_PREVIEW_MOVE_GRACE   = std::chrono::milliseconds(3000);
+
+// How rarely a completely idle overview will still repaint itself outright.
+// See realtimePreviewTimerCallback: the idle pulse sends frame callbacks
+// without damaging, and this is the floor that keeps the few POLLED things on
+// screen (the dock's favourites file, the trash icon's name) arriving.
+inline constexpr std::chrono::milliseconds OVERVIEW_IDLE_REPAINT_FLOOR = std::chrono::milliseconds(1000);
+
 // Card shadow + corner-rounding helpers moved to OverviewChrome.hpp
 // (included at the top of this file) so the dock can use them without
 // pulling this whole header. They stay in namespace OvInternal.
@@ -1513,6 +1833,45 @@ inline double clampOverviewScrollingOffset(Layout::Tiled::CScrollingAlgorithm* a
 
     const double MAXOFFSET = std::max(0.0, algo->m_scrollingData->maxWidth() - algo->primaryViewportSize());
     return std::clamp(offset, 0.0, MAXOFFSET);
+}
+
+// A SCROLLING DESKTOP WHOSE COLUMNS FIT THE SCREEN HAS EXACTLY ONE RIGHT CAMERA:
+// centred. Hyprland re-centres only when the content is STRICTLY narrower than
+// the viewport (ScrollTapeController::calculateCameraOffset, `maxExtent <
+// usablePrimary`), and a lone column under scrolling:fullscreen_on_one_column
+// is exactly as wide as the viewport -- so whatever offset that desktop had
+// when it became a single column is kept forever, and the window sits pushed
+// part-way off the screen (user, 2026-09-16: "the tiling kicks part of the
+// window off screen ... as if the monitor boundary was partly offscreen";
+// measured: a lone 1416px foot at x=374 on a 1440px output). Several paths
+// leave such an offset behind -- a tape pan or swipe on a desktop with nothing
+// to scroll, a column taken out directly by the overview's drop code, a desktop
+// laid out on a wider output -- so this does not chase them: it restores the
+// one invariant they all break, and only where nothing can legitimately scroll.
+// Returns whether it moved the camera.
+inline bool normalizeFittingScrollingOffset(const PHLWORKSPACE& workspace) {
+    const auto ALGO = overviewScrollingAlgorithmForWorkspace(workspace);
+    if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller)
+        return false;
+
+    auto& controller = *ALGO->m_scrollingData->controller;
+    // A drag or an inhibitor owns the camera on purpose; leave it to them.
+    if (controller.stripCount() == 0 || controller.isBeingDragged() || controller.getScrollInhibitor().isInhibited)
+        return false;
+
+    const auto   USABLE    = ALGO->usableArea();
+    const double PRIMARY   = controller.getPrimary(USABLE.size());
+    const double MAXEXTENT = controller.calculateMaxExtent(USABLE, ScrollOverview::Config::getValue<bool>("scrolling:fullscreen_on_one_column"));
+    if (PRIMARY <= 0.0 || MAXEXTENT > PRIMARY + 0.5)
+        return false; // something to scroll: every offset in range is a real position
+
+    const double CENTRED = std::round((MAXEXTENT - PRIMARY) / 2.0);
+    if (std::abs(controller.getOffset() - CENTRED) < 0.5)
+        return false;
+
+    controller.setOffset(CENTRED);
+    ALGO->m_scrollingData->recalculate(true);
+    return true;
 }
 
 inline bool moveOverviewScrollingTargetToWorkspaceEdge(const SP<Layout::ITarget>& target, int side) {
@@ -1769,7 +2128,9 @@ inline Vector2D hyprlerp(const Vector2D& from, const Vector2D& to, const float p
 // The fullscreen window when that path applies; null when every window gets its
 // own tile.
 inline PHLWINDOW overviewFullscreenPathWindow(const PHLWORKSPACE& workspace) {
-    if (!workspace || isWorkspaceScrolling(workspace) || ScrollOverview::Config::getMissionControl())
+    // The memoised read, so every overview decision in one frame answers the
+    // same thing about mission control -- the grid below asks it too.
+    if (!workspace || isWorkspaceScrolling(workspace) || overviewMissionControlOn())
         return nullptr;
 
     const auto FULLSCREENWINDOW = getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(workspace));

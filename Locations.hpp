@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -22,7 +23,17 @@ namespace ScrollOverview::Locations {
         bool        canEject = false; // eject rather than unmount, per the reference
         bool        mounted  = true;  // mounts only: false is an fstab point not currently mounted
         bool        empty    = true;  // trash only: no `Empty Trash` row while it is
+
+        bool operator==(const SLocation&) const = default;
     };
+
+    // THE POLL, AS A NUMBER. The dock memoizes the item list it builds out of
+    // items()/openWindows() and needs one cheap thing to key it on (user,
+    // 2026-09-14). It moves only when a poll actually changed something --
+    // a mount appearing, the trash filling, a Files window opening on a
+    // location -- so a poll that finds the desktop exactly as it left it does
+    // not throw the dock's cache away once a second for nothing.
+    uint64_t generation();
 
     // In dock order: removables first, then the trash -- `Locations.getApps()`.
     //

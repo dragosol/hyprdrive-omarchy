@@ -72,6 +72,8 @@ void restore(PHLMONITOR monitor, PHLWINDOW window);
 // flight, and the render loop asks before deciding whether to keep asking for
 // frames.
 bool any();
+// ...on this monitor's dock: a flight is drawn by, and holds out, exactly one.
+bool anyOn(PHLMONITOR monitor);
 
 // Does this window have a flight at all, and is that flight a RESTORE? Z5: a
 // window mid-restore still reads as minimized (it stays stashed until landing),

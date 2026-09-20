@@ -10,6 +10,10 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 
+// The badge change is told to the DOCK, which decides whether it is visible at
+// all before anything is damaged.
+#include "Dock.hpp"
+
 namespace ScrollOverview::LauncherEntry {
 
 namespace {
@@ -148,9 +152,15 @@ namespace {
         // urgent app did not pull the dock out until an unrelated config reload
         // damaged the screen. The dock's own damageIfChanged decides what
         // actually changes; this only guarantees it gets asked.
+        //
+        // Through damageIfChanged and not a bare damageMonitor (user,
+        // 2026-09-14): a count that moved on an app NOT on the dock, or one
+        // whose badge is switched off, used to repaint both whole outputs
+        // anyway. damageIfChanged compares the pill's appearance and damages
+        // only the monitors where something actually changed.
         for (const auto& MONITOR : State::monitorState()->monitors()) {
             if (MONITOR)
-                g_pHyprRenderer->damageMonitor(MONITOR);
+                Dock::damageIfChanged(MONITOR);
         }
 
         return 0;

@@ -62,7 +62,10 @@ check: hyprdrive.so
 
 PREFIX ?= $(HOME)/.local
 
-install: hyprdrive.so
+# check, not just hyprdrive.so: `make install` used to skip symcheck entirely,
+# which is how an undefined-symbol .so reached ~/.local/lib and killed every
+# login until the plugin was moved aside (2026-09-15).
+install: hyprdrive.so check
 	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
 	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
 	bash scripts/install-fragments.sh

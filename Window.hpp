@@ -3,12 +3,24 @@
 #include "globals.hpp"
 #include <hyprland/src/helpers/time/Time.hpp>
 
+class CWLSurfaceResource;
+
 namespace OverviewWindow {
 
 bool shouldBlurBackground(const PHLWINDOW& window);
 bool shouldUsePrecomputedBlur(const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr, bool dragged = false);
 bool shouldUseBlurFramebuffer(const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr);
+// Drops the U2 texture-prefilter cache. A no-op while any overview is still
+// up: the cache is shared by every overview (both monitors sample the same
+// client textures), and ~CScrollOverview used to clear it for ALL of them
+// whenever one closed. Must be called with the EGL context current.
 void releaseTexturePrefilterCache();
+// Drops only the entries of windows that are gone; see Window.cpp.
+void trimTexturePrefilterCache();
+// "This surface committed": marks its cached prefilter copy stale. Called from
+// main.cpp's damageSurface hook -- the same signal the overview already uses to
+// decide a live tile needs repainting.
+void notifySurfaceCommit(const SP<CWLSurfaceResource>& surface);
 void forceDecoRecalc(const PHLWINDOW& window);
 
 struct SRenderParams {

@@ -3,6 +3,7 @@
 #include "globals.hpp"
 #include "Dock.hpp"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,16 @@ namespace ScrollOverview::Stacks {
         std::string path;               // absolute, no trailing slash
         bool        grid       = false; // its view. Per-stack, persisted.
         bool        sortByTime = false; // false: by name. Per-stack, persisted.
+
+        // WHAT THE CELL DRAWS, resolved ONCE when the store is read rather than
+        // on every build of the dock's item list (user, 2026-09-14). iconFor()
+        // stats the path and asks gio to guess a content type, and dockItems()
+        // was calling it -- plus a second is_directory of its own -- for every
+        // stack, several times per frame per monitor. None of the three answers
+        // changes without the store changing, which is what reload() is.
+        std::string icon;               // themed icon NAME for the cell
+        std::string label;              // the basename the cell and its tooltip show
+        bool        isDir = false;      // a folder fans; a file just opens
     };
 
     // The store, cached and poll-refreshed exactly as favourites() is -- the
@@ -74,6 +85,12 @@ namespace ScrollOverview::Stacks {
     std::string iconFor(const std::string& path);
     std::string labelFor(const std::string& path);
 
+    // THE STORE, AS A NUMBER. The dock memoizes the item list it builds out of
+    // all() and needs one cheap thing to key it on (user, 2026-09-14). Moves
+    // when the store is re-read into something different, and when this process
+    // writes it.
+    uint64_t    generation();
+
     // ---- the popup -------------------------------------------------------
     // Opened by a click on a stack cell, and modelled on the Y1 hover panel:
     // one frosted plate per row, grown out of the icon it belongs to, hit-
@@ -85,6 +102,10 @@ namespace ScrollOverview::Stacks {
     void abandonItemDrag();
     bool isOpen();
     const std::string& openPath();
+    // Which output the popup is on, or MONITOR_INVALID. The dock's frame pump
+    // needs it to decide how much of a monitor one of its animations has to
+    // damage (Dock.cpp, dockDamageRegion).
+    MONITORID popupMonitor();
 
     // Does the popup hold the dock out? (autohide, exactly as panelHoldsDock.)
     bool holdsDock(PHLMONITOR monitor);
@@ -110,8 +131,13 @@ namespace ScrollOverview::Stacks {
     // through untouched. A key that ate space anywhere else would be a
     // regression far larger than the feature.
     bool previewHovered();
-    // Frames are needed while it animates or while it is up at all.
-    bool needsFrames();
+    // Frames this MONITOR needs for the stacks: the popup's entrance and exit,
+    // a drag ghost following the pointer, and the hop/shake that acknowledges a
+    // move. An open, settled fan asks for nothing -- it does not move, and it
+    // has no hover state of its own (user, 2026-09-14). The popup lives on one
+    // monitor; the hop and the shake ride a CELL, which every monitor's dock
+    // draws, so those are answered for all of them.
+    bool needsFrames(MONITORID monitor);
     // A signature of everything drawn, for the dock's damage comparison.
     std::string visualState();
 

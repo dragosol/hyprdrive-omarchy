@@ -3,6 +3,9 @@
 #include "globals.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <sys/stat.h>
 #include <ranges>
 #include <cctype>
 #include <cstdint>
@@ -269,8 +272,11 @@ namespace AppSearch {
             return true;
         }
 
+        uint64_t g_inventoryGen = 1;
+
         void scan() {
             Prof::Timer PROF{Prof::scanNs, Prof::scanCalls};
+            ++g_inventoryGen;
             g_entries.clear();
 
             std::unordered_set<std::string> seen;
@@ -773,6 +779,11 @@ namespace AppSearch {
         scan();
     }
 
+    uint64_t inventoryGeneration() {
+        inventory(); // a first call must not report generation 1 for an unscanned list
+        return g_inventoryGen;
+    }
+
     std::vector<const SEntry*> search(const std::string& query, size_t limit) {
         Prof::Timer PROF{Prof::appNs, Prof::appCalls};
         std::vector<const SEntry*> results;
@@ -840,14 +851,13 @@ namespace AppSearch {
     std::mutex  g_iconIndexMutex;
     std::thread g_iconIndexWorker;
 
-    void warmIconIndexLocked() {
-        const auto THEME = iconThemeName();
-        if (g_iconIndexBuilt && g_iconIndexTheme == THEME)
-            return;
+    static std::atomic<uint64_t> g_iconIndexGen{1};
+    static std::atomic<bool>     g_iconRebuildRunning{false};
 
-        g_iconIndex.clear();
-        g_iconIndexTheme = THEME;
-        g_iconIndexBuilt = true;
+    // The walk itself, into a map nobody else can see yet. Pure apart from the
+    // filesystem, so it can run on the worker while readers keep the old index.
+    static std::unordered_map<std::string, SIconCandidate> buildIconIndex() {
+        std::unordered_map<std::string, SIconCandidate> index;
 
         std::error_code ec;
         const auto      ROOTS = iconRoots();
@@ -869,7 +879,7 @@ namespace AppSearch {
                 if (SCORE < 0)
                     continue;
 
-                auto& SLOT = g_iconIndex[PATH.stem().string()];
+                auto& SLOT = index[PATH.stem().string()];
 
                 // Roots are in priority order and the old code stopped at the
                 // first root that answered, so a later root must never override
@@ -882,6 +892,19 @@ namespace AppSearch {
                 }
             }
         }
+
+        return index;
+    }
+
+    void warmIconIndexLocked() {
+        const auto THEME = iconThemeName();
+        if (g_iconIndexBuilt && g_iconIndexTheme == THEME)
+            return;
+
+        g_iconIndex      = buildIconIndex();
+        g_iconIndexTheme = THEME;
+        g_iconIndexBuilt = true;
+        ++g_iconIndexGen;
     }
 
     void warmIconIndex() {
@@ -896,7 +919,10 @@ namespace AppSearch {
         if (g_iconIndexWorker.joinable())
             return;
 
-        g_iconIndexWorker = std::thread([] {
+        // Up for the warm-up too, so pollForChanges never joins -- and so never
+        // blocks a frame on -- a scan that is still walking the themes.
+        g_iconRebuildRunning = true;
+        g_iconIndexWorker    = std::thread([] {
             // Y13. NICED, and the measurement is why: moving the scan off the
             // parse-time path bought 4.1s on when `qs` launches but only 2.3s
             // on when the wallpaper lands, because the worker then spent that
@@ -905,14 +931,101 @@ namespace AppSearch {
             // exactly the work that should yield.
             ::setpriority(PRIO_PROCESS, 0, 10);
 
-            std::scoped_lock lock(g_iconIndexMutex);
-            warmIconIndexLocked();
+            {
+                std::scoped_lock lock(g_iconIndexMutex);
+                warmIconIndexLocked();
+            }
+            g_iconRebuildRunning = false;
         });
     }
 
     void shutdownIconIndex() {
         if (g_iconIndexWorker.joinable())
             g_iconIndexWorker.join();
+    }
+
+    uint64_t iconIndexGeneration() {
+        return g_iconIndexGen.load();
+    }
+
+    // mtimes of the directories whose contents decide the answers. A directory's
+    // mtime moves when an entry is added, removed or renamed in it, which is what
+    // an install does (and what install scripts that rm + rewrite do). Icon files
+    // land deep inside a theme (hicolor/256x256/apps), so a theme is watched
+    // through its icon-theme.cache as well -- the pacman hook regenerates that
+    // on every package that ships icons.
+    static std::vector<int64_t> stampOf(const std::vector<std::string>& paths) {
+        std::vector<int64_t> out;
+        out.reserve(paths.size());
+        for (const auto& PATH : paths) {
+            struct stat st{};
+            out.emplace_back(::stat(PATH.c_str(), &st) == 0 ? sc<int64_t>(st.st_mtim.tv_sec) * 1'000'000'000LL + st.st_mtim.tv_nsec : -1);
+        }
+        return out;
+    }
+
+    static std::vector<std::string> iconWatchPaths() {
+        std::vector<std::string> paths;
+        for (const auto& THEME : themeChain(iconThemeName())) {
+            for (const auto& BASE : iconBases()) {
+                paths.emplace_back(BASE + "/" + THEME);
+                paths.emplace_back(BASE + "/" + THEME + "/icon-theme.cache");
+            }
+        }
+        paths.emplace_back("/usr/share/pixmaps");
+        return paths;
+    }
+
+    void pollForChanges() {
+        static auto                 lastPoll = std::chrono::steady_clock::time_point{};
+        static std::vector<int64_t> appStamp, iconStamp;
+        static bool                 primed = false;
+
+        const auto NOW = std::chrono::steady_clock::now();
+        if (primed && NOW - lastPoll < std::chrono::seconds(2))
+            return;
+        lastPoll = NOW;
+
+        const auto APPS  = stampOf(appDirs());
+        const auto ICONS = stampOf(iconWatchPaths());
+
+        // The first call only records: the initial scan and warm-up happen on
+        // their own schedule, and treating "never polled" as "changed" would
+        // redo both at plugin load.
+        if (!primed) {
+            primed    = true;
+            appStamp  = APPS;
+            iconStamp = ICONS;
+            return;
+        }
+
+        if (APPS != appStamp) {
+            appStamp = APPS;
+            refresh();
+        }
+
+        if (ICONS != iconStamp && !g_iconRebuildRunning.load()) {
+            iconStamp = ICONS;
+            // The previous worker (the warm-up, or an earlier rebuild) has
+            // finished if the flag is down, so this join returns at once.
+            if (g_iconIndexWorker.joinable())
+                g_iconIndexWorker.join();
+
+            g_iconRebuildRunning = true;
+            g_iconIndexWorker    = std::thread([] {
+                ::setpriority(PRIO_PROCESS, 0, 10);
+                auto       fresh = buildIconIndex();
+                const auto THEME = iconThemeName();
+                {
+                    std::scoped_lock lock(g_iconIndexMutex);
+                    g_iconIndex      = std::move(fresh);
+                    g_iconIndexTheme = THEME;
+                    g_iconIndexBuilt = true;
+                }
+                ++g_iconIndexGen;
+                g_iconRebuildRunning = false;
+            });
+        }
     }
 
     std::string resolveIconPath(const std::string& iconName) {
@@ -1042,19 +1155,25 @@ namespace AppSearch {
         // Called from the overview's per-window membership gate, so it runs for
         // every window every frame. The inventory is small but the compare is
         // not free; the answer only changes when the inventory is rescanned.
+        // Keyed on the GENERATION, not the vector's address: a rescan rewrites
+        // the vector in place, so the address never changed and a class looked
+        // up before its app was installed stayed a miss forever.
         static std::unordered_map<std::string, size_t> cache;
-        static const std::vector<SEntry>*              cachedFor = nullptr;
+        static uint64_t                                cachedGen = 0;
 
         const auto& INV = inventory();
-        if (cachedFor != &INV || (cache.size() > INV.size() + 64)) {
+        if (cachedGen != g_inventoryGen || (cache.size() > INV.size() + 64)) {
             cache.clear();
-            cachedFor = &INV;
+            cachedGen = g_inventoryGen;
         }
 
         if (const auto IT = cache.find(wmClass); IT != cache.end())
             return IT->second;
 
-        const auto WANT  = lower(wmClass);
+        // A synthesized quickshell identity resolves on the TITLE half: the
+        // class half is shared by every panel and matches nothing on its own.
+        static constexpr std::string_view QS_PREFIX = "org.quickshell:";
+        const auto WANT  = lower(wmClass.starts_with(QS_PREFIX) ? wmClass.substr(QS_PREFIX.size()) : wmClass);
         size_t     found = std::string::npos;
 
         for (size_t i = 0; i < INV.size(); ++i) {
@@ -1074,6 +1193,13 @@ namespace AppSearch {
 
         cache[wmClass] = found;
         return found;
+    }
+
+    std::string identityClass(const std::string& wmClass, const std::string& title) {
+        if (wmClass != "org.quickshell" || title.empty())
+            return wmClass;
+
+        return "org.quickshell:" + title;
     }
 
     std::string appNameForClass(const std::string& wmClass) {
@@ -1104,12 +1230,12 @@ namespace AppSearch {
         // was thousands of string compares per frame for an answer that only
         // changes when the inventory is rebuilt.
         static std::unordered_map<std::string, size_t> cache;
-        static const void*                             cachedFor = nullptr;
+        static uint64_t                                cachedGen = 0;
 
         const auto& INV = inventory();
-        if (cachedFor != &INV) {
+        if (cachedGen != g_inventoryGen) {
             cache.clear();
-            cachedFor = &INV;
+            cachedGen = g_inventoryGen;
         }
 
         if (const auto IT = cache.find(id); IT != cache.end())
@@ -1342,6 +1468,15 @@ int main() {
     // X28. The menu's Actions section. Nautilus is the entry on this host that
     // actually ships an Actions= list, so it is the only honest fixture; assert
     // the shape rather than a literal list, which upstream is free to reorder.
+    // Quickshell's shared app_id: identity is the title, and only for that
+    // class. Everything else must come back byte-identical or the whole
+    // identity path would start lying about ordinary windows.
+    assert(identityClass("org.quickshell", "Omamail") == "org.quickshell:Omamail");
+    assert(identityClass("org.quickshell", "") == "org.quickshell");
+    assert(identityClass("kitty", "Omamail") == "kitty");
+    if (!idForClass("org.quickshell:Omamail").empty())
+        std::printf("quickshell identity: org.quickshell:Omamail -> \"%s\"\n", idForClass("org.quickshell:Omamail").c_str());
+
     assert(idForClass("definitely-not-an-app-zzz").empty());
     assert(actionsForClass("definitely-not-an-app-zzz").empty());
     if (const auto NAUT = idForClass("org.gnome.Nautilus"); !NAUT.empty()) {

@@ -523,6 +523,105 @@ static SSearchItem agentItem(const SAgentDef& AG, const std::string& prompt) {
     return item;
 }
 
+// The name Omarchy's default-agent file uses for one of our agent prefixes, or
+// "" for an agent that cannot be Omarchy's default (the "Default Agent"
+// pseudo-row among them). `agy` maps to `gemini`, exactly as this machine's
+// omarchy-default-agent overlay does for Antigravity: ~/.local/bin/gemini
+// forwards to agy, and the packaged launcher only knows the gemini name -- so
+// the Antigravity and Gemini rows ARE one default here.
+static std::string omarchyAgentName(const std::string& prefix) {
+    if (prefix == "agy" || prefix == "gemini")
+        return "gemini";
+
+    for (const char* NAME : {"grok", "claude", "opencode", "codex", "copilot", "crush", "pi"}) {
+        if (prefix == NAME)
+            return NAME;
+    }
+
+    return "";
+}
+
+static std::string agentPrefix(const SSearchItem& item) {
+    constexpr std::string_view TAG = "agent:";
+    return item.kind == EItemKind::Agent && item.id.starts_with(TAG) ? item.id.substr(TAG.size()) : std::string{};
+}
+
+static fs::path defaultAgentPath() {
+    const char* HOME = std::getenv("HOME");
+    return HOME && *HOME ? fs::path{HOME} / ".config" / "omarchy" / "defaults" / "agent" : fs::path{};
+}
+
+// Re-read only when the file CHANGES: this is asked for every agent row on every
+// frame the results are up, and `omarchy default agent codex` run in a terminal
+// must still land without a restart. Same parse as the packaged getter: the
+// first line, surrounding whitespace dropped.
+static std::string defaultAgentName() {
+    static std::string        cached;
+    static fs::file_time_type seen{};
+    static bool               loaded = false;
+
+    const auto PATH = defaultAgentPath();
+    std::error_code ec;
+    const auto MTIME = PATH.empty() ? fs::file_time_type{} : fs::last_write_time(PATH, ec);
+    if (PATH.empty() || ec) {
+        cached.clear();
+        loaded = false;
+        return cached;
+    }
+
+    if (!loaded || MTIME != seen) {
+        std::ifstream file(PATH);
+        std::string   line;
+        std::getline(file, line);
+        const auto FIRST = line.find_first_not_of(" \t\r\n");
+        const auto LAST  = line.find_last_not_of(" \t\r\n");
+        cached = FIRST == std::string::npos ? std::string{} : line.substr(FIRST, LAST - FIRST + 1);
+        seen   = MTIME;
+        loaded = true;
+    }
+
+    return cached;
+}
+
+bool canBeDefaultAgent(const SSearchItem& item) {
+    return !omarchyAgentName(agentPrefix(item)).empty();
+}
+
+bool isDefaultAgent(const SSearchItem& item) {
+    const auto NAME = omarchyAgentName(agentPrefix(item));
+    return !NAME.empty() && NAME == defaultAgentName();
+}
+
+bool setDefaultAgent(const SSearchItem& item) {
+    const auto NAME = omarchyAgentName(agentPrefix(item));
+    const auto PATH = defaultAgentPath();
+    if (NAME.empty() || PATH.empty())
+        return false;
+
+    // Written straight to the file, NOT through `omarchy default agent`: that
+    // command also installs the agent and LAUNCHES it, and a double tap in a
+    // search field must not open a terminal. Temp file + rename, so a reader
+    // never sees it half-written.
+    std::error_code ec;
+    fs::create_directories(PATH.parent_path(), ec);
+
+    auto tmp = PATH;
+    tmp += ".hyprdrive-tmp";
+    {
+        std::ofstream file(tmp, std::ios::trunc);
+        if (!(file << NAME << '\n'))
+            return false;
+    }
+
+    fs::rename(tmp, PATH, ec);
+    return !ec;
+}
+
+// The default agent's rows first, every other row in the order it already had.
+static void defaultAgentFirst(std::vector<SSearchItem>& items) {
+    std::stable_partition(items.begin(), items.end(), [](const SSearchItem& item) { return isDefaultAgent(item); });
+}
+
 std::vector<SSearchItem> searchAgents(const std::string& rawQuery) {
     std::vector<SSearchItem> items;
     if (rawQuery.empty() || rawQuery[0] != '/')
@@ -553,6 +652,7 @@ std::vector<SSearchItem> searchAgents(const std::string& rawQuery) {
             continue;
         items.push_back(agentItem(AG, prompt));
     }
+    defaultAgentFirst(items);
     return items;
 }
 
@@ -565,6 +665,7 @@ std::vector<SSearchItem> promptAllAgents(const std::string& prompt) {
             continue;
         items.push_back(agentItem(AG, prompt));
     }
+    defaultAgentFirst(items);
     return items;
 }
 
@@ -575,6 +676,7 @@ std::vector<SSearchItem> agentHelpItems() {
             continue;
         items.push_back(agentItem(AG, ""));
     }
+    defaultAgentFirst(items);
     return items;
 }
 
@@ -1753,6 +1855,52 @@ static void fileWorkerLoop() {
         g_fileDoneGen.store(gen, std::memory_order_release);
         notifyFileResultsReady();
     }
+}
+
+// See the header. The stat()s are the whole reason this is polled rather than
+// computed: they are the same three the readers below already make, and making
+// them per frame per monitor is exactly what the memo exists to stop.
+uint64_t searchInputsGeneration() {
+    using clock = std::chrono::steady_clock;
+    static clock::time_point lastPoll{};
+    static uint64_t          fsFingerprint = 0;
+    static bool              polled        = false;
+
+    const auto NOW = clock::now();
+    if (!polled || NOW - lastPoll >= std::chrono::milliseconds(250)) {
+        polled   = true;
+        lastPoll = NOW;
+
+        uint64_t h = 1469598103934665603ULL;
+        const auto mix = [&h](uint64_t v) {
+            h ^= v;
+            h *= 1099511628211ULL;
+        };
+
+        const char* HOME = std::getenv("HOME");
+
+        struct stat st {};
+        mix(stat("/usr/share/omarchy/default/omarchy/omarchy-menu.jsonc", &st) == 0 ? static_cast<uint64_t>(st.st_mtime) : 0);
+        if (HOME) {
+            const std::string USERMENU = std::string(HOME) + "/.config/omarchy/extensions/omarchy-menu.jsonc";
+            mix(stat(USERMENU.c_str(), &st) == 0 ? static_cast<uint64_t>(st.st_mtime) : 0);
+
+            // Which agents are logged in: one directory mtime, the same one
+            // readyAgentIds() keys its own cache on.
+            const std::string USAGE = agentUsageDir();
+            mix(!USAGE.empty() && stat(USAGE.c_str(), &st) == 0 ? static_cast<uint64_t>(st.st_mtime) : 0);
+
+            // ...and which of them is Omarchy's default, because that decides
+            // the ORDER of the AI & Tools column.
+            const auto AGENT = defaultAgentPath();
+            mix(!AGENT.empty() && stat(AGENT.c_str(), &st) == 0 ? static_cast<uint64_t>(st.st_mtime) : 0);
+        }
+
+        fsFingerprint = h;
+    }
+
+    // The worker's own counter needs no poll and must not wait for one.
+    return fsFingerprint ^ (g_fileDoneGen.load(std::memory_order_acquire) * 1099511628211ULL);
 }
 
 std::vector<SSearchItem> fileResults() {

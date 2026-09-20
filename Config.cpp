@@ -18,11 +18,14 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <initializer_list>
+#include <array>
 #include <optional>
 #include <regex>
+#include <span>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -148,6 +151,22 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.stack");
                 return dispatcherFactoryLua(L, "stack");
+            },
+        },
+        {
+            // A diagnostic, and in the table for the same reason the rest are:
+            // a Lua config reaches dispatchers ONLY through these bindings, so
+            // one that is not here cannot be called at all (user, 2026-09-19:
+            // "attempt to call a nil value (field 'debug')").
+            .name            = "debug",
+            .argPattern      = std::regex{"^(frames)$"},
+            .defaultArg      = "frames",
+            .typeArgError    = "expected a string argument",
+            .invalidArgError = "expected: frames",
+            .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
+            .luaLegacy       = [](lua_State* L) {
+                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
+                return dispatcherFactoryLua(L, "debug");
             },
         },
         {
@@ -547,6 +566,10 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CBoolValue>(KEY("dock:notification_counter"),
                                   "hyprgnomedock: red count badge on the icon (D2D show-icons-notifications-counter)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:emblems"), "hyprgnomedock: draw Unity LauncherEntry emblems at all (D2D show-icons-emblems)", true));
+    // DockTilt (user, 2026-09-14): the card lean from dragos.shastasia.com, in
+    // two halves the panel switches separately. Both off leaves the flat squish.
+    addKey(makeShared<CBoolValue>(KEY("dock:hover_tilt"), "dock icons lean toward the pointer in 3D while hovered, and spring flat on leave", true));
+    addKey(makeShared<CBoolValue>(KEY("dock:press_tilt"), "a pressed dock icon leans further in toward the press point, with a glare where it is pressed", true));
     addKey(makeShared<CBoolValue>(KEY("dock:dance_urgent"), "hyprgnomedock: wiggle an urgent app's icon (D2D dance-urgent-applications)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:urgent_notify"),
                                   "hyprgnomedock: reveal the dock when an app goes urgent (D2D show-dock-urgent-notify)", true));
@@ -704,18 +727,21 @@ void registerConfig() {
 }
 
 int getGestureDistance() {
-    return std::max<int>(1, getValue<int>("plugin:hyprdrive:gesture_distance"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:gesture_distance");
+    return std::max<int>(1, sc<int>(*VAL));
 }
 
 float getGestureDetent() {
     // Clamped again here rather than trusted from the key: |K| >= 1 makes the
     // warp non-monotonic, and a non-monotonic warp means the cards run backwards
     // mid-drag. Cheap insurance against a hand-edited hyprland.conf.
-    return std::clamp(getValue<float>("plugin:hyprdrive:gesture_detent"), 0.F, 0.9F);
+    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:gesture_detent");
+    return std::clamp(sc<float>(*VAL), 0.F, 0.9F);
 }
 
 bool getGestureDetentLabel() {
-    return getValue<int>("plugin:hyprdrive:gesture_detent_label") != 0;
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:gesture_detent_label");
+    return *VAL != 0;
 }
 
 std::string getGestureDetentSound() {
@@ -779,24 +805,59 @@ static CHyprColor readableOn(const CHyprColor& bg, std::initializer_list<CHyprCo
     return relLuma(bg) <= 0.55F ? CHyprColor{1.F, 1.F, 1.F, 1.F} : CHyprColor{0.12F, 0.12F, 0.12F, 1.F};
 }
 
+// How often the theme file is looked at, at most. omarchyTheme() sits behind
+// six colour accessors and every one of those is read per card per frame, so
+// the mtime check ran -- getenv, a path concatenation and a stat() -- thousands
+// of times a second to notice a file the user changes by hand. Same number and
+// the same reasoning as the dock's FAVORITES_POLL_MS.
+static constexpr float THEME_POLL_MS = 500.F;
+
+// Bumped by invalidateThemeCache(); every cache below re-checks when the number
+// it last saw is stale. A counter rather than a flag because there is more than
+// one cache and each has to see the invalidation exactly once.
+static uint64_t g_themeGeneration = 1;
+
+void invalidateThemeCache() {
+    ++g_themeGeneration;
+}
+
 // Omarchy writes the active palette into colors.toml on `omarchy theme set`
-// and reloads Hyprland. Cached on mtime so a frame does not reopen the file.
-static SOmarchyThemeColors omarchyTheme() {
+// and reloads Hyprland. Cached on mtime so a frame does not reopen the file,
+// and the mtime itself behind THEME_POLL_MS so a frame does not stat it either.
+//
+// `last` is what the previous FULL check resolved to, and the throttled path
+// returns exactly that -- handing back `cachedTheme` would resurrect a palette
+// whose file has since gone away.
+static const SOmarchyThemeColors& omarchyTheme() {
+    static const SOmarchyThemeColors  NONE{};
+    static SOmarchyThemeColors        cachedTheme;
+    static const SOmarchyThemeColors* last = &NONE;
+    static std::string                cachedPath;
+    static time_t                     cachedMtime = 0;
+    static Time::steady_tp            checkedAt{};
+    static uint64_t                   seenGeneration = 0;
+
+    const auto NOW = Time::steadyNow();
+    if (seenGeneration == g_themeGeneration && std::chrono::duration<float, std::milli>(NOW - checkedAt).count() < THEME_POLL_MS)
+        return *last;
+
+    checkedAt      = NOW;
+    seenGeneration = g_themeGeneration;
+    last           = &NONE;
+
     const char* const STATE = std::getenv("XDG_STATE_HOME");
     const char* const HOME  = std::getenv("HOME");
     const std::string PATH  = (STATE && *STATE) ? std::string{STATE} + "/omarchy/current/theme/colors.toml" :
                               (HOME && *HOME)   ? std::string{HOME} + "/.local/state/omarchy/current/theme/colors.toml" :
                                                   std::string{};
     if (PATH.empty())
-        return {};
+        return NONE;
 
     struct stat st {};
     if (stat(PATH.c_str(), &st) != 0)
-        return {};
+        return NONE;
 
-    static std::string         cachedPath;
-    static time_t              cachedMtime = 0;
-    static SOmarchyThemeColors cachedTheme;
+    last = &cachedTheme;
 
     if (cachedTheme.valid && cachedPath == PATH && cachedMtime == st.st_mtime)
         return cachedTheme;
@@ -879,12 +940,12 @@ static SOmarchyThemeColors omarchyTheme() {
 }
 
 static std::optional<uint32_t> omarchyThemeBackgroundRgb() {
-    const auto T = omarchyTheme();
+    const auto& T = omarchyTheme();
     return T.valid ? std::optional<uint32_t>(T.background) : std::nullopt;
 }
 
 bool isLightTheme() {
-    const auto T = omarchyTheme();
+    const auto& T = omarchyTheme();
     if (T.valid)
         return T.isLight;
     const auto BG = dockBackgroundColor();
@@ -893,31 +954,36 @@ bool isLightTheme() {
 }
 
 CHyprColor themeForeground() {
-    const auto T = omarchyTheme();
+    const auto& T = omarchyTheme();
     if (T.valid)
         return colorFromArgb(T.foreground, 1.F);
     return isLightTheme() ? CHyprColor{0.08F, 0.08F, 0.08F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 1.F};
 }
 
 CHyprColor themeMutedText() {
-    const auto T  = omarchyTheme();
+    const auto& T = omarchyTheme();
     const auto BG = T.valid ? colorFromArgb(T.background, 1.F) : dockBackgroundColor();
     const auto FG = themeForeground();
 
     // `muted` in colors.toml is often a surface/overlay, not body text. Prefer
     // light_foreground (Omarchy subtext) then dark_foreground, then muted —
     // whichever still contrasts with the plate.
-    std::vector<CHyprColor> cands;
+    //
+    // A fixed array, not a vector: three candidates at most, and this is read
+    // once per label per frame -- the vector was a heap allocation to hold
+    // 48 bytes of colour.
+    std::array<CHyprColor, 3> cands{};
+    size_t                    nCands = 0;
     if (T.valid && T.hasLightFg)
-        cands.push_back(colorFromArgb(T.lightForeground, 1.F));
+        cands[nCands++] = colorFromArgb(T.lightForeground, 1.F);
     if (T.valid && T.hasDarkFg)
-        cands.push_back(colorFromArgb(T.darkForeground, 1.F));
+        cands[nCands++] = colorFromArgb(T.darkForeground, 1.F);
     if (T.valid)
-        cands.push_back(colorFromArgb(T.muted, 1.F));
+        cands[nCands++] = colorFromArgb(T.muted, 1.F);
 
     CHyprColor best = FG;
     float      bestD = -1.F;
-    for (const auto& c : cands) {
+    for (const auto& c : std::span{cands.data(), nCands}) {
         const float vsBg = lumaDelta(c, BG);
         if (vsBg < 0.22F)
             continue;
@@ -936,27 +1002,27 @@ CHyprColor themeMutedText() {
 }
 
 CHyprColor themeAccent() {
-    const auto T = omarchyTheme();
+    const auto& T = omarchyTheme();
     if (T.valid)
         return colorFromArgb(T.accent, 1.F);
     return highlightColor();
 }
 
 CHyprColor themeHeading() {
-    const auto T  = omarchyTheme();
+    const auto& T = omarchyTheme();
     const auto BG = T.valid ? colorFromArgb(T.background, 1.F) : dockBackgroundColor();
     return readableOn(BG, {themeAccent(), themeForeground()});
 }
 
 CHyprColor themeSelection() {
-    const auto T = omarchyTheme();
+    const auto& T = omarchyTheme();
     if (T.valid)
         return colorFromArgb(T.selection, 1.F);
     return highlightColor().modifyA(0.35F);
 }
 
 CHyprColor themeSelectedFill() {
-    const auto T  = omarchyTheme();
+    const auto& T = omarchyTheme();
     const auto BG = T.valid ? colorFromArgb(T.background, 1.F) : dockBackgroundColor();
     const auto SEL = themeSelection();
     if (lumaDelta(SEL, BG) >= 0.10F)
@@ -975,19 +1041,24 @@ CHyprColor themeSelectedText() {
 }
 
 CHyprColor themeUrgent() {
-    const auto T = omarchyTheme();
+    const auto& T = omarchyTheme();
     if (T.valid && T.hasUrgent)
         return colorFromArgb(T.urgent, 1.F);
     return CHyprColor{0.95F, 0.35F, 0.35F, 1.F};
 }
 
 CHyprColor highlightColor() {
-    if (const auto HIGHLIGHT = getValue<::Config::CGradientValueData>("plugin:hyprdrive:col_highlight");
-        !HIGHLIGHT.m_colors.empty() && HIGHLIGHT.m_colors[0].a > 0.001F)
-        return HIGHLIGHT.m_colors[0];
+    // The accent is read a dozen times a frame per monitor -- every tile ring,
+    // every strip cell, every selected row. Through getValue<CGradientValueData>
+    // each of those was two full copies of a vector-owning gradient; the handles
+    // are resolved once and only the ONE colour that is wanted is copied out.
+    static auto& HIGHLIGHT = valueRef<::Config::IComplexConfigValue>("plugin:hyprdrive:col_highlight");
+    if (const auto* G = gradientPtr(HIGHLIGHT); G && !G->m_colors.empty() && G->m_colors[0].a > 0.001F)
+        return G->m_colors[0];
 
-    const auto ACCENT = getValue<::Config::CGradientValueData>("general:col.active_border");
-    return ACCENT.m_colors.empty() ? CHyprColor{1.F, 1.F, 1.F, 1.F} : ACCENT.m_colors[0];
+    static auto& ACCENT = valueRef<::Config::IComplexConfigValue>("general:col.active_border");
+    const auto*  G      = gradientPtr(ACCENT);
+    return (!G || G->m_colors.empty()) ? CHyprColor{1.F, 1.F, 1.F, 1.F} : G->m_colors[0];
 }
 
 CHyprColor highlightForeground() {
@@ -1005,21 +1076,47 @@ CHyprColor highlightForeground() {
 }
 
 int themeRounding() {
-    return std::max(0, getValue<int>("decoration:rounding"));
+    static auto& VAL = valueRef<Hyprlang::INT>("decoration:rounding");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 float themeRoundingPower() {
-    const auto POWER = getValue<float>("decoration:rounding_power");
+    static auto& VAL   = valueRef<Hyprlang::FLOAT>("decoration:rounding_power");
+    const auto   POWER = sc<float>(*VAL);
     return std::clamp(POWER > 0.F ? POWER : 2.F, 1.F, 10.F);
 }
 
 // Omarchy's `omarchy font set` writes ~/.config/fontconfig/fonts.conf so the
 // "monospace" alias resolves to the chosen family. Hyprland's unset default is
 // Sans; that is not Omarchy's font. A user-set misc:font_family still wins.
-std::string themeFontFamily() {
+//
+// Behind THEME_POLL_MS, and by reference. This runs inside OverviewRender::text()
+// for every caller that does not pin a family -- which is most of them -- so it
+// was a getenv, a stat() and two std::string copies per glyph-cache PROBE. The
+// misc:font_family read is inside the gate with everything else: it only moves
+// on a reload, and a reload invalidates this.
+const std::string& themeFontFamily() {
+    static std::string     resolved{"monospace"};   // what the last full check answered
+    static std::string     parsed;                  // last successful fonts.conf parse
+    static std::string     parsedPath;
+    static time_t          parsedMtime = 0;
+    static Time::steady_tp checkedAt{};
+    static uint64_t        seenGeneration = 0;
+
+    const auto NOW = Time::steadyNow();
+    if (seenGeneration == g_themeGeneration && std::chrono::duration<float, std::milli>(NOW - checkedAt).count() < THEME_POLL_MS)
+        return resolved;
+
+    checkedAt      = NOW;
+    seenGeneration = g_themeGeneration;
+
     const auto PIN = getValue<std::string>("misc:font_family");
-    if (!PIN.empty() && PIN != STRVAL_EMPTY && PIN != "Sans")
-        return PIN;
+    if (!PIN.empty() && PIN != STRVAL_EMPTY && PIN != "Sans") {
+        resolved = PIN;
+        return resolved;
+    }
+
+    resolved = "monospace";
 
     const char* const CFG  = std::getenv("XDG_CONFIG_HOME");
     const char* const HOME = std::getenv("HOME");
@@ -1027,26 +1124,26 @@ std::string themeFontFamily() {
                              (HOME && *HOME) ? std::string{HOME} + "/.config/fontconfig/fonts.conf" :
                                                std::string{};
     if (PATH.empty())
-        return "monospace";
+        return resolved;
 
     struct stat st {};
     if (stat(PATH.c_str(), &st) != 0)
-        return "monospace";
+        return resolved;
 
-    static std::string cachedPath;
-    static time_t      cachedMtime = 0;
-    static std::string cachedFamily;
+    if (parsedPath == PATH && parsedMtime == st.st_mtime && !parsed.empty()) {
+        resolved = parsed;
+        return resolved;
+    }
 
-    if (cachedPath == PATH && cachedMtime == st.st_mtime && !cachedFamily.empty())
-        return cachedFamily;
-
-    cachedPath  = PATH;
-    cachedMtime = st.st_mtime;
-    cachedFamily = "monospace";
+    parsedPath  = PATH;
+    parsedMtime = st.st_mtime;
+    parsed      = "monospace";
 
     std::ifstream in{PATH};
-    if (!in)
-        return cachedFamily;
+    if (!in) {
+        resolved = parsed;
+        return resolved;
+    }
 
     static const std::regex RE{R"(<string>([^<]+)</string>)"};
     std::string             line;
@@ -1057,15 +1154,17 @@ std::string themeFontFamily() {
         const auto NAME = match[1].str();
         if (NAME.empty() || NAME == "monospace")
             continue;
-        cachedFamily = NAME;
+        parsed = NAME;
         break;
     }
 
-    return cachedFamily;
+    resolved = parsed;
+    return resolved;
 }
 
 CHyprColor dockIndicatorColor() {
-    const uint32_t ARGB = getValue<uint32_t>("plugin:hyprdrive:dock:indicator_color");
+    static auto&   VAL  = valueRef<Hyprlang::INT>("plugin:hyprdrive:dock:indicator_color");
+    const uint32_t ARGB = sc<uint32_t>(*VAL);
     if ((ARGB >> 24) == 0)
         return highlightColor();
     return colorFromArgb(ARGB);
@@ -1075,46 +1174,56 @@ CHyprColor dockIndicatorColor() {
 // opacity from ~/.config/hypr/windows.lua (`0.985 override 0.85 override`).
 static float omarchyWindowOpacity() {
     static constexpr float STOCK = 0.85F;
-    const float INACTIVE = std::clamp(getValue<float>("decoration:inactive_opacity"), 0.F, 1.F);
+    static auto& VAL      = valueRef<Hyprlang::FLOAT>("decoration:inactive_opacity");
+    const float  INACTIVE = std::clamp(sc<float>(*VAL), 0.F, 1.F);
     return std::clamp(STOCK * INACTIVE, 0.F, 1.F);
 }
 
 CHyprColor dockBackgroundColor() {
-    float OPACITY = getValue<float>("plugin:hyprdrive:dock:background_opacity");
+    static auto& OPACITYVAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:dock:background_opacity");
+    static auto& COLORVAL   = valueRef<Hyprlang::INT>("plugin:hyprdrive:dock:background_color");
+    static auto& FALLBACK   = valueRef<Hyprlang::INT>("misc:background_color");
+
+    float OPACITY = sc<float>(*OPACITYVAL);
     if (OPACITY < 0.F)
         OPACITY = omarchyWindowOpacity();
     else
         OPACITY = std::clamp(OPACITY, 0.F, 1.F);
 
-    const uint32_t ARGB = getValue<uint32_t>("plugin:hyprdrive:dock:background_color");
+    const uint32_t ARGB = sc<uint32_t>(*COLORVAL);
     uint32_t       RGB  = ARGB;
     if ((ARGB >> 24) == 0) {
         if (const auto THEME = omarchyThemeBackgroundRgb())
             RGB = *THEME;
         else
-            RGB = getValue<uint32_t>("misc:background_color");
+            RGB = sc<uint32_t>(*FALLBACK);
     }
     return colorFromArgb(RGB).modifyA(OPACITY);
 }
 
 int dockCornerRadius() {
-    return std::max(0, getValue<int>("plugin:hyprdrive:dock:corner_radius"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:dock:corner_radius");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 float getScale() {
-    return std::clamp(getValue<float>("plugin:hyprdrive:scale"), 0.1F, 0.9F);
+    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:scale");
+    return std::clamp(sc<float>(*VAL), 0.1F, 0.9F);
 }
 
 float getOpenSpeed() {
-    return std::max(0.1F, getValue<float>("plugin:hyprdrive:open_speed"));
+    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:open_speed");
+    return std::max(0.1F, sc<float>(*VAL));
 }
 
 float getCloseSpeed() {
-    return std::max(0.1F, getValue<float>("plugin:hyprdrive:close_speed"));
+    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:close_speed");
+    return std::max(0.1F, sc<float>(*VAL));
 }
 
 int getWorkspaceGap() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:workspace_gap"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:workspace_gap");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 std::string getTerminal() {
@@ -1122,28 +1231,36 @@ std::string getTerminal() {
 }
 
 ELayout getLayout() {
-    const auto LAYOUT = getValue<std::string>("plugin:hyprdrive:layout");
+    static auto& VAL    = valueRef<std::string>("plugin:hyprdrive:layout");
+    const auto   LAYOUT = *VAL;
     return LAYOUT == "horizontal" ? ELayout::HORIZONTAL : ELayout::VERTICAL;
 }
 
 bool getLeftHanded() {
-    const auto LEFT_HANDED = getValue<int>("plugin:hyprdrive:input:left_handed");
+    static auto& VAL         = valueRef<Hyprlang::INT>("plugin:hyprdrive:input:left_handed");
+    const auto   LEFT_HANDED = sc<int>(*VAL);
     if (LEFT_HANDED <= 1)
         return LEFT_HANDED != 0;
 
-    return getValue<bool>("input:left_handed");
+    static auto& HOST = valueRef<Hyprlang::INT>("input:left_handed");
+    return *HOST != 0;
 }
 
 int getDragMode() {
-    return std::clamp(getValue<int>("plugin:hyprdrive:input:drag_mode"), 0, 1);
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:input:drag_mode");
+    return std::clamp<int>(sc<int>(*VAL), 0, 1);
 }
 
 int getDragThreshold() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:input:drag_threshold"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:input:drag_threshold");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
+// The single hottest read in the plugin: animElapsedMs() divides by this, and
+// every eased thing on screen samples that at least once a frame.
 float animScale() {
-    return std::max(0.F, getValue<float>("plugin:hyprdrive:anim_scale"));
+    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:anim_scale");
+    return std::max(0.F, sc<float>(*VAL));
 }
 
 bool motionEnabled() {
@@ -1168,8 +1285,10 @@ float animElapsedMs(const Time::steady_tp& since) {
 float getTouchpadScrollFactor() {
     static constexpr float OVERVIEWTOUCHPADSCROLLFACTOR = 1.5F;
 
-    return OVERVIEWTOUCHPADSCROLLFACTOR * std::max<float>(0.F, getValue<float>("input:touchpad:scroll_factor")) *
-        std::max<float>(0.F, getValue<float>("plugin:hyprdrive:input:touchpad_scroll_factor"));
+    static auto& HOST = valueRef<Hyprlang::FLOAT>("input:touchpad:scroll_factor");
+    static auto& OURS = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:input:touchpad_scroll_factor");
+
+    return OVERVIEWTOUCHPADSCROLLFACTOR * std::max<float>(0.F, sc<float>(*HOST)) * std::max<float>(0.F, sc<float>(*OURS));
 }
 
 static EScrollAction defaultVerticalScrollAction(ELayout layout) {
@@ -1177,7 +1296,8 @@ static EScrollAction defaultVerticalScrollAction(ELayout layout) {
 }
 
 EScrollAction getVerticalScrollAction(ELayout layout) {
-    const auto MODE = std::clamp(getValue<int>("plugin:hyprdrive:input:scrolling_mode"), 0, 3);
+    static auto& VAL  = valueRef<Hyprlang::INT>("plugin:hyprdrive:input:scrolling_mode");
+    const auto   MODE = std::clamp<int>(sc<int>(*VAL), 0, 3);
 
     switch (MODE) {
         case 1: return defaultVerticalScrollAction(layout) == EScrollAction::WORKSPACE ? EScrollAction::COLUMN : EScrollAction::WORKSPACE;
@@ -1196,59 +1316,115 @@ EScrollAction getHorizontalScrollAction(ELayout layout) {
 }
 
 int getScrollEventDelay() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:input:scroll_event_delay"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:input:scroll_event_delay");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 int getWallpaperMode() {
-    return std::clamp<int>(getValue<int>("plugin:hyprdrive:wallpaper"), 0, 2);
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:wallpaper");
+    return std::clamp<int>(sc<int>(*VAL), 0, 2);
 }
 
 bool getBlur() {
-    return getValue<bool>("plugin:hyprdrive:blur");
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:blur");
+    return *VAL != 0;
 }
 
 bool getMissionControl() {
-    return getValue<bool>("plugin:hyprdrive:mission_control");
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:mission_control");
+    return *VAL != 0;
 }
 
 int getMissionControlGap() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:mission_control_gap"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:mission_control_gap");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 int getMissionControlReflowMs() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:mission_control_reflow_ms"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:mission_control_reflow_ms");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 bool getStrip() {
-    return getValue<bool>("plugin:hyprdrive:strip");
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip");
+    return *VAL != 0;
 }
 
 int getStripHeight() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:strip_height"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip_height");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 int getStripGap() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:strip_gap"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip_gap");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 float getDragMiniScale() {
-    return std::clamp(getValue<float>("plugin:hyprdrive:drag_mini_scale"), 0.05F, 1.F);
+    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:drag_mini_scale");
+    return std::clamp(sc<float>(*VAL), 0.05F, 1.F);
 }
 
 int getDragMiniMs() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:drag_mini_ms"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:drag_mini_ms");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 int getDragRecentreMs() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:drag_recentre_ms"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:drag_recentre_ms");
+    return std::max<int>(0, sc<int>(*VAL));
 }
 
 bool getTapSuper() {
-    return getValue<bool>("plugin:hyprdrive:tap_super");
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:tap_super");
+    return *VAL != 0;
 }
 
 int getTapSuperTimeoutMs() {
-    return std::max<int>(0, getValue<int>("plugin:hyprdrive:tap_super_timeout_ms"));
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:tap_super_timeout_ms");
+    return std::max<int>(0, sc<int>(*VAL));
+}
+
+// See the note in Config.hpp. Values are read through the registration objects
+// rather than through valueRef, so this needs no second spelling of any key --
+// and therefore cannot drift from what is actually registered.
+uint64_t dockKeyFingerprint() {
+    static uint64_t unknownCounter = 0;
+
+    uint64_t   h      = 14695981039346656037ULL;   // FNV-1a
+    const auto mix    = [&h](const uint64_t v) { h = (h ^ v) * 1099511628211ULL; };
+    const auto mixStr = [&mix](const std::string_view s) { mix(std::hash<std::string_view>{}(s)); };
+
+    const std::string PREFIX = std::string{Compat::KEY_PREFIX} + "dock:";
+
+    for (const auto& VALUE : g_modernValues) {
+        if (!VALUE)
+            continue;
+
+        const std::string_view NAME{VALUE->name()};
+        if (!NAME.starts_with(PREFIX))
+            continue;
+
+        mixStr(NAME);
+
+        if (const auto* V = dynamic_cast<::Config::Values::CBoolValue*>(VALUE.get()))
+            mix(V->value() ? 1U : 0U);
+        else if (const auto* V = dynamic_cast<::Config::Values::CIntValue*>(VALUE.get()))
+            mix(sc<uint64_t>(V->value()));
+        else if (const auto* V = dynamic_cast<::Config::Values::CColorValue*>(VALUE.get()))
+            mix(sc<uint64_t>(V->value()));
+        else if (const auto* V = dynamic_cast<::Config::Values::CFloatValue*>(VALUE.get())) {
+            const float F    = V->value();
+            uint32_t    bits = 0;
+            std::memcpy(&bits, &F, sizeof(bits));
+            mix(bits);
+        } else if (const auto* V = dynamic_cast<::Config::Values::CStringValue*>(VALUE.get()))
+            mixStr(V->value());
+        else
+            mix(++unknownCounter);
+    }
+
+    return h;
 }
 
 ::Config::CCssGapData getCssGapData(const std::string& name) {
@@ -1264,24 +1440,31 @@ int getTapSuperTimeoutMs() {
 }
 
 int getShadowEnabled() {
-    return getValue<bool>("plugin:hyprdrive:shadow:enabled") ? 1 : 0;
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:shadow:enabled");
+    return *VAL != 0 ? 1 : 0;
 }
 
 int getShadowRange() {
-    return getValue<int>("plugin:hyprdrive:shadow:range");
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:shadow:range");
+    return sc<int>(*VAL);
 }
 
 int getShadowRenderPower() {
-    return getValue<int>("plugin:hyprdrive:shadow:render_power");
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:shadow:render_power");
+    return sc<int>(*VAL);
 }
 
-std::optional<::Config::CGradientValueData> getShadowColor() {
+// By pointer, not by optional-of-copy: the card shadow asks for this once per
+// card and once per strip cell, and a CGradientValueData copy is a heap
+// allocation. nullptr means "not pinned" exactly as std::nullopt did.
+const ::Config::CGradientValueData* getShadowColor() {
     constexpr auto NAME = "plugin:hyprdrive:shadow:color";
 
     if (!::Config::mgr()->getConfigValue(NAME).setByUser)
-        return std::nullopt;
+        return nullptr;
 
-    return getValue<::Config::CGradientValueData>(NAME);
+    static auto& VAL = valueRef<::Config::IComplexConfigValue>(NAME);
+    return gradientPtr(VAL);
 }
 
 }

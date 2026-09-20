@@ -38,6 +38,11 @@ class IOverviewFramePolicy {
     virtual bool shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Time::steady_tp& now) = 0;
     virtual bool shouldAllowRealtimePreviewSchedule()                                              = 0;
     virtual bool shouldSuppressRenderDamage() const                                                = 0;
+    // One line naming everything on this monitor that is still asking for
+    // frames, for `hyprdrive:debug frames`. Part of the frame policy rather
+    // than a debug side-channel on purpose: whatever decides to keep painting
+    // is what has to be able to say why (2026-09-15).
+    virtual std::string frameDebugLine() const                                                     = 0;
 
     // Set while the overview is drawing itself, so its own damage does not come
     // back round as a reason to draw again.

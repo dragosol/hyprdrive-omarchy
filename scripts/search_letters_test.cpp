@@ -165,6 +165,27 @@ int main() {
         std::printf("search_letters_test: %d/%d failed\n", g_fail, g_run);
         return 1;
     }
+    // Two views (monitors) laying the same letters out at different scales
+    // must not disturb each other: each settles at its own positions, and
+    // alternating the two every frame never restarts the displacement ease.
+    {
+        SAnimator A;
+        const auto T0 = clock::now();
+        A.sync("ab", T0);
+        const auto SETTLED = T0 + std::chrono::milliseconds(static_cast<int>(std::max(ENTRANCE_MS, DISPLACE_MS)) + 5);
+        A.place({20.F, 20.F}, 2.F, 2.F, T0, 0);
+        A.place({12.F, 12.F}, 1.F, 1.25F, T0, 1);
+        bool steady = true;
+        for (int f = 1; f < 60; ++f) {
+            const auto T  = SETTLED + std::chrono::milliseconds(16 * f);
+            const auto P0 = A.place({20.F, 20.F}, 2.F, 2.F, T, 0);
+            const auto P1 = A.place({12.F, 12.F}, 1.F, 1.25F, T, 1);
+            steady = steady && P0.size() == 2 && P1.size() == 2 && P0[1].x == 22.F && P1[1].x == 13.F;
+        }
+        ok(steady, "two views alternate every frame without moving each other's letters");
+        ok(!A.busy(SETTLED + std::chrono::milliseconds(16 * 60)), "two settled views are not busy");
+    }
+
     std::printf("search_letters_test: %d checks OK\n", g_run);
     return 0;
 }

@@ -41,6 +41,8 @@ KEY_META = [
     {"key": PLUGIN + "dock:autohide_ms", "kind": "int", "group": "dock", "label": "Autohide slide (ms)", "min": 0, "max": 2000, "step": 10},
     {"key": PLUGIN + "dock:show_apps_button", "kind": "bool", "group": "dock", "label": "Show Applications button"},
     {"key": PLUGIN + "dock:show_favorites", "kind": "bool", "group": "dock", "label": "Pinned favorites"},
+    {"key": PLUGIN + "dock:hover_tilt", "kind": "bool", "group": "dock", "label": "Hover tilt"},
+    {"key": PLUGIN + "dock:press_tilt", "kind": "bool", "group": "dock", "label": "Press tilt"},
     # Textures
     {"key": PLUGIN + "prefilter_below", "kind": "float", "group": "textures", "label": "Mipmap prefilter below", "min": 0, "max": 1, "step": 0.05},
     {"key": PLUGIN + "live_layer_frost", "kind": "bool", "group": "textures", "label": "Live layer frost"},
@@ -63,6 +65,7 @@ DEFAULT_GESTURES = [
 ACTIONS = [
     {"value": "overview", "label": "Overview (follow fingers)"},
     {"value": "workspace", "label": "Workspace swipe"},
+    {"value": "scroll", "label": "Scroll workspace columns"},
     {"value": "close", "label": "Close window"},
     {"value": "fullscreen", "label": "Fullscreen"},
     {"value": "maximize", "label": "Maximize"},
@@ -271,6 +274,17 @@ def save_store(s):
     os.replace(tmp, STORE)
 
 
+def write_fragment(path, text):
+    # Hyprland reloads its whole config (~100 ms stall) on any write under
+    # ~/.config/hypr, so leave an unchanged fragment untouched.
+    try:
+        if path.read_text() == text:
+            return
+    except OSError:
+        pass
+    path.write_text(text)
+
+
 def lua_lit(v):
     if isinstance(v, bool):
         return "true" if v else "false"
@@ -342,7 +356,7 @@ def write_panel_fragment(store):
     body.append("")
     FRAGDIR.mkdir(parents=True, exist_ok=True)
     path = FRAGDIR / PANEL_FRAG
-    path.write_text(compose_fragment("\n".join(body), path))
+    write_fragment(path, compose_fragment("\n".join(body), path))
     return path
 
 
@@ -418,7 +432,7 @@ def write_gesture_fragment(gestures):
     lines.append("")
     FRAGDIR.mkdir(parents=True, exist_ok=True)
     path = FRAGDIR / GESTURE_FRAG
-    path.write_text(compose_fragment("\n".join(lines), path))
+    write_fragment(path, compose_fragment("\n".join(lines), path))
     return path
 
 

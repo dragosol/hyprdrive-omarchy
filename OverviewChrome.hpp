@@ -26,21 +26,30 @@ struct SOverviewShadowConfig {
     Config::CGradientValueData color;
 };
 
+// Read once per card AND once per strip cell, every frame. It used to cost
+// seven map lookups plus TWO unconditional CGradientValueData copies -- the
+// plugin's colour and the compositor's, each a heap allocation, one of which
+// was always thrown away. The colours are now looked at through pointers and
+// exactly one copy is made, into the struct the shadow pass element takes by
+// value; the two compositor ints are resolved to a handle once per call site.
 inline SOverviewShadowConfig getOverviewShadowConfig() {
-    const auto enabled     = ScrollOverview::Config::getShadowEnabled();
-    const auto range       = ScrollOverview::Config::getShadowRange();
-    const auto renderPower = ScrollOverview::Config::getShadowRenderPower();
-    const auto color       = ScrollOverview::Config::getShadowColor();
+    const auto  enabled     = ScrollOverview::Config::getShadowEnabled();
+    const auto  range       = ScrollOverview::Config::getShadowRange();
+    const auto  renderPower = ScrollOverview::Config::getShadowRenderPower();
+    const auto* color       = ScrollOverview::Config::getShadowColor();
 
-    const auto globalRange       = ScrollOverview::Config::getValue<int>("decoration:shadow:range");
-    const auto globalRenderPower = ScrollOverview::Config::getValue<int>("decoration:shadow:render_power");
-    const auto globalColor       = ScrollOverview::Config::getValue<::Config::CGradientValueData>("decoration:shadow:color");
+    static auto& globalRangeVal       = ScrollOverview::Config::valueRef<Hyprlang::INT>("decoration:shadow:range");
+    static auto& globalRenderPowerVal = ScrollOverview::Config::valueRef<Hyprlang::INT>("decoration:shadow:render_power");
+    static auto& globalColorVal       = ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>("decoration:shadow:color");
+
+    const auto globalRange       = sc<int>(*globalRangeVal);
+    const auto globalRenderPower = sc<int>(*globalRenderPowerVal);
 
     Config::CGradientValueData shadowColor;
     if (color && !color->m_colors.empty())
         shadowColor = *color;
-    else if (!globalColor.m_colors.empty())
-        shadowColor = globalColor;
+    else if (const auto* globalColor = ScrollOverview::Config::gradientPtr(globalColorVal); globalColor && !globalColor->m_colors.empty())
+        shadowColor = *globalColor;
 
     return {
         .enabled      = !!enabled,

@@ -4,12 +4,18 @@
 #include "Compat.hpp"
 #include "Scratchpad.hpp"
 #include "Placement.hpp"
+#include "WorkspacePlan.hpp"
+#include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/config/shared/workspace/WorkspaceRuleManager.hpp>
 
 // The detent tick spawns through CProcess::runAsync. Included explicitly rather
 // than leaned on transitively: this is the only user in this TU, and a silent
 // loss of the transitive path would fail at the one call site that matters.
 #include <hyprutils/os/Process.hpp>
 #include <unistd.h> // access(X_OK) on the detent sound before spawning it
+
+// WorkspacePlan facts: which empty desktops each overview holds as phantoms.
+static void forgetPhantomsOf(const CScrollOverview* overview);
 using namespace OvInternal; // opted in here rather than leaked from the header
 
 // The definition behind the global declaration in OverviewInternal.hpp. One real
@@ -51,7 +57,7 @@ CScrollOverview::~CScrollOverview() {
         realtimePreviewTimer = nullptr;
     }
     frost.releaseGL();
-    OverviewWindow::releaseTexturePrefilterCache();
+    OverviewWindow::trimTexturePrefilterCache();
     const auto MONITOR = pMonitor.lock();
     const auto WORKSPACE = MONITOR ? MONITOR->m_activeWorkspace : PHLWORKSPACE{};
     emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(WORKSPACE, Desktop::focusState()->window()), false);
@@ -69,6 +75,7 @@ CScrollOverview::~CScrollOverview() {
     images.clear(); // otherwise we get a vram leak
     trailingWorkspace.reset();
     gapWorkspaces.clear();
+    forgetPhantomsOf(this);
     if (scrollOverviews().empty())
         Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
     if (const auto MONITOR = pMonitor.lock())
@@ -166,6 +173,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // one curve while the panel it uncovers grows on another reads as two events.
     Animation::mgr()->createAnimation(0.F, searchDock, searchAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(0.F, scratchpadReveal, searchAnimConfig, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(0.F, altStripsReveal, searchAnimConfig, AVARDAMAGE_NONE);
     syncPluginAnimEnabled();
 
     scale->setUpdateCallback([this](auto) { damage(); });
@@ -174,19 +182,20 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     workspaceInsertFadeProgress->setUpdateCallback([this](auto) { damage(); });
     reflowPacer->setUpdateCallback([this](auto) { damage(); });
     resultsBand->setUpdateCallback([this](auto) {
-        g_search.layout.bandH = resultsBand->value();
+        searchLayoutHere().bandH = resultsBand->value();
         damage();
     });
     resultsWidth->setUpdateCallback([this](auto) { damage(); });
     searchDock->setUpdateCallback([this](auto) { damage(); });
     scratchpadReveal->setUpdateCallback([this](auto) { damage(); });
+    altStripsReveal->setUpdateCallback([this](auto) { damage(); });
 
     // A previous overview's band must not open the next one already pushed, nor
     // its pill start docked. The published layout is the ONLY group of session
     // state this may touch: the query and the nav zone belong to the dispatcher
     // that asked for the overview, and a second monitor opening must not wipe
     // the query the first one is showing.
-    g_search.resetLayout();
+    g_search.resetLayout(PMONITOR ? PMONITOR->m_id : MONITOR_INVALID);
 
     if (!swipe)
         *scale = ScrollOverview::Config::getScale();
@@ -250,13 +259,114 @@ void CScrollOverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::stea
     }
 }
 
-// E8-c, GNOME-style: the wallpaper at native size, once per frame, so each card
-// can composite it with shader rounding (real clip + AA) instead of a painted
-// mask. Re-rendered every frame because wallpapers animate.
-// ponytail: no dirty tracking; add a dirty flag if profiling ever cares.
+// Y17 (GPU, 2026-09-14). The two wallpaper caches below are rebuilt only when
+// something they draw changed. Two halves make that safe:
+//
+//   1. frost.cardWallpaperDirty / frost.backdropDirty, set from the wallpaper
+//      LAYER COMMIT hook (shouldHandleSurfaceDamage) -- the same damageSurface
+//      signal the overview already trusts to repaint a live tile. If a commit
+//      did not reach that hook the tile would be stale too, so the caches are
+//      exactly as fresh as the rest of the overview.
+//
+//   2. this signature, for everything a commit does NOT report: the monitor's
+//      pixel size, transform and scale, the render target's format and image
+//      description, renderBackground's inputs (the wallpaper texture object,
+//      its fade-in opacity animation and the misc:* keys that pick what it
+//      paints), each wallpaper layer's identity/geometry/alpha/texture (an
+//      alpha fade or slide animates with no commit at all), and -- for the
+//      backdrop only -- the blur knobs blurFramebufferWithDamage reads
+//      globally and updateBackdropBlurCache does NOT force (brightness,
+//      vibrancy, vibrancy_darkness, the blend-path switch), so a theme reload
+//      rebuilds the cached blur.
+//
+// Cost is a handful of pointer reads and config-map lookups, twice a frame.
+static inline void frostSigMix(uint64_t& h, uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+}
+
+static inline void frostSigMixD(uint64_t& h, double v) {
+    static_assert(sizeof(uint64_t) == sizeof(double));
+    frostSigMix(h, __builtin_bit_cast(uint64_t, v));
+}
+
+static inline void frostSigMixP(uint64_t& h, const void* p) {
+    frostSigMix(h, sc<uint64_t>(rc<uintptr_t>(p)));
+}
+
+static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLayer, bool includeBlurKnobs) {
+    // Never 0: 0 is the "no signature yet" sentinel in COverviewFrostCache.
+    uint64_t h = 0xcbf29ce484222325ULL;
+    if (!monitor)
+        return h;
+
+    frostSigMixD(h, monitor->m_pixelSize.x);
+    frostSigMixD(h, monitor->m_pixelSize.y);
+    frostSigMixD(h, monitor->m_transformedSize.x);
+    frostSigMixD(h, monitor->m_transformedSize.y);
+    frostSigMix(h, sc<uint64_t>(monitor->m_transform));
+    frostSigMixD(h, monitor->m_scale);
+
+    if (const auto& CURRENTFB = g_pHyprRenderer->m_renderData.currentFB; CURRENTFB) {
+        frostSigMix(h, sc<uint64_t>(CURRENTFB->m_drmFormat));
+        frostSigMixP(h, CURRENTFB->imageDescription().get());
+    }
+
+    // renderBackground(): the hyprpaper/fallback wallpaper and its fade.
+    frostSigMixP(h, monitor->m_background.get());
+    if (monitor->m_backgroundOpacity)
+        frostSigMixD(h, monitor->m_backgroundOpacity->value());
+    frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:background_color")));
+    frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:disable_hyprland_logo")));
+    frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:disable_splash_rendering")));
+
+    const auto MIXLAYER = [&h](const PHLLS& ls) {
+        if (!Desktop::View::validMapped(ls))
+            return;
+
+        frostSigMixP(h, ls.get());
+        const auto BOX = ls->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+        frostSigMixD(h, BOX.x);
+        frostSigMixD(h, BOX.y);
+        frostSigMixD(h, BOX.width);
+        frostSigMixD(h, BOX.height);
+        frostSigMixD(h, ls->alpha().value());
+        if (const auto RES = ls->m_layerSurface ? ls->m_layerSurface->m_surface.lock() : SP<CWLSurfaceResource>{})
+            frostSigMixP(h, RES->m_current.texture.get());
+    };
+
+    for (auto const& ls : monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND])
+        MIXLAYER(ls.lock());
+
+    // The card fill also composites BOTTOM (Omarchy's wallpaper often lives
+    // there); the backdrop does not -- renderGlobalWallpaper draws BACKGROUND
+    // only -- so it must not be keyed on it.
+    if (includeBottomLayer) {
+        for (auto const& ls : monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM])
+            MIXLAYER(ls.lock());
+    }
+
+    if (includeBlurKnobs) {
+        frostSigMixD(h, ScrollOverview::Config::getValue<float>("decoration:blur:brightness"));
+        frostSigMixD(h, ScrollOverview::Config::getValue<float>("decoration:blur:vibrancy"));
+        frostSigMixD(h, ScrollOverview::Config::getValue<float>("decoration:blur:vibrancy_darkness"));
+        frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("render:use_shader_blur_blend")));
+    }
+
+    return h;
+}
+
+// E8-c, GNOME-style: the wallpaper at native size, so each card can composite
+// it with shader rounding (real clip + AA) instead of a painted mask.
+// Y17: no longer re-rendered every frame -- see wallpaperCacheSignature above
+// for the two halves of the invalidation.
 void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp& now) {
     if (!monitor || !g_pHyprRenderer->m_renderData.currentFB)
         return;
+
+    if (const auto SIG = wallpaperCacheSignature(monitor, /* includeBottomLayer */ true, /* includeBlurKnobs */ false); SIG != frost.lastCardWallpaperSig) {
+        frost.cardWallpaperDirty  = true;
+        frost.lastCardWallpaperSig = SIG;
+    }
 
     const auto FBSIZE     = monitor->m_pixelSize;
     const auto RENDERSIZE = monitor->m_transformedSize;
@@ -269,9 +379,19 @@ void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::stea
             frost.cardWallpaperFB->release();
         if (!frost.cardWallpaperFB || !frost.cardWallpaperFB->alloc(sc<int>(FBSIZE.x), sc<int>(FBSIZE.y), FBFORMAT))
             return;
+        // A fresh allocation holds nothing; the size/format check above is also
+        // what catches a mode or scale change.
+        frost.cardWallpaperDirty = true;
     }
 
     frost.cardWallpaperFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+
+    // Y17: everything below re-renders the whole wallpaper into the FB. The
+    // cached pixels do not depend on the overview's scale or view offset -- the
+    // cards sample this FB through their own UVs -- so nothing per-frame forces
+    // a rebuild.
+    if (!frost.cardWallpaperDirty)
+        return;
 
     const CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
 
@@ -301,6 +421,8 @@ void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::stea
         }
         OverviewRender::flushPass(monitor);
     }
+
+    frost.cardWallpaperDirty = false;
 }
 
 // Omarchy lockscreen (shell/plugins/lock/LockView.qml MultiEffect):
@@ -313,12 +435,19 @@ constexpr int   LOCKSCREEN_BLUR_PASSES   = 4;
 constexpr float LOCKSCREEN_BLUR_CONTRAST = 0.92F;
 
 void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now) {
-    if (!monitor || wallpaperMode == 1)
+    if (!monitor || wallpaperMode == 1 || !g_pHyprRenderer->m_renderData.currentFB)
         return;
 
     if (frost.lastBackdropWallpaperMode != wallpaperMode) {
         frost.backdropDirty             = true;
         frost.lastBackdropWallpaperMode = wallpaperMode;
+    }
+
+    // Y17: keyed on the blur knobs too -- this cache holds BLURRED pixels, so a
+    // theme reload that moves brightness/vibrancy has to rebuild it.
+    if (const auto SIG = wallpaperCacheSignature(monitor, /* includeBottomLayer */ false, /* includeBlurKnobs */ true); SIG != frost.lastBackdropSig) {
+        frost.backdropDirty    = true;
+        frost.lastBackdropSig  = SIG;
     }
 
     const auto FBSIZE     = monitor->m_pixelSize;
@@ -335,8 +464,18 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
         frost.backdropDirty = true;
     }
 
-    if (g_pHyprRenderer->m_renderData.currentFB)
-        frost.backdropFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+    frost.backdropFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+
+    // Y17 (GPU, 2026-09-14). THE early-out. backdropDirty was written at the
+    // bottom of this function and never read, so every frame of every monitor
+    // re-rendered the wallpaper and ran a forced 4-pass full-resolution kawase
+    // over it -- the single largest GPU item in an overview frame. The cached
+    // image is independent of the overview's scale and view offset (the open
+    // animation rides on renderBackdropBlurCache's alpha, and the 80% dim is a
+    // separate rect drawn by the caller), so there is nothing per-frame left in
+    // it to recompute.
+    if (!frost.backdropDirty)
+        return;
 
     const CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
 
@@ -363,6 +502,10 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
         ScrollOverview::Config::setValue("decoration:blur:passes", PREV_PASSES);
         ScrollOverview::Config::setValue("decoration:blur:noise", PREV_NOISE);
         ScrollOverview::Config::setValue("decoration:blur:contrast", PREV_CONTRAST);
+        // Y17: this guard is now only constructed on the rebuild path, so
+        // m_blurFBDirty is set only when the forced-config blur actually ran --
+        // it used to be set on every frame of every monitor, which asked
+        // Hyprland to redo its own precomputed blur for nothing.
         if (monitor)
             monitor->m_blurFBDirty = true;
     });
@@ -497,66 +640,119 @@ float CScrollOverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
     return std::clamp(workspaceInsertFadeProgress->value(), 0.F, 1.F);
 }
 
-// Highest workspace on this monitor that still has windows. Empty desktops
-// after that are the ponytail, not occupied space -- using max-id here made
-// the trailing empty pin every id below it, so emptying the 2nd-last desktop
-// never shrank the strip.
-static WORKSPACEID highestOccupiedWorkspaceID(PHLMONITOR MONITOR) {
-    WORKSPACEID maxOccupied = 0;
-    if (!MONITOR)
-        return maxOccupied;
+// WHICH DESKTOPS THIS MONITOR'S STRIP MAY CREATE: WorkspacePlan.hpp, a pure
+// function with its own host test. Everything below only gathers the facts
+// for it and applies this monitor's row.
+//
+// The phantoms every overview holds are part of those facts (rule 6), so they
+// are registered here rather than read off the instances: the registry holds
+// IOverview, and a plan that could not see another monitor's phantoms would
+// hand its id out as a spare.
+static std::unordered_map<const CScrollOverview*, std::vector<PHLWORKSPACEREF>> g_phantomsByOverview;
 
-    for (const auto& w : State::workspaceState()->workspaces()) {
-        const auto WORKSPACE = w.lock();
-        if (!valid(WORKSPACE) || WORKSPACE->m_monitor != MONITOR || WORKSPACE->m_isSpecialWorkspace)
-            continue;
-        if (WORKSPACE->getWindowCount() > 0)
-            maxOccupied = std::max(maxOccupied, WORKSPACE->m_id);
+static void forgetPhantomsOf(const CScrollOverview* overview) {
+    g_phantomsByOverview.erase(overview);
+}
+
+static bool isHeldPhantom(const PHLWORKSPACE& workspace) {
+    for (const auto& [_, REFS] : g_phantomsByOverview) {
+        for (const auto& REF : REFS) {
+            if (REF.lock() == workspace)
+                return true;
+        }
+    }
+    return false;
+}
+
+static ScrollOverview::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
+    namespace WP = ScrollOverview::WorkspacePlan;
+    if (!monitor)
+        return {};
+
+    std::vector<WP::ID> monitors;
+    for (const auto& MON : State::monitorState()->monitors()) {
+        if (MON)
+            monitors.push_back(MON->m_id);
     }
 
-    return maxOccupied;
+    std::vector<WP::SWorkspace> facts;
+    for (const auto& w : State::workspaceState()->workspaces()) {
+        const auto WORKSPACE = w.lock();
+        if (!valid(WORKSPACE) || WORKSPACE->m_isSpecialWorkspace || WORKSPACE->m_id <= 0)
+            continue;
+        const auto OWNER = WORKSPACE->m_monitor.lock();
+        facts.push_back({.id = WORKSPACE->m_id, .monitor = OWNER ? OWNER->m_id : -1, .windows = sc<size_t>(WORKSPACE->getWindowCount()), .held = isHeldPhantom(WORKSPACE)});
+    }
+
+    // Rule 2: `create` quietly moves a rule-bound id to its bound output.
+    const WP::BoundMonitor BOUND = [](WP::ID id) -> std::optional<WP::ID> {
+        if (const auto BOUNDTO = ::Config::workspaceRuleMgr()->getBoundMonitorForWS(std::to_string(id)); BOUNDTO)
+            return BOUNDTO->m_id;
+        return std::nullopt;
+    };
+
+    auto       PLAN = WP::plan(monitors, facts, BOUND);
+    const auto IT   = PLAN.find(monitor->m_id);
+    return IT == PLAN.end() ? WP::SRow{} : IT->second;
+}
+
+// The last line of defence under the plan: Hyprland's create() makes a SECOND
+// workspace with an id that already exists rather than refusing, so nothing
+// here creates without checking first.
+static PHLWORKSPACE createWorkspaceIfFree(WORKSPACEID id, const PHLMONITOR& monitor) {
+    for (const auto& w : State::workspaceState()->workspaces()) {
+        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && WORKSPACE->m_id == id)
+            return nullptr;
+    }
+
+    const auto CREATED = State::workspaceState()->create(id, monitor->m_id, std::to_string(id));
+    // And a rule that sent it elsewhere after all is not this monitor's to hold.
+    if (CREATED && CREATED->m_monitor.lock() != monitor)
+        return nullptr;
+    return CREATED;
+}
+
+static PHLWORKSPACE workspaceWithID(WORKSPACEID id) {
+    for (const auto& w : State::workspaceState()->workspaces()) {
+        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && WORKSPACE->m_id == id && !WORKSPACE->m_isSpecialWorkspace)
+            return WORKSPACE;
+    }
+    return nullptr;
 }
 
 // ponytail: E2 keeps the GNOME invariant "the highest occupied workspace is
 // followed by one empty" by creating the real workspace, not a phantom strip
 // card. The strong ref below is the only thing keeping it alive -- Hyprland
 // reaps empty workspaces the moment nothing owns them -- so closing the
-// overview cleans it up for free. Extra empties above occupied+1 are dropped
-// so moving the last window off the 2nd-last desktop shrinks the strip.
+// overview cleans it up for free. Which id it is comes from the plan: with more
+// than one monitor it is the first one no other monitor owns (user,
+// 2026-09-14), and an empty desktop already sitting above the occupied ones is
+// reused rather than joined by another.
 void CScrollOverview::ensureTrailingWorkspace() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing)
         return;
 
-    const WORKSPACEID maxOccupied = highestOccupiedWorkspaceID(MONITOR);
-    if (maxOccupied <= 0)
+    const auto ROW = workspacePlanFor(MONITOR);
+    if (!ROW.spare) {
+        trailingWorkspace.reset();
         return;
-
-    const WORKSPACEID trailingID = maxOccupied + 1;
-
-    PHLWORKSPACE last;
-    WORKSPACEID  maxID = 0;
-    for (const auto& w : State::workspaceState()->workspaces()) {
-        const auto WORKSPACE = w.lock();
-        if (!valid(WORKSPACE) || WORKSPACE->m_monitor != MONITOR || WORKSPACE->m_isSpecialWorkspace)
-            continue;
-
-        if (!last || WORKSPACE->m_id > maxID) {
-            maxID = WORKSPACE->m_id;
-            last  = WORKSPACE;
-        }
     }
 
-    if (trailingWorkspace && trailingWorkspace->m_id != trailingID)
+    if (trailingWorkspace && (trailingWorkspace->m_id != *ROW.spare || trailingWorkspace->m_monitor.lock() != MONITOR))
         trailingWorkspace.reset();
 
-    if (last && last->m_id == trailingID && last->getWindowCount() == 0) {
-        if (trailingWorkspace != last)
-            trailingWorkspace.reset();
+    if (ROW.existing) {
+        // Adopt it only if this overview made it -- a phantom that stopped
+        // being a hole, typically. The user's own empty desktop stays theirs.
+        const auto EXISTING = workspaceWithID(*ROW.spare);
+        if (!trailingWorkspace && EXISTING && std::find(gapWorkspaces.begin(), gapWorkspaces.end(), EXISTING) != gapWorkspaces.end())
+            trailingWorkspace = EXISTING;
         return;
     }
 
-    trailingWorkspace = State::workspaceState()->create(trailingID, MONITOR->m_id, std::to_string(trailingID));
+    if (!trailingWorkspace)
+        trailingWorkspace = createWorkspaceIfFree(*ROW.spare, MONITOR);
 }
 
 // ponytail: X3 population parity. The reference grid is indexed by workspace
@@ -568,71 +764,40 @@ void CScrollOverview::ensureTrailingWorkspace() {
 // thing keeping them alive, exactly as E2's trailing workspace works, so closing
 // the overview reaps them for free.
 //
-// v1.1 item 0. That purchase had NO CEILING, and the F3B report caught the bill:
-// a long session wedged the compositor with its main thread at 86% inside this
-// function. The highest live id only ever RATCHETS UP -- an output cycle leaves
-// the session parked one desktop higher (measured: five headless_on/off cycles
-// took maxID 1 -> 4), a window parked on a high desktop pins it there, and the
-// user can jump to any id at all -- and this fill then re-creates every missing
-// id below it on EVERY open and hands the renderer a card and a blurred strip
-// cell for each one.
-//
-// Measured on b78cd50, one window parked on desktop 300, session on desktop 1
-// (zrig/v6/item0): the open itself stays cheap (7 ms) -- the cost is what the
-// open LEAVES BEHIND. Compositor main-thread CPU while the overview is up:
-// 0.03 s/s at maxID 2, 0.06 s/s at 50, 0.68 s/s at 300, with the hyprctl round
-// trip going 6 ms -> 28 ms. (It falls again past ~500 only because the cells
-// have shrunk below a pixel and the renderer drops them -- the peak is where a
-// cell is small enough to be free of nothing and large enough to be drawn.)
-//
-// So: BOUND it. Parity is a claim about the first few desktops -- GNOME's own
-// dynamic count is "highest used + 1" and nobody's is thirty-two -- and a strip
-// with more cells than this is a smear, not a row of desktops. Past the cap the
-// strip shows what actually EXISTS, sparsely: a real desktop 300 still gets its
-// own card, so nothing the user made disappears; only the phantoms stop.
-constexpr WORKSPACEID GAP_POPULATION_MAX = 32;
-
+// v1.1 item 0 bounded it (WorkspacePlan::GAP_CEILING, 32): a phantom per id up
+// to a desktop parked at 300 cost 0.68 s/s of compositor CPU while the overview
+// was up (zrig/v6/item0). And with more than one monitor a hole is only filled
+// when this monitor owns the desktops on both sides of it (WorkspacePlan rule
+// 5) -- the id between the laptop's 3 and the external's 4 is nobody's.
 void CScrollOverview::ensureNoWorkspaceGaps() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing) {
         gapWorkspaces.clear();
+        forgetPhantomsOf(this);
         return;
     }
 
-    WORKSPACEID                    maxID = 0;
-    std::unordered_set<WORKSPACEID> existing;
-    for (const auto& w : State::workspaceState()->workspaces()) {
-        const auto WORKSPACE = w.lock();
-        if (!valid(WORKSPACE) || WORKSPACE->m_isSpecialWorkspace)
-            continue;
-
-        // Ids on ANOTHER monitor are not gaps here, and re-creating one would
-        // move it, so they count as occupied without becoming ours.
-        existing.insert(WORKSPACE->m_id);
-        if (WORKSPACE->m_monitor == MONITOR)
-            maxID = std::max(maxID, WORKSPACE->m_id);
-    }
-
+    const auto                ROW = workspacePlanFor(MONITOR);
     std::vector<PHLWORKSPACE> kept;
-    // Fill holes only below the last occupied desktop. Filling up to the
-    // trailing empty (old maxID) re-created the emptied 2nd-last as a gap
-    // and the strip never shrank.
-    const WORKSPACEID         maxOccupied = highestOccupiedWorkspaceID(MONITOR);
-    const WORKSPACEID         FILLTO      = std::min(maxOccupied > 0 ? maxOccupied : maxID, GAP_POPULATION_MAX + 1);
-    for (WORKSPACEID id = 1; id < FILLTO; ++id) {
-        if (existing.contains(id)) {
-            // Keep paying for the ones we already materialised; anything else is
-            // the user's and must not be adopted.
-            if (const auto it = std::find_if(gapWorkspaces.begin(), gapWorkspaces.end(), [id](const auto& w) { return w && w->m_id == id; }); it != gapWorkspaces.end())
-                kept.emplace_back(*it);
+    for (const auto ID : ROW.gaps) {
+        // Keep paying for the ones already materialised; anything else that
+        // exists is someone's and must not be adopted.
+        if (const auto EXISTING = workspaceWithID(ID)) {
+            if (std::find(gapWorkspaces.begin(), gapWorkspaces.end(), EXISTING) != gapWorkspaces.end())
+                kept.emplace_back(EXISTING);
             continue;
         }
 
-        if (const auto CREATED = State::workspaceState()->create(id, MONITOR->m_id, std::to_string(id)); CREATED)
+        if (const auto CREATED = createWorkspaceIfFree(ID, MONITOR))
             kept.emplace_back(CREATED);
     }
 
     gapWorkspaces = std::move(kept);
+
+    auto& refs = g_phantomsByOverview[this];
+    refs.clear();
+    for (const auto& W : gapWorkspaces)
+        refs.emplace_back(W);
 }
 
 void CScrollOverview::rebuildWorkspaceImages() {
@@ -843,9 +1008,14 @@ CBox CScrollOverview::tileBox(const PHLWINDOW& window) const {
     if (!window || !MONITOR)
         return {};
 
-    size_t workspaceIdx = images.size();
+    // By HOME desktop, the same rule the grid membership uses (Y9). A minimized
+    // window's m_workspace is the `special:minimized` stash, which is no card at
+    // all: matching on it returned an empty box for a tile the grid was DRAWING,
+    // and every keyboard walk dropped that tile as if it were not there.
+    const WORKSPACEID HOME         = overviewGridHomeWorkspace(window);
+    size_t            workspaceIdx = images.size();
     for (size_t i = 0; i < images.size(); ++i) {
-        if (images[i] && images[i]->pWorkspace == window->m_workspace) {
+        if (images[i] && images[i]->pWorkspace && images[i]->pWorkspace->m_id == HOME) {
             workspaceIdx = i;
             break;
         }
@@ -931,7 +1101,16 @@ void CScrollOverview::updateTileHover() {
     // The pointer moved, so the pointer owns the ring again. Whatever the
     // arrows had selected keeps its role for Return and for close(); it just
     // stops being the thing drawn.
-    g_search.nav.keyboardTile = false;
+    //
+    // It asks for the frame ITSELF. The motion handler's frame request is
+    // conditional on the hover signature moving, and this can fire on a motion
+    // over empty space where nothing else changes at all -- the arrow-selected
+    // tile's ring would then stay on screen until something else repainted.
+    if (g_search.nav.keyboardTile) {
+        g_search.nav.keyboardTile = false;
+        damage();
+        requestInputFrame();
+    }
 
     if (closing || drag.activeWindow || resize.activeWindow || pan.pointerDown) {
         TileChrome::setHovered(PHLWINDOW{});
@@ -951,7 +1130,7 @@ void CScrollOverview::updateTileHover() {
     // selection and both devices move it. It also swallows the tile hover: the
     // panel is drawn over the grid while the band eases, and a tile lighting up
     // through it would be hovering something the user cannot click.
-    if (const auto* ROW = searchRowAt(lastMousePosLocal); ROW) {
+    if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
         TileChrome::setHovered(PHLWINDOW{});
         g_search.nav.zone = EOverviewNavZone::Result;
         if (g_search.nav.selection != ROW->index) {
@@ -972,6 +1151,61 @@ void CScrollOverview::updateTileHover() {
     }
 
     TileChrome::setHovered(windowAtOverviewPoint(lastMousePosLocal));
+}
+
+// See SHoverSignature. Read AFTER updateTileHover, so the tile half is the
+// answer that frame would draw rather than the one before it.
+CScrollOverview::SHoverSignature CScrollOverview::hoverSignature() const {
+    SHoverSignature sig;
+
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR)
+        return sig;
+
+    if (const auto HOVERED = TileChrome::hovered()) {
+        sig.tile        = HOVERED.get();
+        sig.closeButton = tileCloseButtonBox(HOVERED).containsPoint(lastMousePosLocal);
+    }
+
+    sig.searchHover     = g_search.nav.hoverIndex;
+    sig.searchSelection = g_search.nav.selection;
+    sig.searchZone      = sc<int>(g_search.nav.zone);
+
+    // The two invisible reveal zones. They are read by the RENDER (from
+    // updateScratchpadReveal / updateAltStripsReveal), so entering one has to
+    // buy a frame or the reveal it exists to start would never begin -- and
+    // leaving one has to buy a frame or it would never retract.
+    const auto zoneHit = [&](const CBox& logical) {
+        if (logical.width <= 1)
+            return false;
+
+        const auto ZONE = getOverviewGlobalBox(logical, MONITOR, scale->value(), OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+        return ZONE.width > 1 && ZONE.containsPoint(lastMousePosLocal);
+    };
+
+    sig.scratchZone = zoneHit(scratchpadZoneLogicalBox());
+    sig.altZone     = zoneHit(altZoneLogicalBox());
+    sig.scratchCell = scratchpadCellContains(lastMousePosLocal);
+
+    if (const auto HIT = altCellAt(lastMousePosLocal)) {
+        sig.altCellOverview = HIT->overview;
+        sig.altCellIdx      = HIT->workspaceIdx;
+    }
+
+    // The numbered strip cells are deliberately absent: a cell only lights up
+    // under a DRAG, and a drag asks for a frame on every motion regardless.
+
+    return sig;
+}
+
+bool CScrollOverview::hoverSignatureChanged() {
+    const auto SIG = hoverSignature();
+    if (lastHoverSignatureValid && SIG == lastHoverSignature)
+        return false;
+
+    lastHoverSignature      = SIG;
+    lastHoverSignatureValid = true;
+    return true;
 }
 
 PHLWINDOW CScrollOverview::windowClosestToWorkspaceCenter(size_t workspaceIdx) const {
@@ -1361,6 +1595,26 @@ void CScrollOverview::performPrimaryClickAction() {
         return;
     }
 
+    // Another monitor's desktop: that monitor switches to it and focus goes
+    // there with it -- the desktop just picked is where the user is going. Its
+    // last focused window when it has one, through that monitor's own overview
+    // (selectAndClose closes every overview, this one included); a desktop with
+    // nothing to focus switches and closes with that overview closing LAST, so
+    // it is the one whose close decides where focus lands.
+    if (const auto HIT = altCellAt(lastMousePosLocal)) {
+        const auto LAST = getOverviewWindowToShow(HIT->workspace->getLastFocusedWindow());
+        if (LAST && LAST->m_workspace == HIT->workspace && shouldShowOverviewWindow(LAST) && HIT->overview->selectAndClose(LAST))
+            return;
+
+        HIT->overview->focusOverviewWorkspace(HIT->workspace, HIT->workspaceIdx);
+        for (const auto& overview : scrollOverviews()) {
+            if (overview && overview.get() != HIT->overview)
+                overview->close();
+        }
+        HIT->overview->close();
+        return;
+    }
+
     if (const auto STRIPWORKSPACE = workspaceAtStripPoint(lastMousePosLocal, &stripIdx); STRIPWORKSPACE) {
         focusOverviewWorkspace(STRIPWORKSPACE, stripIdx);
         close();
@@ -1467,7 +1721,7 @@ float CScrollOverview::dragMiniProgress() const {
     const float ELAPSED = ScrollOverview::Config::animElapsedMs(drag.miniChangedAt);
     const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION));
     if (T < 1.F)
-        grid().reflowActive = true; // rides the overview's existing next-frame request
+        gridSetReflowActive(pMonitor.lock()); // rides the overview's existing next-frame request
 
     return drag.miniFrom + (TARGET - drag.miniFrom) * T;
 }
@@ -1494,7 +1748,7 @@ float CScrollOverview::dragRecentreProgress() const {
     const float ELAPSED = ScrollOverview::Config::animElapsedMs(drag.recentreChangedAt);
     const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION));
     if (T < 1.F)
-        grid().reflowActive = true; // rides the overview's existing next-frame request
+        gridSetReflowActive(pMonitor.lock()); // rides the overview's existing next-frame request
 
     return drag.recentreFrom + (TARGET - drag.recentreFrom) * T;
 }
@@ -1810,7 +2064,7 @@ void CScrollOverview::updateWindowDrag() {
     // The detached scratchpad cell counts as the strip here: the proxy shrinking
     // to mini scale is how a cell says "this is a drop target", and over the
     // scratchpad it stayed full size (user, 2026-09-12).
-    const bool OVERSTRIP = workspaceAtStripPoint(lastMousePosLocal) != nullptr || scratchpadCellContains(lastMousePosLocal);
+    const bool OVERSTRIP = workspaceAtStripPoint(lastMousePosLocal) != nullptr || scratchpadCellContains(lastMousePosLocal) || altCellAt(lastMousePosLocal).has_value();
 
     const auto VIEWPORTWORKSPACE = viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace] ? images[viewportCurrentWorkspace]->pWorkspace : PHLWORKSPACE{};
     if (const bool OVERFOREIGN = OVERDOCK || OVERSTRIP || (DROPWORKSPACE && DROPWORKSPACE != VIEWPORTWORKSPACE); OVERFOREIGN != drag.miniOver) {
@@ -1827,12 +2081,44 @@ void CScrollOverview::updateWindowDrag() {
         drag.recentreChangedAt = Time::steadyNow();
     }
 
+    // THIS overview always: the proxy is under the cursor and follows it at
+    // motion rate, which is faster than the output refreshes.
+    requestInputFrame();
+    damage();
+
+    // Every OTHER one only when the drag can actually be seen on it, which on
+    // a two-monitor session is almost never: a full repaint of the other
+    // overview was being asked for on every motion event of every drag.
+    //
+    // The PREVIOUS box counts as well as this one -- the frame that erases the
+    // proxy off a monitor is the frame after it left.
+    const auto DRAGBOX = draggedWindowGlobalBox();
+    const auto PREVBOX = drag.lastGlobalBox;
+    drag.lastGlobalBox = DRAGBOX;
+
     for (const auto& overview : scrollOverviews()) {
-        if (!overview)
+        auto* const OTHER = overview ? dynamic_cast<CScrollOverview*>(overview.get()) : nullptr;
+        if (!OTHER || OTHER == this)
             continue;
 
-        overview->requestInputFrame();
-        overview->damage();
+        const auto OTHERMON = OTHER->pMonitor.lock();
+        if (!OTHERMON)
+            continue;
+
+        const auto BOUNDS  = OTHERMON->logicalBox();
+        const bool VISIBLE = (!DRAGBOX.empty() && !DRAGBOX.copy().intersection(BOUNDS).empty()) || (!PREVBOX.empty() && !PREVBOX.copy().intersection(BOUNDS).empty());
+
+        // ...and its own chrome, which a drag anywhere can be driving: the
+        // other monitors' strips and the scratchpad cell are drop targets, and
+        // they are revealed BY the drag.
+        const bool CHROME = OTHER->altStripsRevealValue() > 0.01F || OTHER->scratchpadRevealValue() > 0.01F || OTHER->altStripsReveal->isBeingAnimated() ||
+            OTHER->scratchpadReveal->isBeingAnimated();
+
+        if (!VISIBLE && !CHROME)
+            continue;
+
+        OTHER->requestInputFrame();
+        OTHER->damage();
     }
 }
 
@@ -1871,6 +2157,20 @@ void CScrollOverview::updateWindowResize() {
 }
 
 void CScrollOverview::clearDragPending() {
+    // The last frame of the drag. updateWindowDrag only pays for the outputs
+    // the proxy was actually on, so the one it is leaving has to be told the
+    // proxy is gone -- once, here, rather than on every motion of the drag.
+    if (!drag.lastGlobalBox.empty()) {
+        for (const auto& overview : scrollOverviews()) {
+            if (!overview || overview.get() == this)
+                continue;
+
+            overview->requestInputFrame();
+            overview->damage();
+        }
+    }
+    drag.lastGlobalBox = CBox{};
+
     grid().dragExcluded        = nullptr;
     drag.pendingPrimary          = false;
     drag.activeWindow.reset();
@@ -2287,8 +2587,8 @@ void CScrollOverview::commitDropCancel(const SOverviewDropSite& site) {
             const float SCALEDIV = std::max(scale->value(), 0.01F) * std::max(MON->m_scale, 0.01F);
 
             grid().reflows[site.window.get()] = SGridReflow{site.window, CBox{overviewPointToGlobal(WSIDX, FLOATBOX.pos()), FLOATBOX.size() * (1.F / SCALEDIV)}, slot,
-                                                          Time::steadyNow(), g_overviewFrame, false};
-            grid().reflowActive               = true;
+                                                          Time::steadyNow(), overviewFrameOn(MON), false};
+            gridSetReflowActive(MON);
         }
     }
 
@@ -2503,6 +2803,21 @@ void CScrollOverview::endWindowDrag() {
 
     gatherDropSite(site);
 
+    // Released on ANOTHER monitor's strip: it is exactly a drop on that desktop's
+    // cell in that monitor's own strip, which the cross-monitor drop path already
+    // handles end to end. So hand the rest of the ladder that site -- that
+    // overview, that monitor, and the middle of that cell there -- instead of
+    // teaching every stage below about a second kind of cell.
+    if (const auto HIT = site.window ? altCellAt(site.dropPointLocal) : std::nullopt) {
+        const auto THERE = HIT->overview->stripCellBox(HIT->workspaceIdx, HIT->monitor, HIT->overview->scale->value());
+        if (THERE.width > 1 && THERE.height > 1) {
+            site.dropOverview   = HIT->overview;
+            site.dropMonitor    = HIT->monitor;
+            site.dropPointLocal = THERE.middle();
+            site.facts.overPill = false;
+        }
+    }
+
     // The detached scratchpad cell is not one of `images`, so the decision table
     // below cannot see it and must not be asked about it. A release on the cell
     // parks the window there and the drag ends here -- ensureDefault because a
@@ -2626,6 +2941,26 @@ void CScrollOverview::trackpadSwipeLayout(const PHLWORKSPACE target, const doubl
     trackpadTapeFollowing = true;
     ALGO->moveTape(sc<float>(-1 * delta * ScrollOverview::Config::getTouchpadScrollFactor() / SCALE));
     damage();
+}
+
+bool CScrollOverview::onTapeSwipeUpdate(double delta) {
+    if (closing || images.empty() || viewportCurrentWorkspace >= images.size() || !images[viewportCurrentWorkspace])
+        return false;
+
+    const auto WORKSPACE = images[viewportCurrentWorkspace]->pWorkspace;
+    if (!isWorkspaceScrolling(WORKSPACE))
+        return false;
+
+    // 0 is trackpadSwipeLayout's "fingers lifted"; a real update never asks for it.
+    if (delta != 0.0)
+        trackpadSwipeLayout(WORKSPACE, delta);
+    return true;
+}
+
+void CScrollOverview::onTapeSwipeEnd() {
+    if (images.empty() || viewportCurrentWorkspace >= images.size() || !images[viewportCurrentWorkspace])
+        return;
+    trackpadSwipeLayout(images[viewportCurrentWorkspace]->pWorkspace, 0.0);
 }
 
 void CScrollOverview::trackpadSwipeWorkspace(const double delta) {
@@ -2862,7 +3197,7 @@ void CScrollOverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOvervie
     // The results as the last frame DREW them -- the same boxes the mouse
     // hit-tests against, so the two devices cannot disagree about where a row
     // is. G5's grid cells and the list rows are both in here already.
-    for (const auto& HIT : g_search.layout.hits)
+    for (const auto& HIT : searchLayoutHere().hits)
         targets.push_back({HIT.box, EOverviewNavZone::Result, HIT.index, {}});
 
     // Every workspace's tiles, filtered to the ones actually ON the monitor.
@@ -2872,11 +3207,19 @@ void CScrollOverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOvervie
     // whether the drawn box lands on the monitor -- the same test the render
     // pass uses. Measured 2026-08-05: with the current-workspace filter, arrows
     // produced a byte-identical frame on a desktop with two visible tiles.
+    //
+    // ONCE PER WINDOW. With a query typed every workspace's main-grid list also
+    // carries the promoted matches (B2), so the same window came back once per
+    // desktop -- harmless to the pick, but it is the list the Tab entry and the
+    // phantom-selection check below read, and those must see each tile once.
+    std::unordered_set<const Desktop::View::CWindow*> seen;
     for (const auto& IMAGE : images) {
         if (!IMAGE || !IMAGE->pWorkspace)
             continue;
 
         for (const auto& WINDOW : overviewMainGridWindows(IMAGE->pWorkspace, MONITOR)) {
+            if (!WINDOW || !seen.insert(WINDOW.get()).second)
+                continue;
             const CBox BOX = tileBox(WINDOW);
             if (BOX.width > 1.F && BOX.height > 1.F && overviewBoxIntersectsMonitor(BOX, MONITOR))
                 targets.push_back({BOX, EOverviewNavZone::Tile, -1, WINDOW});
@@ -2885,13 +3228,50 @@ void CScrollOverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOvervie
 
 }
 
+// The tile keyboard selection starts on: top row first, then leftmost -- the
+// order a filtered grid reads in. Rows are centred, so "same row" is a shared
+// vertical band rather than an equal y.
+PHLWINDOW CScrollOverview::firstNavTile() const {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR)
+        return nullptr;
+
+    std::vector<SOverviewNavTarget> targets;
+    collectNavTargets(MONITOR, targets);
+
+    const SOverviewNavTarget* best = nullptr;
+    for (const auto& TARGET : targets) {
+        if (TARGET.zone != EOverviewNavZone::Tile)
+            continue;
+        if (!best) {
+            best = &TARGET;
+            continue;
+        }
+        const bool SAMEROW = TARGET.box.y < best->box.y + best->box.height && best->box.y < TARGET.box.y + TARGET.box.height;
+        if (SAMEROW ? TARGET.box.middle().x < best->box.middle().x : TARGET.box.middle().y < best->box.middle().y)
+            best = &TARGET;
+    }
+
+    return best ? best->window : nullptr;
+}
+
+bool CScrollOverview::isNavTile(const PHLWINDOW& window) const {
+    const auto MONITOR = pMonitor.lock();
+    if (!window || !MONITOR)
+        return false;
+
+    std::vector<SOverviewNavTarget> targets;
+    collectNavTargets(MONITOR, targets);
+    return std::ranges::any_of(targets, [&](const auto& TARGET) { return TARGET.zone == EOverviewNavZone::Tile && TARGET.window == window; });
+}
+
 // Where the selection is NOW. Empty when the zone has nothing selected in it,
 // which is what the caller's "land somewhere" fallback keys off.
 CBox CScrollOverview::currentNavBox(const std::vector<SOverviewNavTarget>& targets, PHLMONITOR MONITOR) const {
     CBox current;
     switch (g_search.nav.zone) {
         case EOverviewNavZone::Search:
-            current = g_search.layout.pill;
+            current = searchLayoutHere().pill;
             break;
         case EOverviewNavZone::Result:
             for (const auto& TARGET : targets)
@@ -2992,9 +3372,9 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
         return false;
 
     // 2D Navigation inside the Results zone
-    if (g_search.nav.zone == EOverviewNavZone::Result && !g_search.layout.hits.empty()) {
+    if (g_search.nav.zone == EOverviewNavZone::Result && !searchLayoutHere().hits.empty()) {
         const SSearchRowHit* curHit = nullptr;
-        for (const auto& hit : g_search.layout.hits) {
+        for (const auto& hit : searchLayoutHere().hits) {
             if (hit.index == g_search.nav.selection) {
                 curHit = &hit;
                 break;
@@ -3015,7 +3395,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
                     damage();
                     return true;
                 }
-                for (const auto& hit : g_search.layout.hits) {
+                for (const auto& hit : searchLayoutHere().hits) {
                     if (hit.column == curHit->column && hit.rowInCol == curHit->rowInCol - 1) {
                         g_search.nav.selection = hit.index;
                         damage();
@@ -3026,7 +3406,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             }
 
             if (DOWN) {
-                for (const auto& hit : g_search.layout.hits) {
+                for (const auto& hit : searchLayoutHere().hits) {
                     if (hit.column == curHit->column && hit.rowInCol == curHit->rowInCol + 1) {
                         g_search.nav.selection = hit.index;
                         damage();
@@ -3038,13 +3418,13 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
 
             if (RIGHT) {
                 int maxCol = 0;
-                for (const auto& hit : g_search.layout.hits)
+                for (const auto& hit : searchLayoutHere().hits)
                     maxCol = std::max(maxCol, hit.column);
 
                 for (int targetCol = curHit->column + 1; targetCol <= maxCol; ++targetCol) {
                     const SSearchRowHit* bestHit = nullptr;
                     int bestDiff = 999;
-                    for (const auto& hit : g_search.layout.hits) {
+                    for (const auto& hit : searchLayoutHere().hits) {
                         if (hit.column == targetCol) {
                             int diff = std::abs(hit.rowInCol - curHit->rowInCol);
                             if (diff < bestDiff) {
@@ -3076,7 +3456,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
                 for (int targetCol = curHit->column - 1; targetCol >= 0; --targetCol) {
                     const SSearchRowHit* bestHit = nullptr;
                     int bestDiff = 999;
-                    for (const auto& hit : g_search.layout.hits) {
+                    for (const auto& hit : searchLayoutHere().hits) {
                         if (hit.column == targetCol) {
                             int diff = std::abs(hit.rowInCol - curHit->rowInCol);
                             if (diff < bestDiff) {
@@ -3097,11 +3477,26 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
     }
 
     if ((g_search.nav.zone == EOverviewNavZone::Search || g_search.nav.zone != EOverviewNavZone::Result) && DOWN) {
-        if (!g_search.layout.hits.empty()) {
+        if (!searchLayoutHere().hits.empty()) {
             g_search.nav.zone              = EOverviewNavZone::Result;
-            g_search.nav.selection         = g_search.layout.hits[0].index;
+            g_search.nav.selection         = searchLayoutHere().hits[0].index;
             g_search.nav.explicitSelection = true;
             g_search.nav.intent            = ESearchIntent::Browsing;
+            damage();
+            return true;
+        }
+    }
+
+    // A selected tile the filter has since hidden is not a place to walk FROM:
+    // its box is where it would be unfiltered, so the first arrow jumped over
+    // whatever lay between that phantom and the direction pressed, and Enter
+    // would have picked a window that is not on screen. Land on the first
+    // visible tile instead; the NEXT arrow walks from there.
+    if (g_search.nav.zone == EOverviewNavZone::Tile && !isNavTile(closeOnWindow.lock())) {
+        if (const auto FIRST = firstNavTile()) {
+            closeOnWindow             = FIRST;
+            g_search.nav.keyboardTile = true;
+            TileChrome::setHovered(FIRST, false);
             damage();
             return true;
         }
@@ -3169,11 +3564,9 @@ void CForcedVisibility::forceSurface(SP<CWLSurfaceResource> surface) {
     if (!HLSURFACE)
         return;
 
-    for (auto& entry : m_surfaces) {
-        if (entry.surface.lock() == surface) {
-            HLSURFACE->m_visibleRegion = {};
-            return;
-        }
+    if (!m_surfaceSeen.insert(surface.get()).second) {
+        HLSURFACE->m_visibleRegion = {};
+        return;
     }
 
     m_surfaces.push_back({surface, HLSURFACE->m_visibleRegion});
@@ -3197,26 +3590,64 @@ void CForcedVisibility::forceWindowSurfaces(PHLWINDOW window) {
     }, nullptr);
 }
 
+// seen = forceWindow ran for this window; cleared = it was suspended and we
+// cleared it. seen == 0 means the window never reaches forceWindow at all,
+// which is how the fullscreen path was caught.
+static std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> g_unsuspendCount;
+
 void CForcedVisibility::forceWindow(PHLWINDOW window) {
     if (!window)
         return;
 
     constexpr auto FULLSCREENALPHA = Desktop::View::WINDOW_ALPHA_FULLSCREEN;
 
-    for (auto& entry : m_windows) {
-        if (entry.window == window) {
-            window->m_hidden = false;
-            window->alpha(FULLSCREENALPHA)->setValueAndWarp(1.F);
-            return;
-        }
+    const bool FIRST = m_windowSeen.insert(window.get()).second;
+    if (FIRST) {
+        auto& entry  = m_windows.emplace_back();
+        entry.window = window;
+        entry.hidden = window->m_hidden;
     }
 
-    auto& entry                  = m_windows.emplace_back();
-    entry.window                 = window;
-    entry.hidden                 = window->m_hidden;
-
     window->m_hidden = false;
-    window->alpha(FULLSCREENALPHA)->setValueAndWarp(1.F);
+
+    // A SUSPENDED CLIENT CANNOT ASK FOR THE FRAME THAT WOULD WAKE IT (user,
+    // 2026-09-19: a fullscreen YouTube video in Zen on another desktop "shows
+    // static when in fact it's playing" -- measured at 0-2% CPU, i.e. not
+    // merely stale but genuinely not decoding).
+    //
+    // Hyprland gives a window whose workspace is not active the xdg-toplevel
+    // `suspended` state, and Firefox honours it literally: it stops painting AND
+    // stops decoding, so it never calls CWLSurfaceResource::frame and never
+    // reaches the frame gate at all. Forcing m_hidden and alpha is not enough --
+    // those make the COMPOSITOR draw the client's last buffer, not the client
+    // produce a new one. The dock has cleared this for its previews all along
+    // (Dock.cpp forcePreviewVisible), which is why hovering a dock preview made
+    // the strip come alive too: one un-suspend serves every viewer of a client.
+    //
+    // It lives HERE, and not in the card walk where it was first written, because
+    // that walk iterates the card's TILED windows and a fullscreen window is not
+    // among them -- it is drawn through overviewFullscreenPathWindow instead, so
+    // the one window the bug was reported about was the one window the fix
+    // missed. forceWindow is called from renderWindowLive for every window the
+    // overview draws, fullscreen included, and it is above the alpha early-out
+    // deliberately: a window already parked at alpha 1 still needs waking.
+    if (Prof::enabled())
+        ++g_unsuspendCount[window->m_class].first;
+
+    if (window->m_suspended) {
+        if (Prof::enabled())
+            ++g_unsuspendCount[window->m_class].second;
+        window->setSuspended(false);
+    }
+
+    // The same guard forceWorkspaceAlphaVisible uses. setValueAndWarp on an
+    // animation that is already parked at 1 still writes through the animation
+    // manager, and this runs for every forced window on every frame.
+    auto& alpha = window->alpha(FULLSCREENALPHA);
+    if (alpha->value() == 1.F && alpha->goal() == 1.F && !alpha->isBeingAnimated())
+        return;
+
+    alpha->setValueAndWarp(1.F);
 }
 
 void CForcedVisibility::forceLayersAboveFullscreen(PHLMONITOR monitor) {
@@ -3263,6 +3694,7 @@ void CForcedVisibility::restoreSurfaces() {
     }
 
     m_surfaces.clear();
+    m_surfaceSeen.clear();
 }
 
 void CForcedVisibility::restoreWindows() {
@@ -3292,6 +3724,7 @@ void CForcedVisibility::restoreWindows() {
     }
 
     m_windows.clear();
+    m_windowSeen.clear();
 }
 
 void CForcedVisibility::restoreLayers() {
@@ -3375,6 +3808,196 @@ void CScrollOverview::restoreWorkspaceAnimationOverrides() {
 
     savedWorkspaceAnimationConfigs.clear();
     workspaceAnimationsOverridden = false;
+}
+
+// WHAT CADENCE THE OVERVIEW IS ACTUALLY DRAWN AT, per output, kept after it
+// closes so the question can be asked from a terminal (user, 2026-09-19: the
+// search field "expanding at a weird framerate"). An animation that is smooth
+// in arithmetic and choppy on screen is a frame-supply problem, and the two
+// have opposite fixes -- this is how they are told apart, and it costs one
+// timestamp per frame.
+namespace {
+struct SFrameCadence {
+    std::array<float, 120> gaps{};
+    size_t                 count = 0;
+    size_t                 next  = 0;
+    Time::steady_tp        last{};
+};
+
+std::unordered_map<MONITORID, SFrameCadence> g_frameCadence;
+
+void noteFrame(MONITORID id) {
+    auto& C = g_frameCadence[id];
+    if (C.last.time_since_epoch().count() != 0) {
+        const float GAP = std::chrono::duration<float, std::milli>(Time::steadyNow() - C.last).count();
+        if (GAP < 2000.F) { // a gap across a close is not a frame time
+            C.gaps[C.next] = GAP;
+            C.next         = (C.next + 1) % C.gaps.size();
+            C.count        = std::min(C.count + 1, C.gaps.size());
+        }
+    }
+    C.last = Time::steadyNow();
+}
+
+std::string cadenceReport(MONITORID id) {
+    const auto IT = g_frameCadence.find(id);
+    if (IT == g_frameCadence.end() || IT->second.count < 3)
+        return "no frames recorded";
+
+    std::vector<float> gaps(IT->second.gaps.begin(), IT->second.gaps.begin() + sc<long>(IT->second.count));
+    std::ranges::sort(gaps);
+    const float MED  = gaps[gaps.size() / 2];
+    const float P95  = gaps[sc<size_t>(sc<float>(gaps.size()) * 0.95F)];
+    const float WORST = gaps.back();
+    size_t      late = 0;
+    for (const float G : gaps) {
+        if (G > MED * 1.5F)
+            ++late;
+    }
+
+    return std::format("{} frames: median {:.1f}ms ({:.0f} fps), p95 {:.1f}ms, worst {:.1f}ms, {} late", gaps.size(), MED, MED > 0.F ? 1000.F / MED : 0.F, P95, WORST, late);
+}
+}
+
+std::string CScrollOverview::frameCadence(MONITORID monitor) {
+    return cadenceReport(monitor);
+}
+
+// DIAGNOSTIC: which branch of shouldAllowSurfaceFrame a window last took.
+// "the video is not updating in the strip" has a dozen candidate answers above
+// the adaptive gate -- off-screen card, occluded by a fullscreen window, not
+// shown at all -- and they are indistinguishable from outside. Written only
+// while profiling is on (see Prof::enabled), read back by frameDebugLine.
+static std::unordered_map<std::string, const char*> g_frameGateReason;
+static std::unordered_map<std::string, const char*> g_damageGateReason;
+
+static inline void noteFrameGate(const PHLWINDOW& window, const char* reason) {
+    if (!Prof::enabled() || !window)
+        return;
+
+    g_frameGateReason[window->m_class] = reason;
+}
+
+// The mirror of noteFrameGate for the DAMAGE side. A client can be awake, be
+// handed frames and still show a still, if its commits are refused before they
+// reach the repaint -- which is indistinguishable from outside.
+static inline void noteDamageGate(const PHLWINDOW& window, const char* reason) {
+    if (!Prof::enabled() || !window)
+        return;
+
+    g_damageGateReason[window->m_class] = reason;
+}
+
+std::string CScrollOverview::frameDebugLine() const {
+    const auto MONITOR = pMonitor.lock();
+    std::string out    = MONITOR ? MONITOR->m_name : std::string("?");
+
+    const auto var = [&](const char* name, const auto& v) {
+        if (v && v->isBeingAnimated())
+            out += std::string(" ") + name;
+    };
+
+    out += closing ? " [closing]" : " [open]";
+    var("scale", scale);
+    var("viewOffset", viewOffset);
+    var("wsInsert", workspaceInsertProgress);
+    var("wsInsertFade", workspaceInsertFadeProgress);
+    var("reflowPacer", reflowPacer);
+    var("resultsBand", resultsBand);
+    var("resultsWidth", resultsWidth);
+    var("searchDock", searchDock);
+    var("scratchpadReveal", scratchpadReveal);
+    var("altStripsReveal", altStripsReveal);
+
+    if (TileChrome::animatingOn(MONITOR))
+        out += " tileChrome";
+
+    // The adaptive preview pulse, so "is that tile live or is it a still?" is a
+    // question `hyprdrive:debug frames` answers rather than one you settle by
+    // staring at a screenshot. streaming/polling, and the window still inside
+    // its post-move grace.
+    if (!previewPulses.empty()) {
+        const auto NOW = Time::steadyNow();
+        size_t     streaming = 0, grace = 0;
+        for (const auto& [WINDOW, STATE] : previewPulses) {
+            if (NOW < STATE.graceUntil)
+                ++grace;
+            else if (STATE.streaming && NOW - STATE.lastChange <= OVERVIEW_PREVIEW_QUIET_TIMEOUT)
+                ++streaming;
+        }
+        out += std::format(" previews[{}stream/{}grace/{}poll @{}ms", streaming, grace, previewPulses.size() - streaming - grace,
+                           previewPulseInterval(NOW).count());
+
+        // Named, because "a video is not updating" needs to say WHICH window is
+        // in which state before it can say whose fault it is.
+        for (const auto& [WINDOW, STATE] : previewPulses) {
+            const auto W = STATE.ref.lock();
+            if (!W)
+                continue;
+
+            const char* MODE = NOW < STATE.graceUntil                                                      ? "grace" :
+                (STATE.streaming && NOW - STATE.lastChange <= OVERVIEW_PREVIEW_QUIET_TIMEOUT)              ? "STREAM" :
+                                                                                                             "poll";
+            const auto SINCE = STATE.lastChange.time_since_epoch().count() == 0 ?
+                -1 :
+                std::chrono::duration_cast<std::chrono::milliseconds>(NOW - STATE.lastChange).count();
+            out += std::format(" {}={}({}ms{}{})", W->m_class.empty() ? std::string("?") : W->m_class, MODE, SINCE,
+                               W->m_suspended ? " SUSP" : "", W->isHidden() ? " HIDDEN" : "");
+        }
+
+        out += "]";
+    }
+
+    if (Prof::enabled() && !g_frameGateReason.empty()) {
+        out += " gate[";
+        for (const auto& [CLASS, REASON] : g_frameGateReason)
+            out += std::format("{}={} ", CLASS, REASON);
+        out += "] forced[";
+        for (const auto& [CLASS, N] : g_unsuspendCount)
+            out += std::format("{}={}/{} ", CLASS, N.first, N.second);
+        out += "] damage[";
+        for (const auto& [CLASS, REASON] : g_damageGateReason)
+            out += std::format("{}={} ", CLASS, REASON);
+        out += "]";
+    }
+    if (realtimePreviewFrameQueued)
+        out += " previewQueued";
+    if (previewRepaintPending)
+        out += " previewPending";
+    if (needsIdleRepaint())
+        out += " idleRepaint";
+    if (drag.activeWindow)
+        out += " drag";
+    if (resize.activeWindow)
+        out += " resize";
+    if (pan.pointerDown)
+        out += " pan";
+    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()))
+        out += " searchLetters";
+    if (const auto DOCK = ScrollOverview::Dock::frameReason(MONITOR); DOCK)
+        out += std::string(" dock:") + DOCK;
+
+    return out;
+}
+
+void CScrollOverview::reapplyConfigOverridesAfterReload() {
+    if (!sharedStateOwner || closing)
+        return;
+
+    // Re-save from the freshly reloaded config, then re-apply: the apply
+    // functions early-return on the overridden flags, so those drop first.
+    // The stale pre-reload snapshots are NOT restored -- restoring them would
+    // write dead values over the config the user just reloaded.
+    if (workspaceAnimationsOverridden) {
+        workspaceAnimationsOverridden = false;
+        savedWorkspaceAnimationConfigs.clear();
+        applyWorkspaceAnimationOverrides();
+    }
+
+    if (inputConfigOverridden) {
+        inputConfigOverridden = false;
+        applyInputConfigOverrides();
+    }
 }
 
 void CScrollOverview::forceWorkspaceAlphaVisible(const PHLWORKSPACE& workspace) {
@@ -3623,6 +4246,27 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         return overviewGridPromoted(getOverviewWindowToShow(ref.lock()), monitor);
     });
 
+    // A SUSPENDED CLIENT CANNOT ASK FOR THE FRAME THAT WOULD WAKE IT (user,
+    // 2026-09-19: a fullscreen YouTube video in Zen on another desktop "shows
+    // static when in fact it's playing").
+    //
+    // Hyprland marks windows whose workspace is not active as suspended over
+    // xdg-toplevel, and Firefox honours that literally: it stops painting AND
+    // stops decoding. It then never calls CWLSurfaceResource::frame, so it never
+    // reaches shouldAllowSurfaceFrame at all -- measured, zen was absent from the
+    // gate trace entirely while every terminal on screen was in it. No amount of
+    // adaptive polling reaches it, because a poll IS a frame callback and the
+    // client has stopped listening for one.
+    //
+    // It belongs here rather than in sendOverviewFrameCallbacks: that runs only
+    // on the pulses that do NOT repaint, and on a repainting frame the callbacks
+    // go out through the render tail instead, so a window could stay suspended
+    // for as long as anything on the overview was animating. This runs whenever
+    // the card is drawn, which is the definition of the tile being on screen.
+    // m_forceRendering below is the other half and not a substitute: it makes
+    // the compositor DRAW the client's last buffer, not the client produce a new
+    // one. Hyprland re-suspends on its own once the tile stops being drawn, and
+    // the frame RATE stays the adaptive gate's decision downstream.
     if (!WORKSPACEVISIBLE && !HASPROMOTED)
         return;
 
@@ -3640,7 +4284,13 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
     // X7/X8 chrome is drawn in a SECOND pass. The app icon straddles the tile's
     // bottom edge and a hovered tile grows into its neighbours, so chrome drawn
     // with its own tile gets painted over by the next one.
-    std::vector<std::pair<PHLWINDOW, CBox>> tileChrome;
+    // A member buffer, not a local: this runs once per WORKSPACE per frame on
+    // every output, and a fresh vector of PHLWINDOW+CBox pairs per pass is a
+    // heap allocation per card per frame for a list that is thrown away at the
+    // end of it. Nothing here re-enters renderWorkspaceLive, so one buffer is
+    // enough; it is cleared rather than reallocated.
+    auto& tileChrome = tileChromeBuf;
+    tileChrome.clear();
 
     const auto renderOverviewWindow = [&](const PHLWINDOW& window) {
         // F3-b outbound: a releasing tile no longer matches, so the search half
@@ -3763,6 +4413,25 @@ float CScrollOverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace
     if (!workspace || !monitor || monitor->m_size.x <= 0.F || monitor->m_size.y <= 0.F)
         return 1.0F;
 
+    // Once per workspace per drawn frame. stripRow asks for every image and
+    // stripMiniBox asks again for every mini, and each answer walks that
+    // workspace's windows, casts the layout algorithm and searches `images`.
+    // Keyed on the OUTPUT's frame counter, so the answer a hit test between
+    // frames gets is the one the minis were last drawn at.
+    const uint64_t FRAME = overviewFrameOn(monitor);
+    if (spanRatioFrame != FRAME || spanRatioMonitor != monitor->m_id) {
+        spanRatioMemo.clear();
+        spanRatioFrame   = FRAME;
+        spanRatioMonitor = monitor->m_id;
+    } else if (const auto IT = spanRatioMemo.find(workspace->m_id); IT != spanRatioMemo.end())
+        return IT->second;
+
+    const float VALUE = workspaceScrollingSpanRatioLive(workspace, monitor);
+    spanRatioMemo[workspace->m_id] = VALUE;
+    return VALUE;
+}
+
+float CScrollOverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
     if (!isWorkspaceScrolling(workspace))
         return 1.0F;
 
@@ -3865,80 +4534,106 @@ float CScrollOverview::scratchpadRevealValue() const {
 // With REVEAL 0 every added term vanishes and this is exactly the strip-only
 // layout it replaced -- which is what the geometry host tests assert.
 CBox CScrollOverview::stripSlotLogicalBox(size_t workspaceIdx, bool scratchSlot, float revealOverride) const {
+    const auto& ROW = stripRow(revealOverride, -1.F);
+    if (!ROW.valid)
+        return {};
+
+    const auto BOX = scratchSlot ? ROW.scratch : (workspaceIdx < ROW.cells.size() ? ROW.cells[workspaceIdx] : ScrollOverview::StripLayout::SBox{});
+    return BOX.empty() ? CBox{} : CBox{BOX.x, BOX.y, BOX.w, BOX.h};
+}
+
+// The whole row: this monitor's cells, the scratchpad cell, and every other
+// monitor's strip -- StripLayout.hpp, the pure function with the host test. This
+// only gathers what it needs to know.
+const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scratchRevealOverride, float altRevealOverride) const {
+    // A row with no cells in it, for the outputs that have nothing to lay out.
+    // Returned by reference like every other answer here: the SOutput carries
+    // three vectors, and stripSlotLogicalBox asks for one cell at a time.
+    static const ScrollOverview::StripLayout::SOutput EMPTY{};
+
     const auto MONITOR = pMonitor.lock();
-    if (!MONITOR || images.empty() || (!scratchSlot && workspaceIdx >= images.size()))
-        return {};
+    if (!MONITOR || images.empty())
+        return EMPTY;
 
-    const float BAND = overviewStripLogicalHeight(MONITOR);
-    if (BAND <= 0.F)
-        return {};
+    // THE MEMO. Everything below is pure arithmetic over these scalars plus the
+    // per-image span ratios, and none of it can change inside one drawn frame,
+    // so the whole row is built once and handed out. The key carries the top
+    // chrome and the band explicitly even though the frame counter is in it:
+    // renderSearch publishes the row height MID-frame, which is the one way two
+    // calls in the same frame are entitled to disagree.
+    const uint64_t FRAME     = overviewFrameOn(MONITOR);
+    const float    SCRATCH   = scratchRevealOverride >= 0.F ? std::clamp(scratchRevealOverride, 0.F, 1.F) : scratchpadRevealValue();
+    const float    ALTREVEAL = altRevealOverride >= 0.F ? std::clamp(altRevealOverride, 0.F, 1.F) : altStripsRevealValue();
+    const float    TOPL      = overviewSearchLogicalHeight(MONITOR) + overviewResultsLogicalHeight(MONITOR);
+    const float    BANDL     = overviewStripLogicalHeight(MONITOR);
+    const float    GAPL      = sc<float>(ScrollOverview::Config::getStripGap());
+    const double   ASPECT    = MONITOR->m_size.y > 1 ? sc<double>(MONITOR->m_size.x) / sc<double>(MONITOR->m_size.y) : 1.6;
+    // The other monitors' strips, as one number: how many there are, how many
+    // cells each has, and where each output sits -- the only things about them
+    // this layout reads. Read off the memoised altStrips() so the key and the
+    // layout below cannot disagree about the list.
+    size_t altSignature = 0;
+    if (ALTREVEAL > 0.F) {
+        for (const auto& ALT : altStrips()) {
+            const auto& M = ALT.monitor;
 
-    const float REVEAL = revealOverride >= 0.F ? std::clamp(revealOverride, 0.F, 1.F) : scratchpadRevealValue();
-    if (scratchSlot && REVEAL <= 0.001F)
-        return {};
-
-    const float  PAD    = BAND * OVERVIEW_STRIP_BAND_PAD_FRAC;
-    const float  GAP    = sc<float>(ScrollOverview::Config::getStripGap());
-    const float  ASPECT = MONITOR->m_size.y > 1 ? sc<float>(MONITOR->m_size.x) / sc<float>(MONITOR->m_size.y) : 1.6F;
-    const size_t COUNT  = images.size();
-
-    float cellH = BAND - 2.F * PAD;
-    float baseW = cellH * ASPECT;
-
-    std::vector<float> cellWidths(COUNT, baseW);
-    float              sumCellW = 0.F;
-
-    for (size_t i = 0; i < COUNT; ++i) {
-        const float RATIO = images[i] ? workspaceScrollingSpanRatio(images[i]->pWorkspace, MONITOR) : 1.0F;
-        cellWidths[i]     = baseW * RATIO;
-        sumCellW += cellWidths[i];
+            altSignature = altSignature * 1000003 + sc<size_t>(M->m_id) + 1;
+            altSignature = altSignature * 1000003 + ALT.overview->images.size();
+            altSignature = altSignature * 1000003 + sc<size_t>(sc<long long>(M->m_size.x));
+            altSignature = altSignature * 1000003 + sc<size_t>(sc<long long>(M->m_size.y));
+        }
     }
 
-    const float STRIPGAPS = GAP * sc<float>(COUNT - 1);
-    // Both plates' padding, plus the gap that has to remain visible between them.
-    const float DETACH    = REVEAL * (2.F * OVERVIEW_STRIP_PANELPADL + GAP * OVERVIEW_SCRATCHPAD_DETACH_GAPS);
+    if (stripRowMemo.filled && stripRowMemo.frame == FRAME && stripRowMemo.scratchArg == scratchRevealOverride && stripRowMemo.altArg == altRevealOverride &&
+        stripRowMemo.scratch == SCRATCH && stripRowMemo.alt == ALTREVEAL && stripRowMemo.top == TOPL && stripRowMemo.band == BANDL && stripRowMemo.gap == GAPL &&
+        stripRowMemo.monX == MONITOR->m_position.x && stripRowMemo.monY == MONITOR->m_position.y && stripRowMemo.monW == MONITOR->m_size.x &&
+        stripRowMemo.aspect == ASPECT && stripRowMemo.images == images.size() && stripRowMemo.altSignature == altSignature)
+        return stripRowMemo.out;
 
-    // Many workspaces must shrink the cells rather than overflow the monitor --
-    // and the detached cell is inside that budget, so revealing it shrinks them
-    // a little further instead of pushing itself off the screen edge.
-    if (const float MAXW = sc<float>(MONITOR->m_size.x) - 2.F * PAD;
-        sumCellW + STRIPGAPS + DETACH + REVEAL * baseW > MAXW && sumCellW + REVEAL * baseW > 0.F) {
-        const float SCALE_DOWN = std::max(0.F, (MAXW - STRIPGAPS - DETACH) / (sumCellW + REVEAL * baseW));
-        cellH *= SCALE_DOWN;
-        baseW *= SCALE_DOWN;
-        for (size_t i = 0; i < COUNT; ++i)
-            cellWidths[i] *= SCALE_DOWN;
-        sumCellW *= SCALE_DOWN;
+    ScrollOverview::StripLayout::SInput in;
+    in.monX     = MONITOR->m_position.x;
+    in.monY     = MONITOR->m_position.y;
+    in.monW     = MONITOR->m_size.x;
+    in.aspect   = ASPECT;
+    in.top      = TOPL;
+    in.band     = BANDL;
+    in.padFrac  = OVERVIEW_STRIP_BAND_PAD_FRAC;
+    in.gap      = ScrollOverview::Config::getStripGap();
+    in.panelPad = OVERVIEW_STRIP_PANELPADL;
+    in.detach   = OVERVIEW_SCRATCHPAD_DETACH_GAPS;
+
+    in.ratios.reserve(images.size());
+    for (const auto& IMG : images)
+        in.ratios.push_back(IMG ? workspaceScrollingSpanRatio(IMG->pWorkspace, MONITOR) : 1.0);
+
+    in.scratchReveal = SCRATCH;
+
+    if (ALTREVEAL > 0.F) {
+        for (const auto& ALT : altStrips()) {
+            const auto& M = ALT.monitor;
+            in.alts.push_back({ALT.overview->images.size(), M->m_size.y > 1 ? sc<double>(M->m_size.x) / sc<double>(M->m_size.y) : 1.6});
+        }
+        in.altReveal = ALTREVEAL;
     }
 
-    if (cellH <= 1.F)
-        return {};
+    stripRowMemo.frame        = FRAME;
+    stripRowMemo.scratchArg   = scratchRevealOverride;
+    stripRowMemo.altArg       = altRevealOverride;
+    stripRowMemo.scratch      = SCRATCH;
+    stripRowMemo.alt          = ALTREVEAL;
+    stripRowMemo.top          = TOPL;
+    stripRowMemo.band         = BANDL;
+    stripRowMemo.gap          = GAPL;
+    stripRowMemo.monX         = MONITOR->m_position.x;
+    stripRowMemo.monY         = MONITOR->m_position.y;
+    stripRowMemo.monW         = MONITOR->m_size.x;
+    stripRowMemo.aspect       = in.aspect;
+    stripRowMemo.images       = images.size();
+    stripRowMemo.altSignature = altSignature;
+    stripRowMemo.out          = ScrollOverview::StripLayout::layout(in);
+    stripRowMemo.filled       = true;
 
-    // The cell GROWS out of the strip's right edge rather than popping in at
-    // full width, so the re-centring and the reveal are one motion.
-    const float SCRATCHW = REVEAL * baseW;
-    const float TOTAL    = sumCellW + STRIPGAPS + DETACH + SCRATCHW;
-
-    // X10: the search row owns the very top; the band starts under it.
-    // X60: and the RESULTS sit between the two, so a growing result list pushes
-    // the strip down rather than being anchored to the bottom half. This
-    // reverses X48's arrangement (and with it DoD 18's "the strip never moves
-    // under a query") on the user's instruction of 2026-08-05.
-    const float Y = sc<float>(MONITOR->m_position.y) + overviewSearchLogicalHeight(MONITOR) + overviewResultsLogicalHeight(MONITOR) + PAD +
-        (BAND - 2.F * PAD - cellH) / 2.F;
-
-    float currentX = sc<float>(MONITOR->m_position.x) + (sc<float>(MONITOR->m_size.x) - TOTAL) / 2.F;
-
-    if (scratchSlot)
-        return SCRATCHW <= 1.F ? CBox{} : CBox{currentX + sumCellW + STRIPGAPS + DETACH, Y, SCRATCHW, cellH};
-
-    if (cellWidths[workspaceIdx] <= 1.F)
-        return {};
-
-    for (size_t i = 0; i < workspaceIdx; ++i)
-        currentX += cellWidths[i] + GAP;
-
-    return CBox{currentX, Y, cellWidths[workspaceIdx], cellH};
+    return stripRowMemo.out;
 }
 
 CBox CScrollOverview::stripCellLogicalBox(size_t workspaceIdx) const {
@@ -4041,6 +4736,266 @@ void CScrollOverview::updateScratchpadReveal() {
         *scratchpadReveal = TARGET;
 }
 
+// ------------------------------------------------ other monitors' strips --
+
+// Every OTHER monitor that has an overview up and desktops to show, left to
+// right the way the monitors themselves are arranged. Closing overviews stay in:
+// all of them close together, and a strip that vanished the instant its
+// overview started to leave would jerk this row a whole strip sideways mid-fade.
+const std::vector<CScrollOverview::SAltStrip>& CScrollOverview::altStrips() const {
+    // MEMOISED, because this is asked for on every POINTER MOTION and motion
+    // arrives far faster than frames do: the reveal zone's box and the alt-cell
+    // hit test both start here, and each call allocated a vector and sorted it.
+    // Keyed on the overview frame counter (which only moves inside render) and
+    // on how many overviews are registered, so it is rebuilt once per drawn
+    // frame per output and whenever a monitor's overview comes or goes.
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR) {
+        altStripsBuf.clear();
+        altStripsFilled = false;
+        return altStripsBuf;
+    }
+
+    const size_t COUNT = scrollOverviews().size();
+    if (altStripsFilled && altStripsFrame == g_overviewFrame && altStripsCount == COUNT)
+        return altStripsBuf;
+
+    altStripsFrame  = g_overviewFrame;
+    altStripsCount  = COUNT;
+    altStripsFilled = true;
+
+    auto& out = altStripsBuf;
+    out.clear();
+
+    for (const auto& OV : scrollOverviews()) {
+        const auto OTHER = OV ? dynamic_cast<CScrollOverview*>(OV.get()) : nullptr;
+        if (!OTHER || OTHER == this)
+            continue;
+        const auto OTHERMON = OTHER->pMonitor.lock();
+        if (!OTHERMON || OTHERMON == MONITOR || !OTHERMON->m_enabled || OTHER->images.empty())
+            continue;
+        out.push_back({OTHER, OTHERMON});
+    }
+
+    std::ranges::sort(out, [](const SAltStrip& a, const SAltStrip& b) {
+        if (a.monitor->m_position.x != b.monitor->m_position.x)
+            return a.monitor->m_position.x < b.monitor->m_position.x;
+        if (a.monitor->m_position.y != b.monitor->m_position.y)
+            return a.monitor->m_position.y < b.monitor->m_position.y;
+        return a.monitor->m_id < b.monitor->m_id;
+    });
+    return out;
+}
+
+float CScrollOverview::altStripsRevealValue() const {
+    return altStripsReveal ? std::clamp(altStripsReveal->value(), 0.F, 1.F) : 0.F;
+}
+
+// The reveal zone: left of the strip's first cell, a clear padding gap off its
+// plate, out to the monitor's edge -- the scratchpad zone, mirrored, and for the
+// same reasons (see scratchpadZoneLogicalBox). Nothing at all with no other
+// monitor: hovering there on a one-monitor setup must do nothing.
+CBox CScrollOverview::altZoneLogicalBox() const {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || images.empty() || altStrips().empty())
+        return {};
+
+    const auto FIRST = stripCellLogicalBox(0);
+    if (FIRST.width <= 1)
+        return {};
+
+    const float GAP = sc<float>(ScrollOverview::Config::getStripGap());
+    const float PAD = OVERVIEW_STRIP_PANELPADL + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
+    const float X   = sc<float>(MONITOR->m_position.x);
+    const float W   = sc<float>(FIRST.x) - PAD - X;
+
+    return W <= 1.F ? CBox{} : CBox{X, sc<float>(FIRST.y), W, sc<float>(FIRST.height)};
+}
+
+// Half out does not take a click, same as the scratchpad cell.
+std::optional<CScrollOverview::SAltHit> CScrollOverview::altCellAt(const Vector2D& point) const {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || altStripsRevealValue() <= 0.5F)
+        return std::nullopt;
+
+    const auto& STRIPS = altStrips();
+    const auto  ROW    = stripRow(-1.F, -1.F);
+    if (!ROW.valid || !ROW.altDrawable || ROW.altCells.size() != STRIPS.size())
+        return std::nullopt;
+
+    for (size_t k = 0; k < STRIPS.size(); ++k) {
+        auto* const OTHER = STRIPS[k].overview;
+        for (size_t j = 0; j < ROW.altCells[k].size() && j < OTHER->images.size(); ++j) {
+            const auto& B = ROW.altCells[k][j];
+            if (B.empty() || !OTHER->images[j] || !OTHER->images[j]->pWorkspace)
+                continue;
+            const auto CELL = getOverviewGlobalBox(CBox{B.x, B.y, B.w, B.h}, MONITOR, scale->value(), OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+            if (CELL.width <= 1 || !CELL.containsPoint(point))
+                continue;
+            return SAltHit{.overview = OTHER, .monitor = STRIPS[k].monitor, .workspaceIdx = j, .workspace = OTHER->images[j]->pWorkspace, .cell = CELL};
+        }
+    }
+    return std::nullopt;
+}
+
+void CScrollOverview::updateAltStripsReveal() {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || !altStripsReveal)
+        return;
+
+    bool want = false;
+    // No other monitor, no strips -- and no zone either, so nothing can ask.
+    if (!closing && !altStrips().empty() && isOverviewPointerOnMonitor(MONITOR)) {
+        // A window drag on this monitor, whichever overview it started in: the
+        // strips are drop targets for sending a window to another monitor.
+        const bool DRAGGING = drag.activeWindow || (g_pointerGrabOverview && g_pointerGrabOverview->drag.activeWindow);
+        want                = DRAGGING;
+
+        if (!want) {
+            if (const auto LOGICAL = altZoneLogicalBox(); LOGICAL.width > 1) {
+                const auto ZONE = getOverviewGlobalBox(LOGICAL, MONITOR, scale->value(), OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+                want            = ZONE.width > 1 && ZONE.containsPoint(lastMousePosLocal);
+            }
+        }
+    }
+
+    if (const float TARGET = want ? 1.F : 0.F; std::abs(altStripsReveal->goal() - TARGET) > 0.01F)
+        *altStripsReveal = TARGET;
+}
+
+// What a monitor is called on its strip's label. The connector name alone
+// ("DP-1") says nothing to a person; the model does, except for a laptop panel
+// whose "model" is a hex id.
+static std::string overviewMonitorLabel(const PHLMONITOR& monitor) {
+    if (!monitor)
+        return {};
+
+    const auto& NAME = monitor->m_name;
+    if (NAME.starts_with("eDP") || NAME.starts_with("LVDS") || NAME.starts_with("DSI"))
+        return "Built-in Display";
+
+    const auto MAKE  = monitor->m_output ? monitor->m_output->make : std::string{};
+    const auto MODEL = monitor->m_output ? monitor->m_output->model : std::string{};
+    const auto BRAND = MAKE.substr(0, MAKE.find(' '));
+    if (!MODEL.empty() && !MODEL.starts_with("0x"))
+        return BRAND.empty() ? MODEL : BRAND + " " + MODEL;
+    if (!BRAND.empty())
+        return BRAND + " (" + NAME + ")";
+    return NAME;
+}
+
+void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& STYLE) {
+    const float REVEAL = altStripsRevealValue();
+    if (!monitor || REVEAL <= 0.01F)
+        return;
+
+    const auto STRIPS = altStrips();
+    const auto ROW    = stripRow(-1.F, -1.F);
+    if (STRIPS.empty() || !ROW.valid || !ROW.altDrawable || ROW.altCells.size() != STRIPS.size())
+        return;
+
+    const float FADE = STYLE.fade * REVEAL;
+
+    auto*      dragContext = g_pointerGrabOverview && g_pointerGrabOverview->drag.activeWindow ? g_pointerGrabOverview : this;
+    const auto DRAGGED     = getOverviewWindowToShow(dragContext->drag.activeWindow.lock());
+    const auto HOVER       = isOverviewPointerOnMonitor(monitor) ? altCellAt(lastMousePosLocal) : std::nullopt;
+
+    for (size_t k = 0; k < STRIPS.size(); ++k) {
+        auto* const OTHER    = STRIPS[k].overview;
+        const auto  OTHERMON = STRIPS[k].monitor;
+        const auto& CELLS    = ROW.altCells[k];
+
+        // Its own plate, padded by how far out it is (StripLayout.hpp), so it
+        // never sits over this strip's plate or the next monitor's.
+        double x0 = 1e18, x1 = -1e18, y0 = 0, h = 0;
+        for (const auto& B : CELLS) {
+            if (B.empty())
+                continue;
+            x0 = std::min(x0, B.x);
+            x1 = std::max(x1, B.right());
+            y0 = B.y;
+            h  = B.h;
+        }
+        if (x1 <= x0)
+            continue;
+
+        const CBox PLATELOGICAL{x0 - ROW.altPlatePad, y0 - ROW.altPlatePad, x1 - x0 + 2.0 * ROW.altPlatePad, h + 2.0 * ROW.altPlatePad};
+        const auto PLATE = getOverviewGlobalBox(PLATELOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+        if (PLATE.width <= 1 || !overviewBoxIntersectsMonitor(PLATE, monitor))
+            continue;
+
+        const auto FIRSTCELL  = getOverviewGlobalBox(CBox{CELLS.front().x, CELLS.front().y, CELLS.front().w, CELLS.front().h}, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F,
+                                                     layout);
+        const int  PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PLATE.x))));
+        const int  PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
+        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true);
+
+        const float MINIRENDERSCALE = renderScale * sc<float>(FIRSTCELL.height) / std::max(1.F, sc<float>(OTHERMON->m_size.y) * monitor->m_scale);
+
+        for (size_t j = 0; j < CELLS.size() && j < OTHER->images.size(); ++j) {
+            const auto& WIMG = OTHER->images[j];
+            if (CELLS[j].empty() || !WIMG || !WIMG->pWorkspace)
+                continue;
+
+            const auto CELL = getOverviewGlobalBox(CBox{CELLS[j].x, CELLS[j].y, CELLS[j].w, CELLS[j].h}, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+            if (CELL.width <= 1 || !overviewBoxIntersectsMonitor(CELL, monitor))
+                continue;
+
+            const bool ATLEFT  = j == 0;
+            const bool ATRIGHT = j + 1 == CELLS.size();
+
+            renderOverviewWorkspaceShadow(monitor, CELL, renderScale, false, FADE);
+
+            // The desktop's number, as every strip cell carries it.
+            if (const auto NUMTEX = OverviewRender::text(std::to_string(WIMG->pWorkspace->m_id), ScrollOverview::Config::themeForeground().modifyA(0.20F),
+                                                         std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
+                NUMTEX && NUMTEX->ok()) {
+                CTexPassElement::SRenderData num;
+                num.tex = NUMTEX;
+                num.box = CBox{CELL.x + std::round((sc<float>(CELL.width) - sc<float>(NUMTEX->m_size.x)) / 2.F),
+                               CELL.y + std::round((sc<float>(CELL.height) - sc<float>(NUMTEX->m_size.y)) / 2.F), sc<float>(NUMTEX->m_size.x),
+                               sc<float>(NUMTEX->m_size.y)}
+                              .round();
+                num.a = FADE;
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(num));
+            }
+
+            // Drawn by THAT monitor's overview. It already forces these windows
+            // visible for its own strip and restores them when it closes; a
+            // second owner recording the forced state as "original" would put
+            // the forced state back.
+            for (const auto& REF : WIMG->windows) {
+                const auto WINDOW = getOverviewWindowToShow(REF.lock());
+                if (!overviewStripMiniShown(WINDOW, WIMG->pWorkspace) || WINDOW == DRAGGED)
+                    continue;
+
+                const auto MINI = OTHER->stripMiniBox(CELL, WINDOW, OTHERMON);
+                if (MINI.width < 2 || MINI.height < 2 || MINI.intersection(CELL).empty())
+                    continue;
+
+                OTHER->renderWindowLive(monitor, WINDOW, MINI.copy().round(), MINIRENDERSCALE, now, &CELL, false, FADE);
+            }
+
+            // A drop target lights like one; the source desktop of the drag does not.
+            const bool HOT = HOVER && HOVER->overview == OTHER && HOVER->workspaceIdx == j &&
+                (!DRAGGED || WIMG->pWorkspace != dragContext->drag.originalWorkspace.lock());
+            if (HOT) {
+                renderStripCellRect(CELL, ScrollOverview::Config::highlightColor().modifyA(0.22F * FADE), ATLEFT, ATRIGHT, STYLE);
+                renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
+            }
+
+            // That monitor's active desktop, marked the way its own strip marks it.
+            if (OTHERMON->m_activeWorkspace && WIMG->pWorkspace->m_id == OTHERMON->m_activeWorkspace->m_id)
+                renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
+        }
+
+        // Which monitor this is, over its plate, the scratchpad label's plate
+        // and gap -- always, because unlike the scratchpad it has no other name.
+        OverviewRender::labelPill(monitor, overviewMonitorLabel(OTHERMON), sc<float>(PLATE.x) + sc<float>(PLATE.width) / 2.F,
+                                  sc<float>(PLATE.y) - OverviewRender::LABEL_PILL_GAP * monitor->m_scale, FADE, monitor->m_scale);
+    }
+}
+
 void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& STYLE) {
     const float REVEAL = scratchpadRevealValue();
     if (!monitor || REVEAL <= 0.01F)
@@ -4058,7 +5013,8 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     // which is the whole visual point: two plates read as two things, and a
     // swipe stops at the edge of the first.
     const auto PLATELOGICAL = scratchpadCellLogicalBox(-1.F).copy().expand(OVERVIEW_STRIP_PANELPADL);
-    if (const auto PLATE = getOverviewGlobalBox(PLATELOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout); PLATE.width > 1) {
+    const auto PLATE        = getOverviewGlobalBox(PLATELOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+    if (PLATE.width > 1) {
         const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(CELL.x) - sc<float>(PLATE.x))));
         const int PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
         OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true);
@@ -4124,9 +5080,15 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     // 2026-09-12). Only while something is parked: an empty cell already says
     // what it is in the middle of itself, and a plate over nothing would be the
     // clutter the hover zone exists to avoid.
+    //
+    // It floats above the PLATE by the dock tooltip's own gap (user,
+    // 2026-09-14). Anchored on the cell it sat flush on the plate's top edge:
+    // the cell is inset from the plate by exactly the panel padding it was
+    // lifted by.
     if (!PARKED.empty()) {
+        const float TOP = PLATE.width > 1 ? sc<float>(PLATE.y) : sc<float>(CELL.y) - OVERVIEW_STRIP_PANELPADL * monitor->m_scale;
         OverviewRender::labelPill(monitor, ScrollOverview::Scratchpad::label(WORKSPACE), sc<float>(CELL.x) + sc<float>(CELL.width) / 2.F,
-                                  sc<float>(CELL.y) - OVERVIEW_STRIP_PANELPADL * monitor->m_scale, FADE, monitor->m_scale);
+                                  TOP - OverviewRender::LABEL_PILL_GAP * monitor->m_scale, FADE, monitor->m_scale);
     }
 }
 
@@ -4242,6 +5204,29 @@ PHLWINDOW CScrollOverview::windowAtStripPoint(const Vector2D& point, CBox* miniB
             // (it opens the scratchpad), never to a tile behind the band.
             return nullptr;
         }
+    }
+
+    // The other monitors' strips, the same way and for the same reason: a
+    // press on one of their previews picks THAT window up, so it can be dragged
+    // over to this monitor.
+    if (const auto HIT = altCellAt(point)) {
+        const auto& WIMG = HIT->overview->images[HIT->workspaceIdx];
+        for (auto it = WIMG->windows.rbegin(); it != WIMG->windows.rend(); ++it) {
+            const auto WINDOW = getOverviewWindowToShow(it->lock());
+            if (!overviewStripMiniShown(WINDOW, WIMG->pWorkspace))
+                continue;
+
+            const auto MINI = HIT->overview->stripMiniBox(HIT->cell, WINDOW, HIT->monitor);
+            if (MINI.width < 2 || MINI.height < 2 || !MINI.containsPoint(point))
+                continue;
+
+            if (miniBox)
+                *miniBox = MINI;
+
+            return WINDOW;
+        }
+
+        return nullptr;
     }
 
     for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
@@ -4634,6 +5619,7 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
     // Ahead of every box below: the reveal is what the strip's own layout reads
     // to know how much room to leave, so it has to settle before the cells do.
     updateScratchpadReveal();
+    updateAltStripsReveal();
 
     // User, 2026-08-06: the strip FADES in, and a toggle halfway through
     // reverses the fade. Driven off the open scale the overview already
@@ -4687,6 +5673,7 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
     }
 
     renderScratchpadCell(monitor, renderScale, now, style);
+    renderAltStrips(monitor, renderScale, now, style);
 }
 
 // How many open windows the query reaches. Counted across every workspace, not
@@ -4696,11 +5683,26 @@ size_t CScrollOverview::matchingWindowCount() const {
     if (g_search.query.text.empty())
         return 0;
 
+    // N walks of the whole window list, once per desktop, every frame on every
+    // output -- and the answer moves only when the query does or when a window
+    // joins, leaves, is minimized or is retitled, all of which bump the
+    // membership generation this keys on.
+    const uint64_t MEMBERS = Membership::generation();
+    if (matchCountFilled && matchCountQuery == g_search.query.text && matchCountMembers == MEMBERS && matchCountImages == images.size())
+        return matchCountValue;
+
     size_t matches = 0;
     for (const auto& wimg : images) {
         if (wimg && wimg->pWorkspace)
             matches += overviewGridWindows(wimg->pWorkspace).size();
     }
+
+    matchCountQuery   = g_search.query.text;
+    matchCountMembers = MEMBERS;
+    matchCountImages  = images.size();
+    matchCountValue   = matches;
+    matchCountFilled  = true;
+
     return matches;
 }
 
@@ -4747,6 +5749,8 @@ struct SSearchLayoutInputs {
     std::string_view               query;
     bool                           queried = false, emptyResult = false;
     int                            selection = -1;
+    // The live field's width, logical px, as its spring has it THIS frame.
+    float                          fieldWL = OVERVIEW_PILL_FIELDL;
 };
 
 // LAYOUT. Pure: monitor, animation values and the section set in, boxes out. It
@@ -4763,6 +5767,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     out.selection   = IN.selection;
 
     const auto MONITOR = IN.monitor;
+    out.monitorId      = MONITOR ? MONITOR->m_id : MONITOR_INVALID;
 
     out.label = !IN.queried ? "Search, calculate or run" : (IN.emptyResult ? std::string(IN.query) + "    no matches" : std::string(IN.query));
 
@@ -4773,7 +5778,9 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     // but invisible (X10). The overview scale insets this logical row far
     // enough down to clear the bar; X22 only removed the pan (see
     // OVERVIEW_CHROME_NO_PAN).
-    const float FIELDWL     = IN.queried ? OVERVIEW_PILL_FIELDQL : OVERVIEW_PILL_FIELDL;
+    // The live field (SSearchFieldMotion): springs toward the query's width,
+    // capped so the pill never passes OVERVIEW_PILL_MAXFRAC of the monitor.
+    const float FIELDWL     = IN.fieldWL;
     const float PILLWL      = OVERVIEW_PILL_WL(FIELDWL);
     const CBox  PILLLOGICAL = {
         sc<float>(MONITOR->m_position.x) + (sc<float>(MONITOR->m_size.x) - PILLWL) / 2.F,
@@ -4805,6 +5812,19 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
     if (pill.width <= 1.F || !overviewBoxIntersectsMonitor(pill, MONITOR))
         return out; // nothing to draw, and the published heights carry unchanged
+
+    // The transform's scale, read BEFORE the box is snapped to whole pixels.
+    // Read after, it moved with the rounding of the pill's width -- and the text
+    // is measured in that scale, and the measurement is what sizes the field,
+    // which sizes the pill, which rounds differently: a loop that settled into
+    // flipping between two widths a pixel apart, the whole bar and its text
+    // twitching every few frames while nothing was being typed (user,
+    // 2026-09-14, recording 14-16-59: pill edges 1117/2318 <-> 1118/2317).
+    // (getOverviewGlobalBox rounds by default, so `pill` is already whole
+    // pixels here -- the first attempt at this read the rounded width and the
+    // loop kept running: widths 824/826, scale 1.3105/1.3135, logged
+    // 2026-09-14. The unrounded transform of the same box is the real scale.)
+    const float TRANSFORMSCALE = sc<float>(getOverviewGlobalBox(PILLLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout, false).width) / PILLWL;
     pill.round();
 
     out.drawable = true;
@@ -4818,12 +5838,14 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
     // Everything inside the pill is measured off the box as it actually landed,
     // so the badge and the type follow the card transform for free.
-    out.scale          = sc<float>(pill.width) / PILLWL;
+    out.scale          = TRANSFORMSCALE;
     const float SCALE  = out.scale;
     const float BADGED = std::round(OVERVIEW_PILL_BADGEL * SCALE);
     const float PADL   = std::round(OVERVIEW_PILL_PADL * SCALE);
     out.gap            = std::round(OVERVIEW_PILL_GAPL * SCALE);
     out.fieldW         = std::round(FIELDWL * SCALE);
+
+    out.fieldXExact = sc<float>(getOverviewGlobalBox(PILLLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout, false).x) + PADL + BADGED + out.gap;
 
     out.badge = CBox{pill.x + PADL, pill.y + std::round((pill.height - BADGED) / 2.F), BADGED, BADGED};
     out.badge.round();
@@ -5015,6 +6037,11 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             } else if (o.kind == OmarchySearch::EItemKind::Agent) {
                 out.inspector.detail1      = o.description;
                 out.inspector.shortcutHint = "Enter  Launch agent";
+                // Same "Key x2  Action" form as the app card's Shift x2 hint.
+                if (OmarchySearch::isDefaultAgent(o))
+                    out.inspector.shortcutHint2 = "Default agent";
+                else if (OmarchySearch::canBeDefaultAgent(o))
+                    out.inspector.shortcutHint2 = "Ctrl×2  Set as default";
             } else if (o.kind == OmarchySearch::EItemKind::Calculator) {
                 out.inspector.detail1      = o.description;
                 out.inspector.detail2      = "Enter copies " + o.actionCommand + " to the clipboard";
@@ -5311,8 +6338,9 @@ static void drawSearch(const SSearchLayout& L) {
     const int  FONTPX = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
     const auto NOW    = Time::steadyNow();
 
-    const float FIELDX = BADGE.x + BADGE.width + L.gap;
-    const CBox  FIELD{FIELDX, PILL.y, L.fieldW, PILL.height};
+    // Snapped for the CLIP box (a chrome edge), exact for the type in it.
+    const float FIELDX = L.fieldXExact > 0.F ? L.fieldXExact : BADGE.x + BADGE.width + L.gap;
+    const CBox  FIELD{std::round(FIELDX), PILL.y, L.fieldW, PILL.height};
 
     const auto ADDLETTER = [&](const SP<Render::ITexture>& tex, const CBox& box, float a) {
         if (!tex || !tex->ok() || a <= 0.F)
@@ -5324,6 +6352,10 @@ static void drawSearch(const SSearchLayout& L) {
         data.clipBox = FIELD;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
     };
+
+    // Nothing measured is nothing to fit: the placeholder keeps the rest width.
+    auto& FIELDMOTION = g_search.fieldOn(L.monitorId);
+    FIELDMOTION.contentL = 0.F;
 
     if (!SearchLetters::g_searchLetters.empty()) {
         // Serpantinum Input.qml: one texture per codepoint, scale/y/opacity from
@@ -5337,24 +6369,50 @@ static void drawSearch(const SSearchLayout& L) {
             widths.push_back((TEX && TEX->ok()) ? sc<float>(TEX->m_size.x) : sc<float>(FONTPX) * 0.5F);
         }
 
-        const auto PLACED = SearchLetters::g_searchLetters.place(widths, SPACING, SCALE, NOW);
+        // What the field has to fit, handed back to next frame's springs: the
+        // LIVE glyphs only (a backspaced letter flying off must not hold the pill
+        // open), plus the "no matches" suffix while it is showing.
+        const auto  SUFFIX    = L.emptyResult && !LIVE.empty() ? OverviewRender::text("    no matches", FG, FONTPX, false, "", 0, 600) : SP<Render::ITexture>{};
+        const float LIVEENDPX = SearchLetters::g_searchLetters.liveEndX(widths, SPACING);
+        FIELDMOTION.contentL = (LIVEENDPX + (SUFFIX && SUFFIX->ok() ? sc<float>(SUFFIX->m_size.x) : 0.F)) / std::max(SCALE, 0.01F);
+
+        // Past the cap the whole run slides left by the scroll, and the glyphs
+        // nearest the field's left edge fade out on a smoothstep over FADEL. The
+        // fade is itself eased in by how far the text has scrolled, so it grows
+        // as scrolling begins instead of popping on at the first pixel.
+        const float SCROLLPX  = std::round(FIELDMOTION.drawScrollL * SCALE);
+        const float FADEPX    = std::max(1.F, OVERVIEW_PILL_FADEL * SCALE);
+        const float FADEON    = std::clamp(SCROLLPX / FADEPX, 0.F, 1.F);
+        const auto  EDGEALPHA = [&](float centreX) {
+            if (FADEON <= 0.F)
+                return 1.F;
+            const float T      = std::clamp((centreX - FIELDX) / FADEPX, 0.F, 1.F);
+            const float SMOOTH = T * T * (3.F - 2.F * T);
+            return 1.F - FADEON * (1.F - SMOOTH);
+        };
+
+        const auto PLACED = SearchLetters::g_searchLetters.place(widths, SPACING, SCALE, NOW, sc<int>(L.monitorId));
+        if (Prof::enabled()) {
+            Prof::retargets += SearchLetters::g_searchLetters.lastRetargets;
+            Prof::pillScale = SCALE;
+            Prof::fieldWL   = FIELDMOTION.drawWidthL;
+        }
         for (const auto& P : PLACED) {
             const auto TEX = OverviewRender::text(P.glyph, FG, FONTPX, false, "", 0, 600);
             if (!TEX || !TEX->ok())
                 continue;
             const float W  = sc<float>(TEX->m_size.x);
             const float H  = sc<float>(TEX->m_size.y);
-            const float CX = FIELDX + P.x + W * 0.5F;
+            const float CX = FIELDX - SCROLLPX + P.x + W * 0.5F;
             const float CY = PILL.y + std::round((PILL.height - H) / 2.F) + H * 0.5F + P.y;
             const float DW = W * P.scale;
             const float DH = H * P.scale;
-            ADDLETTER(TEX, CBox{CX - DW * 0.5F, CY - DH * 0.5F, DW, DH}, P.opacity);
+            ADDLETTER(TEX, CBox{CX - DW * 0.5F, CY - DH * 0.5F, DW, DH}, P.opacity * EDGEALPHA(CX));
         }
 
-        if (L.emptyResult && !LIVE.empty()) {
-            const auto SUFFIX = OverviewRender::text("    no matches", FG, FONTPX, false, "", std::max(1, sc<int>(L.fieldW)), 600);
-            if (SUFFIX && SUFFIX->ok()) {
-                const float X = FIELDX + SearchLetters::g_searchLetters.liveEndX(widths, SPACING);
+        if (SUFFIX) {
+            if (SUFFIX->ok()) {
+                const float X = FIELDX - SCROLLPX + LIVEENDPX;
                 CBox        suffixBox{X, PILL.y + std::round((PILL.height - sc<float>(SUFFIX->m_size.y)) / 2.F), sc<float>(SUFFIX->m_size.x), sc<float>(SUFFIX->m_size.y)};
                 ADDLETTER(SUFFIX, suffixBox, 1.F);
             }
@@ -5385,6 +6443,15 @@ static void drawSearch(const SSearchLayout& L) {
 // The reference's two trailing icon buttons (Google Lens, SongRec) are not
 // drawn -- neither action exists in this overview, so they would be decoration
 // for nothing.
+MONITORID CScrollOverview::searchMonitorId() const {
+    const auto MONITOR = pMonitor.lock();
+    return MONITOR ? MONITOR->m_id : MONITOR_INVALID;
+}
+
+SSearchLayout& CScrollOverview::searchLayoutHere() const {
+    return g_search.layoutOn(searchMonitorId());
+}
+
 void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     Prof::Timer PROF{Prof::srchNs, Prof::srchCalls};
     if (!monitor)
@@ -5393,7 +6460,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // G12. Cleared here rather than where the rows are drawn: every early
     // return below is a frame with no rows on it, and a stale box would hand
     // the next press a result that is no longer on screen.
-    g_search.layout.hits.clear();
+    searchLayoutHere().hits.clear();
 
     // User, 2026-08-06: the pill fades in with the overview, and reverses if
     // the overview is toggled off mid-flight. See renderStrip for why the open
@@ -5447,6 +6514,19 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     const uint8_t COL_MASK = QUERIED ? overviewSearchColMask(SECTIONS) : 0;
     const auto    COL_TGT  = overviewSearchColWidths(resultsWidth->value(), COL_MASK);
 
+    // The LIVE FIELD. Aimed off the text as it was drawn last frame (the draw
+    // pass is the only place a glyph's width is known), which one frame behind
+    // a spring cannot show. The field hugs the query from its rest width up to
+    // the cap; whatever the query needs beyond the cap becomes scroll.
+    auto&       FIELDMOTION = g_search.fieldOn(monitor->m_id);
+    const float MAXFIELDL   = std::max(OVERVIEW_PILL_FIELDL, sc<float>(monitor->m_size.x) * OVERVIEW_PILL_MAXFRAC - OVERVIEW_PILL_WL(0.F));
+    // Whole logical px: the measurement is a glyph run divided by a float scale,
+    // and a target that wanders by a fraction of a pixel re-arms the spring --
+    // which snaps within its epsilon -- every frame it steps.
+    const float NEEDL       = FIELDMOTION.contentL > 0.F ? std::ceil(FIELDMOTION.contentL + OVERVIEW_PILL_ENDROOML) : 0.F;
+    if (FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow()))
+        requestInputFrame();
+
     // ---- LAYOUT: the animated values are sampled once, right here.
     const SSearchLayoutInputs IN{
         .monitor     = monitor,
@@ -5458,18 +6538,19 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         .width       = resultsWidth->value(),
         .colW        = {COL_TGT.col[0], COL_TGT.col[1], COL_TGT.col[2]},
         .inspectorW  = COL_TGT.inspector,
-        .rowLCarry   = g_search.layout.rowL,
+        .rowLCarry   = searchLayoutHere().rowL,
         .query       = g_search.query.text,
         .queried     = QUERIED,
         .emptyResult = EMPTYRESULT,
         .selection   = g_search.nav.selection,
+        .fieldWL     = FIELDMOTION.drawWidthL,
     };
 
     SSearchLayout LAYOUT = layoutSearch(IN, RESULTS, SECTIONS);
 
     // ---- PUBLISH: the one assignment the rest of the overview can see.
     g_search.nav.selection = LAYOUT.selection;
-    g_search.layout        = std::move(LAYOUT);
+    searchLayoutHere()     = std::move(LAYOUT);
 
     if (QUERIED && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size())) {
         if (RESULTS[g_search.nav.selection].omarchy && !RESULTS[g_search.nav.selection].omarchy->filePath.empty()) {
@@ -5480,7 +6561,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // ---- DRAW: out of the published object, so the painter, the pointer and
     // the keyboard are provably looking at the same boxes.
     SearchLetters::g_searchLetters.sync(g_search.query.text, Time::steadyNow());
-    drawSearch(g_search.layout);
+    drawSearch(searchLayoutHere());
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor
     // will not schedule the rest of the pop on its own.
@@ -5540,6 +6621,42 @@ bool overviewHandleShiftTap() {
     for (const auto& overview : scrollOverviews()) {
         if (overview)
             overview->close();
+    }
+    return true;
+}
+
+// Ctrl x2: make the AI agent row being browsed Omarchy's default coding agent.
+// The row is SPACE's: the one under the pointer while the pointer is doing the
+// browsing, the keyboard selection otherwise. The agent then leads the AI &
+// Tools column, and the selection follows it there -- left where it was, the
+// highlight would sit on whichever agent slid into the old slot.
+bool overviewHandleCtrlTap() {
+    const auto RESULTS = overviewSearchRows();
+
+    const auto agentAt = [&](int idx) -> std::optional<OmarchySearch::SSearchItem> {
+        if (idx < 0 || idx >= sc<int>(RESULTS.size()) || !RESULTS[sc<size_t>(idx)].omarchy)
+            return std::nullopt;
+        const auto& ITEM = *RESULTS[sc<size_t>(idx)].omarchy;
+        return OmarchySearch::canBeDefaultAgent(ITEM) ? std::optional{ITEM} : std::nullopt;
+    };
+
+    auto item = g_search.nav.intent == ESearchIntent::Hovering ? agentAt(g_search.nav.hoverIndex) : std::nullopt;
+    if (!item)
+        item = agentAt(g_search.nav.selection);
+    if (!item || !OmarchySearch::setDefaultAgent(*item))
+        return false;
+
+    const auto REORDERED = overviewSearchRows();
+    for (size_t i = 0; i < REORDERED.size(); ++i) {
+        if (REORDERED[i].omarchy && REORDERED[i].omarchy->id == item->id) {
+            g_search.nav.selection = sc<int>(i);
+            break;
+        }
+    }
+
+    for (const auto& overview : scrollOverviews()) {
+        if (overview)
+            overview->damage();
     }
     return true;
 }
@@ -5924,6 +7041,15 @@ bool CScrollOverview::shouldAllowRealtimePreviewSchedule() {
         resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated())
         return true;
 
+    // Beside them for the same reason they are here: typing is the one moment
+    // the user is watching a 150ms pop per keystroke, and the 33ms preview
+    // throttle below would show it in five frames. See needsIdleRepaint.
+    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()))
+        return true;
+
+    if (const auto MONITOR = pMonitor.lock(); MONITOR && g_search.fieldOn(MONITOR->m_id).busy())
+        return true;
+
     if (realtimePreviewFrameQueued) {
         scheduleRealtimePreviewFrame();
         return false;
@@ -5953,11 +7079,132 @@ void CScrollOverview::schedulePreviewFrameAfter(std::chrono::milliseconds delay)
     wl_event_source_timer_update(realtimePreviewTimer, DELAY);
 }
 
+// ---------------------------------------------------------------------------
+// THE ADAPTIVE PREVIEW PULSE. See OVERVIEW_PREVIEW_POLL_INTERVAL for why the
+// change detector is the client's own damage and not a comparison of frames.
+
+bool CScrollOverview::previewWantsFrame(const PHLWINDOW& window, const Time::steady_tp& now) {
+    if (!window)
+        return true;
+
+    auto& STATE = previewPulses[window.get()];
+    STATE.ref   = window;
+
+    // A MOVE IS DETECTED HERE rather than hooked. The gate already runs for every
+    // window it governs, so the workspace it was last seen on is a free place to
+    // notice that it is now somewhere else -- no signal to subscribe to, and it
+    // cannot miss a move that happened while the overview was closed.
+    const auto WORKSPACE = window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID;
+    if (STATE.lastSeenWorkspace != WORKSPACE) {
+        STATE.lastSeenWorkspace = WORKSPACE;
+        STATE.graceUntil        = now + OVERVIEW_PREVIEW_MOVE_GRACE;
+    }
+
+    if (now < STATE.graceUntil)
+        return true;
+
+    if (STATE.streaming) {
+        if (now - STATE.lastChange <= OVERVIEW_PREVIEW_QUIET_TIMEOUT)
+            return true;
+
+        // Quiet long enough to stop streaming. The demotion counts as this
+        // window's poll: it has just had frames, so it owes nothing for another
+        // interval, and starting the clock here stops a window that stopped
+        // moving from being polled again on the very next pulse.
+        STATE.streaming = false;
+        STATE.lastPoll  = now;
+        return false;
+    }
+
+    if (STATE.lastPoll.time_since_epoch().count() != 0 && now - STATE.lastPoll < OVERVIEW_PREVIEW_POLL_INTERVAL)
+        return false;
+
+    // The poll itself: one callback. If the client paints anything new, its
+    // commit lands in notePreviewDamage and the tile is streaming before the
+    // next pulse -- so a window that started moving costs one poll of latency
+    // and not two seconds of it.
+    STATE.lastPoll = now;
+    return true;
+}
+
+void CScrollOverview::notePreviewDamage(const PHLWINDOW& window, const Time::steady_tp& now) {
+    if (!window)
+        return;
+
+    auto& STATE      = previewPulses[window.get()];
+    STATE.ref        = window;
+    STATE.lastChange = now;
+    STATE.streaming  = true;
+}
+
+bool CScrollOverview::previewIsStreaming(const PHLWINDOW& window, const Time::steady_tp& now) const {
+    if (!window)
+        return false;
+
+    const auto IT = previewPulses.find(window.get());
+    if (IT == previewPulses.end())
+        return false;
+
+    const auto& STATE = IT->second;
+    if (now < STATE.graceUntil)
+        return true;
+
+    return STATE.streaming && now - STATE.lastChange <= OVERVIEW_PREVIEW_QUIET_TIMEOUT;
+}
+
+bool CScrollOverview::anyPreviewStreaming(const Time::steady_tp& now) const {
+    return std::ranges::any_of(previewPulses, [&](const auto& entry) {
+        const auto& STATE = entry.second;
+        if (now < STATE.graceUntil)
+            return true;
+        return STATE.streaming && now - STATE.lastChange <= OVERVIEW_PREVIEW_QUIET_TIMEOUT;
+    });
+}
+
+std::chrono::milliseconds CScrollOverview::previewPulseInterval(const Time::steady_tp& now) const {
+    // Anything moving on screen: the pulse is the delivery mechanism for its
+    // frames, so it keeps up with the MONITOR, not with misc:render_unfocused_fps.
+    // That setting is a sensible floor for a desktop nobody is looking at; the
+    // overview is the one moment every desktop IS being looked at.
+    if (anyPreviewStreaming(now)) {
+        const auto MONITOR = pMonitor.lock();
+        const int  HZ      = MONITOR && MONITOR->m_refreshRate > 1 ? sc<int>(MONITOR->m_refreshRate) : 60;
+        return std::min(getOverviewIdleFrameInterval(), std::chrono::milliseconds(std::max(1, 1000 / HZ)));
+    }
+
+    // Nothing is moving. The pulse owes two things: the next window due a poll,
+    // and the once-a-second floor that keeps the POLLED bits of chrome (the
+    // dock's favourites file, the trash icon's name) arriving. Sleeping past
+    // the floor would slow those down, so it is the ceiling here -- which still
+    // takes an idle overview from fifteen wakeups a second to one.
+    auto soonest = OVERVIEW_IDLE_REPAINT_FLOOR;
+    for (const auto& [WINDOW, STATE] : previewPulses) {
+        if (STATE.lastPoll.time_since_epoch().count() == 0)
+            return getOverviewIdleFrameInterval();
+
+        const auto DUE = std::chrono::duration_cast<std::chrono::milliseconds>(STATE.lastPoll + OVERVIEW_PREVIEW_POLL_INTERVAL - now);
+        soonest        = std::min(soonest, std::max(std::chrono::milliseconds(1), DUE));
+    }
+
+    return std::max(soonest, getOverviewIdleFrameInterval());
+}
+
+void CScrollOverview::prunePreviewPulses() {
+    std::erase_if(previewPulses, [](const auto& entry) { return !entry.second.ref.lock(); });
+}
+
 void CScrollOverview::scheduleMinimumPreviewFrame() {
-    schedulePreviewFrameAfter(getOverviewIdleFrameInterval());
+    schedulePreviewFrameAfter(previewPulseInterval(Time::steadyNow()));
 }
 
 void CScrollOverview::scheduleRealtimePreviewFrame() {
+    // EVERY caller of this is a repaint that was refused. hkScheduleFrame sends
+    // the dock's own pumpFrame down here, and so does a client commit on a tile
+    // -- so this flag is how the idle pulse below knows that the frame it is
+    // about to fire is standing in for a real damage rather than being the
+    // bare keep-alive it usually is.
+    previewRepaintPending = true;
+
     const auto NOW     = Time::steadyNow();
     const auto ELAPSED = lastRealtimePreviewFrame.time_since_epoch().count() == 0 ? OVERVIEW_WINDOW_FRAME_INTERVAL :
                                                                                    std::chrono::duration_cast<std::chrono::milliseconds>(NOW - lastRealtimePreviewFrame);
@@ -5965,6 +7212,20 @@ void CScrollOverview::scheduleRealtimePreviewFrame() {
     schedulePreviewFrameAfter(DELAY);
 }
 
+// THE IDLE PULSE, and what it is actually FOR: keeping the clients whose tiles
+// are on screen drawing, so a preview is a live window and not a still. It used
+// to do that by damaging the output at misc:render_unfocused_fps -- a full
+// repaint of every overview on every monitor, 15 times a second, forever, for a
+// screen on which nothing was moving.
+//
+// A repaint is only the DELIVERY MECHANISM for the frame callbacks the render
+// tail sends. When there is nothing queued and nothing animating, they can be
+// sent straight from here instead: the tiles that then commit are routed back
+// to a real repaint by shouldHandleSurfaceDamage -> scheduleRealtimePreviewFrame,
+// which is the same path a client commit has always taken. Nothing in
+// sendOverviewFrameCallbacks touches the render pass; it reads the overview's
+// own geometry and calls presentFeedback, both of which are as valid here as
+// they are at the end of render().
 int CScrollOverview::realtimePreviewTimerCallback(void* data) {
     const auto OVERVIEW = sc<CScrollOverview*>(data);
     if (!OVERVIEW)
@@ -5972,10 +7233,78 @@ int CScrollOverview::realtimePreviewTimerCallback(void* data) {
 
     OVERVIEW->realtimePreviewTimerArmed  = false;
     OVERVIEW->realtimePreviewTimerDue    = {};
+    const bool WASQUEUED                 = OVERVIEW->realtimePreviewFrameQueued;
     OVERVIEW->realtimePreviewFrameQueued = false;
-    OVERVIEW->damage();
+
+    const bool WANTSREPAINT              = OVERVIEW->previewRepaintPending;
+    OVERVIEW->previewRepaintPending      = false;
+
+    const auto NOW = Time::steadyNow();
+
+    // THE FLOOR, and it is a deliberate one. A handful of things the overview
+    // draws are POLLED rather than announced -- the dock's favourites file, the
+    // trash icon's full/empty name -- and they used to land on the next of
+    // these pulses because every pulse was a full repaint. One repaint a second
+    // keeps them landing; it is the 15/s that was never earned.
+    const bool FLOOR = OVERVIEW->lastIdleRepaint.time_since_epoch().count() == 0 || NOW - OVERVIEW->lastIdleRepaint >= OVERVIEW_IDLE_REPAINT_FLOOR;
+
+    if (WASQUEUED || WANTSREPAINT || FLOOR || OVERVIEW->needsIdleRepaint()) {
+        OVERVIEW->lastIdleRepaint = NOW;
+        OVERVIEW->damage();
+    } else
+        OVERVIEW->sendOverviewFrameCallbacks(NOW);
+
+    OVERVIEW->prunePreviewPulses();
     OVERVIEW->scheduleMinimumPreviewFrame();
     return 0;
+}
+
+// Is anything on this overview actually moving? Every animated value the render
+// pass reads, plus the two wall-clock eases that are not animated values at all
+// (the grid reflow, which onPreRender re-arms through reflowPacer, and the tile
+// chrome). If none of them is running, the pixels this frame would produce are
+// the pixels already on the screen.
+bool CScrollOverview::needsIdleRepaint() const {
+    if (closing || drag.activeWindow || resize.activeWindow || pan.pointerDown)
+        return true;
+
+    if (inputFramePending || selectedWorkspaceFramePending || rebuildPending)
+        return true;
+
+    if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() || resultsWidth->isBeingAnimated() ||
+        searchDock->isBeingAnimated() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
+        return true;
+
+    if (scratchpadReveal->isBeingAnimated() || altStripsReveal->isBeingAnimated())
+        return true;
+
+    // Per OUTPUT, the same way onPreRender asks: a hover easing on the other
+    // monitor is not a reason for this one to repaint.
+    if (TileChrome::animatingOn(pMonitor.lock()))
+        return true;
+
+    // THE TWO HAND-TIMED ANIMATIONS OF THE SEARCH FIELD (user, 2026-09-19: the
+    // letters "freeze mid-frame ... once I get past a certain number").
+    //
+    // The letter bounce and the field's width/scroll springs are timestamped
+    // rather than PHLANIMVARs, so not one of the tests above can see them, and
+    // this gate is what the idle pulse asks before it repaints at all. Under the
+    // width cap that was invisible: every keystroke re-aimed resultsWidth and
+    // searchDock, whose animation kept the frames coming for the letters as a
+    // side effect. Once the query passes the cap the field stops resizing, those
+    // vars settle, and the only things still moving were these two -- so the
+    // pulse stopped repainting and a letter stuck wherever its pop had reached
+    // until the next key.
+    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()))
+        return true;
+
+    if (const auto MONITOR = pMonitor.lock(); MONITOR && g_search.fieldOn(MONITOR->m_id).busy())
+        return true;
+
+    if (WindowPill::animating() && isOverviewPointerOnMonitor(pMonitor.lock()))
+        return true;
+
+    return false;
 }
 
 bool CScrollOverview::hasRunningWorkspaceAnimation() const {
@@ -6075,6 +7404,11 @@ static PHLWINDOW overviewSushiWindowOn(const PHLMONITOR& monitor) {
 }
 
 void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
+    // The repaint this stood in for (or the one that just happened) is done
+    // with. Anything that wants another one will set the flag again below, or
+    // through hkScheduleFrame.
+    previewRepaintPending = false;
+
     syncPluginAnimEnabled();
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
@@ -6101,6 +7435,26 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
             if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR))
                 return;
         }
+
+        // A SUSPENDED CLIENT CANNOT ASK FOR THE FRAME THAT WOULD WAKE IT (user,
+        // 2026-09-19: a fullscreen YouTube video in Zen on another desktop
+        // "shows static when in fact it's playing").
+        //
+        // Hyprland marks windows whose workspace is not active as suspended over
+        // xdg-toplevel, and Firefox honours that literally: it stops painting AND
+        // stops decoding. The window then never calls CWLSurfaceResource::frame,
+        // so it never reaches shouldAllowSurfaceFrame -- measured, its class was
+        // absent from the gate trace entirely while every terminal was in it. No
+        // amount of adaptive polling can fix that, because the poll is a frame
+        // callback and the client is not listening for one.
+        //
+        // A tile on screen is a claim that this window is being looked at, which
+        // is the same claim the dock makes for a preview (Dock.cpp), and it is
+        // undone by Hyprland itself as soon as the overview stops drawing the
+        // tile. The frame RATE is still the adaptive gate's decision downstream;
+        // this only puts the client back in a state where it can be asked.
+        if (window->m_suspended)
+            window->setSuspended(false);
 
         if (!realtime && !ISDRAGGED && !CANFRAMETHROTTLEDWINDOWS) {
             scheduleRealtimePreviewFrame();
@@ -6244,8 +7598,10 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
         window == getOverviewWindowToShow(g_pointerGrabOverview->drag.activeWindow.lock()))
         return true;
 
-    if (!window || window->m_monitor != MONITOR)
+    if (!window || window->m_monitor != MONITOR) {
+        noteFrameGate(window, "other-monitor/no-window");
         return true;
+    }
 
     // Y11. THE DOCK IS A SECOND VIEWER OF THIS WINDOW. Everything below decides
     // whether the window is worth drawing IN THE OVERVIEW, and refuses the frame
@@ -6265,14 +7621,18 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
     // Minimized windows never hit this because their stash workspace fails
     // shouldShowOverviewWindow below and takes the `return true` -- which is why
     // X25's minimized previews measured live and Y11's did not.
-    if (ScrollOverview::Dock::isPreviewing(window))
+    if (ScrollOverview::Dock::isPreviewing(window)) {
+        noteFrameGate(window, "dock-preview");
         return true;
+    }
 
     // ...and the same argument for a window that was just retiled onto a
     // desktop nobody is looking at: it needs a few real frames to redraw at its
     // new size, or the strip shows its old buffer inside the new frame.
-    if (ScrollOverview::Dock::isRetiling(window))
+    if (ScrollOverview::Dock::isRetiling(window)) {
+        noteFrameGate(window, "retiling");
         return true;
+    }
 
     if (shouldShowPinnedFloatingOverviewWindow(window)) {
         if (sendingOverviewFrameCallbacks)
@@ -6282,39 +7642,76 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
         return false;
     }
 
-    if (!shouldShowOverviewWindow(window) || !window->m_workspace)
+    if (!shouldShowOverviewWindow(window) || !window->m_workspace) {
+        noteFrameGate(window, "not-shown-in-overview");
         return true;
+    }
 
     const auto ACTIVEIDX = activeWorkspaceIndex();
     const auto SCALE     = scale->value();
     const auto PITCH     = getWorkspaceRenderedPitch(MONITOR, SCALE, layout);
 
+    bool sawCard = false;
     for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
         const auto& workspaceImage = images[workspaceIdx];
         if (!workspaceImage || workspaceImage->pWorkspace != window->m_workspace)
             continue;
 
+        sawCard = true;
         {
             const auto fullscreenWindow = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
-            if (fullscreenWindow && fullscreenWindow != window && !window->m_isFloating)
+            if (fullscreenWindow && fullscreenWindow != window && !window->m_isFloating) {
+                noteFrameGate(window, "occluded-by-fullscreen");
                 return false;
+            }
         }
 
         const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, ACTIVEIDX, PITCH);
         const auto WINDOWBOX        = getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
-        if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR))
+        if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR)) {
+            noteFrameGate(window, "card-offscreen");
             return false;
+        }
 
-        if (isSelectedWorkspace(workspaceImage->pWorkspace))
+        // The selected desktop is the one being looked at: it stays live and is
+        // never polled.
+        if (isSelectedWorkspace(workspaceImage->pWorkspace)) {
+            noteFrameGate(window, "selected-ws");
             return true;
+        }
 
-        if (sendingOverviewFrameCallbacks)
+        // Every other tile is adaptive. A refused poll returns WITHOUT asking for
+        // a preview frame: the whole point is not to wake for a window that has
+        // nothing to show.
+        if (!previewWantsFrame(window, now)) {
+            noteFrameGate(window, "poll-wait");
+            return false;
+        }
+
+        // A STREAMING TILE IS A DOCK PREVIEW BY ANOTHER NAME (user, 2026-09-19:
+        // the video "lags/is choppy painting, until I load the dock previews by
+        // hovering over the app icon"). Dock::isPreviewing returns true above
+        // without consulting either throttle, so a hovered preview runs at the
+        // monitor's rate; a streaming tile was going through the idle pulse
+        // instead, which runs at misc:render_unfocused_fps -- 15 by default, and
+        // 15fps of a 30fps video is exactly the judder described. Polling tiles
+        // still pay the 2s interval, which is where the leanness actually lives.
+        if (previewIsStreaming(window, now)) {
+            noteFrameGate(window, "allowed(streaming)");
             return true;
+        }
 
+        if (sendingOverviewFrameCallbacks) {
+            noteFrameGate(window, "allowed(pulse)");
+            return true;
+        }
+
+        noteFrameGate(window, "throttled");
         scheduleRealtimePreviewFrame();
         return false;
     }
 
+    noteFrameGate(window, sawCard ? "no-card-match" : "no-card-for-workspace");
     return false;
 }
 
@@ -6335,6 +7732,12 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
             return false;
 
         markBlurDirty();
+        // Y17 (GPU, 2026-09-14). The two wallpaper caches are no longer redrawn
+        // every frame, so this hook is what tells them a wallpaper changed.
+        // updateCardWallpaperFB composites BACKGROUND *and* BOTTOM (Omarchy's
+        // wallpaper is often a BOTTOM layer); renderGlobalWallpaper, and so the
+        // backdrop, draws BACKGROUND only.
+        frost.cardWallpaperDirty = true;
         if (layerOwner->m_layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
             markBackdropBlurDirty();
         return true;
@@ -6344,6 +7747,14 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
         return true;
 
     auto window = getOverviewWindowToShow(windowOwner);
+
+    // A window on another monitor is that monitor's to damage -- but while its
+    // strip is out on THIS one, this one shows it too, and nothing else would
+    // repaint it here. Throttled like every other off-card preview. Never
+    // refuses: the owning monitor's own damage must still go through.
+    if (window && window->m_monitor != MONITOR && altStripsRevealValue() > 0.01F)
+        scheduleRealtimePreviewFrame();
+
     if (g_pointerGrabOverview && g_pointerGrabOverview->drag.activeWindow &&
         window == getOverviewWindowToShow(g_pointerGrabOverview->drag.activeWindow.lock())) {
         const auto DRAGBOX = g_pointerGrabOverview->draggedWindowGlobalBox();
@@ -6374,9 +7785,12 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
         return true;
     }
 
-    if (!shouldShowOverviewWindow(window) || !window->m_workspace)
+    if (!shouldShowOverviewWindow(window) || !window->m_workspace) {
+        noteDamageGate(window, "not-shown");
         return false;
+    }
 
+    noteDamageGate(window, "reached-loop");
     const auto ACTIVEIDX = activeWorkspaceIndex();
     const auto SCALE     = scale->value();
     const auto PITCH     = getWorkspaceRenderedPitch(MONITOR, SCALE, layout);
@@ -6388,19 +7802,37 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
 
         {
             const auto fullscreenWindow = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
-            if (fullscreenWindow && fullscreenWindow != window && !window->m_isFloating)
+            if (fullscreenWindow && fullscreenWindow != window && !window->m_isFloating) {
+                noteDamageGate(window, "occluded-by-fullscreen");
                 return false;
+            }
         }
 
         const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, ACTIVEIDX, PITCH);
         const auto WINDOWBOX        = getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
-        if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR))
+        if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR)) {
+            noteDamageGate(window, "card-offscreen");
             return false;
+        }
+
+        noteDamageGate(window, "ACCEPTED");
+        // THE DETECTOR. The client painted something, which is the only evidence
+        // that this preview is not a still -- so the tile starts streaming and
+        // keeps streaming until it goes quiet for OVERVIEW_PREVIEW_QUIET_TIMEOUT.
+        const auto NOWDAMAGE = Time::steadyNow();
+        notePreviewDamage(window, NOWDAMAGE);
 
         if (isSelectedWorkspace(workspaceImage->pWorkspace)) {
             selectedWorkspaceFramePending = true;
             return true;
         }
+
+        // ...and the commit that proved it is worth painting NOW. The 33ms
+        // throttle below is right for a tile that damages once; for one that is
+        // playing video it is a second cap on top of the pulse's, and the two
+        // together are what made a dock hover look like a different feature.
+        if (previewIsStreaming(window, NOWDAMAGE))
+            return true;
 
         if (!realtimePreviewFrameQueued && shouldAllowRealtimePreviewFrame())
             return true;
@@ -6663,8 +8095,8 @@ void CScrollOverview::onPreRender() {
     // (strip_top, tile_h), not pixel diffs -- strip_top is quantised to 2px, so
     // it holds still through the eased tail and reading THAT as frame timing
     // invents a 196ms stall which the painted-frame signal shows is not there.
-    if (TileChrome::animating())
-        grid().reflowActive = true;
+    if (TileChrome::animatingOn(pMonitor.lock()))
+        gridSetReflowActive(pMonitor.lock());
 
     // V2. The SUPER-hold pill eases on the same kind of wall clock, and inside
     // an overview it needs the frames asked for the same way: hkScheduleFrame
@@ -6673,11 +8105,12 @@ void CScrollOverview::onPreRender() {
     // reveal would freeze half out over a still cursor. Joining the reflow
     // pacer rather than adding a fourth pump, for the reason Dock::needsFrames
     // gives: one list, in one place.
-    if (WindowPill::animating())
-        grid().reflowActive = true;
+    // ...and the pill is on the HOVERED tile, so it is this output's business
+    // only while this output owns the pointer. It used to pump both.
+    if (WindowPill::animating() && isOverviewPointerOnMonitor(pMonitor.lock()))
+        gridSetReflowActive(pMonitor.lock());
 
-    if (grid().reflowActive) {
-        grid().reflowActive = false;
+    if (gridTakeReflowActive(pMonitor.lock())) {
         reflowPacer->setValueAndWarp(0.F);
         *reflowPacer = 1.F;
         damage();
@@ -6834,13 +8267,27 @@ void CScrollOverview::onWorkspaceChange() {
     damage();
 }
 
+void normalizeScrollingCamera(PHLWORKSPACE workspace) {
+    normalizeFittingScrollingOffset(workspace);
+}
+
+void normalizeAllScrollingCameras() {
+    for (const auto& w : State::workspaceState()->workspaces()) {
+        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE))
+            normalizeFittingScrollingOffset(WORKSPACE);
+    }
+}
+
 void CScrollOverview::render() {
     Prof::Timer PROF{Prof::frameNs, Prof::frameCalls};
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return;
 
+    noteFrame(MONITOR->m_id);
+
     ++g_overviewFrame;
+    ++g_overviewFramesByMonitor[MONITOR->m_id];
 
     if (g_pointerGrabOverview && g_pointerGrabOverview != this && g_pointerGrabOverview->drag.activeWindow && isOverviewPointerOnMonitor(MONITOR))
         lastMousePosLocal = getOverviewMousePosLocal(MONITOR);
@@ -6864,6 +8311,14 @@ void CScrollOverview::render() {
 
     const auto WALLPAPERMODE = ScrollOverview::Config::getWallpaperMode();
 
+    // Y17 (GPU, 2026-09-14): at PROGRESS >= 1 the blurred backdrop below covers
+    // this full-screen wallpaper pass, so skipping it here looks free. It is
+    // NOT taken: the backdrop is composited with normal blending at alpha
+    // PROGRESS, and its own alpha channel is whatever the kawase left in the
+    // cached FB -- which is 1 only if the render target carries no alpha. On a
+    // format that does, an alpha a hair under 1 lets this wallpaper show
+    // through the 20% the dim scrim does not cover. Unprovable by reading, so
+    // it stays.
     if (WALLPAPERMODE == 0 || WALLPAPERMODE == 2)
         renderGlobalWallpaper(MONITOR, NOW);
     else
@@ -6924,24 +8379,52 @@ void CScrollOverview::render() {
         }
     }
 
-    const bool NEEDS_PRECOMPUTED_BLUR = hasVisiblePrecomputedBlurWindow(MONITOR, ACTIVEIDX, PITCH, SCALE);
+    // Y17 (GPU, 2026-09-14). CPreBlurElement is a full-monitor dual-kawase that
+    // writes Monitor::m_blurFB, and m_blurFB is read only by a surface that
+    // takes Hyprland's xray path. Every tile here goes through
+    // OverviewWindow::renderOverviewWindow with scaleBlurToRenderScale=true
+    // (Window.hpp:27), and that scales decoration:blur:size by the tile's
+    // render scale (Window.cpp:1062) -- which forces usePrecomputedBlur=false
+    // and then calls blockOverviewWindowBlurOptimization over every surface of
+    // the window (Window.cpp:1075/1082). blockBlurOptimization is exactly what
+    // Hyprland sets on its own BACKGROUND/BOTTOM layers to keep them off the
+    // xray FB (Renderer.cpp:969), so while the blur size is scaled NOTHING the
+    // overview draws reads m_blurFB and the pre-blur is pure waste. The scale
+    // factor is global to the frame, so the predicate is computed once here.
+    // The dock's own frost does not read m_blurFB either: queueDockFrost
+    // (Dock.cpp:1429) queues COverviewBlurPassElement with xray=false, and that
+    // element's needsPrecomputeBlur() is hardcoded false (X88).
+    // decoration:blur:xray is the one switch that puts a surface the overview
+    // did NOT render through renderOverviewWindow -- the Quick Look preview
+    // below, a dock hover preview -- on the xray path (Renderer.cpp:1540), so
+    // with it on the pre-blur keeps running regardless.
+    const int  BLURSIZE               = ScrollOverview::Config::getValue<int>("decoration:blur:size");
+    const bool TILEBLURSCALED         = BLURSIZE > 0 && std::max(1, sc<int>(std::round(BLURSIZE * SCALE))) != BLURSIZE;
+    const bool NOPREBLURREADER        = TILEBLURSCALED && !ScrollOverview::Config::getValue<bool>("decoration:blur:xray");
+    const bool NEEDS_PRECOMPUTED_BLUR = !NOPREBLURREADER && hasVisiblePrecomputedBlurWindow(MONITOR, ACTIVEIDX, PITCH, SCALE);
     if (NEEDS_PRECOMPUTED_BLUR && frost.overviewDirty)
         g_pHyprRenderer->m_renderPass.add(makeUnique<CPreBlurElement>());
 
     OverviewRender::flushPass(MONITOR);
 
+    // Cleared only when the element actually ran: a frame that skipped it must
+    // leave the flag standing so the pre-blur happens once the scale settles
+    // back to 1 and the tiles start reading m_blurFB again.
     if (NEEDS_PRECOMPUTED_BLUR)
         frost.overviewDirty = false;
 
-    {
-        Prof::Timer PROFLIVE{Prof::liveNs, Prof::liveCalls};
-        for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
-            renderWorkspaceLive(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
-        }
-    }
+    // THE LIVE WINDOWS ARE THE TOP LAYER WHILE THE TOGGLE IS IN FLIGHT (user,
+    // 2026-09-16: "elements of the workspace strip are showing up halfway
+    // through the overview toggle animation"). The strip used to be drawn after
+    // the windows unconditionally, so for the middle of every open and close --
+    // the stretch where the shrinking window still covers the strip row -- the
+    // strip's panel, cards and minis painted OVER the window. While the scale is
+    // moving the strip goes underneath instead, and the window reveals it as it
+    // shrinks. Settled, nothing overlaps the strip row, so the usual order (and
+    // the strip frost sampling cards + tiles) is back with nothing to see
+    // switching over.
+    const bool TOGGLEINFLIGHT = closing || m_isSwiping || scale->isBeingAnimated();
 
-
-    OverviewRender::flushPass(MONITOR);
 
     // X92 / X97. Blur the overview main FB (cards + tiles) into a PRIVATE FB.
     // Gate on decoration:blur:enabled — the same switch window frost uses — NOT
@@ -6953,21 +8436,54 @@ void CScrollOverview::render() {
     // takes, which blurs the wallpaper even when Omarchy windows do not. So the
     // capture has to run for the badge as well, with the flag forced for its
     // duration exactly as updateBackdropBlurCache forces it around its own.
-    if (ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
-        OverviewRender::captureFrameChromeBlur(MONITOR);
-    else if (detentBadgeVisible()) {
-        ScrollOverview::Config::setValue("decoration:blur:enabled", true);
-        auto restoreBlur = Hyprutils::Utils::CScopeGuard([] { ScrollOverview::Config::setValue("decoration:blur:enabled", false); });
-        OverviewRender::captureFrameChromeBlur(MONITOR);
-    } else
-        OverviewRender::clearFrameChromeBlur();
+    //
+    // Y17 (GPU, 2026-09-14). The capture is a full-monitor dual-kawase plus a
+    // full-monitor copy, and every surface that samples it is behind the SAME
+    // `overviewGridProgress(SCALE) < 0.01` early return: the strip panel and
+    // the alternate-monitor / scratchpad plates it draws (renderStrip), the
+    // search results container (renderSearch) and the detent badge
+    // (renderDetentBadge). Below that threshold not one xray=true blur element
+    // is queued, so the capture has no reader at all -- skip it exactly the way
+    // the blur-off branch does. (The search PILL and the dock pill are
+    // xray=false: they blur live and never look at this FB.)
+    const auto renderStripLayer = [&]() {
+        const bool CHROMEBLURSAMPLED = overviewGridProgress(SCALE) >= 0.01F;
+        if (CHROMEBLURSAMPLED && ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
+            OverviewRender::captureFrameChromeBlur(MONITOR);
+        else if (CHROMEBLURSAMPLED && detentBadgeVisible()) {
+            ScrollOverview::Config::setValue("decoration:blur:enabled", true);
+            auto restoreBlur = Hyprutils::Utils::CScopeGuard([] { ScrollOverview::Config::setValue("decoration:blur:enabled", false); });
+            OverviewRender::captureFrameChromeBlur(MONITOR);
+        } else
+            OverviewRender::clearFrameChromeBlur();
+
+        {
+            Prof::Timer PROFSTRIP{Prof::stripNs, Prof::stripCalls};
+            renderStrip(MONITOR, SCALE, NOW);
+            // On top of the cell the strip just drew, including its minis.
+            renderDetentBadge(MONITOR, SCALE);
+        }
+    };
+
+    if (TOGGLEINFLIGHT) {
+        renderStripLayer();
+        // Committed before any window queues: a tile's prefilter binds a temp
+        // FB, and nothing of the strip may still be waiting in the pass then.
+        OverviewRender::flushPass(MONITOR);
+    }
 
     {
-        Prof::Timer PROFSTRIP{Prof::stripNs, Prof::stripCalls};
-        renderStrip(MONITOR, SCALE, NOW);
-        // On top of the cell the strip just drew, including its minis.
-        renderDetentBadge(MONITOR, SCALE);
+        Prof::Timer PROFLIVE{Prof::liveNs, Prof::liveCalls};
+        for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
+            renderWorkspaceLive(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
+        }
     }
+
+
+    OverviewRender::flushPass(MONITOR);
+
+    if (!TOGGLEINFLIGHT)
+        renderStripLayer();
     // X87: search (and its frost) under the drag proxy. Previously renderSearch
     // ran after renderDraggedWindow, so the pill painted over the window you
     // were dragging -- empty or with results.
@@ -7038,15 +8554,23 @@ void CScrollOverview::render() {
         ++Prof::frames;
         const auto SINCEKEY = std::chrono::duration<double, std::milli>(Prof::clock::now() - Prof::keyAt).count();
         if (FILE* const F = std::fopen("/tmp/hyprdrive-prof.log", "a")) {
-            std::fprintf(F, "q=%-6s f=%llu sinceKey=%7.2fms  FRAME=%6.2fms  bg=%6.2fms  live=%6.2fms  strip=%6.2fms  renderSearch=%6.2fms  match=%5.2fms/%llu  rows=%5.2fms  app=%5.2fms  scan=%5.2fms/%llu  TEXT[cold=%llu %6.2fms]  ICON[cold=%llu resolve=%6.2f decode=%6.2f upload=%6.2f]\n",
+            std::fprintf(F, "q=%-6s f=%llu sinceKey=%7.2fms  FRAME=%6.2fms  bg=%6.2fms  live=%6.2fms  strip=%6.2fms  renderSearch=%6.2fms  match=%5.2fms/%llu  rows=%5.2fms  app=%5.2fms  scan=%5.2fms/%llu  TEXT[cold=%llu %6.2fms]  ICON[cold=%llu resolve=%6.2f decode=%6.2f upload=%6.2f]  LETTERS[n=%zu busy=%d]  RETARGET[%d]  SCALE[%.5f]  FIELDW[%.3f]\n",
                          g_search.query.text.c_str(), (unsigned long long)Prof::frames, SINCEKEY,
                          Prof::frameNs / 1e6, Prof::bgNs / 1e6, Prof::liveNs / 1e6, Prof::stripNs / 1e6, Prof::srchNs / 1e6,
                          Prof::matchNs / 1e6, (unsigned long long)Prof::matchCalls,
                          Prof::rowsNs / 1e6, Prof::appNs / 1e6, Prof::scanNs / 1e6, (unsigned long long)Prof::scanCalls,
-                         (unsigned long long)Prof::txtCold, Prof::txtNs / 1e6, (unsigned long long)Prof::icoCold, Prof::icoResolveNs / 1e6, Prof::icoDecodeNs / 1e6, Prof::icoUploadNs / 1e6);
+                         (unsigned long long)Prof::txtCold, Prof::txtNs / 1e6, (unsigned long long)Prof::icoCold, Prof::icoResolveNs / 1e6, Prof::icoDecodeNs / 1e6, Prof::icoUploadNs / 1e6,
+                         SearchLetters::g_searchLetters.letters.size(), (int)SearchLetters::g_searchLetters.busy(Time::steadyNow()),
+                         Prof::retargets, Prof::pillScale, Prof::fieldWL);
             std::fclose(F);
         }
-        if (Prof::frames >= 3)
+        // THREE FRAMES MEASURED THE PAINT, NOT THE ANIMATION (user, 2026-09-19:
+        // "around the 5th letter is when it starts lagging"). The keystroke
+        // repaint is frames 1-3; the letter bounce runs ENTRANCE_MS = 420ms,
+        // about 25 frames at 60Hz, and every one of them after the third was
+        // invisible here. A choppy POP cannot be seen in a window that closes
+        // before the pop does, so the window is the animation's length.
+        if (SINCEKEY > 600.0)
             Prof::pending = false;
     }
 

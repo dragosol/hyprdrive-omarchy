@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,26 @@ namespace AppSearch {
     const std::vector<SEntry>& inventory();
     void                       refresh();
 
+    // NEW APPS AND NEW ICONS, WITHOUT A RELOAD (user, 2026-09-19: "some icons
+    // including ghostty do not have a dock icon"). The inventory and the icon
+    // index were each built exactly once per plugin load, so anything installed
+    // afterwards -- Ghostty that very afternoon -- had no entry and no icon until
+    // the next login. Call once per frame: it looks at the application and
+    // icon-theme directories at most every couple of seconds (a handful of
+    // stat()s), rescans the desktop entries when one of them changed, and
+    // rebuilds the icon index OFF the render thread when a theme did.
+    void                       pollForChanges();
+
+    // Moves whenever the icon index is rebuilt. Anything caching what an icon
+    // NAME resolved to -- textures above all -- keys on this.
+    uint64_t                   iconIndexGeneration();
+
+    // Moves every time the inventory is (re)scanned. Anything that caches a
+    // result built out of `inventory()` -- the search rows, which hold raw
+    // SEntry pointers into it -- keys on this, so a refresh cannot leave a
+    // dangling pointer behind in a memo.
+    uint64_t                   inventoryGeneration();
+
     // Ranked best-first. Empty query yields nothing -- an unfiltered overview
     // shows windows, not a list of every installed app.
     std::vector<const SEntry*> search(const std::string& query, size_t limit);
@@ -51,6 +72,19 @@ namespace AppSearch {
     // about WHEN the work happens, not what it produces.
     void warmIconIndexAsync();
     void shutdownIconIndex();
+
+    // QUICKSHELL PANELS SHARE ONE APP ID (user, 2026-09-19: omamail "isn't
+    // picked up by my dock as an actual app"). Quickshell runs every panel
+    // plugin inside a SINGLE process, so each panel toplevel carries the same
+    // Wayland app_id -- org.quickshell -- and a per-window app_id is not
+    // something a plugin can set. The only thing telling Omamail apart from
+    // the pager, the speed test or the Wi-Fi QR panel is its TITLE.
+    //
+    // So identity for those windows is class+title, "org.quickshell:Omamail",
+    // and entryIndexForClass resolves that against Name= the way it already
+    // resolves a bare class. Every other window is returned unchanged, which is
+    // what makes this safe to put on the identity path wholesale.
+    std::string identityClass(const std::string& wmClass, const std::string& title);
 
     // Absolute path to the best icon file for an Icon= value, or "" if none.
     // Pure filesystem: decode and texture upload belong to the render layer.

@@ -135,6 +135,9 @@ struct SEase {
 struct SState {
     SEase hover;
     SEase press;
+    // The output this tile was on when its ease was armed. Only used to decide
+    // which overview owes the frames; the ease itself is output-agnostic.
+    MONITORID monitor = MONITOR_INVALID;
 };
 
 std::unordered_map<Desktop::View::CWindow*, SState> g_states;
@@ -159,13 +162,21 @@ SState* stateFor(const PHLWINDOW& window, bool create) {
     if (!window)
         return nullptr;
 
+    const auto stamp = [&window](SState& state) -> SState* {
+        // Re-stamped on every lookup rather than only at creation: a window
+        // dragged to the other output has to start owing ITS frames.
+        if (const auto MON = window->m_monitor.lock())
+            state.monitor = MON->m_id;
+        return &state;
+    };
+
     // ponytail: only ever as many entries as tiles the cursor has touched this
     // session, and forget() empties it when the overview closes. Reaping dead
     // windows would need a hook for a map that never gets big.
     if (const auto IT = g_states.find(window.get()); IT != g_states.end())
-        return &IT->second;
+        return stamp(IT->second);
 
-    return create ? &g_states[window.get()] : nullptr;
+    return create ? stamp(g_states[window.get()]) : nullptr;
 }
 
 // Growing is an entrance and shrinking back is an exit, so the direction of the
@@ -320,6 +331,16 @@ bool animating() {
     return std::ranges::any_of(g_states, [](const auto& entry) { return entry.second.hover.running() || entry.second.press.running(); });
 }
 
+bool animatingOn(PHLMONITOR monitor) {
+    if (!monitor)
+        return false;
+
+    const auto ID = monitor->m_id;
+    return std::ranges::any_of(g_states, [ID](const auto& entry) {
+        return entry.second.monitor == ID && (entry.second.hover.running() || entry.second.press.running());
+    });
+}
+
 CBox scaledBox(const PHLWINDOW& window, const CBox& base) {
     const auto* const STATE = stateFor(window, false);
     if (!STATE || base.w < 1 || base.h < 1)
@@ -443,7 +464,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
     // does not crawl out of a corner. Below one device pixel there is nothing
     // honest to draw -- a rounded box of zero width is not a small icon, it is a
     // no-op with a texture bound -- so the draw starts when the box does.
-    if (const auto TEX = OverviewRender::appIcon(AppSearch::iconForClass(window->m_class))) {
+    if (const auto TEX = OverviewRender::appIcon(AppSearch::iconForClass(AppSearch::identityClass(window->m_class, window->m_title)))) {
         const float SIDE = std::clamp(shortSide(tileBox) * ICON_FRACTION, ICON_MIN * SCALE, ICON_MAX * SCALE) * FADE;
 
         CBox iconBox = CBox{sc<float>(tileBox.x + tileBox.w / 2.0) - SIDE / 2.F, sc<float>(tileBox.y + tileBox.h) - SIDE / 2.F, SIDE, SIDE};
