@@ -3573,6 +3573,43 @@ void CForcedVisibility::forceSurface(SP<CWLSurfaceResource> surface) {
     HLSURFACE->m_visibleRegion = {};
 }
 
+// A SURFACE ENTERED ON NO OUTPUT IS A SURFACE THE CLIENT STOPS PAINTING
+// (user, 2026-09-19: a fullscreen YouTube video "sometimes it updates sometimes
+// it doesn't", and reproducibly not after switching desktops from the strip).
+//
+// wl_surface.enter/leave is how a client learns it is on screen, and Firefox
+// uses it the way it uses xdg-toplevel suspended: entered nowhere means paint
+// nothing. While the overview is up it, not the desktop, is what the monitor
+// shows, so Hyprland can leave a window's surface on no output at all while the
+// overview is busily drawing that window's tile -- and then the client is being
+// handed frame callbacks it will never answer. Measured: with the video's own
+// card SELECTED, so REALTIME frames and no throttle, `sent` climbed and the
+// time since its last damage climbed with it (1993ms, 3009ms, 4027ms).
+//
+// Clearing m_visibleRegion above stops the COMPOSITOR culling the surface; this
+// is the other half, and the two are not substitutes. Recorded and undone in
+// restoreSurfaces so closing the overview hands the question back to Hyprland.
+void CForcedVisibility::enterWindowSurfaces(PHLWINDOW window, PHLMONITOR monitor) {
+    if (!window || !monitor || !window->wlSurface() || !window->wlSurface()->resource())
+        return;
+
+    std::pair<CForcedVisibility*, PHLMONITOR> data = {this, monitor};
+    window->wlSurface()->resource()->breadthfirst(
+        [](SP<CWLSurfaceResource> surface, const Vector2D&, void* data) {
+            const auto [SELF, MONITOR] = *sc<std::pair<CForcedVisibility*, PHLMONITOR>*>(data);
+            if (!surface)
+                return;
+
+            if (std::ranges::any_of(surface->m_enteredOutputs, [&](const auto& m) { return m.lock() == MONITOR; }))
+                return;
+
+            surface->enter(MONITOR);
+            if (SELF->m_enteredSeen.insert(surface.get()).second)
+                SELF->m_entered.push_back({surface, MONITOR});
+        },
+        &data);
+}
+
 void CForcedVisibility::forceWindowSurfaces(PHLWINDOW window) {
     if (!window || !window->wlSurface() || !window->wlSurface()->resource())
         return;
@@ -3594,6 +3631,10 @@ void CForcedVisibility::forceWindowSurfaces(PHLWINDOW window) {
 // cleared it. seen == 0 means the window never reaches forceWindow at all,
 // which is how the fullscreen path was caught.
 static std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> g_unsuspendCount;
+// asked = frameWindow was reached for this class; sent = a frame callback was
+// actually handed to its surface tree. asked>0 with sent==0 means the throttle
+// ate every one of them.
+static std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> g_frameSent;
 
 void CForcedVisibility::forceWindow(PHLWINDOW window) {
     if (!window)
@@ -3693,6 +3734,18 @@ void CForcedVisibility::restoreSurfaces() {
         HLSURFACE->m_visibleRegion = entry.visibleRegion;
     }
 
+    // Hand the question back to Hyprland: a client must not be left believing
+    // it is on an output that has stopped drawing it, or it keeps painting (and
+    // decoding) for a tile nobody is showing any more.
+    for (auto& entry : m_entered) {
+        const auto SURFACE = entry.surface.lock();
+        const auto MONITOR = entry.monitor.lock();
+        if (SURFACE && MONITOR)
+            SURFACE->leave(MONITOR);
+    }
+
+    m_entered.clear();
+    m_enteredSeen.clear();
     m_surfaces.clear();
     m_surfaceSeen.clear();
 }
@@ -3941,7 +3994,17 @@ std::string CScrollOverview::frameDebugLine() const {
             const auto SINCE = STATE.lastChange.time_since_epoch().count() == 0 ?
                 -1 :
                 std::chrono::duration_cast<std::chrono::milliseconds>(NOW - STATE.lastChange).count();
-            out += std::format(" {}={}({}ms{}{})", W->m_class.empty() ? std::string("?") : W->m_class, MODE, SINCE,
+            // Class alone is ambiguous -- several terminals, one of them the one
+            // reading this output -- so carry a slice of the title too.
+            auto title = W->m_title.substr(0, 14);
+            // Truncating by BYTES can cut a multi-byte character in half; drop
+            // any incomplete trailing sequence rather than emit a broken glyph.
+            while (!title.empty() && (sc<unsigned char>(title.back()) & 0xC0) == 0x80)
+                title.pop_back();
+            if (!title.empty() && (sc<unsigned char>(title.back()) & 0xC0) == 0xC0)
+                title.pop_back();
+            std::ranges::replace(title, ' ', '_');
+            out += std::format(" {}/{}={}({}ms{}{})", W->m_class.empty() ? std::string("?") : W->m_class, title, MODE, SINCE,
                                W->m_suspended ? " SUSP" : "", W->isHidden() ? " HIDDEN" : "");
         }
 
@@ -3954,6 +4017,9 @@ std::string CScrollOverview::frameDebugLine() const {
             out += std::format("{}={} ", CLASS, REASON);
         out += "] forced[";
         for (const auto& [CLASS, N] : g_unsuspendCount)
+            out += std::format("{}={}/{} ", CLASS, N.first, N.second);
+        out += "] sent[";
+        for (const auto& [CLASS, N] : g_frameSent)
             out += std::format("{}={}/{} ", CLASS, N.first, N.second);
         out += "] damage[";
         for (const auto& [CLASS, REASON] : g_damageGateReason)
@@ -6772,6 +6838,30 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
 
     forced.forceWindow(window);
     forced.forceWindowSurfaces(window);
+    forced.enterWindowSurfaces(window, monitor);
+
+    // IF WE DREW IT, WE ASK FOR ITS NEXT FRAME (user, 2026-09-19: after
+    // switching desktop from the strip, the live window on the previous desktop
+    // stops painting).
+    //
+    // The render walk and the frame-callback walk decide independently which
+    // tiles exist, and they disagree: a promoted tile is drawn at the active
+    // card's offset while its own workspace card is off screen, so
+    // sendOverviewFrameCallbacks skipped the workspace and never reached the
+    // window this pass is busy drawing. Measured across four samples with the
+    // video on the previous desktop: forced[zen] climbing 691 -> 865 (drawn
+    // every frame) while sent[zen] sat frozen at 387/151 (asked for nothing).
+    //
+    // Asking from here makes "drawn" and "gets frames" the same question by
+    // construction rather than by two visibility tests agreeing. It is not a
+    // second throttle either: this goes through CWLSurfaceResource::frame like
+    // every other request, so shouldAllowSurfaceFrame -- and with it the whole
+    // poll/stream gate -- still decides whether the callback is delivered.
+    if (window->wlSurface() && window->wlSurface()->resource()) {
+        askingForDrawnWindow = true;
+        surfaceTreePresent(window->wlSurface()->resource(), monitor, now);
+        askingForDrawnWindow = false;
+    }
     // E8-f: renderWindow multiplies the texture by the WORKSPACE alpha, so a
     // workspace sitting at 0 draws this window's border and nothing else. The
     // window's own alpha is already forced per frame right above; forcing the
@@ -7456,10 +7546,16 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
         if (window->m_suspended)
             window->setSuspended(false);
 
+        if (Prof::enabled())
+            ++g_frameSent[window->m_class].first;
+
         if (!realtime && !ISDRAGGED && !CANFRAMETHROTTLEDWINDOWS) {
             scheduleRealtimePreviewFrame();
             return;
         }
+
+        if (Prof::enabled())
+            ++g_frameSent[window->m_class].second;
 
         surfaceTreePresent(window->wlSurface() ? window->wlSurface()->resource() : nullptr, MONITOR, now);
         if (!realtime && !ISDRAGGED)
@@ -7634,6 +7730,32 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
         return true;
     }
 
+    // ASKED FOR BY THE PASS THAT IS DRAWING IT (user, 2026-09-19: the live
+    // window on the previous desktop stops painting after switching desktop
+    // from the strip).
+    //
+    // A window appears TWICE in this overview: as a tile in the big card grid,
+    // and live inside its strip thumbnail (renderStripCell -> renderWindowLive).
+    // The tests below describe only the first of those, so a window whose card
+    // has scrolled away -- measured at idx=0 box=-7066,98 against a 1440x900
+    // monitor -- was refused frames while its thumbnail sat in plain view being
+    // redrawn every frame. That is why it depended on WHICH desktop you switched
+    // to: the same window was live or frozen depending on how far its card had
+    // scrolled.
+    //
+    // When the request comes from the draw itself, the geometry question is
+    // already answered -- we are painting it right now -- so only the poll/
+    // stream gate has anything left to decide.
+    if (askingForDrawnWindow) {
+        if (!previewWantsFrame(window, now)) {
+            noteFrameGate(window, "poll-wait(drawn)");
+            return false;
+        }
+
+        noteFrameGate(window, "allowed(drawn)");
+        return true;
+    }
+
     if (shouldShowPinnedFloatingOverviewWindow(window)) {
         if (sendingOverviewFrameCallbacks)
             return true;
@@ -7658,16 +7780,30 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
             continue;
 
         sawCard = true;
-        {
-            const auto fullscreenWindow = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
-            if (fullscreenWindow && fullscreenWindow != window && !window->m_isFloating) {
-                noteFrameGate(window, "occluded-by-fullscreen");
-                return false;
-            }
+        const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
+        if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->m_isFloating) {
+            noteFrameGate(window, "occluded-by-fullscreen");
+            return false;
         }
 
         const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, ACTIVEIDX, PITCH);
-        const auto WINDOWBOX        = getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
+
+        // A FULLSCREEN WINDOW HAS NO TILE (user, 2026-09-19: a fullscreen
+        // YouTube video shows a still even while its card is plainly on screen).
+        // It is drawn filling the card through the fullscreen path, so asking
+        // getOverviewWindowBox where its TILE is answers about a layout it is
+        // not part of, the intersect test fails, and the frame is refused as
+        // off-screen. Measured: the card visible in the strip and the tile 0
+        // changed pixels across five captures. This test runs BEFORE the
+        // selected-workspace check, which is why even the selected desktop's
+        // video was frozen. Ask about the card instead, because the card is
+        // what it is drawn into.
+        // The card's VISIBLE box, which is what renderWorkspaceLive tests -- the
+        // raw workspace box can sit off-screen for a card the scrolled strip is
+        // nonetheless showing, so testing it disagreed with the pass that draws.
+        const auto WINDOWBOX = FULLSCREENWINDOW == window ?
+            workspaceOverviewVisibleBox(workspaceIdx, getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout), SCALE, MONITOR) :
+            getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
         if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR)) {
             noteFrameGate(window, "card-offscreen");
             return false;
@@ -7790,6 +7926,17 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
         return false;
     }
 
+    // The mirror of askingForDrawnWindow: a commit from a window this overview
+    // has been drawing is worth a repaint even when its card is off in the grid,
+    // because the thumbnail showing it is not.
+    if (previewPulses.contains(window.get())) {
+        noteDamageGate(window, "ACCEPTED(drawn)");
+        const auto NOWDRAWN = Time::steadyNow();
+        notePreviewDamage(window, NOWDRAWN);
+        if (previewIsStreaming(window, NOWDRAWN))
+            return true;
+    }
+
     noteDamageGate(window, "reached-loop");
     const auto ACTIVEIDX = activeWorkspaceIndex();
     const auto SCALE     = scale->value();
@@ -7800,16 +7947,24 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
         if (!workspaceImage || workspaceImage->pWorkspace != window->m_workspace)
             continue;
 
-        {
-            const auto fullscreenWindow = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
-            if (fullscreenWindow && fullscreenWindow != window && !window->m_isFloating) {
-                noteDamageGate(window, "occluded-by-fullscreen");
-                return false;
-            }
+        const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
+        if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->m_isFloating) {
+            noteDamageGate(window, "occluded-by-fullscreen");
+            return false;
         }
 
         const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, ACTIVEIDX, PITCH);
-        const auto WINDOWBOX        = getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
+
+        // Same substitution as the frame gate above, and for the same reason:
+        // the commit that proves a fullscreen window is alive was being dropped
+        // against a tile box it has no part in, so even when it did paint the
+        // overview never repainted to show it.
+        // The card's VISIBLE box, which is what renderWorkspaceLive tests -- the
+        // raw workspace box can sit off-screen for a card the scrolled strip is
+        // nonetheless showing, so testing it disagreed with the pass that draws.
+        const auto WINDOWBOX = FULLSCREENWINDOW == window ?
+            workspaceOverviewVisibleBox(workspaceIdx, getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout), SCALE, MONITOR) :
+            getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
         if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR)) {
             noteDamageGate(window, "card-offscreen");
             return false;

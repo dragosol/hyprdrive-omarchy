@@ -58,6 +58,10 @@ class CForcedVisibility {
 
     void forceSurface(SP<CWLSurfaceResource> surface);
     void forceWindowSurfaces(PHLWINDOW window);
+    // Tell the client its surface is ON THIS OUTPUT while its tile is drawn.
+    // Undone by restoreAll, so a client is never left believing it is visible
+    // on a monitor that has stopped drawing it.
+    void enterWindowSurfaces(PHLWINDOW window, PHLMONITOR monitor);
     void forceWindow(PHLWINDOW window);
     void forceLayersAboveFullscreen(PHLMONITOR monitor);
     void restoreAll();
@@ -75,6 +79,12 @@ class CForcedVisibility {
         PHLWINDOWREF window;
         bool         hidden = false;
     };
+    struct SEntered {
+        WP<CWLSurfaceResource> surface;
+        PHLMONITORREF          monitor;
+    };
+    std::vector<SEntered>           m_entered;
+    std::unordered_set<void*>       m_enteredSeen;
     struct SLayer {
         PHLLSREF layer;
         bool     aboveFullscreen = true;
@@ -645,6 +655,10 @@ class CScrollOverview : public IOverview {
     bool                             selectedWorkspaceFramePending = false;
     bool                             inputFramePending = false;
     bool                             sendingOverviewFrameCallbacks = false;
+    // Set while renderWindowLive is asking for the next frame of the window it
+    // is drawing. The draw has already answered "is this on screen"; see
+    // shouldAllowSurfaceFrame.
+    bool                             askingForDrawnWindow = false;
     bool                             usesSubmapKeybinds = false;
     bool                             submapActive = false;
     uint32_t                         submapMouseClickButton = 0;
