@@ -45,6 +45,7 @@
 #include <hyprutils/string/ConstVarList.hpp>
 using namespace Hyprutils::String;
 
+#include "CursorShape.hpp"
 #include "globals.hpp"
 #include "SearchLetters.hpp"
 
@@ -1728,6 +1729,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         rc<void*>(hkOnMouseMoved));
     g_pScrollMouseMovedHook->hook();
 
+    CursorShape::init();
     g_pRenderPreHook = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
         // Throttled inside to a few stat()s every couple of seconds.
         AppSearch::pollForChanges();
@@ -2066,6 +2068,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pRawKeyHook.reset();
     g_pTapSuperButtonHook.reset();
     g_pRenderPreHook.reset();
+    CursorShape::shutdown();
     g_pMembOpenHook.reset();
     g_pMembLateHook.reset();
     g_pMembCloseHook.reset();
