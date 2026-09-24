@@ -1018,7 +1018,11 @@ static void                registerRawKeyHooks() {
                 // must never START a search still keeps the key rather than
                 // typing it into a window the user cannot see. A fan opened
                 // over the overview would otherwise never see the press.
-                if (event.keycode == EVDEV_KEY_SPACE && ScrollOverview::Stacks::previewHovered()) {
+                // Dock stacks A: an open fan/pane owns ITS keys (arrows, Enter,
+                // Esc, Space; the pane also types). handleKey claims SPACE only
+                // when there is an item to preview, so everywhere else the key
+                // falls through untouched -- the scope rule above still holds.
+                if (ScrollOverview::Stacks::keyboardActive() && ScrollOverview::Stacks::handleKey(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;

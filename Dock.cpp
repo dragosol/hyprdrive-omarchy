@@ -4874,6 +4874,14 @@ void setWindowDragActive(bool active) {
 // same order -- the live blur behind it, then the theme's tint on top, both at
 // the caller's alpha -- and they were five copies of that pair before V2 and V4
 // each added a sixth. See the note in Dock.hpp.
+// The theme's accent: Hyprland's active border, the colour labelPill's ring uses.
+CHyprColor accentColor() {
+    if (auto* const ACTIVE = sc<::Config::CGradientValueData*>(ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>("general:col.active_border").ptr());
+        ACTIVE && !ACTIVE->m_colors.empty())
+        return ACTIVE->m_colors[0];
+    return ScrollOverview::Config::themeForeground();
+}
+
 void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha) {
     queueDockFrost(monitor, box, rounding, alpha);
 

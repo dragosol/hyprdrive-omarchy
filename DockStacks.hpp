@@ -140,6 +140,14 @@ namespace ScrollOverview::Stacks {
     // through untouched. A key that ate space anywhere else would be a
     // regression far larger than the feature.
     bool previewHovered();
+
+    // Dock stacks A. While a fan or pane is open it owns its keys: arrows,
+    // Enter, Esc, Space (and, the pane, typing). handleKey takes a PRESS and
+    // says whether it claimed it; Space is claimed only when previewHovered()
+    // would preview something, so it never goes missing elsewhere.
+    bool keyboardActive();
+    bool handleKey(uint32_t keycode);
+    bool sushiAvailable();
     // Frames this MONITOR needs for the stacks: the popup's entrance and exit,
     // a drag ghost following the pointer, and the hop/shake that acknowledges a
     // move. An open, settled fan asks for nothing -- it does not move, and it

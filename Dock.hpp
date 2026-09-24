@@ -337,6 +337,7 @@ void revealNow(PHLMONITOR monitor);
 // through the -1 sentinels (X71) and skipped entirely when
 // decoration:blur:enabled is off, matching Omarchy windows; the tint on top is
 // the dock's background colour, and `alpha` is multiplied into both.
+CHyprColor accentColor(); // Hyprland's active border colour (the theme accent)
 void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha);
 
 // A dragged icon is drawn as a translucent CLONE -- the original is still in its
