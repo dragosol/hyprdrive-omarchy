@@ -848,39 +848,14 @@ std::vector<SItem> buildDockItems() {
         });
     }
 
-    // X35. Locations come after every app, which is where `Locations.getApps()`
-    // puts them once `shellAppCompare` has sorted the running ones to the front.
+    // DOCK ORDER (dock stacks A, 2026-09-24): apps | Scratchpad | stacks |
+    // removable drives | Trash. Stacks used to come after the locations, which
+    // put the user's own shelf behind Trash.
     //
-    // `isolate_locations` TRUE is what makes this a plain append: a location's
-    // running state is ITS OWN, so it is asked of the file manager's open
-    // windows rather than inherited from whether Nautilus happens to be up. With
-    // the key off, a location is drawn but never marked running -- the reference
-    // reaches for the file manager's own AppIcon there, and this dock has no
-    // second icon to hand the state to.
-    const bool ISOLATE = Config::getValue<bool>(KEY_ISOLATE_LOCATIONS);
-    for (const auto& LOCATION : Locations::items()) {
-        out.emplace_back(SItem{
-            .icon         = LOCATION.icon,
-            .running      = ISOLATE && Locations::openWindows(LOCATION.uri),
-            .uri          = LOCATION.uri,
-            .locationName = LOCATION.name,
-            .mount        = LOCATION.mount,
-            .canEject     = LOCATION.canEject,
-            .mounted      = LOCATION.mounted,
-            .trashEmpty   = LOCATION.empty,
-        });
-    }
-
-    // V11 V4. STACKS come after the locations, which is the end of the dock.
-    // The reference appends to the dash for the same reason: a stack is the
-    // user's own shelf and it should not push the apps around.
-    //
-    // A stack carries `uri` as well as `stack`, so the nine `!uri.empty()`
-    // branches this file already has treat it as the not-an-app it is.
-    // The icon, the label and the is-a-directory answer are resolved when the
-    // STORE is read (DockStacks.cpp, decorate) rather than here: all three stat
-    // the path, and one of them asks gio to guess a content type, which is not
-    // a thing to do per stack per build.
+    // A stack carries `uri` as well as `stack`, so the `!uri.empty()` branches
+    // this file already has treat it as the not-an-app it is. Its icon, label
+    // and is-a-directory answer are resolved when the STORE is read
+    // (DockStacks.cpp, decorate), not here.
     for (const auto& STACK : Stacks::all()) {
         out.emplace_back(SItem{
             .icon         = STACK.icon,
@@ -890,6 +865,27 @@ std::vector<SItem> buildDockItems() {
             .stackPath    = STACK.path,
             .stackDir     = STACK.isDir,
         });
+    }
+
+    // X35. Locations: mounts first, then everything else (Trash), so Trash
+    // stays the last cell. `isolate_locations` TRUE makes a location's running
+    // state its own -- asked of the file manager's open windows.
+    const bool ISOLATE = Config::getValue<bool>(KEY_ISOLATE_LOCATIONS);
+    for (const bool MOUNTS : {true, false}) {
+        for (const auto& LOCATION : Locations::items()) {
+            if (LOCATION.mount != MOUNTS)
+                continue;
+            out.emplace_back(SItem{
+                .icon         = LOCATION.icon,
+                .running      = ISOLATE && Locations::openWindows(LOCATION.uri),
+                .uri          = LOCATION.uri,
+                .locationName = LOCATION.name,
+                .mount        = LOCATION.mount,
+                .canEject     = LOCATION.canEject,
+                .mounted      = LOCATION.mounted,
+                .trashEmpty   = LOCATION.empty,
+            });
+        }
     }
 
     // ONE PASS, at the end, so no branch above can forget it. See SItem::subject.
@@ -3496,6 +3492,9 @@ struct SDockDrag {
     CBox        home;
     Vector2D    grab;
     Vector2D    at;
+
+    // A STACK being reordered among the stacks (dock stacks A); empty for an app.
+    std::string stackPath;
 };
 
 // V3. The cancel: an icon released on nothing FLIES BACK to its cell instead of
@@ -3564,6 +3563,18 @@ std::vector<size_t> favoriteSlots(const SLayout& layout) {
     return out;
 }
 
+std::vector<size_t> stackSlots(const SLayout& layout) {
+    std::vector<size_t> out;
+    for (size_t i = 0; i < layout.items.size(); ++i)
+        if (layout.items[i].stack)
+            out.emplace_back(i);
+    return out;
+}
+
+bool draggingStack() {
+    return g_dockDrag.drag && !g_dockDrag.drag->stackPath.empty();
+}
+
 int caretIndex() {
     return g_dockDrag.drag && g_dockDrag.drag->live ? g_dockDrag.drag->insert : g_dockDrag.foreignInsert;
 }
@@ -3605,7 +3616,8 @@ constexpr float GHOST_HOME_MS = 220.F;
 // Where the caret sits for an insertion index: hard against the left edge of
 // the icon that would follow it, or past the last favourite when it is the end.
 CBox caretBox(const SLayout& layout, int index, float scale) {
-    const auto SLOTS = favoriteSlots(layout);
+    // A stack drag's caret runs over the stack cells, not the favourites.
+    const auto SLOTS = draggingStack() ? stackSlots(layout) : favoriteSlots(layout);
     if (index < 0 || SLOTS.empty())
         return {};
 
@@ -3820,6 +3832,23 @@ int dropIndexAt(PHLMONITOR monitor, const Vector2D& point) {
             return sc<int>(k);
     }
 
+    return sc<int>(SLOTS.size());
+}
+
+// Where a dragged STACK would land among the stacks: the same midpoint rule as
+// dropIndexAt, over the stack cells only. -1 off the pill.
+int stackDropIndexAt(PHLMONITOR monitor, const Vector2D& point) {
+    if (!monitor)
+        return -1;
+    const auto LAYOUT = layout(monitor);
+    if (LAYOUT.pill.width < 1 || !LAYOUT.pill.containsPoint(point))
+        return -1;
+    const auto SLOTS = stackSlots(LAYOUT);
+    for (size_t k = 0; k < SLOTS.size(); ++k) {
+        const auto& BOX = LAYOUT.items[SLOTS[k]].iconBox;
+        if (point.x < BOX.x + BOX.width / 2.0)
+            return sc<int>(k);
+    }
     return sc<int>(SLOTS.size());
 }
 
@@ -4081,16 +4110,17 @@ bool dragBegin(PHLMONITOR monitor, const Vector2D& point) {
 
     const auto LAYOUT = layout(monitor);
     const auto ITEM   = std::ranges::find_if(LAYOUT.items, [&](const SItem& item) { return hoverBox(item.iconBox, monitor->m_scale).containsPoint(point); });
-    if (ITEM == LAYOUT.items.end() || ITEM->desktopId.empty())
+    if (ITEM == LAYOUT.items.end() || (ITEM->desktopId.empty() && !ITEM->stack))
         return false;
 
-    g_dockDrag.drag = SDockDrag{.id      = ITEM->desktopId,
-                                .monitor = monitor->m_id,
-                                .start   = point,
-                                .icon    = ITEM->icon,
-                                .home    = ITEM->iconBox,
-                                .grab    = point - Vector2D{ITEM->iconBox.x, ITEM->iconBox.y},
-                                .at      = point};
+    g_dockDrag.drag = SDockDrag{.id        = ITEM->desktopId,
+                                .monitor   = monitor->m_id,
+                                .start     = point,
+                                .icon      = ITEM->icon,
+                                .home      = ITEM->iconBox,
+                                .grab      = point - Vector2D{ITEM->iconBox.x, ITEM->iconBox.y},
+                                .at        = point,
+                                .stackPath = ITEM->stack ? ITEM->stackPath : std::string{}};
     return true;
 }
 
@@ -4169,7 +4199,7 @@ bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
         pressEnd();
     }
 
-    g_dockDrag.drag->insert = dropIndexAt(monitor, point);
+    g_dockDrag.drag->insert = g_dockDrag.drag->stackPath.empty() ? dropIndexAt(monitor, point) : stackDropIndexAt(monitor, point);
     return true;
 }
 
@@ -4193,6 +4223,28 @@ bool dragRelease(PHLMONITOR monitor, const Vector2D& point) {
 
     const auto DRAG = *g_dockDrag.drag;
     g_dockDrag.drag.reset();
+
+    // A STACK being reordered (dock stacks A): only among the stacks, only a
+    // live drag that ends on the pill. A release near the press is a click --
+    // it opens the stack.
+    if (!DRAG.stackPath.empty()) {
+        const float CLICKTOL = 3.F * dragThresholdPx(monitor);
+        if (!DRAG.live || DRAG.start.distanceSq(point) <= CLICKTOL * CLICKTOL)
+            return false;
+        const int INDEX = stackDropIndexAt(monitor, point);
+        if (INDEX < 0)
+            return true; // off the pill: nothing moves (removing is the menu's job)
+        // INDEX counts the dragged stack itself; a later slot lands one short otherwise.
+        size_t from = 0;
+        for (const auto& S : Stacks::all()) {
+            if (S.path == DRAG.stackPath)
+                break;
+            ++from;
+        }
+        const size_t TO = sc<size_t>(INDEX) > from ? sc<size_t>(INDEX) - 1 : sc<size_t>(INDEX);
+        Stacks::moveTo(DRAG.stackPath, TO);
+        return true;
+    }
 
     // USER-REPORTED P0 2026-08-06: "I cant use the dock clicking it does
     // nothing". This is X16's lesson arriving on the dock, and it is why the
