@@ -243,25 +243,63 @@ namespace OvInternal {
             const size_t COUNT = windows.size();
             const float  GAP   = gap;
 
+            // SCORED WITH THE ROWS PLACEMENT WILL ACTUALLY BUILD (user, 2026-09-23:
+            // "I see 5 windows and a lot of space on the right and left of them").
+            //
+            // This used to give every window an EQUAL cell -- usable width over the
+            // column count -- and take the smallest scale any window allowed in
+            // it. With mixed widths that is the WIDEST window's scale: a
+            // full-width window in a cell sized for a fifth of the row pinned the
+            // scale, and the half-width windows beside it were then drawn far
+            // narrower than their cells. Placement below packs by REAL widths, so
+            // the row came out a good deal narrower than the screen and the
+            // difference sat empty at both ends.
+            //
+            // Now each candidate row count is split exactly as placement splits it
+            // (earlier rows take the remainder), and the scale is the largest that
+            // fits every row's REAL total width and the rows' real stacked height.
+            // It can only be equal or larger than the old answer: the old per-cell
+            // bound was a stricter version of the same constraint.
             size_t bestRows  = 0;
             float  bestScale = 0.F;
             for (size_t rows = 1; rows <= COUNT; ++rows) {
-                const size_t COLS  = (COUNT + rows - 1) / rows;
-                const float  CELLW = (sc<float>(usable.w) - GAP * sc<float>(COLS - 1)) / sc<float>(COLS);
-                const float  CELLH = (sc<float>(usable.h) - GAP * sc<float>(rows - 1)) / sc<float>(rows);
-                if (CELLW <= 1.F || CELLH <= 1.F)
-                    continue;
+                const size_t BASE  = COUNT / rows;
+                const size_t EXTRA = COUNT % rows;
 
-                float rowScale = 1.F;
-                for (const auto& SIZE : sizes) {
-                    if (SIZE.x <= 1 || SIZE.y <= 1)
-                        continue;
+                float  scale    = 1.F;
+                float  sumRowH  = 0.F;
+                size_t first    = 0;
+                bool   feasible = true;
+                for (size_t row = 0; row < rows; ++row) {
+                    const size_t N = BASE + (row < EXTRA ? 1 : 0);
+                    if (N == 0) {
+                        feasible = false;
+                        break;
+                    }
 
-                    rowScale = std::min({rowScale, CELLW / sc<float>(SIZE.x), CELLH / sc<float>(SIZE.y)});
+                    float rowW = 0.F, rowH = 0.F;
+                    for (size_t i = first; i < first + N; ++i) {
+                        rowW += std::max(1.F, sc<float>(sizes[i].x));
+                        rowH = std::max(rowH, std::max(1.F, sc<float>(sizes[i].y)));
+                    }
+                    first += N;
+
+                    const float ROOM = sc<float>(usable.w) - GAP * sc<float>(N - 1);
+                    if (ROOM <= 1.F) {
+                        feasible = false;
+                        break;
+                    }
+                    scale = std::min(scale, ROOM / rowW);
+                    sumRowH += rowH;
                 }
 
-                if (rowScale > bestScale) {
-                    bestScale = rowScale;
+                const float ROOMH = sc<float>(usable.h) - GAP * sc<float>(rows - 1);
+                if (!feasible || ROOMH <= 1.F || sumRowH <= 0.F)
+                    continue;
+                scale = std::min(scale, ROOMH / sumRowH);
+
+                if (scale > bestScale) {
+                    bestScale = scale;
                     bestRows  = rows;
                 }
             }
@@ -415,9 +453,16 @@ namespace OvInternal {
         // panel's foot plus the same gap that sits between the search pill and
         // the strip, not by the unused bottom of the band plus another
         // mission-control gap -- that pair was the hole between strip and windows.
+        //
+        // The stack is measured from the MONITOR's top edge -- the pill docks
+        // off overviewTopChromeBottomL and the strip's band off m_position.y --
+        // so it is a floor to clamp against, not a margin to add. Adding it to
+        // a work area that already excluded a top bar counted that bar twice
+        // and pushed every tile down by its height (22px under this rice).
         if (const float TOPCHROME = overviewStripStackL(monitor) + overviewSearchLogicalHeight(monitor) + overviewResultsLogicalHeight(monitor); TOPCHROME > 0.F) {
-            usable.y += TOPCHROME;
-            usable.h -= TOPCHROME;
+            const double BOTTOM = usable.y + usable.h;
+            usable.y            = std::max(usable.y, monitor->m_position.y + TOPCHROME);
+            usable.h            = BOTTOM - usable.y;
             if (usable.h <= 1)
                 return false;
         }

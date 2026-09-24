@@ -45,6 +45,9 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false
 // Centred horizontally on `cx`, with the plate's BOTTOM edge at `bottomY`.
 // Returns the plate box, or an empty box if the text could not be rendered.
 CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale);
+// Where labelPill WOULD draw, without drawing: the same box it computes, so a
+// caller can dodge something before committing to a position.
+CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale);
 
 // How far a label plate floats above the plate it labels, in logical px: the
 // dock tooltip above the pill, and the Scratchpad label above its strip plate

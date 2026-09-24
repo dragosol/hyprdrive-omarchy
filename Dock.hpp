@@ -248,6 +248,11 @@ void setForeignInsert(int index);
 bool openMenu(PHLMONITOR monitor, const Vector2D& point);
 bool menuOpen();
 void closeMenu();
+// Get Info's lookup poll: armed when the info view opens; removed on unload.
+void armInfoPoll();
+void stopInfoPoll();
+// The urgent hop's wake-up timer; removed on unload.
+void stopUrgentHopTimer();
 bool menuContains(PHLMONITOR monitor, const Vector2D& point);
 bool menuClick(PHLMONITOR monitor, const Vector2D& point);
 

@@ -1,3 +1,4 @@
+#include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include "OverviewInternal.hpp"
 #include "SearchLetters.hpp"
 
@@ -172,6 +173,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // X50 rides the same config as the band it travels with: the pill lifting on
     // one curve while the panel it uncovers grows on another reads as two events.
     Animation::mgr()->createAnimation(0.F, searchDock, searchAnimConfig, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(0.F, pillNudge, searchAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(0.F, scratchpadReveal, searchAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(0.F, altStripsReveal, searchAnimConfig, AVARDAMAGE_NONE);
     syncPluginAnimEnabled();
@@ -187,6 +189,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     });
     resultsWidth->setUpdateCallback([this](auto) { damage(); });
     searchDock->setUpdateCallback([this](auto) { damage(); });
+    pillNudge->setUpdateCallback([this](auto) { damage(); });
     scratchpadReveal->setUpdateCallback([this](auto) { damage(); });
     altStripsReveal->setUpdateCallback([this](auto) { damage(); });
 
@@ -1125,6 +1128,16 @@ void CScrollOverview::updateTileHover() {
         return;
     }
 
+    // ...and the same for the desktop strip (user, 2026-09-23). It is another
+    // surface, not empty space on the way to a close button, and a tile left
+    // blown up behind it sits in the way of the thing the pointer went to look
+    // at. The whole PLATE counts -- the gaps between cells too -- plus the
+    // scratchpad cell and the other monitors' strips.
+    if (stripUiContains(lastMousePosLocal)) {
+        TileChrome::setHovered(PHLWINDOW{}, false);
+        return;
+    }
+
     // X62. A result under the cursor takes the selection, so pointing at a row
     // and arrowing onto it land on the SAME highlight -- there is only one
     // selection and both devices move it. It also swallows the tile hover: the
@@ -1192,8 +1205,16 @@ CScrollOverview::SHoverSignature CScrollOverview::hoverSignature() const {
         sig.altCellIdx      = HIT->workspaceIdx;
     }
 
-    // The numbered strip cells are deliberately absent: a cell only lights up
-    // under a DRAG, and a drag asks for a frame on every motion regardless.
+    // The numbered cells used to be absent here -- a cell only lit up under a
+    // DRAG, and a drag asks for a frame on every motion regardless. They carry a
+    // hover LABEL now (renderStripCellLabel), and plain motion onto a cell has
+    // to buy the frame that draws it, or the label would trail the pointer by
+    // however long it took something else to repaint.
+    {
+        size_t idx = images.size();
+        if (workspaceAtStripPoint(lastMousePosLocal, &idx))
+            sig.stripCell = idx;
+    }
 
     return sig;
 }
@@ -1836,8 +1857,31 @@ CBox CScrollOverview::draggedWindowGlobalBox() const {
         }
     }
 
-    const float MINI       = 1.F - dragMiniProgress() * (1.F - ScrollOverview::Config::getDragMiniScale());
-    const auto  GLOBALSIZE = SOURCEBOX.size() * (1.F / std::max(MONITOR->m_scale, 0.01F)) * MINI;
+    // THE MINI SIZE IS THE STRIP'S, not a fraction of wherever the drag came
+    // from (user, 2026-09-23: "ALWAYS have the same ratio of window height to
+    // strip height regardless if im dragging TO or from it"). As a fraction --
+    // drag_mini_scale x SOURCEBOX -- the size over the strip inherited every
+    // difference between the sources: a grid slot shrinks as the grid fills, a
+    // dock tear-out and a strip grab are sized by the destination card's slot,
+    // so one window reached the strip at three different sizes.
+    //
+    // The strip already has one answer for "how big is this window in a cell":
+    // stripMiniBox scales every window by cell height / monitor height. The
+    // proxy now eases toward exactly that, so what hangs under the cursor over
+    // a cell is what will land in it, from any source. drag_mini_scale stays as
+    // the fallback for a session with the strip turned off.
+    const float P          = dragMiniProgress();
+    Vector2D    miniTarget = SOURCEBOX.size() * ScrollOverview::Config::getDragMiniScale();
+    if (!images.empty() && overviewStripLogicalHeight(MONITOR) > 0.F) {
+        const CBox CELL = stripCellBox(0, MONITOR, scale->value());
+        const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+        if (CELL.height > 1 && GEOM.w >= 1 && GEOM.h >= 1) {
+            const double K = CELL.height / std::max(1.0, MONITOR->m_size.y); // rendered cell px per logical monitor px
+            miniTarget     = Vector2D{GEOM.w * K, GEOM.h * K};
+        }
+    }
+    const Vector2D RENDERED   = SOURCEBOX.size() + (miniTarget - SOURCEBOX.size()) * P;
+    const auto     GLOBALSIZE = RENDERED * (1.F / std::max(MONITOR->m_scale, 0.01F));
     const auto CURSOR     = g_pInputManager->getMouseCoordsInternal();
 
     const auto GRAB = dragEffectiveGrabRatio();
@@ -3255,6 +3299,89 @@ PHLWINDOW CScrollOverview::firstNavTile() const {
     return best ? best->window : nullptr;
 }
 
+// firstNavTile's ordering, generalised to the whole desktop. Rows are centred,
+// so "same row" is a shared vertical band rather than an equal y.
+std::vector<PHLWINDOW> CScrollOverview::navTilesOf(const PHLWORKSPACE& workspace) const {
+    std::vector<PHLWINDOW> out;
+    const auto             MONITOR = pMonitor.lock();
+    if (!workspace || !MONITOR)
+        return out;
+
+    struct SOrdered {
+        PHLWINDOW window;
+        CBox      box;
+    };
+    std::vector<SOrdered> ordered;
+
+    for (const auto& WINDOW : overviewMainGridWindows(workspace, MONITOR)) {
+        if (!WINDOW)
+            continue;
+        // The SLOT, not the drawn box: the drawn box carries the viewport pan,
+        // and the desktop being walked ONTO has not been panned to yet.
+        CBox slot;
+        if (!overviewGridLayout(workspace, MONITOR, WINDOW, slot) || slot.width <= 1.F || slot.height <= 1.F)
+            continue;
+        ordered.push_back({WINDOW, slot});
+    }
+
+    std::ranges::sort(ordered, [](const SOrdered& a, const SOrdered& b) {
+        const bool SAMEROW = a.box.y < b.box.y + b.box.height && b.box.y < a.box.y + a.box.height;
+        return SAMEROW ? a.box.middle().x < b.box.middle().x : a.box.middle().y < b.box.middle().y;
+    });
+
+    out.reserve(ordered.size());
+    for (const auto& O : ordered)
+        out.push_back(O.window);
+    return out;
+}
+
+// Off the end of one desktop's grid and onto the next (user, 2026-09-23). Only
+// reached with no query: a filtered grid already holds the matches from every
+// desktop, so "the next desktop" is not a place its walk can go.
+bool CScrollOverview::stepTileDesktop(int delta) {
+    if (delta == 0 || images.empty())
+        return false;
+
+    const int CUR  = sc<int>(viewportCurrentWorkspace);
+    const int NEXT = CUR + delta;
+    if (NEXT < 0 || NEXT >= sc<int>(images.size()))
+        return false;
+
+    const auto IMAGE = images[sc<size_t>(NEXT)];
+    if (!IMAGE || !IMAGE->pWorkspace)
+        return false;
+
+    const auto TILES = navTilesOf(IMAGE->pWorkspace);
+
+    focusOverviewWorkspace(IMAGE->pWorkspace, sc<size_t>(NEXT));
+
+    // Right lands on that desktop's first tile, left on its last, so the walk
+    // reads as one continuous line across the desktops rather than jumping to
+    // the same corner every time. An empty desktop is still a valid stop: the
+    // selection simply has nothing to sit on until the next arrow.
+    if (!TILES.empty()) {
+        const auto TARGET         = delta > 0 ? TILES.front() : TILES.back();
+        g_search.nav.zone         = EOverviewNavZone::Tile;
+        g_search.nav.selection    = -1;
+        g_search.nav.keyboardTile = true;
+        closeOnWindow             = TARGET;
+        TileChrome::setHovered(TARGET, false);
+    } else {
+        // An EMPTY desktop has nothing to select, and the tile left behind on
+        // the previous one must not stay selected: close() commits
+        // closeOnWindow, so it carried the user straight back to the desktop
+        // they had just walked off (measured: arrows to empty ws 1, Escape,
+        // landed on ws 2). With no window selected, close() takes its
+        // no-selection path and stays on the desktop in view.
+        closeOnWindow.reset();
+        g_search.nav.keyboardTile = false;
+        TileChrome::setHovered(PHLWINDOW{}, false);
+    }
+
+    damage();
+    return true;
+}
+
 bool CScrollOverview::isNavTile(const PHLWINDOW& window) const {
     const auto MONITOR = pMonitor.lock();
     if (!window || !MONITOR)
@@ -3513,9 +3640,40 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
     if (current.width <= 1.F || current.height <= 1.F)
         current = targets.front().box;
 
+    // NAVIGATING WINDOWS STAYS IN THE WINDOWS (user, 2026-09-23: "it can also be
+    // spatial but restricted to grid when I'm navigating windows"). The pick is
+    // still geometric -- it is what makes a two-row grid walk the way it looks
+    // -- but the strip and the results are no longer things an arrow can fall
+    // onto by being nearer than the next tile. Tab is the way between the
+    // three panes now, which is the whole point of the cycle.
+    //
+    // ...and in the windows of THIS desktop's card only (user, 2026-09-23: "if my
+    // right arrow selects a window in the next workspace then we should be moved
+    // to it"). The neighbouring cards peek in at the monitor's edges, so their
+    // tiles are on screen and were valid spatial targets: right off the end of
+    // the grid selected the nearest tile on the peeking card and left the view
+    // where it was, and the step below -- which moves the view -- never ran
+    // because a target had been found. Confining the pick to this card is what
+    // routes "off the end" through stepTileDesktop, which changes desktop and
+    // lands on that desktop's first tile (or its last, going left).
+    if (g_search.nav.zone == EOverviewNavZone::Tile) {
+        std::unordered_set<const Desktop::View::CWindow*> here;
+        if (viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace] && images[viewportCurrentWorkspace]->pWorkspace)
+            for (const auto& W : overviewMainGridWindows(images[viewportCurrentWorkspace]->pWorkspace, MONITOR))
+                if (W)
+                    here.insert(W.get());
+        std::erase_if(targets, [&](const SOverviewNavTarget& t) { return t.zone != EOverviewNavZone::Tile || !here.contains(t.window.get()); });
+    }
+
     const auto* const best = pickNavTarget(targets, current, g_search.nav.zone, LEFT, RIGHT, DOWN);
-    if (!best)
+    if (!best) {
+        // Off the end of the grid. With no query the desktops are a line the
+        // walk continues along; with one, the grid already IS every match and
+        // there is nowhere further to go, so the selection stops.
+        if (g_search.nav.zone == EOverviewNavZone::Tile && (LEFT || RIGHT) && g_search.query.text.empty())
+            return stepTileDesktop(LEFT ? -1 : 1);
         return false;
+    }
 
     switch (best->zone) {
         case EOverviewNavZone::Desktop:
@@ -3959,6 +4117,7 @@ std::string CScrollOverview::frameDebugLine() const {
     var("resultsBand", resultsBand);
     var("resultsWidth", resultsWidth);
     var("searchDock", searchDock);
+    var("pillNudge", pillNudge);
     var("scratchpadReveal", scratchpadReveal);
     var("altStripsReveal", altStripsReveal);
 
@@ -4397,6 +4556,7 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
 
         renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX);
         tileChrome.emplace_back(window, windowBox);
+        lastTileBoxes[window.get()] = {windowBox, workspaceIdx};
     };
 
     const auto renderTileChrome = [&] {
@@ -4470,9 +4630,135 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
 
     renderWindowsByState(false);
     renderWindowsByState(true);
+    renderClosingTiles(monitor, workspaceIdx, now);
     renderTileChrome();
     if (WORKSPACEVISIBLE)
         renderDropIndicator();
+}
+
+// OMARCHY'S OWN CLOSE, borrowed rather than invented: `windowsOut` on this rice
+// is `popin 87%` on a linear bezier at speed 1.49, with fadeOut alongside it.
+// Hyprland speeds are deciseconds, so 1.49 is 149ms, and popin 87% means the
+// window shrinks to 87% of its size about its centre while the alpha runs out.
+// Read off the live animation tree rather than hardcoded from the theme file, so
+// a user who retunes windowsOut gets the overview's copy retuned with it.
+//
+// The ANIMATION TREE, not Config::getValue: animations are not config values,
+// and getValue on a key that does not exist dereferences an empty handle --
+// the first version of this read `animations:windowsOut:speed` that way and
+// would have taken the compositor down on the first close. Same accessor the
+// constructor uses for windowsMove.
+static float closingTileDurationMs() {
+    const auto CONFIG = Config::animationTree()->getAnimationPropertyConfig("windowsOut");
+    const auto VALUES = CONFIG && CONFIG->pValues ? CONFIG->pValues.lock() : CONFIG;
+    if (!VALUES || !VALUES->internalEnabled)
+        return 0.F; // windowsOut off = no close animation, same as the desktop
+    return VALUES->internalSpeed > 0.01F ? VALUES->internalSpeed * 100.F : 149.F;
+}
+
+// BORROWED, not captured (measured 2026-09-23 with /tmp/hyprdrive-close.log):
+// the first frame after window.close already finds the window DESTROYED -- foot
+// exits the instant it is asked -- so there is never a frame in which to
+// photograph it ourselves. What does exist on that frame is Hyprland's own
+// snapshot, taken at unmap for its windowsOut. It is a MONITOR-sized
+// framebuffer with the window at its real position, so the tile is drawn by
+// scaling the whole snapshot until the window's region lands on the tile's box
+// and clipping to that box.
+//
+// Waiting for the unmap is also what keeps a refused close honest: an app that
+// answers "save changes?" stays mapped, no fadeout ever appears, and the entry
+// times out instead of animating a ghost out from under a tile that is still
+// there.
+// Called once per workspace CARD per frame -- the current desktop and the
+// neighbours peeking in at the edges. The ghost is drawn only on the card whose
+// pass drew the tile; drawn on every card it stacked its alpha and faded late.
+void CScrollOverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now) {
+    if (closingTiles.empty() || !monitor)
+        return;
+
+    const float     DURMS    = closingTileDurationMs();
+    constexpr float WAITMS   = 1000.F; // longest a still-mapped window may take to actually go
+    constexpr float POPIN    = 0.87F;
+    bool            animating = false;
+
+    for (auto& tile : closingTiles) {
+        const auto WINDOW = tile.window.lock();
+
+        if (!tile.captured) {
+            // Still mapped: the close was asked for, not done. Wait for it.
+            if (WINDOW && WINDOW->m_isMapped)
+                continue;
+
+            // Gone. Find the snapshot Hyprland took of it -- the one whose box
+            // holds the window's last real geometry, nearest first.
+            const CBox REALPX{(tile.realBox.x - monitor->m_position.x) * monitor->m_scale, (tile.realBox.y - monitor->m_position.y) * monitor->m_scale,
+                              tile.realBox.width * monitor->m_scale, tile.realBox.height * monitor->m_scale};
+            for (const auto& FADE : Desktop::fadingOutState()->fadeouts()) {
+                if (!FADE || FADE->monitor().lock() != monitor)
+                    continue;
+                const auto FB = FADE->framebuffer();
+                if (!FB || !FB->isAllocated())
+                    continue;
+                const CBox RB = FADE->renderBox();
+                if (!RB.containsPoint(REALPX.middle()))
+                    continue;
+                tile.fb       = FB;
+                tile.fbBox    = RB;     // where the snapshot sits, monitor px
+                tile.srcBox   = REALPX; // where the window sits inside it
+                tile.captured = true;
+                tile.start    = now;    // the animation starts at the unmap, like Hyprland's
+                break;
+            }
+            continue;
+        }
+
+        const float ELAPSED = std::chrono::duration<float, std::milli>(now - tile.start).count();
+        const float T       = DURMS <= 0.F ? 1.F : std::clamp(ELAPSED / DURMS, 0.F, 1.F);
+        if (T < 1.F)
+            animating = true; // keep frames coming even from the cards that do not draw it
+        if (tile.cardIdx != cardIdx || T >= 1.F || !tile.fb || !tile.fb->isAllocated())
+            continue;
+        const auto TEX = tile.fb->getTexture();
+        if (!TEX || tile.srcBox.width < 1.F || tile.srcBox.height < 1.F)
+            continue;
+
+
+        // popin 87%: the tile shrinks about its centre, linearly, alpha out.
+        const float SCALE = 1.F - ((1.F - POPIN) * T);
+        const CBox  TILE{tile.box.x + (tile.box.width * (1.F - SCALE) / 2.F), tile.box.y + (tile.box.height * (1.F - SCALE) / 2.F), tile.box.width * SCALE,
+                         tile.box.height * SCALE};
+
+        // The whole snapshot, scaled so the window's region of it covers TILE.
+        const double K = TILE.width / tile.srcBox.width;
+        const CBox   DRAW{TILE.x - ((tile.srcBox.x - tile.fbBox.x) * K), TILE.y - ((tile.srcBox.y - tile.fbBox.y) * K), tile.fbBox.width * K, tile.fbBox.height * K};
+
+        CRegion damageRegion{TILE};
+        g_pHyprRenderer->draw(
+            CTexPassElement::SRenderData{
+                .tex     = TEX,
+                .box     = DRAW,
+                .a       = 1.F - T,
+                .damage  = damageRegion,
+                .clipBox = TILE,
+            },
+            damageRegion);
+    }
+
+    std::erase_if(closingTiles, [&](const SClosingTile& t) {
+        const float SINCE = std::chrono::duration<float, std::milli>(now - t.start).count();
+        if (!t.captured) {
+            const auto W = t.window.lock();
+            // Refused close (still mapped past the wait), or unmapped with no
+            // snapshot to borrow: let it go without an animation.
+            return (W && W->m_isMapped) ? SINCE >= WAITMS : !W || SINCE >= WAITMS;
+        }
+        return SINCE >= DURMS || !t.fb || !t.fb->isAllocated();
+    });
+
+    // The pass does not schedule itself: keep frames coming while anything is
+    // animating OR still waiting on its unmap.
+    if (animating || !closingTiles.empty())
+        damage();
 }
 
 float CScrollOverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
@@ -4698,6 +4984,19 @@ const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scra
     stripRowMemo.altSignature = altSignature;
     stripRowMemo.out          = ScrollOverview::StripLayout::layout(in);
     stripRowMemo.filled       = true;
+
+    // What the plate actually reaches, for the grid below it. StripLayout puts
+    // the cells at PAD + (band - 2*PAD - cellH)/2 into the band and the plate
+    // pads them by panelPad, so this is that foot -- and it collapses to the
+    // old PAD + cellH + panelPad the moment the row stops shrinking.
+    if (const auto& OUT = stripRowMemo.out; OUT.valid && OUT.cellH > 0.0) {
+        // PAD, then the cells as they actually came out, then the plate's pad.
+        // No centring term: StripLayout top-aligns the row in the band, so the
+        // whole of the shrink is below the plate and this is its real foot.
+        const float PAD = BANDL * OVERVIEW_STRIP_BAND_PAD_FRAC;
+        searchLayoutHere().stripPlateL = PAD + sc<float>(OUT.cellH) + OVERVIEW_STRIP_PANELPADL;
+    } else
+        searchLayoutHere().stripPlateL = 0.F;
 
     return stripRowMemo.out;
 }
@@ -5166,6 +5465,27 @@ CBox CScrollOverview::stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, floa
         return {};
 
     return getOverviewGlobalBox(LOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+}
+
+// The strip as one surface: its plate (the cells, the gaps between them and
+// the panel padding -- built exactly as renderStripPanel builds it), the
+// scratchpad cell, and the other monitors' strips.
+bool CScrollOverview::stripUiContains(const Vector2D& point) const {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F || images.empty())
+        return false;
+
+    const auto FIRST = stripCellLogicalBox(0);
+    const auto LAST  = stripCellLogicalBox(images.size() - 1);
+    if (FIRST.width > 1 && LAST.width > 1) {
+        constexpr float PAD = OVERVIEW_STRIP_PANELPADL;
+        const CBox      PANELLOGICAL{FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD,
+                                sc<float>(FIRST.height) + 2.F * PAD};
+        if (getOverviewGlobalBox(PANELLOGICAL, MONITOR, scale->value(), OVERVIEW_CHROME_NO_PAN, 0.F, layout).containsPoint(point))
+            return true;
+    }
+
+    return scratchpadCellContains(point) || altCellAt(point).has_value();
 }
 
 PHLWORKSPACE CScrollOverview::workspaceAtStripPoint(const Vector2D& point, size_t* hoveredWorkspaceIdx) const {
@@ -5740,6 +6060,174 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
 
     renderScratchpadCell(monitor, renderScale, now, style);
     renderAltStrips(monitor, renderScale, now, style);
+
+    // Last, so the plate sits over everything the strip drew. Not during a drag:
+    // the cell's highlight is the answer to "where will this land", and a label
+    // would sit in the way of reading it.
+    pillNudgeWant                  = 0.F; // the label below re-asks every frame; no label, no lift
+    searchLayoutHere().gridNudgeL  = 0.F; // ...and no push on the grid
+    if (!DRAGGED)
+        renderStripCellLabel(monitor, renderScale, FADE);
+}
+
+// THE DESKTOP'S NAME AND WHAT IS ON IT, over a hovered strip cell (user,
+// 2026-09-22: "the same kind of mouseover tooltip available in scratchpad
+// (non-empty desktops only)"). Same plate as the scratchpad's label and the
+// dock's icon labels -- OverviewRender::labelPill -- at the same gap above the
+// strip plate, so all three read as one piece of chrome.
+//
+// Empty desktops get nothing, as asked: the empty cell already shows its number
+// in the middle of itself, and a plate over nothing is clutter.
+bool CScrollOverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::string& keyOut, std::string& labelOut, float& cxOut, float& bottomOut) {
+    if (!monitor || !isOverviewPointerOnMonitor(monitor))
+        return false;
+
+    size_t idx = images.size();
+    if (!workspaceAtStripPoint(lastMousePosLocal, &idx) || idx >= images.size() || !images[idx] || !images[idx]->pWorkspace)
+        return false;
+
+    // App names, in window order, each once. Three at most -- the plate is a
+    // glance, not a list -- and the rest counted.
+    std::vector<std::string> names;
+    size_t                   windows = 0;
+    for (const auto& REF : images[idx]->windows) {
+        const auto W = REF.lock();
+        if (!W || !W->m_isMapped)
+            continue;
+        ++windows;
+        auto NAME = AppSearch::appNameForClass(AppSearch::identityClass(W->m_class, W->m_title));
+        if (NAME.empty())
+            NAME = W->m_class;
+        if (!NAME.empty() && std::ranges::find(names, NAME) == names.end())
+            names.push_back(NAME);
+    }
+    if (windows == 0)
+        return false;
+
+    std::string label = "Desktop " + images[idx]->pWorkspace->m_name;
+    for (size_t i = 0; i < names.size() && i < 3; ++i)
+        label += (i == 0 ? "  ·  " : ", ") + names[i];
+    if (names.size() > 3)
+        label += std::format("  +{}", names.size() - 3);
+
+    const CBox CELL = stripCellBox(idx, monitor, renderScale);
+    if (CELL.width <= 1)
+        return false;
+
+    // From the PLATE, built exactly the way renderScratchpadCell builds the
+    // scratchpad's -- the LOGICAL cell expanded by the panel padding, THEN
+    // transformed -- so the gap between plate and label is the same number on
+    // every desktop and on the scratchpad (user, 2026-09-23). The first version
+    // subtracted a rendered 10px from the cell, which is not the same thing once
+    // the overview's card transform has scaled the padding.
+    const CBox  PLATE  = getOverviewGlobalBox(stripCellLogicalBox(idx).copy().expand(OVERVIEW_STRIP_PANELPADL), monitor, renderScale, OVERVIEW_CHROME_NO_PAN,
+                                              0.F, layout);
+    const float CX     = sc<float>(CELL.x) + sc<float>(CELL.width) / 2.F;
+    const float GAP    = OverviewRender::LABEL_PILL_GAP * monitor->m_scale; // the scratchpad label's gap
+    const float ABOVE  = sc<float>(PLATE.y) - GAP;
+    float       bottom = ABOVE;
+
+    // ...unless above is where the search lives. The centre cells sit right
+    // under the pill, and once a query is typed the results panel's foot sits
+    // in that same gap -- a label there would be drawn over both. Below the
+    // plate is the gap to the windows, which is the same size by construction
+    // (overviewChromeGapL), so the label fits there instead.
+    const CBox  WANT = OverviewRender::labelPillBox(monitor, label, CX, ABOVE, monitor->m_scale);
+    const auto& PUB  = searchLayoutHere();
+
+    if (WANT.width > 1 && PUB.containerBox.width > 1 && !WANT.intersection(PUB.containerBox).empty()) {
+        // The results panel owns that gap and cannot move -- it hangs off the
+        // pill's row -- so the label goes under the plate instead, into the gap
+        // to the windows, at the same gap.
+        bottom = sc<float>(PLATE.y + PLATE.height) + GAP + sc<float>(WANT.height);
+
+        // ...and the windows make room for it: label to windows gets the same
+        // gap as plate to label. The grid already sits one chrome gap below the
+        // plate, so only the difference is asked for, in LOGICAL px -- the
+        // label is measured in rendered px, and the pill's published scale is
+        // rendered-per-logical under the same card transform.
+        if (PUB.scale > 0.01F) {
+            const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(monitor);
+            searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
+        }
+    } else if (WANT.width > 1 && PUB.pillRest.width > 1 && WANT.x < PUB.pillRest.x + PUB.pillRest.width && PUB.pillRest.x < WANT.x + WANT.width) {
+        // The pill is above this cell: it gets gently shoved up, and the label
+        // keeps the SAME gap to the pill as to the plate (user, 2026-09-23).
+        //
+        // Both gaps are GAP when there is room. When there is not -- the pill
+        // can only rise to just under the bar -- they shrink TOGETHER, so the
+        // label always sits centred between the lifted pill and the plate
+        // rather than hard against one of them.
+        const float H          = sc<float>(WANT.height);
+        const float RESTBOTTOM = sc<float>(PUB.pillRest.y + PUB.pillRest.height);
+        const float CEILBOTTOM = RESTBOTTOM - PUB.pillMaxUp; // the pill's foot at its highest
+        const float ROOM       = sc<float>(PLATE.y) - CEILBOTTOM - H;
+        const float G          = std::clamp(ROOM / 2.F, 0.F, GAP);
+
+        bottom                 = sc<float>(PLATE.y) - G;
+        const float LABELTOP   = bottom - H;
+        pillNudgeWant          = std::clamp(RESTBOTTOM + G - LABELTOP, 0.F, PUB.pillMaxUp);
+    }
+
+    keyOut    = std::to_string(images[idx]->pWorkspace->m_id);
+    labelOut  = label;
+    cxOut     = CX;
+    bottomOut = bottom;
+    return true;
+}
+
+// THE DOCK TOOLTIP'S FADE, for the strip's labels (user, 2026-09-24: "apply
+// those same fade rules to the strip labels"). The same state machine as
+// Dock.cpp's renderTooltip: one plate; a new target gets its own entrance; a
+// changed label on the same target keeps its alpha; leaving fades the plate
+// where it was, 110ms against the entrance's 150 -- exits ~25% quicker, the
+// house rule -- on the same houseEase curves.
+void CScrollOverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, float fade) {
+    if (!monitor || fade < 0.01F)
+        return;
+
+    std::string key, label;
+    float       cx = 0.F, bottom = 0.F;
+    const bool  LIVE = stripCellLabelLive(monitor, renderScale, key, label, cx, bottom);
+
+    auto& T = stripTip;
+    if (LIVE) {
+        if (key != T.key || T.out) {
+            T.key   = key;
+            T.since = Time::steadyNow();
+            T.out   = false;
+        }
+        T.text   = label;
+        T.cx     = cx;
+        T.bottom = bottom;
+    } else {
+        if (T.text.empty())
+            return;
+        if (!T.out) {
+            T.out   = true;
+            T.since = Time::steadyNow();
+        }
+    }
+
+    const float MS = std::chrono::duration<float, std::milli>(Time::steadyNow() - T.since).count();
+    const float P  = std::clamp(MS / (T.out ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS), 0.F, 1.F);
+    if (T.out && P >= 1.F) {
+        T.text.clear();
+        T.key.clear();
+        return;
+    }
+
+    const float ALPHA = T.out ? 1.F - houseEase(false, P) : houseEase(true, P);
+    OverviewRender::labelPill(monitor, T.text, T.cx, T.bottom, ALPHA * fade, monitor->m_scale);
+}
+
+// Whether the strip label is mid-fade, which needs frames nothing else would
+// ask for (a pointer resting on a cell emits no motion).
+bool CScrollOverview::stripTipAnimating() const {
+    if (stripTip.text.empty())
+        return false;
+    const float MS = std::chrono::duration<float, std::milli>(Time::steadyNow() - stripTip.since).count();
+    return MS < (stripTip.out ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS) + 16.F;
 }
 
 // How many open windows the query reaches. Counted across every workspace, not
@@ -5805,6 +6293,7 @@ struct SSearchLayoutInputs {
     ScrollOverview::Config::ELayout layout{};
     float                          fade = 0.F;  // the overview's open progress
     float                          dock = 0.F;  // X50: searchDock->value()
+    float                          nudge = 0.F; // pillNudge->value(): rendered px the pill is lifted for a strip label
     float                          band = 0.F;  // X21/X23: resultsBand->value()
     float                          width = 0.F; // animated container width
     float                          colW[3] = {};
@@ -5927,6 +6416,28 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     const float PILLFOOTL = PILLLOGICAL.y + OVERVIEW_PILL_HL + ((sc<float>(pill.y) - PILLUNDOCKEDY) / std::max(0.001F, SCALE));
     out.rowL              = std::clamp(PILLFOOTL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL, 0.F, OVERVIEW_SEARCH_ROWHL);
 
+    // THE NUDGE, applied only AFTER rowL: the strip, the results and the grid
+    // all hang off rowL, so lifting the pill before it would lift the strip too
+    // -- and the label the pill is making room for would chase it upward. Here
+    // it moves the pill and nothing else. Capped at the docked height, just
+    // under the bar, which is as high as the pill ever goes.
+    {
+        float dockTopL = overviewTopChromeBottomL(MONITOR);
+        if (const auto WS = MONITOR->m_activeWorkspace; WS && WS->m_space) {
+            if (const auto WA = WS->m_space->workArea(); WA.w > 1 && WA.h > 1)
+                dockTopL = std::max(dockTopL, sc<float>(WA.y));
+        }
+        const float CEIL = (dockTopL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL) * sc<float>(MONITOR->m_scale);
+        out.pillRest     = out.pill;
+        out.pillMaxUp    = std::max(0.F, sc<float>(out.pill.y) - CEIL);
+
+        if (IN.nudge > 0.5F) {
+            const float UP = std::round(std::clamp(IN.nudge, 0.F, out.pillMaxUp));
+            out.pill.y -= UP;
+            out.badge.y -= UP;
+        }
+    }
+
     // F3: the app half of the search, laid out under the pill. This is a second,
     // ordered list ALONGSIDE the window gate -- it deliberately does not change
     // which windows the grid shows (RICE_PROGRESS.md "F3-scope" §1).
@@ -5962,6 +6473,43 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
         return out;
     container.round();
     out.containerBox = container;
+
+    // THE TOOL PANE. The rows are the tool's; lay out one header and a full-width
+    // entry per row -- each still a hit, so the arrows and the pointer select
+    // them exactly as they select a result -- and none of the cards or the
+    // inspector.
+    if (!RESULTS.empty() && RESULTS[0].tool != 0) {
+        out.tool.active   = true;
+        out.tool.kind     = RESULTS[0].tool;
+        out.tool.title    = RESULTS[0].toolTitle;
+        out.tool.subtitle = RESULTS[0].toolSubtitle;
+
+        const float LEFT  = CONTAINER_XL + OVERVIEW_TOOL_PADL;
+        const float WIDTH = CONTAINER_WL - (2.F * OVERVIEW_TOOL_PADL);
+        const float FOOT  = CONTAINER_YL + CONTAINER_HL - OVERVIEW_TOOL_PADL / 2.F;
+        out.tool.header   = getOverviewGlobalBox(CBox{LEFT, CONTAINER_YL + OVERVIEW_TOOL_PADL, WIDTH, OVERVIEW_TOOL_HEADL - 10.F}, MONITOR, IN.renderScale,
+                                                 OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
+        out.tool.header.round();
+
+        float y = CONTAINER_YL + OVERVIEW_TOOL_PADL + OVERVIEW_TOOL_HEADL;
+        for (size_t i = 0; i < RESULTS.size(); ++i) {
+            if (y + OVERVIEW_TOOL_ROWHL > FOOT)
+                break; // the band decides how many fit; the rest wait for a taller one
+            CBox row = getOverviewGlobalBox(CBox{LEFT, y, WIDTH, OVERVIEW_TOOL_ROWHL}, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
+            row.round();
+            out.hits.emplace_back(SSearchRowHit{.box = row, .desktopId = "", .icon = "", .index = sc<int>(i), .column = 0, .rowInCol = sc<int>(i)});
+            out.tool.entries.push_back(SSearchLayout::SToolPane::SEntry{
+                .hit      = out.hits.size() - 1,
+                .tag      = RESULTS[i].description,
+                .text     = RESULTS[i].name,
+                .example  = RESULTS[i].toolExample,
+                .status   = RESULTS[i].toolStatus,
+                .selected = g_search.nav.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
+            });
+            y += OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL;
+        }
+        return out;
+    }
 
     const auto ADDITEM = [&](const CBox& box, size_t I, int col, int rowInCol) {
         out.hits.emplace_back(SSearchRowHit{
@@ -6096,6 +6644,43 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             } else if (o.kind == OmarchySearch::EItemKind::Back) {
                 out.inspector.detail1      = "Return to the parent menu";
                 out.inspector.shortcutHint = "Enter  Go back";
+            } else if (o.kind == OmarchySearch::EItemKind::Action && (o.id == "tool:define" || o.id == "tool:translate")) {
+                // THE TOOLS' OWN CARD (user, 2026-09-24): how to use it, and a
+                // quick answer for what is typed -- the translation into the last
+                // language used. The lookup is the same cached one the panel
+                // opens onto, so Enter lands on an answer already there.
+                const bool  DEFINE = o.id == "tool:define";
+                const auto& TEXT   = o.description;
+                const auto  TQ     = ToolSearch::parse(DEFINE ? "define " + TEXT : "translate " + TEXT);
+                const auto  RES    = ToolSearch::lookup(TQ);
+                const auto  TO     = DEFINE ? std::string{} : ToolSearch::defaultTargetLanguage();
+
+                out.inspector.category = DEFINE ? "Dictionary" : "Translate";
+                out.inspector.title    = std::string(DEFINE ? "Define" : "Translate") + " \u201c" + TEXT + "\u201d";
+
+                using EState = ToolSearch::SResult::EState;
+                switch (RES.state) {
+                    case EState::Loading: out.inspector.subtitle = DEFINE ? "Looking up\u2026" : "Translating\u2026"; break;
+                    case EState::Empty: out.inspector.subtitle = DEFINE ? "No definitions found" : "No translation came back"; break;
+                    case EState::Error: out.inspector.subtitle = RES.message.empty() ? "Could not reach the service" : RES.message; break;
+                    case EState::Ready: {
+                        const auto& FIRST      = RES.senses.front();
+                        out.inspector.subtitle = DEFINE ? (FIRST.tag.empty() ? FIRST.text : FIRST.tag + "  \u00b7  " + FIRST.text) : TO + ":  " + FIRST.text;
+                        if (DEFINE && RES.senses.size() > 1)
+                            out.inspector.subtitle += "  (+" + std::to_string(RES.senses.size() - 1) + " more)";
+                        break;
+                    }
+                }
+
+                if (DEFINE) {
+                    out.inspector.detail1 = "Source: Wiktionary";
+                    out.inspector.detail2 = "define <word>    def <word>    dict <word>";
+                } else {
+                    out.inspector.detail1 = "Into " + TO + " \u2014 the last language used. Name another to switch.";
+                    out.inspector.detail2 = "tr <lang> <text>    tr en:fr <text>    translate <text>";
+                    out.inspector.detail3 = "Languages by code or name: es, fr, de, ro, ja, spanish, german\u2026";
+                }
+                out.inspector.shortcutHint = DEFINE ? "Enter  Open the dictionary" : "Enter  Open the translator";
             } else if (o.kind == OmarchySearch::EItemKind::Action) {
                 out.inspector.detail1      = o.description.empty() ? o.name : o.description;
                 out.inspector.detail2      = o.actionCommand;
@@ -6205,6 +6790,95 @@ static void drawSearch(const SSearchLayout& L) {
             div.box   = divBox;
             div.color = ScrollOverview::Config::themeForeground().modifyA(0.12F * FADE);
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(div));
+        }
+    }
+
+    // THE TOOL PANE. Drawn on the container plate the cards would have used, in
+    // the theme's own heading / foreground / muted colours, so the dictionary
+    // and the translator read as the same surface as the results they replace.
+    if (L.tool.active) {
+        const CBox& HEAD   = L.tool.header;
+        const auto  FGCOL  = ScrollOverview::Config::themeForeground();
+        const auto  MUTED  = ScrollOverview::Config::themeMutedText();
+        const auto  HEADCO = ScrollOverview::Config::themeHeading();
+
+        // Glyph, headword, source -- and on the right, what Enter does.
+        const char* GLYPH  = L.tool.kind == 1 ? "\uf02d" : "\uf1ab"; // book / language
+        float       headX  = HEAD.x;
+        if (const auto GTEX = OverviewRender::text(GLYPH, ACCENT, std::max(1, sc<int>(std::round(20.F * SCALE))), false, "JetBrainsMono Nerd Font", 0); GTEX && GTEX->ok()) {
+            CBox g{HEAD.x, HEAD.y + std::round((HEAD.height - sc<float>(GTEX->m_size.y)) / 2.F), sc<float>(GTEX->m_size.x), sc<float>(GTEX->m_size.y)};
+            ADDTEX(GTEX, g.round());
+            headX += sc<float>(GTEX->m_size.x) + std::round(12.F * SCALE);
+        }
+
+        float hintW = 0.F;
+        if (!L.tool.entries.empty() && !L.tool.entries.front().status) {
+            if (const auto HINT = OverviewRender::text("\u21b5  copy", MUTED, std::max(1, sc<int>(std::round(11.F * SCALE))), false, "", 0, 500); HINT && HINT->ok()) {
+                CBox h{HEAD.x + HEAD.width - sc<float>(HINT->m_size.x), HEAD.y + std::round((HEAD.height - sc<float>(HINT->m_size.y)) / 2.F), sc<float>(HINT->m_size.x),
+                       sc<float>(HINT->m_size.y)};
+                ADDTEX(HINT, h.round());
+                hintW = sc<float>(HINT->m_size.x) + std::round(16.F * SCALE);
+            }
+        }
+
+        const int  TITLEW = std::max(1, sc<int>(HEAD.x + HEAD.width - hintW - headX));
+        const auto TITLE  = OverviewRender::text(L.tool.title, FGCOL, std::max(1, sc<int>(std::round(18.F * SCALE))), false, "", TITLEW, 600);
+        const auto SUB    = OverviewRender::text(L.tool.subtitle, MUTED, std::max(1, sc<int>(std::round(11.F * SCALE))), false, "", TITLEW, 500);
+        const float TH    = TITLE && TITLE->ok() ? sc<float>(TITLE->m_size.y) : 0.F;
+        const float SH    = SUB && SUB->ok() ? sc<float>(SUB->m_size.y) : 0.F;
+        float       ty    = HEAD.y + std::round((HEAD.height - TH - SH - (SH > 0 ? 2.F * SCALE : 0.F)) / 2.F);
+        if (TH > 0) {
+            ADDTEX(TITLE, CBox{headX, ty, sc<float>(TITLE->m_size.x), TH}.round());
+            ty += TH + 2.F * SCALE;
+        }
+        if (SH > 0)
+            ADDTEX(SUB, CBox{headX, ty, sc<float>(SUB->m_size.x), SH}.round());
+
+        // The entries.
+        const float TAGW   = L.tool.kind == 1 ? std::round(92.F * SCALE) : std::round(52.F * SCALE);
+        const float ROWPAD = std::round(10.F * SCALE);
+        for (const auto& E : L.tool.entries) {
+            const CBox& ROW = L.hits[E.hit].box;
+
+            if (E.selected) {
+                CRectPassElement::SRectData sel;
+                sel.box           = ROW;
+                sel.color         = ACCENT.modifyA(0.22F * FADE);
+                sel.round         = roundFor(ROW);
+                sel.roundingPower = POWER;
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
+            }
+
+            if (E.status) {
+                if (const auto ST = OverviewRender::text(E.text, MUTED, std::max(1, sc<int>(std::round(13.F * SCALE))), false, "", sc<int>(ROW.width - 2.F * ROWPAD), 500);
+                    ST && ST->ok())
+                    ADDTEX(ST, CBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - sc<float>(ST->m_size.y)) / 2.F), sc<float>(ST->m_size.x), sc<float>(ST->m_size.y)}.round());
+                continue;
+            }
+
+            const float TEXTX = ROW.x + ROWPAD + TAGW;
+            const int   TEXTW = std::max(16, sc<int>(ROW.x + ROW.width - ROWPAD - TEXTX));
+
+            if (!E.tag.empty()) {
+                if (const auto TG = OverviewRender::text(E.tag, E.selected ? FGCOL : HEADCO, std::max(1, sc<int>(std::round(10.F * SCALE))), false, "", sc<int>(TAGW - ROWPAD), 600);
+                    TG && TG->ok())
+                    ADDTEX(TG, CBox{ROW.x + ROWPAD, ROW.y + std::round(8.F * SCALE), sc<float>(TG->m_size.x), sc<float>(TG->m_size.y)}.round());
+            }
+
+            const int   TEXTPX = std::max(1, sc<int>(std::round(14.F * SCALE)));
+            const int   EXPX   = std::max(1, sc<int>(std::round(11.F * SCALE)));
+            const auto  EX     = E.example.empty() ? SP<Render::ITexture>{} :
+                                                     OverviewRender::text("\u201c" + E.example + "\u201d", MUTED, EXPX, true, "", TEXTW, 400);
+            const float EXH    = EX && EX->ok() ? sc<float>(EX->m_size.y) : 0.F;
+            // The text wraps into whatever the example leaves of the row.
+            const int   MAXH   = std::max(1, sc<int>(ROW.height - 2.F * std::round(5.F * SCALE) - EXH));
+            if (const auto TX = OverviewRender::textWrapped(E.text, FGCOL, TEXTPX, std::max(16, ((TEXTW + 15) / 16) * 16), MAXH, false, "", 400); TX && TX->ok()) {
+                const float TXH = sc<float>(TX->m_size.y);
+                const float TOP = ROW.y + std::round((ROW.height - TXH - EXH) / 2.F);
+                ADDTEX(TX, CBox{TEXTX, TOP, sc<float>(TX->m_size.x), TXH}.round());
+                if (EXH > 0)
+                    ADDTEX(EX, CBox{TEXTX, TOP + TXH, sc<float>(EX->m_size.x), EXH}.round());
+            }
         }
     }
 
@@ -6546,8 +7220,13 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // An app hit is a hit: "no matches" must not contradict a listed result.
     const bool EMPTYRESULT = QUERIED && !g_search.query.text.empty() && MATCHES == 0 && RESULTS.empty();
 
+    // How many previews the grid below is showing, which is what the row budget
+    // is a ratio OF. Needed BEFORE the trim: the trim is what decides how many
+    // rows exist, so a cap computed after it could never raise the ceiling.
+    const size_t GRID_TILES = QUERIED && monitor->m_activeWorkspace ? overviewMainGridWindows(monitor->m_activeWorkspace, monitor).size() : 0;
+
     auto SECTIONS = overviewSearchSections(RESULTS);
-    overviewTrimSectionsToFit(SECTIONS, monitor);
+    overviewTrimSectionsToFit(SECTIONS, monitor, GRID_TILES);
 
     // Typing arms first-app selection; results land over the next frames, so
     // the spend lives here -- once, on the first frame that actually has an
@@ -6562,7 +7241,9 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         }
     }
 
-    const float TARGET = QUERIED ? overviewResultsBandTarget(monitor, SECTIONS) : 0.F;
+    searchLayoutHere().gridTiles = GRID_TILES;
+
+    const float TARGET = QUERIED ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, !RESULTS.empty() && RESULTS[0].tool != 0) : 0.F;
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 
@@ -6576,6 +7257,11 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
 
     if (const float DOCKGOAL = QUERIED && !EMPTYRESULT && !RESULTS.empty() ? 1.F : 0.F; std::abs(searchDock->goal() - DOCKGOAL) > 0.01F)
         *searchDock = DOCKGOAL;
+
+    // The strip ran first this frame and said how far its label needs the pill
+    // out of the way (0 when no label is up, so the pill settles back down).
+    if (std::abs(pillNudge->goal() - pillNudgeWant) > 0.5F)
+        *pillNudge = pillNudgeWant;
 
     const uint8_t COL_MASK = QUERIED ? overviewSearchColMask(SECTIONS) : 0;
     const auto    COL_TGT  = overviewSearchColWidths(resultsWidth->value(), COL_MASK);
@@ -6600,6 +7286,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         .layout      = this->layout,
         .fade        = FADE,
         .dock        = searchDock->value(),
+        .nudge       = pillNudge->value(),
         .band        = resultsBand->value(),
         .width       = resultsWidth->value(),
         .colW        = {COL_TGT.col[0], COL_TGT.col[1], COL_TGT.col[2]},
@@ -6615,6 +7302,18 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     SSearchLayout LAYOUT = layoutSearch(IN, RESULTS, SECTIONS);
 
     // ---- PUBLISH: the one assignment the rest of the overview can see.
+    //
+    // CARRY, exactly as rowLCarry does above. This assignment replaces the WHOLE
+    // published struct, so any field written by somebody other than layoutSearch
+    // is wiped by it -- which is what silently happened to both of these when
+    // they were added: stripPlateL is the strip step's output from earlier this
+    // frame, gridTiles was measured at the top of this one, and both are read by
+    // NEXT frame's band and strip. A field added here tomorrow needs the same
+    // line, so keep them together.
+    LAYOUT.stripPlateL = searchLayoutHere().stripPlateL;
+    LAYOUT.gridTiles   = GRID_TILES;
+    LAYOUT.gridNudgeL  = searchLayoutHere().gridNudgeL;
+
     g_search.nav.selection = LAYOUT.selection;
     searchLayoutHere()     = std::move(LAYOUT);
 
@@ -7160,7 +7859,7 @@ bool CScrollOverview::shouldAllowRealtimePreviewSchedule() {
         return true;
 
     if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() ||
-        resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated())
+        resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || stripTipAnimating())
         return true;
 
     // Beside them for the same reason they are here: typing is the one moment
@@ -7443,7 +8142,7 @@ bool CScrollOverview::needsIdleRepaint() const {
         return true;
 
     if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() || resultsWidth->isBeingAnimated() ||
-        searchDock->isBeingAnimated() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
+        searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || stripTipAnimating() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
         return true;
 
     if (scratchpadReveal->isBeingAnimated() || altStripsReveal->isBeingAnimated())

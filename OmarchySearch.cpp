@@ -1,4 +1,5 @@
 #include "OmarchySearch.hpp"
+#include "ToolSearch.hpp"
 
 #include <hyprutils/os/Process.hpp>
 using namespace Hyprutils::OS;
@@ -1841,7 +1842,13 @@ static void fileWorkerLoop() {
         });
 
         std::vector<SSearchItem> results;
-        const size_t KEEP = std::min<size_t>(8, scoredFiles.size());
+        // The DISPLAY ceiling, not a taste one: overviewTrimSectionsToFit is
+        // what decides how many of these are actually drawn, and it sizes that
+        // against the room the panel has. Keeping 8 here made that decision
+        // first and invisibly -- a `jpg` query on a disk full of images still
+        // answered with eight rows in a panel with space for fourteen (user,
+        // 2026-09-23). Moves with OVERVIEW_RESULT_ROWS_ALONE.
+        const size_t KEEP = std::min<size_t>(20, scoredFiles.size());
         results.reserve(KEEP);
         for (size_t i = 0; i < KEEP; ++i) {
             categorizeFile(scoredFiles[i].item.filePath, scoredFiles[i].item);
@@ -1900,7 +1907,9 @@ uint64_t searchInputsGeneration() {
     }
 
     // The worker's own counter needs no poll and must not wait for one.
-    return fsFingerprint ^ (g_fileDoneGen.load(std::memory_order_acquire) * 1099511628211ULL);
+    // ...and the dictionary/translator's, for the same reason: an answer lands
+    // between frames and the memoised rows have to notice on the next one.
+    return fsFingerprint ^ (g_fileDoneGen.load(std::memory_order_acquire) * 1099511628211ULL) ^ (ToolSearch::generation() * 0x9E3779B97F4A7C15ULL);
 }
 
 std::vector<SSearchItem> fileResults() {

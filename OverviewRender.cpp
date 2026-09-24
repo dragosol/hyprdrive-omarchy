@@ -469,8 +469,8 @@ namespace {
     constexpr float PILL_BG_A  = 0.90F;
 }
 
-CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale) {
-    if (str.empty() || alpha <= 0.F || !monitor)
+CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale) {
+    if (str.empty() || !monitor)
         return {};
 
     const float SCALE = std::max(scale, 0.01F);
@@ -487,6 +487,23 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
     // Keep it on screen: a tile or an icon at either end would otherwise push
     // its label off the edge.
     plate.x = std::clamp(plate.x, 0.0, std::max(0.0, monitor->m_size.x * SCALE - plate.width));
+    return plate;
+}
+
+CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale) {
+    if (str.empty() || alpha <= 0.F || !monitor)
+        return {};
+
+    const float SCALE = std::max(scale, 0.01F);
+    const auto  TEX   = text(str, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::max(1, sc<int>(std::round(PILL_FONT * SCALE))), false, "", 0, 500);
+    if (!TEX || !TEX->ok())
+        return {};
+
+    const float PADX  = PILL_PAD_X * SCALE;
+    const float PADY  = PILL_PAD_Y * SCALE;
+    const CBox  plate = labelPillBox(monitor, str, cx, bottomY, scale);
+    if (plate.width < 1)
+        return {};
 
     // `border-radius: 999px` is a full pill, so the radius is half the height
     // rather than a constant -- it stays a pill when the font or padding moves.

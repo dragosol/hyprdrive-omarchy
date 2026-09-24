@@ -136,7 +136,19 @@ inline SOutput layout(const SInput& in) {
 
     const double SCRATCHW = R * BASEW;
     const double TOTAL    = leftW + sumW + in.gap * double(COUNT - 1) + R * DETACH + SCRATCHW;
-    const double Y        = in.monY + in.top + PAD + (in.band - 2.0 * PAD - CELLH) / 2.0;
+    // TOP-ALIGNED in the band, not centred (user, 2026-09-23: "your ratios just
+    // increased the padding between results pane, strip and windows").
+    //
+    // The band is a RESERVATION sized for cells that fill it; `s` shrinks the
+    // cells whenever the row is too wide for the monitor, and centring the
+    // shorter row split the difference into dead space ABOVE and BELOW the
+    // plate. Both halves then showed up as padding -- the top half between the
+    // results pane and the strip, the bottom half between the strip and the
+    // windows -- and on nine desktops that was 37px on each side of a plate only
+    // 133px tall. Top-aligning spends the shrink once, at the bottom, where
+    // overviewStripStackL hands it to the grid through stripPlateL instead of
+    // leaving it as a hole.
+    const double Y        = in.monY + in.top + PAD;
     const double X0       = in.monX + (in.monW - TOTAL) / 2.0;
 
     // The other monitors' strips GROW out of the row's left end, cells and gaps

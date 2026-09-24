@@ -150,6 +150,12 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
         return;
     }
 
+    if (m_allWorkspaces && !m_forcedUseR) {
+        m_prevUseR   = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_use_r");
+        m_forcedUseR = true;
+        ScrollOverview::Config::setValue("gestures:workspace_swipe_use_r", 1);
+    }
+
     m_native.begin(e);
 }
 
@@ -176,6 +182,13 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     }
 
     m_native.end(e);
+
+    // AFTER the native end: the release is where it picks the workspace to land
+    // on, and it reads use_r to do it.
+    if (m_forcedUseR) {
+        ScrollOverview::Config::setValue("gestures:workspace_swipe_use_r", m_prevUseR);
+        m_forcedUseR = false;
+    }
 }
 
 void COverviewScrollGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {

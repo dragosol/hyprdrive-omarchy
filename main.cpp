@@ -45,6 +45,9 @@
 #include <hyprutils/string/ConstVarList.hpp>
 using namespace Hyprutils::String;
 
+#include "ScratchpadExit.hpp"
+#include "ToolSearch.hpp"
+#include "AppInfo.hpp"
 #include "CursorShape.hpp"
 #include "globals.hpp"
 #include "SearchLetters.hpp"
@@ -960,6 +963,7 @@ static CHyprSignalListener g_pDockHoverHook;
 static CHyprSignalListener g_pDockClickHook;
 static CHyprSignalListener g_pDockScrollHook;
 static CHyprSignalListener g_pDockRenderHook;
+static CHyprSignalListener g_pScratchExitRenderHook;
 static CHyprSignalListener g_pMonitorGoneHook;
 static CHyprSignalListener g_pScrollCameraActiveHook;
 static CHyprSignalListener g_pScrollCameraMovedHook;
@@ -989,6 +993,25 @@ static void                registerRawKeyHooks() {
                 g_heldGuardKeys.insert(event.keycode);
             else
                 g_heldGuardKeys.erase(event.keycode);
+        }
+
+        // A REAL KEY BREAKS EVERY TAP IN FLIGHT -- and it has to be recorded
+        // HERE, above every consume path, not after them.
+        //
+        // The same bookkeeping lives further down inside the !ISSUPER branch,
+        // where it only ever ran for keys that fell all the way through. A chord
+        // whose letter one of the branches below swallowed returned first, so
+        // the SUPER tap candidate was still standing when SUPER came back up and
+        // the release was read as a tap: SUPER+W closed the window and then
+        // toggled the overview shut on the way out (user, 2026-09-23). Every
+        // Super chord over an open overview had it; W is just the first one
+        // bound to something.
+        if (PRESSED && !isModifierKeycode(event.keycode)) {
+            g_tapSuperCandidate = false;
+            g_tapShiftCandidate = false;
+            g_tapShiftLastTapMs = 0;
+            g_tapCtrlCandidate  = false;
+            g_tapCtrlLastTapMs  = 0;
         }
 
         if (!ISSUPER) {
@@ -1238,6 +1261,9 @@ static std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount,
 
     if (action == "workspace")
         return add(makeUnique<COverviewWorkspaceGesture>());
+
+    if (action == "workspace_all")
+        return add(makeUnique<COverviewWorkspaceGesture>(true));
 
     if (action == "scroll")
         return add(makeUnique<COverviewScrollGesture>());
@@ -1831,6 +1857,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     g_pDockHoverHook = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo&) {
         const auto HIT = monitorUnderCursor();
+
+        // The scratchpad's drag-out zone rides the same motion (it is a desktop
+        // surface like the dock, and a drag is nothing but motion).
+        ScrollOverview::ScratchpadExit::onPointerMove(HIT ? HIT->first : PHLMONITOR{});
+
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
             return;
@@ -1966,6 +1997,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::Dock::render(MONITOR);
     });
 
+    // The scratchpad's drag-out zone draws at the LAST moment, not with the
+    // dock: it sits at the very top of the screen (user, 2026-09-24: "bump it
+    // all the way to the top"), where the bar lives, and POST_WINDOWS is below
+    // the top layer -- the bar would paint over it.
+    g_pScratchExitRenderHook = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
+        if (stage != RENDER_LAST_MOMENT)
+            return;
+        const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+        if (!MONITOR || scrollOverviewForMonitor(MONITOR))
+            return;
+        ScrollOverview::ScratchpadExit::render(MONITOR);
+    });
+
     // P0. An overview must not outlive its output. Nothing used to tear one
     // down when its monitor went away, so it stayed in the registry holding a
     // dead PHLMONITORREF and the next `overview off` dereferenced it inside
@@ -2032,6 +2076,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
                     ::write(g_fileWakeFd, &one, sizeof(one));
                 }
             });
+            // The dictionary/translator answers off-thread too; same wake.
+            ToolSearch::setReadyCallback([]() {
+                if (g_fileWakeFd >= 0) {
+                    uint64_t one = 1;
+                    ::write(g_fileWakeFd, &one, sizeof(one));
+                }
+            });
         }
     }
 
@@ -2057,6 +2108,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
         g_letterTickTimer = nullptr;
     }
     OmarchySearch::setResultsCallback(nullptr);
+    ToolSearch::shutdown();
     if (g_fileWakeSource) {
         wl_event_source_remove(g_fileWakeSource);
         g_fileWakeSource = nullptr;
@@ -2085,6 +2137,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pDockClickHook.reset();
     g_pDockScrollHook.reset();
     g_pDockRenderHook.reset();
+    g_pScratchExitRenderHook.reset();
     g_pMonitorGoneHook.reset();
     g_pScrollCameraActiveHook.reset();
     g_pScrollCameraMovedHook.reset();
@@ -2111,6 +2164,14 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // same moment the last overview's destructor used to drop them, and hyprpm
     // reloads this plugin in-process.
     OverviewRender::clearTextCache();
+    // The drag-out zone's drift timer and stripe textures: the timer would fire
+    // into unloaded code, and the textures need the context made current above.
+    ScrollOverview::ScratchpadExit::shutdown();
+    // Get Info: its poll timer would fire into unloaded code, and its worker
+    // must be joined (with any package query killed) before the code goes.
+    ScrollOverview::Dock::stopInfoPoll();
+    ScrollOverview::Dock::stopUrgentHopTimer();
+    AppInfo::shutdown();
     disableScrollOverviewHooks();
 
     if (g_pTrackpadGestures)

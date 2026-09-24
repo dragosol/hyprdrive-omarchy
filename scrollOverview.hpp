@@ -281,6 +281,14 @@ class CScrollOverview : public IOverview {
     void         collectNavTargets(PHLMONITOR monitor, std::vector<SOverviewNavTarget>& targets) const;
     CBox         currentNavBox(const std::vector<SOverviewNavTarget>& targets, PHLMONITOR monitor) const;
     PHLWINDOW    firstNavTile() const;
+    // The tiles of one desktop in READING ORDER (row band, then leftmost) --
+    // firstNavTile's comparison, generalised, so "first" and "last" mean the
+    // same thing to the walk as they do to the Tab entry.
+    std::vector<PHLWINDOW> navTilesOf(const PHLWORKSPACE& workspace) const;
+    // Left/right off the END of a desktop's grid carries on to the neighbouring
+    // desktop and lands on its first (or last) tile. Returns false when there is
+    // no neighbour to go to, which is what stops the selection at the ends.
+    bool         stepTileDesktop(int delta);
     bool         isNavTile(const PHLWINDOW& window) const;
     void         renderSearch(PHLMONITOR monitor, float renderScale);
     void   moveViewportWorkspace(bool up);
@@ -330,6 +338,7 @@ class CScrollOverview : public IOverview {
         bool                    altZone         = false;
         const void*             altCellOverview = nullptr;
         size_t                  altCellIdx      = 0;
+        size_t                  stripCell       = SIZE_MAX; // the numbered cell under the pointer, for its label
 
         bool operator==(const SHoverSignature&) const = default;
     };
@@ -568,6 +577,57 @@ class CScrollOverview : public IOverview {
         float                            transitionOldRelativeOffset = 0.F;
     };
 
+    // A TILE WHOSE WINDOW IS CLOSING, kept alive long enough to animate out.
+    //
+    // The overview's gate is validMapped, so a closing window leaves the grid
+    // the instant it unmaps and its tile vanished between two frames -- the
+    // compositor animates the real window out, but that happens at the window's
+    // own position, which the overview is not showing. This is the overview's
+    // own copy of that animation, on Omarchy's windowsOut curve.
+    //
+    // The SNAPSHOT is the whole reason this is a framebuffer and not a window
+    // pointer: the surface dies at unmap, which is exactly why Hyprland's
+    // CWindowFadeout holds a framebuffer too. window.close fires when the close
+    // is REQUESTED and the unmap follows, so there is normally a frame in hand
+    // to capture in.
+    struct SClosingTile {
+        PHLWINDOWREF             window;
+        SP<Render::IFramebuffer> fb;
+        CBox                     box;              // rendered px, as the tile last sat
+        Time::steady_tp          start;
+        bool                     captured = false; // false = the window died before a frame could snapshot it
+        CBox                     realBox;          // the window's own geometry (logical, global)
+        CBox                     fbBox;            // where Hyprland's snapshot sits, monitor px
+        CBox                     srcBox;           // where the window sits inside that snapshot, monitor px
+        size_t                   cardIdx = 0;      // the card it was drawn on; the ghost is drawn there only
+    };
+    std::vector<SClosingTile>        closingTiles;
+    // Every tile's box as it was LAST DRAWN, refreshed by the tile pass. A
+    // window.close that lands after the unmap cannot ask the grid where the
+    // tile was -- the grid has already dropped it -- so the answer is kept here.
+    struct SLastTile {
+        CBox   box;
+        size_t cardIdx = 0; // which workspace card's pass drew it
+    };
+    std::unordered_map<const Desktop::View::CWindow*, SLastTile> lastTileBoxes;
+
+    bool                             stripUiContains(const Vector2D& point) const;
+    // The label above a hovered, non-empty desktop's strip cell.
+    void                             renderStripCellLabel(PHLMONITOR monitor, float renderScale, float fade);
+    // Which label the hovered cell wants, where, and the pill/grid nudges it
+    // needs; false when the pointer is not on a non-empty cell.
+    bool                             stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::string& keyOut, std::string& labelOut, float& cxOut, float& bottomOut);
+    bool                             stripTipAnimating() const;
+    // The dock tooltip's timings (Dock.cpp TOOLTIP_FADE_MS / _OUT_MS).
+    static constexpr float           STRIPTIP_FADE_MS = 150.F, STRIPTIP_FADE_OUT_MS = 110.F;
+    struct SStripTip {
+        std::string     key, text; // key = the workspace id the plate belongs to
+        Time::steady_tp since = {};
+        bool            out   = false;
+        float           cx = 0.F, bottom = 0.F;
+    } stripTip;
+    void                             renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now);
+
     Vector2D                         lastMousePosLocal = Vector2D{}; // monitor-local pixel space
 
     PHLWINDOWREF                     closeOnWindow;
@@ -711,6 +771,12 @@ class CScrollOverview : public IOverview {
     // X50: eased 0..1 dock factor for the search pill. 1 = results are on
     // screen and the pill has left the scaled card for the top of the monitor.
     PHLANIMVAR<float>                searchDock;
+    // Rendered px the search pill is lifted by so a desktop's strip label has
+    // room under it (user, 2026-09-23: "gently shove the searchbar up"). Eased on
+    // the pill's own dock curve; its goal is written each frame by the strip
+    // label, which runs before the search step.
+    PHLANIMVAR<float>                pillNudge;
+    float                            pillNudgeWant = 0.F;
     // How far the detached scratchpad cell is out (0 hidden, 1 shown). The
     // strip's own layout reads it, which is what slides the strip left to make
     // room rather than having the cell overlap it.

@@ -28,9 +28,17 @@ class COverviewGesture : public ITrackpadGesture {
 
 // 3-finger workspace swipe. Inside an open overview the cards follow the
 // fingers; on the desktop this is Hyprland's native workspace swipe.
+//
+// `workspace_all` (user, 2026-09-23) is the same gesture stepping through EVERY
+// workspace number, empty ones included, rather than only the occupied ones.
+// Hyprland already has that mode -- gestures:workspace_swipe_use_r, `r+1`
+// instead of `m+1` -- but it is global, and turning it on would change the plain
+// `workspace` swipe too. So the all-workspaces variant switches it on for the
+// length of ONE swipe and puts it back at the end: the native gesture reads it
+// on every update and again on release, so begin..end is the window it needs.
 class COverviewWorkspaceGesture : public ITrackpadGesture {
   public:
-    COverviewWorkspaceGesture()  = default;
+    explicit COverviewWorkspaceGesture(bool allWorkspaces = false) : m_allWorkspaces(allWorkspaces) {}
     ~COverviewWorkspaceGesture() override = default;
 
     void begin(const ITrackpadGesture::STrackpadGestureBegin& e) override;
@@ -42,6 +50,10 @@ class COverviewWorkspaceGesture : public ITrackpadGesture {
     CWorkspaceSwipeGesture m_native;
     bool                   m_inOverview = false;
     WP<IOverview>          m_overview;
+
+    bool                   m_allWorkspaces = false;
+    bool                   m_forcedUseR    = false; // this swipe set use_r, and end() owes it back
+    int                    m_prevUseR      = 0;
 };
 
 // Swipe through a SCROLLING workspace's columns (user, 2026-09-14). On the

@@ -18,6 +18,7 @@
 
 #include "AppSearch.hpp"
 #include "OmarchySearch.hpp"
+#include "ToolSearch.hpp"
 #include "SearchSession.hpp"
 #include "TileChrome.hpp"
 #include "WindowPill.hpp"
@@ -427,14 +428,25 @@ inline PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
 // caps at 5 ROWS EACH, not 5 shared. A shared cap is what made X49's section
 // cards invisible: a query matching 5 apps starved every provider, so there was
 // only ever one card to categorise.
+// The tool pane's metrics (logical px): a header with the headword and its
+// source, then one entry per sense -- two lines, the text and an example.
+inline constexpr float OVERVIEW_TOOL_PADL = 16.F, OVERVIEW_TOOL_HEADL = 52.F, OVERVIEW_TOOL_ROWHL = 48.F, OVERVIEW_TOOL_GAPL = 4.F;
+
+inline constexpr size_t OVERVIEW_RESULT_ROWS_CROWDED = 6, OVERVIEW_RESULT_ROWS_NORMAL = 8, OVERVIEW_RESULT_ROWS_ALONE = 20;
+inline constexpr size_t OVERVIEW_RESULT_TILES_CROWDED = 4;
+inline constexpr float  OVERVIEW_RESULT_ROWHL_FULL = 36.F, OVERVIEW_RESULT_CARD_CHROMEL = 56.F;
+
 inline constexpr size_t OVERVIEW_APP_RESULT_LIMIT      = 6;
-inline constexpr size_t OVERVIEW_PROVIDER_ROW_LIMIT    = 5;
 
 // X19: the panel shows ONE ordered list. Local app entries first -- they are an
 // in-memory scan and always instant -- then whatever the SearchProvider2
 // providers have answered with so far. Providers arrive asynchronously, so this
 // is deliberately a snapshot: the list grows across frames as replies land, and
 // a provider that never answers simply never appears.
+// An Action whose actionCommand starts with this is not run: the rest becomes
+// the query (the AI & Tools "Define" / "Translate" rows).
+inline constexpr std::string_view OVERVIEW_QUERY_REWRITE = "hyprdrive:query:";
+
 struct SSearchRow {
     std::string                  name;
     std::string                  description;
@@ -444,6 +456,15 @@ struct SSearchRow {
     SearchProviders::SResult     provider;
     std::optional<OmarchySearch::SSearchItem> omarchy;
     int                          column = 0; // 0 = Left (Apps, Actions, Calc, Agents), 1 = Right (Files, Settings)
+
+    // THE TOOL PANE (ToolSearch.hpp). Non-zero on every row of a `define` /
+    // `tr` query, which then owns the whole results container: 1 = dictionary,
+    // 2 = translator. name = the sense or translation, description = its tag.
+    uint8_t                      tool = 0;
+    std::string                  toolExample;  // a usage example, dimmer, under the text
+    std::string                  toolTitle;    // row 0 only: the headword / source text
+    std::string                  toolSubtitle; // row 0 only: "Wiktionary" / "en → es · MyMemory"
+    bool                         toolStatus = false; // a "Looking up…" / "Nothing found" row, not a result
 };
 
 inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry);
@@ -505,12 +526,82 @@ inline std::vector<SSearchRow> overviewSearchRows() {
     return MEMO.rows;
 }
 
+// A `define` / `tr` query's rows: the senses (or the translation and its
+// alternatives), each copyable with Enter -- or one status row while the lookup
+// is in flight, empty or unreachable.
+inline std::vector<SSearchRow> overviewToolRows(const ToolSearch::SQuery& TQ) {
+    std::vector<SSearchRow> rows;
+    const uint8_t           KIND = TQ.kind == ToolSearch::EKind::Define ? 1 : 2;
+
+    const auto statusRow = [&](const std::string& text, const std::string& title, const std::string& subtitle) {
+        SSearchRow r;
+        r.name         = text;
+        r.column       = 0;
+        r.tool         = KIND;
+        r.toolStatus   = true;
+        r.toolTitle    = title;
+        r.toolSubtitle = subtitle;
+        rows.push_back(std::move(r));
+    };
+
+    if (TQ.term.empty()) {
+        statusRow(KIND == 1 ? "Type a word to look up" : "Type something to translate  ·  tr es hello  ·  tr en:fr good morning", KIND == 1 ? "Dictionary" : "Translate", "");
+        return rows;
+    }
+
+    const auto RES = ToolSearch::lookup(TQ);
+    using EState   = ToolSearch::SResult::EState;
+    switch (RES.state) {
+        case EState::Loading: statusRow(KIND == 1 ? "Looking up…" : "Translating…", RES.title, RES.subtitle); return rows;
+        case EState::Empty: statusRow(KIND == 1 ? "No definitions found" : "No translation came back", RES.title, RES.subtitle); return rows;
+        case EState::Error:
+            statusRow(!RES.message.empty() ? RES.message : (KIND == 1 ? "Could not reach Wiktionary -- check the connection" : "Could not reach the translation service"),
+                      RES.title, RES.subtitle);
+            return rows;
+        case EState::Ready: break;
+    }
+
+    for (size_t i = 0; i < RES.senses.size(); ++i) {
+        const auto& S = RES.senses[i];
+        SSearchRow  r;
+        r.name        = S.text;
+        r.description = S.tag;
+        r.column      = 0;
+        r.tool        = KIND;
+        r.toolExample = S.example;
+        if (i == 0) {
+            r.toolTitle    = RES.title;
+            r.toolSubtitle = RES.subtitle;
+        }
+
+        // Enter copies it: the Calculator row's activation, which is wl-copy of
+        // actionCommand with no shell in between.
+        OmarchySearch::SSearchItem item;
+        item.kind          = OmarchySearch::EItemKind::Calculator;
+        item.id            = "tool:" + std::to_string(i);
+        item.name          = S.text;
+        item.description   = S.tag;
+        item.actionCommand = S.text;
+        item.category      = KIND == 1 ? "Dictionary" : "Translate";
+        r.omarchy          = item;
+        rows.push_back(std::move(r));
+    }
+    return rows;
+}
+
 inline std::vector<SSearchRow> overviewSearchRowsLive() {
     std::vector<SSearchRow> rows;
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 
     const std::string& Q           = g_search.query.text;
     const bool         MENU_BROWSE = OmarchySearch::canNavigateMenuBack();
+
+    // A `define` / `tr` query owns the whole panel (user, 2026-09-22: "turns the
+    // results box into dictionary definitions").
+    if (!MENU_BROWSE) {
+        if (const auto TQ = ToolSearch::parse(Q); TQ.kind != ToolSearch::EKind::None && ToolSearch::enabled(TQ.kind))
+            return overviewToolRows(TQ);
+    }
 
     // ------------------------------------------------------------------------
     // COLUMN 0: OMARCHY MENU & APPS (Super+Space launcher)
@@ -535,7 +626,13 @@ inline std::vector<SSearchRow> overviewSearchRowsLive() {
         }
     }
 
-    const size_t MENU_LIMIT = (Q.empty() || MENU_BROWSE) ? 24 : 8;
+    // The BUILDER's cap is deliberately generous: overviewTrimSectionsToFit is
+    // the single place that decides how many rows survive, and it sizes that
+    // against the room the panel actually has. A second, smaller cap here just
+    // made the trim's ceiling unreachable -- the flat 8 below was why a panel
+    // with space for fourteen rows still never showed more than eight
+    // (user, 2026-09-23).
+    const size_t MENU_LIMIT = (Q.empty() || MENU_BROWSE) ? 24 : OVERVIEW_RESULT_ROWS_ALONE;
     for (const auto& item : OmarchySearch::searchMenu(Q, MENU_LIMIT))
         menuRows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 0});
 
@@ -573,6 +670,24 @@ inline std::vector<SSearchRow> overviewSearchRowsLive() {
     } else if (!Q.empty() && !MENU_BROWSE) {
         for (const auto& item : OmarchySearch::promptAllAgents(Q))
             rows.push_back({item.name, item.description, item.icon, item.iconFont, nullptr, {}, item, 2});
+
+        // The tools, offered for whatever is typed. Activating one rewrites the
+        // query into the tool's own syntax, so the panel turns into it.
+        const auto toolRow = [&](const std::string& id, const std::string& name, const std::string& icon, const std::string& rewrite) {
+            OmarchySearch::SSearchItem t;
+            t.kind          = OmarchySearch::EItemKind::Action;
+            t.id            = id;
+            t.name          = name;
+            t.description   = Q;
+            t.icon          = icon;
+            t.category      = "Tools";
+            t.actionCommand = std::string(OVERVIEW_QUERY_REWRITE) + rewrite;
+            rows.push_back({t.name, t.description, t.icon, "", nullptr, {}, t, 2});
+        };
+        if (ToolSearch::enabled(ToolSearch::EKind::Define) && std::ranges::count(Q, ' ') <= 3)
+            toolRow("tool:define", "Define", "accessories-dictionary", "define " + Q);
+        if (ToolSearch::enabled(ToolSearch::EKind::Translate))
+            toolRow("tool:translate", "Translate", "preferences-desktop-locale", "translate " + Q);
 
         OmarchySearch::SSearchItem webItem;
         webItem.kind          = OmarchySearch::EItemKind::Action;
@@ -676,6 +791,25 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
         return false;
 
     const auto& ROW = RESULTS[index];
+
+    // A tool row that rewrites the query (AI & Tools "Define" / "Translate"):
+    // the panel turns into the tool, and the overview stays up to show it.
+    if (ROW.omarchy && ROW.omarchy->kind == OmarchySearch::EItemKind::Action && ROW.omarchy->actionCommand.starts_with(OVERVIEW_QUERY_REWRITE)) {
+        g_search.query.text             = ROW.omarchy->actionCommand.substr(OVERVIEW_QUERY_REWRITE.size());
+        g_search.query.active           = true;
+        g_search.nav.zone               = EOverviewNavZone::Search;
+        g_search.nav.selection          = -1;
+        g_search.nav.explicitSelection  = false;
+        g_search.nav.selectFirstPending = false;
+        g_search.nav.intent             = ESearchIntent::Typing;
+        g_search.nav.hoverIndex         = -1;
+        return false;
+    }
+
+    // A status row ("Looking up...") is not a result.
+    if (ROW.toolStatus)
+        return false;
+
     if (ROW.omarchy) {
         if (ROW.omarchy->kind == OmarchySearch::EItemKind::Menu || ROW.omarchy->kind == OmarchySearch::EItemKind::Back) {
             const bool DRILL = ROW.omarchy->kind == OmarchySearch::EItemKind::Menu;
@@ -1110,6 +1244,32 @@ inline bool layerHasOverviewAnimation(const PHLLS& layer) {
 // getters above are: overviewStripStackL asks for this THREE times, the grid
 // asks for that stack on every box it places, and each ask is two string-keyed
 // config probes. Same one-frame ceiling on a `hyprctl reload`.
+// The two ceilings above (see the clamp below). The share of the LEFTOVER the
+// band may take once the search chrome has been paid for -- 0.40 keeps the grid
+// on the long side of the split, which is what makes a preview beat a strip cell
+// on the panel this was reported on. The slack is what the stack costs beyond
+// the band itself: panelPad - panelPad + dock pad, i.e. the `+8` in
+// overviewStripStackL once the algebra is done.
+inline constexpr float OVERVIEW_STRIP_MAX_AVAIL_FRAC = 0.40F;
+inline constexpr float OVERVIEW_STRIP_STACK_SLACKL   = 8.F;
+
+// The band's ceiling with the LEFTOVER term left out, which is what breaks the
+// cycle the two ceilings would otherwise make: the full height below shrinks the
+// strip by how much room the results band took, so a results budget that then
+// sized itself against the LIVE strip would feed its own growth -- band up,
+// strip down, leftover up, band up again. overviewResultsBandTarget asks this
+// one instead, and it depends on nothing the band can move.
+inline float overviewStripBandCeilingL(PHLMONITOR monitor) {
+    if (!monitor || !ScrollOverview::Config::getStrip())
+        return 0.F;
+
+    const float H = sc<float>(ScrollOverview::Config::getStripHeight());
+    if (H <= 1.F)
+        return 0.F;
+
+    return std::min(H, sc<float>(monitor->m_size.y) * sc<float>(ScrollOverview::Config::getStripMaxScreenPct()) / 100.F);
+}
+
 inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
     if (!monitor)
         return 0.F;
@@ -1118,6 +1278,7 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
         MONITORID id     = MONITOR_INVALID;
         uint64_t  frame  = 0;
         double    monH   = 0.0;
+        float     chrome = 0.F; // search row + results band: the band shrinks under them
         float     value  = 0.F;
         bool      filled = false;
     };
@@ -1125,16 +1286,51 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
     static std::array<SBandMemo, 4> MEMOS;
     static size_t                   next = 0;
 
+    // The search chrome above the strip, read straight off the publish rather
+    // than through overviewSearchLogicalHeight/overviewResultsLogicalHeight --
+    // both are declared below this point, and this is the same two fields.
+    const auto& PUB    = g_search.layoutOn(monitor->m_id);
+    const float CHROME = std::max(0.F, PUB.rowL) + std::max(0.F, PUB.bandH);
+
     const uint64_t FRAME = overviewFrameOn(monitor);
     for (const auto& MEMO : MEMOS) {
-        if (MEMO.filled && MEMO.id == monitor->m_id && MEMO.frame == FRAME && MEMO.monH == monitor->m_size.y)
+        if (MEMO.filled && MEMO.id == monitor->m_id && MEMO.frame == FRAME && MEMO.monH == monitor->m_size.y && MEMO.chrome == CHROME)
             return MEMO.value;
     }
 
     float value = 0.F;
     if (ScrollOverview::Config::getStrip()) {
-        const float H = sc<float>(ScrollOverview::Config::getStripHeight());
-        value         = H > 1.F && H < sc<float>(monitor->m_size.y) / 2.F ? H : 0.F;
+        const float H    = sc<float>(ScrollOverview::Config::getStripHeight());
+        const float MONH = sc<float>(monitor->m_size.y);
+        value            = H > 1.F ? H : 0.F;
+
+        // A CEILING, not a cliff. This used to read `H < monH/2 ? H : 0`, which
+        // answered a strip configured too tall by switching the strip OFF -- the
+        // one outcome nobody asks for. Clamp instead.
+        //
+        // The ceiling itself is the user's (2026-09-22): a strip cell must never
+        // be bigger than the window previews underneath it, and on a 900px panel
+        // the stock 260 made one strip cell (166px) taller than the grid's whole
+        // remaining height (146px). It is a share of the screen, so it means the
+        // same thing on every panel.
+        if (value > 1.F) {
+            value = overviewStripBandCeilingL(monitor);
+
+            // ...and a second ceiling for when the results panel is up, which is
+            // exactly when the grid is starved: the band may take only a share of
+            // what is left after the search chrome. Rides the results band's own
+            // ease, so the strip gives its room up in step with the panel that
+            // took it rather than snapping a frame later.
+            // ...and only while there ARE previews. With nothing matched the
+            // grid is empty, the panel has taken the room on purpose, and
+            // clamping the strip here would shrink it to protect tiles that do
+            // not exist.
+            const float AVAIL = MONH - CHROME - sc<float>(overviewMissionControlGap()) - OVERVIEW_STRIP_STACK_SLACKL;
+            if (PUB.gridTiles > 0 && AVAIL > 1.F)
+                value = std::min(value, AVAIL * OVERVIEW_STRIP_MAX_AVAIL_FRAC);
+
+            value = std::max(0.F, value);
+        }
     }
 
     auto& slot  = MEMOS[next];
@@ -1142,6 +1338,7 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
     slot.id     = monitor->m_id;
     slot.frame  = FRAME;
     slot.monH   = monitor->m_size.y;
+    slot.chrome = CHROME;
     slot.value  = value;
     slot.filled = true;
 
@@ -1171,6 +1368,14 @@ inline float overviewStripStackL(PHLMONITOR monitor) {
     const float BAND = overviewStripLogicalHeight(monitor);
     if (BAND <= 0.F)
         return 0.F;
+
+    // The plate as the strip step measured it, when there is one. The band is a
+    // reservation and the plate is usually shorter; stacking on the band leaves
+    // the difference as a hole the user reads as "the windows sit too low".
+    if (monitor) {
+        if (const float PLATE = g_search.layoutOn(monitor->m_id).stripPlateL; PLATE > 0.F)
+            return PLATE + overviewChromeGapL(monitor) + std::max(0.F, g_search.layoutOn(monitor->m_id).gridNudgeL);
+    }
 
     const float PAD   = overviewStripPadL(monitor);
     const float CELLH = std::max(0.F, BAND - 2.F * PAD);
@@ -1378,15 +1583,74 @@ inline float overviewResultsSectionHeight(const SSearchSection& section, float s
 // So the stack is made to FIT before anything measures it: rows are given up
 // from the tallest section first, and no section is ever taken below one row.
 // Every category survives; the rows given up are what G6's "%d more" reports.
-inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHLMONITOR monitor) {
+// HOW TALL THE PANEL MAY GET, and HOW MANY ROWS THAT BUYS. Both the trim and
+// the band ask these, so the two can never disagree about the answer -- which
+// is exactly how the flat 8 above outlived the ratio ceiling that replaced it.
+//
+// The panel and the window previews share a single column of screen, and the
+// old flat "8 rows, 360px" answered a one-letter query by spending 40% of the
+// monitor on menu rows nobody asked for while the windows actually being
+// filtered were squeezed into what was left (user, 2026-09-23). So the ceiling
+// asks what the grid below is doing:
+//
+//   crowded  -- more than 4 previews are up, and they are the small ones. 6.
+//   normal   -- a few previews. 8, the old number.
+//   alone    -- NOTHING matched, so there are no previews to protect and the
+//               grid's height goes to zero: the leftover is the panel's.
+//
+// The alone cap is a ceiling on the WORK, not on the space -- each row
+// rasterises text and uploads a texture -- so the geometry below almost always
+// binds first and the 20 only matters on a very tall panel.
+inline float overviewResultsBudgetL(PHLMONITOR monitor, size_t gridTiles) {
+    if (!monitor)
+        return 0.F;
+
+    float budget = std::min(360.F, sc<float>(monitor->m_size.y) * 0.42F);
+
+    // With no previews the grid's own height goes to ZERO, so everything under
+    // the strip is the panel's (user, 2026-09-23). What stays behind is one
+    // mission-control gap, so the strip never sits flush against the desktop
+    // card's bottom edge when a long list pushes the whole stack down.
+    //
+    // The strip term is the stack AS DRAWN rather than its ceiling, which is
+    // safe only on this branch and is why the branch exists: overviewStripStackL
+    // -> overviewStripLogicalHeight reads the published band to size its
+    // leftover ceiling, but that ceiling is gated on gridTiles > 0, so with no
+    // tiles the stack depends on nothing this budget can move.
+    if (gridTiles == 0) {
+        const float SPARE = sc<float>(monitor->m_size.y) - OVERVIEW_SEARCH_ROWHL - overviewStripStackL(monitor) - sc<float>(overviewMissionControlGap());
+        budget            = std::max(budget, SPARE);
+    }
+
+    return budget;
+}
+
+inline size_t overviewResultsRowCap(PHLMONITOR monitor, size_t gridTiles) {
+    const size_t RATIO = gridTiles == 0                         ? OVERVIEW_RESULT_ROWS_ALONE :
+        gridTiles > OVERVIEW_RESULT_TILES_CROWDED               ? OVERVIEW_RESULT_ROWS_CROWDED :
+                                                                  OVERVIEW_RESULT_ROWS_NORMAL;
+
+    // The ratio is the intent; the room is the hard limit. Trimming to more
+    // rows than the budget can draw would spill the card past its container.
+    const float  ROOM = overviewResultsBudgetL(monitor, gridTiles) - OVERVIEW_RESULT_CARD_CHROMEL - (OVERVIEW_RESULT_PANELGAPL * 2.F);
+    const size_t FITS = ROOM >= OVERVIEW_RESULT_ROWHL_FULL ? sc<size_t>(ROOM / OVERVIEW_RESULT_ROWHL_FULL) : 1;
+
+    return std::max<size_t>(1, std::min(RATIO, FITS));
+}
+
+inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHLMONITOR monitor, size_t gridTiles) {
     if (sections.empty() || !monitor)
         return;
 
-    const size_t MAX_ROWS = 8;
+    // THE CAP COMES FROM THE SAME PLACE THE BAND'S DOES. This used to be a flat
+    // `MAX_ROWS = 8` and it runs BEFORE the band is sized, so it silently
+    // decided the answer: the band measured an already-truncated list and no
+    // ceiling above 8 could ever be reached, however much room there was
+    // (user, 2026-09-23: "I never saw more than 8 rows in the results pane").
+    const size_t MAX_ROWS = overviewResultsRowCap(monitor, gridTiles);
     for (auto& sec : sections) {
-        if (sec.rows.size() > MAX_ROWS) {
+        if (sec.rows.size() > MAX_ROWS)
             sec.rows.resize(MAX_ROWS);
-        }
     }
 }
 
@@ -1410,7 +1674,7 @@ inline float overviewResultsWidthTarget(PHLMONITOR monitor, const std::vector<SS
     return overviewResultsSpanW(monitor);
 }
 
-inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections) {
+inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections, size_t gridTiles, bool toolPane = false) {
     if (sections.empty() || !monitor)
         return 0.F;
 
@@ -1420,11 +1684,15 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
     if (maxRows == 0)
         maxRows = 1;
 
-    const size_t VISIBLE_ROWS = std::clamp<size_t>(maxRows, 1, 8);
-    const float CARD_H = 28.F + (sc<float>(VISIBLE_ROWS) * 36.F) + 28.F + (OVERVIEW_RESULT_PANELGAPL * 2.F);
+    // ...and never more rows than there ARE results: a six-row budget spent on
+    // three answers is the same hole seen from the other side. The sections
+    // arrive already trimmed to overviewResultsRowCap, so this only has to
+    // honour what actually survived.
+    const float CARD_H = toolPane ?
+        (2.F * OVERVIEW_TOOL_PADL) + OVERVIEW_TOOL_HEADL + (sc<float>(maxRows) * (OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL)) + (OVERVIEW_RESULT_PANELGAPL * 2.F) :
+        OVERVIEW_RESULT_CARD_CHROMEL + (sc<float>(maxRows) * OVERVIEW_RESULT_ROWHL_FULL) + (OVERVIEW_RESULT_PANELGAPL * 2.F);
 
-    const float BUDGET = std::min(360.F, sc<float>(monitor->m_size.y) * 0.42F);
-    return std::min(CARD_H, BUDGET);
+    return std::min(CARD_H, overviewResultsBudgetL(monitor, gridTiles));
 }
 
 inline int overviewFirstAppIndex(const std::vector<SSearchRow>& rows) {

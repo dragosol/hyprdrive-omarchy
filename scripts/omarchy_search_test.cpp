@@ -172,3 +172,11 @@ int main() {
     std::cout << "omarchy_search_test: " << s_testsPassed << " checks OK" << std::endl;
     return 0;
 }
+
+// OmarchySearch folds the dictionary/translator's generation into its own; the
+// tool worker needs the compositor's config, so the host test stands it in.
+namespace ToolSearch {
+    uint64_t generation() {
+        return 0;
+    }
+}

@@ -478,6 +478,15 @@ static void registerConfigValuesFor() {
                                    SFloatValueOptions{.min = 0.1F, .max = 20.F}));
     addKey(makeShared<CIntValue>(KEY("workspace_gap"), "gap between overview workspaces", 40, SIntValueOptions{.min = 0}));
     addKey(makeShared<CStringValue>(KEY("layout"), "overview layout", Hyprlang::STRING{"vertical"}));
+    // The overview search's dictionary and translator (user, 2026-09-22). OFF by
+    // default: they send what is typed to a third-party service, and a
+    // compositor plugin must not start doing that on its own.
+    addKey(makeShared<CBoolValue>(KEY("search:dictionary"), "`define <word>` in the overview search looks the word up on Wiktionary (sends the word to en.wiktionary.org)", false));
+    addKey(makeShared<CBoolValue>(KEY("search:translate"), "`tr <lang> <text>` in the overview search translates it (sends the text to the translate endpoint)", false));
+    addKey(makeShared<CStringValue>(KEY("search:translate_endpoint"), "LibreTranslate-compatible base URL for `tr`; empty uses the free MyMemory API",
+                                    Hyprlang::STRING{""}));
+    addKey(makeShared<CStringValue>(KEY("search:translate_target"), "language `translate <text>` translates into when none is given; empty uses $LANG",
+                                    Hyprlang::STRING{""}));
     addKey(makeShared<CStringValue>(KEY("terminal"), "terminal used to launch Terminal=true desktop entries; empty falls back to $TERMINAL",
                                     Hyprlang::STRING{""}));
     addKey(makeShared<CIntValue>(KEY("input:scroll_event_delay"), "minimum delay (ms) between discrete scroll steps (wheel workspace nav and trackpad focus stepping)", 200, SIntValueOptions{.min = 0}));
@@ -572,7 +581,7 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CBoolValue>(KEY("dock:press_tilt"), "a pressed dock icon leans further in toward the press point, with a glare where it is pressed", true));
     addKey(makeShared<CBoolValue>(KEY("dock:dance_urgent"), "hyprgnomedock: wiggle an urgent app's icon (D2D dance-urgent-applications)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:urgent_notify"),
-                                  "hyprgnomedock: reveal the dock when an app goes urgent (D2D show-dock-urgent-notify)", true));
+                                  "an urgent app's icon hops up from the screen edge while the dock is hidden (it no longer reveals the dock)", true));
     // X32. `show-favorites`, `show-show-apps-button`, `show-apps-at-top` and
     // `show-apps-always-in-the-edge`, at the reference's values. The last two are
     // a pair: false/true is what puts the button at the right-hand end of a
@@ -696,6 +705,8 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CBoolValue>(KEY("strip"), "workspace thumbnail strip across the top of the overview", true));
     addKey(makeShared<CIntValue>(KEY("strip_height"), "logical px the strip band reserves at the top of the workspace", 260,
                                  SIntValueOptions{.min = 0}));
+    addKey(makeShared<CIntValue>(KEY("strip_max_screen_pct"), "ceiling on the strip band as a percent of screen height, so a strip cell never dwarfs a window preview", 30,
+                                 SIntValueOptions{.min = 1, .max = 100}));
     addKey(makeShared<CIntValue>(KEY("strip_gap"), "gap between strip cells", 5, SIntValueOptions{.min = 0}));
     addKey(makeShared<CBoolValue>(KEY("tap_super"), "tapping SUPER alone toggles the overview", true));
     addKey(makeShared<CIntValue>(KEY("tap_super_timeout_ms"), "longest press-to-release still counted as a SUPER tap (0 = no limit)",
@@ -1226,6 +1237,24 @@ int getWorkspaceGap() {
     return std::max<int>(0, sc<int>(*VAL));
 }
 
+bool getSearchDictionary() {
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:search:dictionary");
+    return *VAL != 0;
+}
+
+bool getSearchTranslate() {
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:search:translate");
+    return *VAL != 0;
+}
+
+std::string getSearchTranslateEndpoint() {
+    return getValue<std::string>("plugin:hyprdrive:search:translate_endpoint");
+}
+
+std::string getSearchTranslateTarget() {
+    return getValue<std::string>("plugin:hyprdrive:search:translate_target");
+}
+
 std::string getTerminal() {
     return getValue<std::string>("plugin:hyprdrive:terminal");
 }
@@ -1353,6 +1382,11 @@ bool getStrip() {
 int getStripHeight() {
     static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip_height");
     return std::max<int>(0, sc<int>(*VAL));
+}
+
+int getStripMaxScreenPct() {
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip_max_screen_pct");
+    return std::clamp<int>(sc<int>(*VAL), 1, 100);
 }
 
 int getStripGap() {

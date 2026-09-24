@@ -680,9 +680,27 @@ void CScrollOverview::onWindowOpen(PHLWINDOW window) {
         damage();
 }
 
-void CScrollOverview::onWindowClose(PHLWINDOW) {
+void CScrollOverview::onWindowClose(PHLWINDOW window) {
         if (closing)
             return;
+
+        // Remember the tile BEFORE the grid reflows it away. The snapshot itself
+        // cannot happen here -- there is no render context outside the pass --
+        // so this only records where the tile was and when it started; the next
+        // frame captures it while the window is still mapped.
+        // Keyed on the LAST DRAWN box, not on shouldShowOverviewWindow/tileBox:
+        // if this event lands after the unmap, both of those already say the
+        // tile does not exist.
+        if (window) {
+            const auto IT      = lastTileBoxes.find(window.get());
+            const bool ALREADY = std::ranges::any_of(closingTiles, [&](const auto& t) { return t.window.lock() == window; });
+            if (IT != lastTileBoxes.end() && !ALREADY && IT->second.box.width > 1.F && IT->second.box.height > 1.F) {
+                const CBox REAL = window->m_realPosition && window->m_realSize ? CBox{window->m_realPosition->value(), window->m_realSize->value()} : CBox{};
+                closingTiles.push_back(
+                    {.window = window, .fb = {}, .box = IT->second.box, .start = Time::steadyNow(), .captured = false, .realBox = REAL, .cardIdx = IT->second.cardIdx});
+            }
+            lastTileBoxes.erase(window.get());
+        }
 
         rebuildPending = true;
         damage();
@@ -776,6 +794,38 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
         if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter) && BASE_MODS != 0)
             return;
 
+        // SUPER+W CLOSES THE HIGHLIGHTED TILE (user, 2026-09-23).
+        //
+        // Not an override of Omarchy's own SUPER+W: that is a global bind with
+        // no submap, so it does not fire while the overview holds one. It is the
+        // same key meaning the same thing, aimed at the window the OVERVIEW is
+        // showing as selected rather than the one the compositor last focused.
+        //
+        // "Selected" is whichever device last moved the ring: arrows set
+        // keyboardTile, and any pointer motion clears it (updateTileHover). So
+        // after the arrows it is the keyboard's tile; after the mouse it is the
+        // tile under the pointer; and over empty space it is nothing at all --
+        // closing whatever closeOnWindow still pointed at would be a window
+        // vanishing that the user was not looking at.
+        if ((KEYSYM == XKB_KEY_w || KEYSYM == XKB_KEY_W) && MODS == HL_MODIFIER_META) {
+            PHLWINDOW target;
+            if (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile)
+                target = getOverviewWindowToShow(closeOnWindow.lock());
+            else {
+                lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
+                target            = windowAtOverviewCursor();
+            }
+
+            if (target && shouldShowOverviewWindow(target)) {
+                target->sendClose();
+                damage();
+            }
+            // Consumed either way: a SUPER+W that found nothing to close must
+            // not fall through to anything else while the overview is up.
+            info.cancelled = true;
+            return;
+        }
+
         switch (KEYSYM) {
             case XKB_KEY_Left:
             case XKB_KEY_KP_Left:
@@ -791,7 +841,11 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Down:
             case XKB_KEY_KP_Down:
-                if (g_search.nav.zone != EOverviewNavZone::Result && (!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack())) {
+                // ...from the SEARCH FIELD only. Down used to drop into the
+                // results from anywhere, including mid-grid, which is the same
+                // "an arrow left the pane" the Tile walk above no longer does.
+                if (g_search.nav.zone != EOverviewNavZone::Result && g_search.nav.zone != EOverviewNavZone::Tile && g_search.nav.zone != EOverviewNavZone::Desktop &&
+                    (!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack())) {
                     if (!searchLayoutHere().hits.empty()) {
                         g_search.nav.zone              = EOverviewNavZone::Result;
                         g_search.nav.selection         = searchLayoutHere().hits[0].index;
@@ -815,7 +869,49 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Tab:
             case XKB_KEY_ISO_Left_Tab: {
-                // Tab toggles keyboard focus between Search Results and open window Tiles
+                // TAB IS THE WAY BETWEEN THE PANES: results -> windows -> desktops
+                // -> results (user, 2026-09-23). Arrows stay inside whichever pane
+                // Tab left them in, so this cycle is the only way across and every
+                // pane has to be ON it -- the old two-way toggle could not reach
+                // the strip at all.
+                //
+                // A pane that is not there is skipped rather than being a dead
+                // stop: with no query there are no results, so the cycle is the
+                // two remaining panes.
+                if (g_search.nav.zone == EOverviewNavZone::Tile) {
+                    g_search.nav.zone              = EOverviewNavZone::Desktop;
+                    g_search.nav.selection         = -1;
+                    g_search.nav.keyboardTile      = false;
+                    g_search.nav.explicitSelection = true;
+                    TileChrome::setHovered(PHLWINDOW{}, false);
+                    damage();
+                    break;
+                }
+
+                if (g_search.nav.zone == EOverviewNavZone::Desktop) {
+                    const auto RESULTS = overviewSearchRows();
+                    if ((!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) && !RESULTS.empty()) {
+                        g_search.nav.zone              = EOverviewNavZone::Result;
+                        g_search.nav.explicitSelection = true;
+                        g_search.nav.intent            = ESearchIntent::Browsing;
+                        g_search.nav.keyboardTile      = false;
+                        if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
+                            g_search.nav.selection = 0;
+                        TileChrome::setHovered(PHLWINDOW{}, false);
+                    } else {
+                        g_search.nav.zone         = EOverviewNavZone::Tile;
+                        g_search.nav.selection    = -1;
+                        g_search.nav.keyboardTile = true;
+                        if (!isNavTile(closeOnWindow.lock())) {
+                            if (const auto FIRST = firstNavTile())
+                                closeOnWindow = FIRST;
+                        }
+                        TileChrome::setHovered(closeOnWindow.lock(), false);
+                    }
+                    damage();
+                    break;
+                }
+
                 if (g_search.nav.zone == EOverviewNavZone::Result) {
                     g_search.nav.zone         = EOverviewNavZone::Tile;
                     g_search.nav.keyboardTile = true;

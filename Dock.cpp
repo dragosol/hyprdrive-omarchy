@@ -99,6 +99,11 @@
 // flight code needs the same m_Value / m_realPosition access this TU has.
 #include "FlightController.hpp"
 #include "Scratchpad.hpp"
+#include "AppInfo.hpp"
+#include <cstring>
+#include <hyprutils/os/Process.hpp>
+#include <unistd.h>
+#include <csignal>
 #include "Placement.hpp"
 
 namespace ScrollOverview::Dock {
@@ -747,6 +752,21 @@ uint64_t g_itemsGeneration = 1;
 //
 // Named build* because it is no longer what callers reach for: dockItems()
 // below memoizes this behind a generation key, and that is the entry point.
+// Z11's spam guard (see launchApp). An entry used to live out its full 30
+// seconds even after the window had come and gone, so "open Trash, close it,
+// click Trash" was swallowed for the rest of the half-minute (user,
+// 2026-09-24). An entry now ends when its launch LANDS -- the item turns
+// running -- and a location, which is not marked running unless
+// isolate_locations is on, only guards against the double-click itself:
+// Nautilus opening a folder is quick and never "cold".
+std::unordered_map<std::string, Time::steady_tp> g_pendingLaunches;
+constexpr float                                  LAUNCH_PENDING_MS   = 30000.F;
+constexpr float                                  LOCATION_PENDING_MS = 1500.F;
+
+std::string pendingLaunchKey(const SItem& item) {
+    return !item.uri.empty() ? item.uri : (item.desktopId.empty() ? item.wmClass : item.desktopId);
+}
+
 std::vector<SItem> buildDockItems() {
     const auto RUNNING = runningClasses();
 
@@ -874,6 +894,10 @@ std::vector<SItem> buildDockItems() {
     // ONE PASS, at the end, so no branch above can forget it. See SItem::subject.
     for (auto& item : out)
         item.subject = tooltipSubject(item);
+
+    for (const auto& ITEM : out)
+        if (ITEM.running && !ITEM.scratchpad)
+            g_pendingLaunches.erase(pendingLaunchKey(ITEM));
 
     return out;
 }
@@ -1296,15 +1320,64 @@ bool anyUrgent(const std::vector<SItem>& items, const STally& tally) {
 // Radians, because CBox::rot is; the reference's degrees are converted at the
 // last moment so the numbers above stay the ones that were read off it. The
 // epoch is shared and set once, which is what keeps two urgent icons in phase.
-float wiggleRadians() {
+// ONE clock for every urgent animation, so the wiggle (dock showing) and the
+// hop (dock hidden) keep the same rhythm, and two urgent apps move together.
+const Time::steady_tp& urgentEpoch() {
     static const Time::steady_tp EPOCH = Time::steadyNow();
+    return EPOCH;
+}
 
-    const float PROGRESS = std::fmod(elapsedMs(EPOCH), WIGGLE_PERIOD_MS) / WIGGLE_PERIOD_MS;
+float wiggleRadians() {
+    const float PROGRESS = std::fmod(elapsedMs(urgentEpoch()), WIGGLE_PERIOD_MS) / WIGGLE_PERIOD_MS;
     if (PROGRESS >= WIGGLE_FRACTION)
         return 0.F;
 
     const float DEGREES = WIGGLE_DEGREES * std::sin(PROGRESS * 24.F * sc<float>(M_PI));
     return DEGREES * sc<float>(M_PI) / 180.F;
+}
+
+// THE HOP (user, 2026-09-24: "we shouldn't have the dock staying revealed to get
+// your attention - instead the shaking item should also jump a little when the
+// dock is out of view (little macos inspiration)"). While the dock is hidden,
+// an urgent app's icon pops up from the bottom edge -- two bounces, the second
+// smaller, like the macOS dock's -- once per wiggle period, on the wiggle's
+// clock. The dock itself stays where autohide put it.
+constexpr float URGENT_HOP_MS   = 900.F; // both bounces
+constexpr float URGENT_HOP_LIFT = 0.62F; // of the icon's height, at the top of the first bounce
+
+// 0..1 of the lift now, or -1 between hops.
+float urgentHopLift() {
+    const float PHASE = std::fmod(elapsedMs(urgentEpoch()), WIGGLE_PERIOD_MS);
+    if (PHASE >= URGENT_HOP_MS)
+        return -1.F;
+    const float T = PHASE / URGENT_HOP_MS;
+    if (T < 0.55F)
+        return std::sin(sc<float>(M_PI) * T / 0.55F);
+    return 0.5F * std::sin(sc<float>(M_PI) * (T - 0.55F) / 0.45F);
+}
+
+float msToNextHop() {
+    return WIGGLE_PERIOD_MS - std::fmod(elapsedMs(urgentEpoch()), WIGGLE_PERIOD_MS);
+}
+
+// Between hops nothing on the desktop asks for frames, so the next hop is woken
+// by a timer rather than by pumping 60 frames a second for an icon that is
+// still for two seconds in three -- an app can stay urgent for hours. Removed
+// from PLUGIN_EXIT (stopUrgentHopTimer).
+wl_event_source* g_hopTimer = nullptr;
+
+int hopTimerCb(void*) {
+    for (const auto& MON : State::monitorState()->monitors())
+        if (MON)
+            g_pHyprRenderer->damageMonitor(MON);
+    return 0;
+}
+
+void armHopTimer(float ms) {
+    if (!g_hopTimer)
+        g_hopTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, hopTimerCb, nullptr);
+    if (g_hopTimer)
+        wl_event_source_timer_update(g_hopTimer, std::max(1, sc<int>(std::ceil(ms))));
 }
 
 // ----------------------------------------------------------------------------
@@ -1731,7 +1804,10 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
     // dock out on its own. It is ORed into BOTH branches below, not just the
     // hidden one -- an urgent app also has to stop the pointer leaving from
     // sliding the dock away again, or the wiggle would play to nobody.
-    const bool URGENT = Config::getValue<bool>(KEY_URGENT_NOTIFY) && anyUrgent(baseLayout(monitor).items, tally);
+    //
+    // ...WITHDRAWN (user, 2026-09-24): an urgent app no longer pins the dock
+    // out. It hops from the edge instead (renderUrgentHop), and the dock stays
+    // wherever autohide has it.
 
     bool       want      = false;
     // A reversal that catches the pill still on screen does not wait out a
@@ -1826,7 +1902,7 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
     // no icon to fly to -- the target lookup failed and the flight was dropped
     // on its first frame, which is why it teleported. The dock now comes out for
     // the flight and slides away after it.
-    want = want || URGENT || overlayHoldsDock() || Flight::anyOn(monitor);
+    want = want || overlayHoldsDock() || Flight::anyOn(monitor);
 
     if (want == R.shown) {
         R.pending = false;
@@ -2473,8 +2549,8 @@ void cycleOrActivate(const SItem& item, bool reversed) {
 // clicks take the toggle branch and never reach here. 30s covers a cold app;
 // a slower one gets a deliberate second chance.
 // ponytail: plain timestamps, no startup-notification protocol.
-std::unordered_map<std::string, Time::steady_tp> g_pendingLaunches;
-constexpr float                                  LAUNCH_PENDING_MS = 30000.F;
+// (g_pendingLaunches and its window live above buildDockItems, which clears
+// an entry once its launch has landed.)
 
 // V3 widened this in two places, both in its signature, and both because a
 // DRAG is a different statement from a click:
@@ -2500,9 +2576,10 @@ void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace =
         g_flight.launchZooms.emplace_back(SLaunchZoom{.icon = item.icon, .monitor = monitor ? monitor->m_id : MONITOR_INVALID, .from = item.iconBox, .startedAt = Time::steadyNow()});
 
     const bool  FIRSTINSTANCE = item.uri.empty() ? itemWindows(item).empty() : true;
-    const auto  PENDKEY       = !item.uri.empty() ? item.uri : (item.desktopId.empty() ? item.wmClass : item.desktopId);
+    const auto  PENDKEY       = pendingLaunchKey(item);
+    const float PENDING_MS    = item.uri.empty() ? LAUNCH_PENDING_MS : LOCATION_PENDING_MS;
     if (!deliberate && FIRSTINSTANCE && !PENDKEY.empty()) {
-        if (const auto IT = g_pendingLaunches.find(PENDKEY); IT != g_pendingLaunches.end() && elapsedMs(IT->second) < LAUNCH_PENDING_MS)
+        if (const auto IT = g_pendingLaunches.find(PENDKEY); IT != g_pendingLaunches.end() && elapsedMs(IT->second) < PENDING_MS)
             return; // the zoom above replays; the exec does not
         g_pendingLaunches[PENDKEY] = Time::steadyNow();
     }
@@ -2553,7 +2630,32 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     // spawn -- tested first because it carries neither a class nor a uri and
     // would otherwise fall through every branch below to launchApp.
     if (item.scratchpad) {
-        Scratchpad::toggle(Scratchpad::byShortName(item.scratchpadName));
+        const auto WORKSPACE = Scratchpad::byShortName(item.scratchpadName);
+
+        // ...unless the overview is up, when it is NOT a toggle. The overview
+        // is covering the scratchpad, so a click on the icon is the user asking
+        // to SEE it -- and toggling would answer that by pulling it down, which
+        // reads as the click doing nothing at all (user, 2026-09-22).
+        //
+        // The overview has to COMMIT to a scratchpad window, not merely close
+        // with the scratchpad shown. Closing hands focus back to its own
+        // selection twice -- once in close(), and again when the close animation
+        // ends and restoreOverviewKeyboard refocuses closeOnWindow -- and
+        // focusing a window outside an open special workspace makes Hyprland
+        // hide it. The first version did show()-then-close() and the scratchpad
+        // flashed up for the length of the animation and went (user,
+        // 2026-09-23: "just closes overview"). selectAndClose makes a window on
+        // the scratchpad the thing both refocuses land on.
+        if (const auto OVERVIEW = openScrollOverviewForMonitor(monitor); OVERVIEW) {
+            Scratchpad::show(WORKSPACE);
+            if (const auto WINDOWS = Scratchpad::windowsOn(WORKSPACE); !WINDOWS.empty())
+                OVERVIEW->selectAndClose(WINDOWS.front());
+            else
+                OVERVIEW->close();
+            return;
+        }
+
+        Scratchpad::toggle(WORKSPACE);
         return;
     }
 
@@ -2684,7 +2786,66 @@ void applyClickAction(PHLMONITOR monitor, const SItem& item, const std::string& 
 
 // ---------------------------------------------------------------- X28 menu --
 
-enum class ERow : uint8_t { Separator, Action, Window, Details, Favorite, Quit, EmptyTrash, Mount, Unmount, Eject, StackView, StackSort, StackOpen, StackUnpin };
+enum class ERow : uint8_t {
+    Separator,
+    Action,
+    Window,
+    Details,
+    Favorite,
+    Quit,
+    EmptyTrash,
+    Mount,
+    Unmount,
+    Eject,
+    StackView,
+    StackSort,
+    StackOpen,
+    StackUnpin,
+    // user, 2026-09-22: "add a force quit option ... add quality of life features".
+    NewWindow,
+    MinimizeAll,
+    RestoreAll,
+    ForceQuit,
+    // Get Info's own view (user, 2026-09-24). The menu swaps to these in place.
+    InfoLine,   // "Version  1.3.1": click copies the value (kept whole in `exec`)
+    InfoReveal, // Show in Files
+    InfoCopyAll,
+    InfoBack,
+};
+
+// OMARCHY-STYLE ROWS: a Nerd Font glyph column, the label, and a dim hint on the
+// right -- the way the Omarchy menu lays its own rows out. The glyphs are all
+// from the Font Awesome block, which every Nerd Font release carries.
+namespace MenuGlyph {
+    inline constexpr const char* NEW      = "\uf067"; // plus
+    inline constexpr const char* ACTION   = "\uf054"; // chevron-right
+    inline constexpr const char* WINDOW   = "\uf2d0"; // window-maximize
+    inline constexpr const char* MINIMIZE = "\uf2d1"; // window-minimize
+    inline constexpr const char* RESTORE  = "\uf2d2"; // window-restore
+    inline constexpr const char* DETAILS  = "\uf05a"; // info-circle
+    inline constexpr const char* FAV_ADD  = "\uf005"; // star
+    inline constexpr const char* FAV_DEL  = "\uf006"; // star-o
+    inline constexpr const char* QUIT     = "\uf00d"; // times
+    inline constexpr const char* KILL     = "\uf05e"; // ban
+    inline constexpr const char* TRASH    = "\uf1f8"; // trash
+    inline constexpr const char* DRIVE    = "\uf0a0"; // hdd
+    inline constexpr const char* EJECT    = "\uf052"; // eject
+    inline constexpr const char* FOLDER   = "\uf07c"; // folder-open
+    inline constexpr const char* GRID     = "\uf00a"; // th
+    inline constexpr const char* SORT     = "\uf0dc"; // sort
+    inline constexpr const char* UNPIN    = "\uf08d"; // thumb-tack
+    inline constexpr const char* BACK     = "\uf053"; // chevron-left
+    inline constexpr const char* COPY     = "\uf0c5"; // copy
+    inline constexpr const char* PACKAGE  = "\uf1b2"; // cube
+    inline constexpr const char* TAG      = "\uf02b"; // tag
+    inline constexpr const char* TERMINAL = "\uf120"; // terminal
+    inline constexpr const char* FILE     = "\uf15b"; // file
+    inline constexpr const char* LINK     = "\uf0c1"; // link
+    inline constexpr const char* CLOCK    = "\uf017"; // clock
+    inline constexpr const char* DISK     = "\uf1c0"; // database
+    inline constexpr const char* SOURCE   = "\uf0e8"; // sitemap
+    inline constexpr const char* TEXT     = "\uf036"; // align-left
+}
 
 struct SRow {
     ERow         kind = ERow::Separator;
@@ -2692,10 +2853,18 @@ struct SRow {
     std::string  exec;   // ERow::Action
     PHLWINDOWREF window; // ERow::Window
     CBox         box;    // monitor-local RENDER px, filled by renderMenu
+    std::string  glyph;          // Nerd Font glyph for the leading column; empty = none
+    std::string  hint;           // dim, right-aligned: a window's desktop, say
+    bool         danger = false; // Force Quit: drawn in the warning colour
 };
 
 struct SMenu {
     MONITORID monitor = MONITOR_INVALID;
+
+    // Get Info: the menu is showing the app's info rows, rebuilt whenever the
+    // package lookup lands (AppInfo::generation() moves past infoGen).
+    bool     infoView = false;
+    uint64_t infoGen  = 0;
 
     // X35. The whole item, not just its class: a location has no class, and the
     // rows it opens are decided by its uri/mount/trashEmpty instead.
@@ -2754,12 +2923,12 @@ std::vector<SRow> buildRows(const SItem& item) {
     // can only be unpinned from a GTK preferences window two clicks away).
     if (item.stack) {
         if (item.stackDir) {
-            rows.emplace_back(SRow{.kind = ERow::StackView, .label = stackIsGrid(item) ? "Show as Fan" : "Show as Grid"});
-            rows.emplace_back(SRow{.kind = ERow::StackSort, .label = stackIsByTime(item) ? "Sort by Name" : "Sort by Date"});
+            rows.emplace_back(SRow{.kind = ERow::StackView, .label = stackIsGrid(item) ? "Show as Fan" : "Show as Grid", .glyph = MenuGlyph::GRID});
+            rows.emplace_back(SRow{.kind = ERow::StackSort, .label = stackIsByTime(item) ? "Sort by Name" : "Sort by Date", .glyph = MenuGlyph::SORT});
             rows.emplace_back(SRow{.kind = ERow::Separator});
         }
-        rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = "Open in Files"});
-        rows.emplace_back(SRow{.kind = ERow::StackUnpin, .label = "Unpin from Dock"});
+        rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = "Open in Files", .glyph = MenuGlyph::FOLDER});
+        rows.emplace_back(SRow{.kind = ERow::StackUnpin, .label = "Unpin from Dock", .glyph = MenuGlyph::UNPIN});
         return rows;
     }
 
@@ -2768,46 +2937,153 @@ std::vector<SRow> buildRows(const SItem& item) {
             // An fstab point that is not up yet offers the opposite action --
             // and no Eject, because there is nothing mounted to eject.
             if (!item.mounted)
-                rows.emplace_back(SRow{.kind = ERow::Mount, .label = "Mount"});
+                rows.emplace_back(SRow{.kind = ERow::Mount, .label = "Mount", .glyph = MenuGlyph::DRIVE});
             else {
-                rows.emplace_back(SRow{.kind = ERow::Unmount, .label = "Unmount"});
+                rows.emplace_back(SRow{.kind = ERow::Unmount, .label = "Unmount", .glyph = MenuGlyph::DRIVE});
                 if (item.canEject)
-                    rows.emplace_back(SRow{.kind = ERow::Eject, .label = "Eject"});
+                    rows.emplace_back(SRow{.kind = ERow::Eject, .label = "Eject", .glyph = MenuGlyph::EJECT});
             }
         } else if (!item.trashEmpty)
-            rows.emplace_back(SRow{.kind = ERow::EmptyTrash, .label = "Empty Trash"});
+            rows.emplace_back(SRow{.kind = ERow::EmptyTrash, .label = "Empty Trash", .glyph = MenuGlyph::TRASH});
 
         return rows;
     }
 
     const auto& wmClass = item.wmClass;
+    const auto  WINDOWS = itemWindows(item);
+    const auto  ID      = AppSearch::idForClass(wmClass);
+
+    // New Window first when there is something to launch: the one thing a
+    // running app's icon cannot do on a click, which focuses instead.
+    if (!ID.empty() && !WINDOWS.empty())
+        rows.emplace_back(SRow{.kind = ERow::NewWindow, .label = "New Window", .glyph = MenuGlyph::NEW});
 
     for (const auto& ACTION : AppSearch::actionsForClass(wmClass))
-        rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec});
+        rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec, .glyph = MenuGlyph::ACTION});
 
-    const auto WINDOWS = itemWindows(item);
     if (!rows.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::Separator});
 
-    for (const auto& WINDOW : WINDOWS)
-        rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? wmClass : WINDOW->m_title), .window = WINDOW});
+    // Each window with WHERE it is: its desktop, the scratchpad, or minimized.
+    // A list of identical app names with nothing to tell them apart was the
+    // commonest reason to open the hover panel instead.
+    size_t minimized = 0;
+    for (const auto& WINDOW : WINDOWS) {
+        std::string where;
+        if (Minimize::isMinimized(WINDOW)) {
+            where = "minimized";
+            ++minimized;
+        } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
+            where = Scratchpad::label(SCRATCH);
+        else if (WINDOW->m_workspace)
+            where = WINDOW->m_workspace->m_name;
+        rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
+    }
+
+    // Whole-app minimize / restore, offered in whichever direction does
+    // something. The flight into (and out of) the icon is the dock's own.
+    if (!WINDOWS.empty()) {
+        if (minimized < WINDOWS.size())
+            rows.emplace_back(SRow{.kind = ERow::MinimizeAll, .label = WINDOWS.size() > 1 ? "Minimize All" : "Minimize", .glyph = MenuGlyph::MINIMIZE});
+        if (minimized > 0)
+            rows.emplace_back(SRow{.kind = ERow::RestoreAll, .label = minimized > 1 ? "Show All" : "Show", .glyph = MenuGlyph::RESTORE});
+    }
 
     // A class no desktop entry claims has nothing to show the details of and
     // nothing to favourite by id, so both rows are left out rather than drawn
     // dead. GNOME does the same with an unmatched window.
-    if (const auto ID = AppSearch::idForClass(wmClass); !ID.empty()) {
+    if (!ID.empty()) {
         if (!rows.empty())
             rows.emplace_back(SRow{.kind = ERow::Separator});
 
-        rows.emplace_back(SRow{.kind = ERow::Details, .label = "Show Details"});
-        rows.emplace_back(SRow{.kind  = ERow::Favorite,
-                               .label = std::ranges::contains(favorites(), ID) ? "Remove from Favorites" : "Add to Favorites"});
+        const bool FAV = std::ranges::contains(favorites(), ID);
+        rows.emplace_back(SRow{.kind = ERow::Favorite, .label = FAV ? "Remove from Favorites" : "Add to Favorites", .glyph = FAV ? MenuGlyph::FAV_DEL : MenuGlyph::FAV_ADD});
+        rows.emplace_back(SRow{.kind = ERow::Details, .label = "Get Info", .glyph = MenuGlyph::DETAILS});
     }
 
-    if (!rows.empty())
-        rows.emplace_back(SRow{.kind = ERow::Separator});
-    rows.emplace_back(SRow{.kind = ERow::Quit, .label = WINDOWS.size() > 1 ? "Quit " + std::to_string(WINDOWS.size()) + " Windows" : "Quit"});
+    if (!WINDOWS.empty()) {
+        if (!rows.empty())
+            rows.emplace_back(SRow{.kind = ERow::Separator});
+        rows.emplace_back(SRow{.kind = ERow::Quit, .label = WINDOWS.size() > 1 ? "Quit " + std::to_string(WINDOWS.size()) + " Windows" : "Quit", .glyph = MenuGlyph::QUIT});
+        // The app asked nicely and did not go (a hung client, a modal it is
+        // stuck behind): SIGKILL every process behind its windows. Last, and in
+        // the warning colour, because it loses unsaved work.
+        rows.emplace_back(SRow{.kind = ERow::ForceQuit, .label = "Force Quit", .glyph = MenuGlyph::KILL, .danger = true});
+    }
 
+    return rows;
+}
+
+// GET INFO's rows: the .desktop entry's own answers straight away, the package
+// manager's as soon as AppInfo has them. Each value row carries the WHOLE value
+// in `exec` (the hint is elided to fit) so a click copies all of it.
+std::vector<SRow> infoRows(const SItem& item) {
+    std::vector<SRow> rows;
+    const auto*       ENTRY = AppSearch::entryForId(AppSearch::idForClass(item.wmClass));
+
+    const auto line = [&](const char* glyph, const std::string& key, std::string value) {
+        if (value.empty())
+            return;
+        // Paths read from home, the way a person would say them.
+        if (const char* HOME = std::getenv("HOME"); HOME && *HOME && value.starts_with(HOME))
+            value = "~" + value.substr(std::strlen(HOME));
+        std::string shown = value;
+        if (shown.size() > 46) {
+            size_t cut = 45;
+            while (cut > 0 && (sc<unsigned char>(shown[cut]) & 0xC0) == 0x80)
+                --cut;
+            shown = shown.substr(0, cut) + "…";
+        }
+        rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = key, .exec = value, .glyph = glyph, .hint = shown});
+    };
+
+    if (ENTRY) {
+        line(MenuGlyph::TAG, "Name", ENTRY->name);
+        line(MenuGlyph::TEXT, "About", ENTRY->comment.empty() ? ENTRY->generic : ENTRY->comment);
+    } else
+        line(MenuGlyph::TAG, "Class", item.wmClass);
+
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+
+    const auto INFO = ENTRY ? AppInfo::lookup(ENTRY->path, ENTRY->exec) : AppInfo::SInfo{.ready = true, .fields = {}};
+    if (!INFO.ready)
+        rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Looking up the package…", .glyph = MenuGlyph::PACKAGE});
+    for (const auto& [KEY, VALUE] : INFO.fields) {
+        const char* G = KEY == "Version" ? MenuGlyph::TAG :
+            KEY == "Source"              ? MenuGlyph::SOURCE :
+            KEY == "Package"             ? MenuGlyph::PACKAGE :
+            KEY == "Size"                ? MenuGlyph::DISK :
+            KEY == "Installed"           ? MenuGlyph::CLOCK :
+                                           MenuGlyph::LINK;
+        line(G, KEY, VALUE);
+    }
+
+    if (ENTRY) {
+        // Exec= without its field codes (%U, %f, ...), which are placeholders,
+        // not part of the command anyone would type.
+        std::string cmd;
+        for (size_t i = 0; i < ENTRY->exec.size(); ++i) {
+            if (ENTRY->exec[i] == '%' && i + 1 < ENTRY->exec.size()) {
+                ++i;
+                continue;
+            }
+            cmd += ENTRY->exec[i];
+        }
+        while (!cmd.empty() && cmd.back() == ' ')
+            cmd.pop_back();
+        line(MenuGlyph::TERMINAL, "Command", cmd);
+        line(MenuGlyph::FILE, "Desktop file", ENTRY->path);
+    }
+
+    if (const auto N = itemWindows(item).size(); N > 0)
+        line(MenuGlyph::WINDOW, "Open windows", std::to_string(N));
+
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+    if (ENTRY)
+        rows.emplace_back(SRow{.kind = ERow::InfoReveal, .label = "Show in Files", .exec = ENTRY->path, .glyph = MenuGlyph::FOLDER});
+    rows.emplace_back(SRow{.kind = ERow::InfoCopyAll, .label = "Copy Info", .glyph = MenuGlyph::COPY});
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+    rows.emplace_back(SRow{.kind = ERow::InfoBack, .label = "Back", .glyph = MenuGlyph::BACK});
     return rows;
 }
 
@@ -2846,14 +3122,34 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             return;
         }
 
-        case ERow::Details: {
-            // What GNOME's own Show Details does. Absent gnome-software this
-            // spawns nothing, exactly as it does on a host without it.
-            const auto ID = AppSearch::idForClass(wmClass);
-            if (!ID.empty())
-                AppSearch::launchExec("gnome-software --details=" + ID);
+        // Get Info and Back swap the menu's rows in place (menuClick); they only
+        // reach here if something activates a row without a menu to swap.
+        case ERow::Details:
+        case ERow::InfoBack: return;
+
+        case ERow::InfoLine:
+            if (!row.exec.empty())
+                Hyprutils::OS::CProcess("/usr/bin/wl-copy", {row.exec}).runAsync();
+            return;
+
+        case ERow::InfoCopyAll: {
+            std::string all;
+            for (const auto& R : infoRows(item))
+                if (R.kind == ERow::InfoLine && !R.exec.empty())
+                    all += R.label + ": " + R.exec + "\n";
+            if (!all.empty())
+                Hyprutils::OS::CProcess("/usr/bin/wl-copy", {all}).runAsync();
             return;
         }
+
+        case ERow::InfoReveal:
+            // FileManager1.ShowItems: the freedesktop call every file manager
+            // answers, so this is not Nautilus-only.
+            if (!row.exec.empty())
+                Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1",
+                                                  "--method", "org.freedesktop.FileManager1.ShowItems", "['file://" + row.exec + "']", ""})
+                    .runAsync();
+            return;
 
         case ERow::Favorite: toggleFavorite(AppSearch::idForClass(wmClass)); return;
 
@@ -2861,6 +3157,32 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             for (const auto& WINDOW : itemWindows(item))
                 WINDOW->sendClose();
             return;
+
+        case ERow::NewWindow: launchApp(monitor, item, nullptr, true); return;
+
+        case ERow::MinimizeAll:
+            for (const auto& WINDOW : itemWindows(item))
+                if (!Minimize::isMinimized(WINDOW))
+                    Flight::minimize(monitor, WINDOW, false);
+            return;
+
+        case ERow::RestoreAll:
+            for (const auto& WINDOW : itemWindows(item))
+                if (Minimize::isMinimized(WINDOW))
+                    Flight::restore(monitor, WINDOW);
+            return;
+
+        case ERow::ForceQuit: {
+            // Each process once; never pid 0/1 and never the compositor itself,
+            // whatever a client claims its pid is.
+            std::unordered_set<pid_t> pids;
+            for (const auto& WINDOW : itemWindows(item))
+                if (const pid_t PID = WINDOW->getPID(); PID > 1 && PID != getpid())
+                    pids.insert(PID);
+            for (const pid_t PID : pids)
+                kill(PID, SIGKILL);
+            return;
+        }
     }
 }
 
@@ -2871,31 +3193,58 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
     if (!g_menu || !monitor || g_menu->monitor != monitor->m_id)
         return;
 
+    // The package lookup landed: the info rows grow their answers.
+    if (g_menu->infoView && AppInfo::generation() != g_menu->infoGen) {
+        g_menu->infoGen = AppInfo::generation();
+        g_menu->rows    = infoRows(g_menu->item);
+    }
+
     const float SCALE  = std::max(monitor->m_scale, 0.01F);
     const int   FONTPX = std::max(1, sc<int>(std::round(MENU_FONT * SCALE)));
 
-    std::vector<SP<Render::ITexture>> textures;
+    // The warning colour for Force Quit: a desaturated red that still reads as
+    // part of a dark Omarchy plate rather than as an alert box.
+    const CHyprColor LABEL_COLOR{1.F, 1.F, 1.F, 0.95F};
+    const CHyprColor DANGER_COLOR{1.F, 0.50F, 0.47F, 0.97F};
+    const CHyprColor DIM_COLOR{1.F, 1.F, 1.F, 0.45F};
+
+    struct SRowTex {
+        SP<Render::ITexture> label, glyph, hint;
+    };
+    std::vector<SRowTex> textures;
     textures.reserve(g_menu->rows.size());
 
-    float width = MENU_MIN_W * SCALE;
+    // One glyph column for the whole plate, so every label starts at the same x
+    // -- present only when some row has a glyph.
+    const bool  GLYPHS    = std::ranges::any_of(g_menu->rows, [](const SRow& r) { return !r.glyph.empty(); });
+    const float GLYPHCOLW = GLYPHS ? std::round(sc<float>(FONTPX) * 1.9F) : 0.F;
+    const float HINTGAP   = std::round(18.F * SCALE);
+
+    float width  = MENU_MIN_W * SCALE;
     float height = 0.F;
     for (const auto& ROW : g_menu->rows) {
         if (ROW.kind == ERow::Separator) {
-            textures.emplace_back(nullptr);
+            textures.emplace_back();
             height += MENU_SEP_H * SCALE;
             continue;
         }
 
-        auto tex = OverviewRender::text(ROW.label, CHyprColor{1.F, 1.F, 1.F, 0.95F}, FONTPX, false, "", 0, 500);
-        if (!tex || !tex->ok()) {
-            textures.emplace_back(nullptr);
+        SRowTex t;
+        t.label = OverviewRender::text(ROW.label, ROW.danger ? DANGER_COLOR : LABEL_COLOR, FONTPX, false, "", 0, 500);
+        if (!t.label || !t.label->ok()) {
+            textures.emplace_back();
             height += MENU_SEP_H * SCALE;
             continue;
         }
+        if (!ROW.glyph.empty())
+            t.glyph = OverviewRender::text(ROW.glyph, ROW.danger ? DANGER_COLOR : DIM_COLOR.modifyA(0.8F), FONTPX, false, "JetBrainsMono Nerd Font", 0, 400);
+        if (!ROW.hint.empty())
+            t.hint = OverviewRender::text(ROW.hint, DIM_COLOR, FONTPX, false, "", 0, 400);
 
-        width  = std::max(width, sc<float>(tex->m_size.x) + 2.F * MENU_PAD_X * SCALE);
-        height += sc<float>(tex->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
-        textures.emplace_back(std::move(tex));
+        const float HINTW = t.hint && t.hint->ok() ? HINTGAP + sc<float>(t.hint->m_size.x) : 0.F;
+        width             = std::max(width, 2.F * MENU_PAD_X * SCALE + GLYPHCOLW + sc<float>(t.label->m_size.x) + HINTW);
+        height += sc<float>(t.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
+        textures.emplace_back(std::move(t));
     }
 
     if (height < 1.F)
@@ -2915,10 +3264,10 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
 
     float y = sc<float>(plate.y);
     for (size_t i = 0; i < g_menu->rows.size(); ++i) {
-        auto&      row = g_menu->rows[i];
-        const auto TEX = textures[i];
+        auto&       row = g_menu->rows[i];
+        const auto& TEX = textures[i];
 
-        if (!TEX) {
+        if (!TEX.label) {
             row.box = CBox{plate.x, std::round(y), plate.width, std::round(MENU_SEP_H * SCALE)};
 
             CRectPassElement::SRectData sep;
@@ -2931,26 +3280,51 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             continue;
         }
 
-        const float ROWH = sc<float>(TEX->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
+        const float ROWH = sc<float>(TEX.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
         row.box          = CBox{plate.x, std::round(y), plate.width, std::round(ROWH)};
 
         if (row.box.containsPoint(MOUSE)) {
-            // X56: the context menu's row highlight follows the theme too.
-            const auto ROWACCENT = ScrollOverview::Config::highlightColor();
+            // X56: the context menu's row highlight follows the theme too --
+            // except on the destructive row, which lights in its own colour so
+            // the pointer landing on it is noticed.
+            const auto ROWACCENT = row.danger ? DANGER_COLOR : ScrollOverview::Config::highlightColor();
 
             CRectPassElement::SRectData fill;
             fill.box           = row.box;
-            fill.color         = ROWACCENT.modifyA(0.26F);
+            fill.color         = ROWACCENT.modifyA(row.danger ? 0.18F : 0.26F);
             fill.round         = 0;
             fill.roundingPower = 2.F;
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
         }
 
+        const float TEXTX = std::round(plate.x + MENU_PAD_X * SCALE);
+        const float TEXTY = std::round(y + MENU_ROW_PAD_Y * SCALE);
+        const float LH    = sc<float>(TEX.label->m_size.y);
+
+        if (TEX.glyph && TEX.glyph->ok()) {
+            CTexPassElement::SRenderData g;
+            g.tex = TEX.glyph;
+            // Centred in the column and on the label's line.
+            g.box = CBox{std::round(TEXTX + (GLYPHCOLW - sc<float>(TEX.glyph->m_size.x)) / 2.F - GLYPHCOLW * 0.15F),
+                         std::round(TEXTY + (LH - sc<float>(TEX.glyph->m_size.y)) / 2.F), sc<float>(TEX.glyph->m_size.x), sc<float>(TEX.glyph->m_size.y)};
+            g.a   = 1.F;
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(g));
+        }
+
         CTexPassElement::SRenderData text;
-        text.tex = TEX;
-        text.box = CBox{std::round(plate.x + MENU_PAD_X * SCALE), std::round(y + MENU_ROW_PAD_Y * SCALE), sc<float>(TEX->m_size.x), sc<float>(TEX->m_size.y)};
+        text.tex = TEX.label;
+        text.box = CBox{TEXTX + GLYPHCOLW, TEXTY, sc<float>(TEX.label->m_size.x), LH};
         text.a   = 1.F;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(text));
+
+        if (TEX.hint && TEX.hint->ok()) {
+            CTexPassElement::SRenderData h;
+            h.tex = TEX.hint;
+            h.box = CBox{std::round(plate.x + plate.width - MENU_PAD_X * SCALE - sc<float>(TEX.hint->m_size.x)), std::round(TEXTY + (LH - sc<float>(TEX.hint->m_size.y)) / 2.F),
+                         sc<float>(TEX.hint->m_size.x), sc<float>(TEX.hint->m_size.y)};
+            h.a   = 1.F;
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(h));
+        }
 
         y += ROWH;
     }
@@ -3837,6 +4211,45 @@ bool menuContains(PHLMONITOR monitor, const Vector2D& point) {
     return g_menu && monitor && g_menu->monitor == monitor->m_id && !g_menu->box.empty() && g_menu->box.containsPoint(point);
 }
 
+// While Get Info waits on the package lookup, ask for a frame now and then so
+// the answer appears without the pointer having to move. A main-thread timer,
+// not a frame request from inside the render pass.
+namespace {
+    wl_event_source* g_infoPoll = nullptr;
+
+    int infoPollCb(void*) {
+        if (!g_menu || !g_menu->infoView)
+            return 0;
+        for (const auto& MON : State::monitorState()->monitors())
+            if (MON && MON->m_id == g_menu->monitor)
+                g_pHyprRenderer->damageMonitor(MON);
+        if (AppInfo::generation() == g_menu->infoGen && g_infoPoll)
+            wl_event_source_timer_update(g_infoPoll, 60);
+        return 0;
+    }
+}
+
+void armInfoPoll() {
+    if (!g_infoPoll)
+        g_infoPoll = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, infoPollCb, nullptr);
+    if (g_infoPoll)
+        wl_event_source_timer_update(g_infoPoll, 60);
+}
+
+void stopUrgentHopTimer() {
+    if (g_hopTimer) {
+        wl_event_source_remove(g_hopTimer);
+        g_hopTimer = nullptr;
+    }
+}
+
+void stopInfoPoll() {
+    if (g_infoPoll) {
+        wl_event_source_remove(g_infoPoll);
+        g_infoPoll = nullptr;
+    }
+}
+
 bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
     if (!menuContains(monitor, point))
         return false;
@@ -3844,6 +4257,18 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
     const auto ROW = std::ranges::find_if(g_menu->rows, [&](const SRow& row) { return row.kind != ERow::Separator && !row.box.empty() && row.box.containsPoint(point); });
     if (ROW == g_menu->rows.end())
         return false; // the plate, between rows: swallowed by the caller, menu stays up
+
+    // Get Info / Back: the menu stays up and changes what it shows.
+    if (ROW->kind == ERow::Details || ROW->kind == ERow::InfoBack) {
+        const bool INFO    = ROW->kind == ERow::Details;
+        const auto ITEM    = g_menu->item;
+        g_menu->infoView   = INFO;
+        g_menu->infoGen    = AppInfo::generation();
+        g_menu->rows       = INFO ? infoRows(ITEM) : buildRows(ITEM);
+        if (INFO)
+            armInfoPoll();
+        return true;
+    }
 
     // Copied before the menu goes away: activating a row can close the overview,
     // and g_menu must not be read through after that.
@@ -4062,6 +4487,12 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
     // unload hook first.
     if (!layout.pill.empty() && Config::getValue<bool>(KEY_DANCE_URGENT) && anyUrgent(layout.items, tally))
         return "urgent-dance";
+
+    // The hop, dock hidden: frames only while it is in the air (plus one to
+    // land it); the timer wakes the next one.
+    if (layout.pill.empty() && Config::getValue<bool>(KEY_AUTOHIDE) && Config::getValue<bool>(KEY_URGENT_NOTIFY) && anyUrgent(baseLayout(monitor).items, tally) &&
+        std::fmod(elapsedMs(urgentEpoch()), WIGGLE_PERIOD_MS) < URGENT_HOP_MS + 50.F)
+        return "urgent-hop";
 
     // X34. The hotkey overlay fades.
     if (overlayUp())
@@ -5202,6 +5633,44 @@ const char* frameReason(PHLMONITOR monitor) {
     return needsFramesReason(monitor, LAYOUT, TALLY);
 }
 
+// The hop's drawing: each urgent app's icon, at its RESTING x, rising out of the
+// bottom edge by the hop's lift. Only ever called with the dock fully away.
+void renderUrgentHop(PHLMONITOR monitor) {
+    if (!Config::getValue<bool>(KEY_AUTOHIDE) || !Config::getValue<bool>(KEY_URGENT_NOTIFY))
+        return;
+
+    const auto  TALLY = buildTally();
+    const auto& BASE  = baseLayout(monitor);
+    std::vector<const SItem*> urgent;
+    for (const auto& ITEM : BASE.items)
+        if (ITEM.running && ITEM.uri.empty() && itemUrgent(ITEM, TALLY))
+            urgent.push_back(&ITEM);
+    if (urgent.empty())
+        return;
+
+    const float LIFT = urgentHopLift();
+    if (LIFT < 0.F) {
+        armHopTimer(msToNextHop());
+        return;
+    }
+
+    const float EDGE = sc<float>(monitor->m_size.y * monitor->m_scale); // monitor-local render px
+    for (const SItem* ITEM : urgent) {
+        const auto TEX = OverviewRender::appIcon(ITEM->icon);
+        if (!TEX || !TEX->ok())
+            continue;
+        const CBox& IB = ITEM->iconBox;
+        const float UP = std::round(LIFT * URGENT_HOP_LIFT * sc<float>(IB.height));
+        if (UP < 1.F)
+            continue;
+        CTexPassElement::SRenderData d;
+        d.tex = TEX;
+        d.box = CBox{IB.x, EDGE - UP, IB.width, IB.height};
+        d.a   = 1.F;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+    }
+}
+
 void render(PHLMONITOR monitor) {
     // Y6/Y8. Retire what has run its course before anything asks whether the
     // dock still needs frames.
@@ -5212,8 +5681,10 @@ void render(PHLMONITOR monitor) {
         g_dockDrag.ghostHome.reset();
 
     const auto LAYOUT = layout(monitor);
-    if (LAYOUT.pill.empty())
+    if (LAYOUT.pill.empty()) {
+        renderUrgentHop(monitor);
         return;
+    }
 
     // A pointer on ANOTHER monitor is nowhere on this dock. Mapped into this
     // monitor's pixels it is merely off-screen today, but nothing guarantees an

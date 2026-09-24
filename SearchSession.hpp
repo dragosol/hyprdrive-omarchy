@@ -259,6 +259,34 @@ struct SSearchLayout {
     // two overlap.
     float rowL = OVERVIEW_SEARCH_ROWHL;
 
+    // THE STRIP PLATE'S FOOT, measured from the top of its reserved band.
+    //
+    // The band is a RESERVATION (strip_height); the plate drawn in it is only
+    // as tall as the cells came out, and StripLayout centres those cells in the
+    // band whenever the row had to shrink to fit the monitor's width. Read the
+    // band instead and the grid is placed against a floor the strip never
+    // reached -- leftover reservation that renders as a hole between the strip
+    // and the windows, growing with the desktop count (5 desktops on a 1440px
+    // monitor shrink by 0.4%, 8 shrink by 38%).
+    //
+    // Published as a HEIGHT, not an absolute y, on purpose: an absolute would
+    // have to be read against the same frame's search row and results band, and
+    // the publish contract above hands those over one frame late. A height only
+    // moves when the cells do.
+    float stripPlateL = 0.F;
+
+    // How many window previews the grid was showing when this was published.
+    // The strip's leftover ceiling and the results row budget are both RATIOS
+    // against this: with no previews on screen there is nothing to protect and
+    // both are free to take the room.
+    size_t gridTiles = 0;
+
+    // LOGICAL px the grid is pushed down by so a desktop label drawn UNDER the
+    // strip (results panel open) has the same gap to the windows as to the
+    // plate (user, 2026-09-23). Written by the strip label each frame, read by
+    // overviewStripStackL; the grid's own reflow animation does the easing.
+    float gridNudgeL = 0.F;
+
     // G12/X62: the rows and grid cells as drawn, in draw order.
     std::vector<SSearchRowHit> hits;
 
@@ -285,6 +313,13 @@ struct SSearchLayout {
     bool  queried = false, emptyResult = false;
 
     CBox  pill, badge;
+    // The pill BEFORE the strip label's nudge, and how far it may be lifted
+    // (to just under the bar). The label sizes its gaps off these, never off
+    // `pill`: `pill` already carries the lift, and measuring the lift against
+    // itself is a loop -- once the ceiling capped it, the wanted lift grew by a
+    // frame's worth every frame (measured: 331 -> 347 -> 365 px and climbing).
+    CBox  pillRest;
+    float pillMaxUp = 0.F;
     float fieldW = 0.F; // the text field, rendered px
     float gap    = 0.F; // badge -> field, rendered px
     // The field's left edge with NO pixel snapping, in the same rendered px.
@@ -345,6 +380,22 @@ struct SSearchLayout {
         bool        running        = false;
         bool        canNewInstance = false;
     } inspector;
+
+    // THE TOOL PANE: a `define` / `tr` query draws this across the whole
+    // container instead of cards and an inspector.
+    struct SToolPane {
+        bool        active = false;
+        uint8_t     kind   = 0; // 1 dictionary, 2 translator
+        CBox        header;
+        std::string title, subtitle;
+        struct SEntry {
+            size_t      hit = 0; // into hits
+            std::string tag, text, example;
+            bool        status   = false;
+            bool        selected = false;
+        };
+        std::vector<SEntry> entries;
+    } tool;
 
     CBox              containerBox;
     std::vector<CBox> dividers;

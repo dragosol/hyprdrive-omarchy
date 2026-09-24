@@ -45,6 +45,7 @@ run strip_scrolling_test scripts/strip_scrolling_test.cpp $(pkg-config --cflags 
 run search_letters_test scripts/search_letters_test.cpp
 run workspace_plan_test scripts/workspace_plan_test.cpp
 run strip_layout_test scripts/strip_layout_test.cpp
+run tool_search_test scripts/tool_search_test.cpp
 run omarchy_search_test scripts/omarchy_search_test.cpp OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 
 exit $fail

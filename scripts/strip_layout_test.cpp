@@ -64,7 +64,9 @@ static SBox reference(const SInput& in, size_t idx, bool scratchSlot) {
         return {};
     const double SCRATCHW = REVEAL * baseW;
     const double TOTAL    = sum + GAPS + DETACH + SCRATCHW;
-    const double Y        = in.monY + in.top + PAD + (in.band - 2 * PAD - cellH) / 2;
+    // Top-aligned: see the note in StripLayout.hpp. The oracle tracks the
+    // intended geometry, so this moved with it.
+    const double Y        = in.monY + in.top + PAD;
     double       x        = in.monX + (in.monW - TOTAL) / 2;
     if (scratchSlot)
         return SCRATCHW <= 1 ? SBox{} : SBox{x + sum + GAPS + DETACH, Y, SCRATCHW, cellH};

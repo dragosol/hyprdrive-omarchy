@@ -65,6 +65,7 @@ DEFAULT_GESTURES = [
 ACTIONS = [
     {"value": "overview", "label": "Overview (follow fingers)"},
     {"value": "workspace", "label": "Workspace swipe"},
+    {"value": "workspace_all", "label": "Workspace swipe (all, incl. empty)"},
     {"value": "scroll", "label": "Scroll workspace columns"},
     {"value": "close", "label": "Close window"},
     {"value": "fullscreen", "label": "Fullscreen"},

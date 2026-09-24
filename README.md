@@ -25,6 +25,12 @@ is the original plugin; this repo is the Omarchy adaptation.
 - Minimize/restore flies into the icon. Hover an icon for live window previews.
 - Stacks: pin a folder, open it as a fan or grid, Space for Nautilus quick look.
 
+**Search tools** (opt-in, see below):
+
+- `define <word>` turns the results panel into a dictionary (Wiktionary).
+- `tr <lang> <text>` / `tr en:fr <text>` / `translate <text>` turns it into a
+  translator (MyMemory, or your own LibreTranslate). Enter copies a result.
+
 `SUPER+SPACE` stays the Omarchy menu. `SUPER+1..0` stay workspace focus. A Super
 *tap* (press and release, no other key) toggles the overview.
 
@@ -81,6 +87,25 @@ make all && make install
 An undefined symbol is not a link error (`-shared` never complains). `make all`
 runs `scripts/symcheck.sh` for that reason. Never ship a build whose symcheck
 failed.
+
+## Network use
+
+Hyprdrive makes **no network requests by default.** The two search tools are
+off until you turn them on, because they send what you type to a third party:
+
+| key | sends | to |
+| --- | --- | --- |
+| `search:dictionary = true` | the word after `define` | `en.wiktionary.org` |
+| `search:translate = true` | the text after `tr` | `api.mymemory.translated.net`, or `search:translate_endpoint` |
+
+Set `search:translate_endpoint` to a self-hosted
+[LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) URL to keep
+translations on your own machine. Requests run off the compositor thread via
+`curl` and `jq`, with your text passed as an argument, never through a shell.
+
+```lua
+hl.config({ plugin = { hyprdrive = { search = { dictionary = true, translate = true } } } })
+```
 
 ## Configuration
 
