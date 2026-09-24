@@ -1,6 +1,7 @@
 // StackModel: the stacks' pure core -- sort, filter, the store format, the fan's
 // fit decision, relative ages. No compositor, no GLib.
 #include "../StackModel.hpp"
+#include "../TextInputUtf8.hpp"
 
 #include <cstdio>
 #include <string>
@@ -123,6 +124,20 @@ int main() {
     check(relativeAge(100000, 100000 - 2 * 3600) == "2h ago", "2h");
     check(relativeAge(1000000, 1000000 - 3 * 86400) == "3d ago", "3d");
     check(relativeAge(100000000, 100000000 - 70 * 86400) == "10w ago", "10w");
+
+    // TextInput's Backspace removes one CODEPOINT, never half of one.
+    {
+        using ScrollOverview::TextInput::popCodepoint;
+        std::string t = "caf\xc3\xa9";
+        popCodepoint(t);
+        check(t == "caf", "pop é");
+        std::string emoji = "a\xf0\x9f\x98\x80";
+        popCodepoint(emoji);
+        check(emoji == "a", "pop emoji");
+        std::string empty;
+        popCodepoint(empty);
+        check(empty.empty(), "pop empty");
+    }
 
     std::printf("stack_model_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

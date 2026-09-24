@@ -47,6 +47,7 @@ using namespace Hyprutils::String;
 
 #include "ScratchpadExit.hpp"
 #include "ToolSearch.hpp"
+#include "TextInput.hpp"
 #include "AppInfo.hpp"
 #include "CursorShape.hpp"
 #include "globals.hpp"
@@ -594,54 +595,17 @@ static bool overviewAcceptsSearch() {
     return std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && !overview->isClosing(); });
 }
 
-// G1: the compose sequence table, built once from the locale. A guest with no
-// Compose file leaves this null and every path below falls through to the plain
-// utf8 one, so compose is a bonus rather than a dependency.
-// ponytail: context and table are deliberately never unref'd -- they live as
-// long as the plugin does, and freeing them at unload would race the key hook.
-static xkb_compose_state* composeState() {
-    static xkb_compose_state* STATE = []() -> xkb_compose_state* {
-        const char* LOCALE = nullptr;
-        for (const char* VAR : {"LC_ALL", "LC_CTYPE", "LANG"}) {
-            if (const char* V = getenv(VAR); V && *V) {
-                LOCALE = V;
-                break;
-            }
-        }
-        if (!LOCALE)
-            LOCALE = "C";
-
-        xkb_context* CTX = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-        if (!CTX)
-            return nullptr;
-
-        xkb_compose_table* TABLE = xkb_compose_table_new_from_locale(CTX, LOCALE, XKB_COMPOSE_COMPILE_NO_FLAGS);
-        if (!TABLE)
-            return nullptr;
-
-        xkb_compose_state* S = xkb_compose_state_new(TABLE, XKB_COMPOSE_STATE_NO_FLAGS);
-        xkb_compose_table_unref(TABLE);
-        return S;
-    }();
-
-    return STATE;
-}
-
 // A sequence half-typed when the overview closes, or when ESC/BACKSPACE cuts it
 // short, must not swallow the first key of the next one.
 static void resetCompose() {
-    if (auto* C = composeState(); C)
-        xkb_compose_state_reset(C);
+    ScrollOverview::TextInput::resetCompose();
 }
 
 // The query is UTF-8 now (it has to be -- a composed 'e' is two bytes), so
 // BACKSPACE removes a CODEPOINT. pop_back() would leave a severed lead byte and
 // hand the providers a string that is not valid UTF-8.
 static void popCodepoint(std::string& s) {
-    size_t n = s.size();
-    while (n > 0 && (static_cast<unsigned char>(s[n - 1]) & 0xC0) == 0x80)
-        --n;
-    s.resize(n > 0 ? n - 1 : 0);
+    ScrollOverview::TextInput::popCodepoint(s);
 }
 
 struct SSearchKey {
@@ -655,53 +619,8 @@ struct SSearchKey {
 static SSearchKey searchKeyFor(uint32_t keycode) {
     if (!g_heldGuardKeys.empty())
         return {};
-
-    const auto STATE = activeXkbState();
-    if (!STATE)
-        return {};
-
-    const xkb_keysym_t SYM = xkb_state_key_get_one_sym(STATE, keycode + 8);
-
-    // G1 last clause: Compose and dead keys START a search. xkb_compose_state_feed
-    // IGNOREs modifier keysyms itself, so a SHIFT held for the second character of
-    // `Compose " o` does not cancel the sequence -- do not pre-filter them here and
-    // do not feed a key we are not going to consume.
-    if (auto* COMPOSE = composeState(); COMPOSE && SYM != XKB_KEY_NoSymbol && xkb_compose_state_feed(COMPOSE, SYM) == XKB_COMPOSE_FEED_ACCEPTED) {
-        switch (xkb_compose_state_get_status(COMPOSE)) {
-            case XKB_COMPOSE_COMPOSING:
-                // Mid-sequence. Types nothing YET, but the bar is live from the
-                // Compose press onward -- that is the whole requirement.
-                return {.consume = true, .starts = true};
-
-            case XKB_COMPOSE_COMPOSED: {
-                char      buf[64] = {};
-                const int N       = xkb_compose_state_get_utf8(COMPOSE, buf, sizeof(buf));
-                resetCompose();
-                return {.consume = true, .starts = true, .text = N > 0 ? std::string(buf, N) : std::string()};
-            }
-
-            case XKB_COMPOSE_CANCELLED:
-                // An invalid sequence types nothing at all, GNOME included. The
-                // keys are still ours -- they were typed AT the search bar.
-                resetCompose();
-                return {.consume = true, .starts = true};
-
-            case XKB_COMPOSE_NOTHING: break; // ordinary key, fall through
-        }
-    }
-
-    char      buf[8] = {};
-    const int N      = xkb_state_key_get_utf8(STATE, keycode + 8, buf, sizeof(buf));
-    if (N <= 0)
-        return {};
-
-    // ENTER, TAB, ESC and friends all yield exactly one control byte and type
-    // nothing. Anything wider is a real character from the layout and is now
-    // allowed in -- the query stopped being ASCII the moment compose landed.
-    if (N == 1 && (buf[0] < 0x20 || buf[0] == 0x7F))
-        return {};
-
-    return {.consume = true, .starts = true, .text = std::string(buf, N)};
+    const auto K = ScrollOverview::TextInput::keyFor(activeXkbState(), keycode);
+    return {.consume = K.consume, .starts = K.starts, .text = K.text};
 }
 
 // ---------------------------------------------------------------------------
