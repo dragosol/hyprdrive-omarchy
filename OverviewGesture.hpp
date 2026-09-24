@@ -4,8 +4,13 @@
 #include <hyprland/src/managers/input/trackpad/gestures/ITrackpadGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/WorkspaceSwipeGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/ScrollMoveGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/SpecialWorkspaceGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/CloseGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/FullscreenGesture.hpp>
 #include "IOverview.hpp"
 
+#include <memory>
+#include <optional>
 #include <vector>
 
 class COverviewGesture : public ITrackpadGesture {
@@ -92,8 +97,95 @@ class CKeysTrackpadGesture : public ITrackpadGesture {
 };
 
 void clearClickGestures();
+// Plugin unload: the deferred hold-click timer would fire into unloaded code.
+void shutdownClickGestures();
 void addClickGesture(size_t fingers, const std::string& action, uint32_t mods, bool disableInhibit, const std::string& arg);
 void removeClickGesture(size_t fingers, uint32_t mods);
 void attachPadFingerListeners();
 bool handleClickGestureButton(const IPointer::SButtonEvent& event);
 void sendGestureChord(const std::string& chord);
+
+// ONE-WAY GESTURES (user, 2026-09-24: "4f up to reveal and 4f down to close
+// scratchpad ... 4f pinchout to fullscreen and 4f pinchin to exit fullscreen
+// ... and if not, then close the app (show it gradually closing same thing as
+// the regular close window gesture)").
+//
+// Hyprland's own special-workspace and fullscreen gestures are TOGGLES: the same
+// swipe that reveals the scratchpad hides it again. These wrap them and decide
+// once, at begin, whether this gesture applies at all -- and when it does, every
+// event goes to the native gesture, so the reveal, the fullscreen grow and the
+// close shrink all follow the fingers exactly as the native ones do. A gesture
+// that does not apply is inert for its whole length. All of them stand down
+// while an overview is up, where the fingers belong to the overview.
+class CHyprdriveForwardGesture : public ITrackpadGesture {
+  public:
+    void begin(const ITrackpadGesture::STrackpadGestureBegin& e) override;
+    void update(const ITrackpadGesture::STrackpadGestureUpdate& e) override;
+    void end(const ITrackpadGesture::STrackpadGestureEnd& e) override;
+
+  protected:
+    // The native gesture to run for this begin, or null to do nothing.
+    virtual ITrackpadGesture* pick() = 0;
+
+  private:
+    ITrackpadGesture* m_active = nullptr;
+};
+
+// `scratchpad_show` / `scratchpad_hide`: reveal the default scratchpad when none
+// is up; put away the one that is.
+class CScratchpadGesture : public CHyprdriveForwardGesture {
+  public:
+    explicit CScratchpadGesture(bool show) : m_show(show) {}
+
+  protected:
+    ITrackpadGesture* pick() override;
+
+  private:
+    bool                                      m_show = true;
+    std::unique_ptr<CSpecialWorkspaceGesture> m_native;
+};
+
+// Hyprland's close gesture with a longer road and a way back (user,
+// 2026-09-24: "4f pinchin trajectory needs to be longer for closing window, or
+// give the user time to change their mind. if 4f is not released from trackpad
+// it shouldn't close the window"). The native one shrinks the window over a
+// short travel and closes on ANY end past 20% of it -- including an end
+// libinput marks CANCELLED, which is what a pinch that loses a finger
+// produces. This runs the native gesture for its animation, but:
+//   - the travel is CLOSE_TRAVEL times longer (its delta scale is cut to match);
+//   - on end it closes only on a real release (not cancelled) with the
+//     fingers still at least CLOSE_COMMIT of the way in -- easing back out
+//     before lifting is changing your mind;
+//   - otherwise it rewinds the native gesture to zero with one synthetic update,
+//     so the native end plays its own spring-back instead of closing.
+class CGuardedCloseGesture : public ITrackpadGesture {
+  public:
+    void begin(const ITrackpadGesture::STrackpadGestureBegin& e) override;
+    void update(const ITrackpadGesture::STrackpadGestureUpdate& e) override;
+    void end(const ITrackpadGesture::STrackpadGestureEnd& e) override;
+
+  private:
+    CCloseTrackpadGesture              m_native;
+    float                              m_delta = 0.F; // the native gesture's own running total
+    eTrackpadGestureDirection          m_dir   = TRACKPAD_GESTURE_DIR_NONE;
+    std::optional<IPointer::SPinchUpdateEvent> m_lastPinch;
+    std::optional<IPointer::SSwipeUpdateEvent> m_lastSwipe;
+    float                              m_userScale = 1.F;
+};
+
+// `fullscreen_on`: fullscreen the focused window, never out of it.
+// `unfullscreen_or_close`: out of fullscreen if it is in it, otherwise Hyprland's
+// close gesture -- the window shrinks and fades under the fingers and closes
+// past the threshold.
+class CFullscreenOrCloseGesture : public CHyprdriveForwardGesture {
+  public:
+    explicit CFullscreenOrCloseGesture(bool enter) : m_enter(enter) {}
+
+  protected:
+    ITrackpadGesture* pick() override;
+
+  private:
+    bool                       m_enter = true;
+    CFullscreenTrackpadGesture m_fullscreen{"fullscreen"};
+    CGuardedCloseGesture       m_close;
+};

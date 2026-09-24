@@ -286,6 +286,11 @@ struct SSearchLayout {
     // plate (user, 2026-09-23). Written by the strip label each frame, read by
     // overviewStripStackL; the grid's own reflow animation does the easing.
     float gridNudgeL = 0.F;
+    // ...and how far the grid is actually moved this frame: gridNudgeL eased.
+    // The grid is TRANSLATED by it, not re-laid-out around it (user, 2026-09-24:
+    // "instead of squeezing down ... just gently move the entire set down out of
+    // the way, just like the search bar moves out of the way").
+    float gridShiftL = 0.F;
 
     // G12/X62: the rows and grid cells as drawn, in draw order.
     std::vector<SSearchRowHit> hits;

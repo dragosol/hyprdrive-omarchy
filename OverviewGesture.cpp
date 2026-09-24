@@ -5,6 +5,7 @@
 #include "scrollOverview.hpp"
 #include "OmarchySearch.hpp"
 #include "SearchProviders.hpp"
+#include "Scratchpad.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -28,6 +29,7 @@
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 
 COverviewGesture::COverviewGesture(eTrackpadGestureDirection direction) : m_direction(direction) {}
 
@@ -490,6 +492,25 @@ bool tryFireClick(uint32_t fingers, uint32_t eatButton) {
 
 // Clickfinger only maps 1/2/3-finger clicks to left/right/middle. A 4-finger
 // physical click never becomes a button; libinput reports a short hold instead.
+//
+// A CANCELLED hold is also how every 4-finger swipe and pinch STARTS: libinput
+// ends the hold the moment the fingers move and only then begins the swipe or
+// pinch, so at this point g_sawSwipeOrPinch is still false. Firing here closed
+// the window at the start of a 4-finger pinch, fingers still down (user,
+// 2026-09-24: "window closing before fingers lifted from trackpad"). A cancelled
+// hold therefore waits HOLD_CANCEL_GRACE_MS and fires only if no swipe or pinch
+// began in the meantime -- they begin in the same input frame as the cancel.
+constexpr int    HOLD_CANCEL_GRACE_MS = 80;
+wl_event_source* g_holdClickTimer     = nullptr;
+uint32_t         g_holdClickFingers   = 0;
+
+int holdClickTimerCb(void*) {
+    clickLog("holdClick deferred: swipe=%d\n", g_sawSwipeOrPinch ? 1 : 0);
+    if (!g_sawSwipeOrPinch)
+        tryFireClick(g_holdClickFingers, 0);
+    return 0;
+}
+
 void maybeClickFromHold(bool cancelled) {
     const uint32_t fingers = g_padFingers >= 2 ? g_padFingers : g_lastPadFingers;
     const float    dur     = sc<float>(std::chrono::duration<float, std::milli>(Time::steadyNow() - g_holdBeganAt).count());
@@ -498,7 +519,18 @@ void maybeClickFromHold(bool cancelled) {
         return;
     if (dur < 0.F || dur > 800.F)
         return;
-    tryFireClick(fingers, 0);
+
+    if (!cancelled) {
+        tryFireClick(fingers, 0);
+        return;
+    }
+
+    if (!g_holdClickTimer && g_pCompositor)
+        g_holdClickTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, holdClickTimerCb, nullptr);
+    if (!g_holdClickTimer)
+        return; // no way to wait: a missed click beats a closed window
+    g_holdClickFingers = fingers;
+    wl_event_source_timer_update(g_holdClickTimer, HOLD_CANCEL_GRACE_MS);
 }
 
 } // namespace
@@ -541,6 +573,13 @@ void CKeysTrackpadGesture::end(const ITrackpadGesture::STrackpadGestureEnd&) {
 
 void clearClickGestures() {
     g_clickGestures.clear();
+}
+
+void shutdownClickGestures() {
+    if (g_holdClickTimer) {
+        wl_event_source_remove(g_holdClickTimer);
+        g_holdClickTimer = nullptr;
+    }
 }
 
 void addClickGesture(size_t fingers, const std::string& action, uint32_t mods, bool disableInhibit, const std::string& arg) {
@@ -641,4 +680,128 @@ bool handleClickGestureButton(const IPointer::SButtonEvent& event) {
              g_padFingers, g_lastPadFingers, g_clickGestures.size());
 
     return tryFireClick(fingers, event.button);
+}
+
+void CHyprdriveForwardGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    ITrackpadGesture::begin(e);
+    m_active = nullptr;
+    if (scrollOverviewForMonitor(Desktop::focusState()->monitor()))
+        return;
+    m_active = pick();
+    if (m_active)
+        m_active->begin(e);
+}
+
+void CHyprdriveForwardGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (m_active)
+        m_active->update(e);
+}
+
+void CHyprdriveForwardGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (m_active)
+        m_active->end(e);
+    m_active = nullptr;
+}
+
+ITrackpadGesture* CScratchpadGesture::pick() {
+    const auto MONITOR = Desktop::focusState()->monitor();
+    if (!MONITOR)
+        return nullptr;
+
+    const auto SHOWN  = ScrollOverview::Scratchpad::shownOn(MONITOR);
+    const auto TARGET = m_show ? (SHOWN ? PHLWORKSPACE{} : ScrollOverview::Scratchpad::ensureDefault(MONITOR)) : SHOWN;
+    if (!TARGET)
+        return nullptr;
+
+    // The native gesture looks the workspace up as "special:" + name.
+    std::string name = TARGET->m_name;
+    if (name.starts_with("special:"))
+        name = name.substr(8);
+    m_native = std::make_unique<CSpecialWorkspaceGesture>(name);
+    return m_native.get();
+}
+
+ITrackpadGesture* CFullscreenOrCloseGesture::pick() {
+    const auto WINDOW = Desktop::focusState()->window();
+    if (!WINDOW)
+        return nullptr;
+
+    const bool FULL = Fullscreen::controller()->isFullscreen(WINDOW);
+    if (m_enter)
+        return FULL ? nullptr : &m_fullscreen;
+    return FULL ? sc<ITrackpadGesture*>(&m_fullscreen) : sc<ITrackpadGesture*>(&m_close);
+}
+
+// The native close gesture's travel is 200 of its units; this is how many times
+// further the fingers go, and what fraction of THAT they must still be past on
+// release for the window to close.
+static constexpr float CLOSE_NATIVE_TRAVEL = 200.F;
+static constexpr float CLOSE_TRAVEL        = 1.75F; // user, 2026-09-24: 2.5 was too hard; halfway to native 1.0
+static constexpr float CLOSE_COMMIT        = 0.5F;  // halfway between native 0.2 and 0.8
+
+void CGuardedCloseGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    auto scaled  = e;
+    scaled.scale = e.scale / CLOSE_TRAVEL;
+    m_userScale  = e.scale;
+    ITrackpadGesture::begin(scaled); // this object tracks the same total the native one does
+    m_native.begin(scaled);
+    m_delta = 0.F;
+    m_dir   = e.direction;
+    m_lastPinch.reset();
+    m_lastSwipe.reset();
+}
+
+void CGuardedCloseGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    auto scaled  = e;
+    scaled.scale = m_userScale / CLOSE_TRAVEL;
+    m_delta += distance(scaled);
+    m_dir = e.direction;
+    if (e.pinch)
+        m_lastPinch = *e.pinch;
+    if (e.swipe)
+        m_lastSwipe = *e.swipe;
+    m_native.update(scaled);
+}
+
+void CGuardedCloseGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    const bool CANCELLED = (e.pinch && e.pinch->cancelled) || (e.swipe && e.swipe->cancelled);
+    const bool COMMIT    = !CANCELLED && m_delta >= CLOSE_NATIVE_TRAVEL * CLOSE_COMMIT;
+
+    if (!COMMIT && m_delta != 0.F) {
+        // One update that takes the native total back to exactly zero, built
+        // from the same formula ITrackpadGesture::distance applies to it.
+        const float MS = m_userScale / CLOSE_TRAVEL; // the native gesture's m_scale
+        ITrackpadGesture::STrackpadGestureUpdate rewind{.direction = m_dir, .scale = MS};
+        IPointer::SPinchUpdateEvent              pinch;
+        IPointer::SSwipeUpdateEvent              swipe;
+        bool                                     built = false;
+
+        if (m_lastPinch && (m_dir == TRACKPAD_GESTURE_DIR_PINCH || m_dir == TRACKPAD_GESTURE_DIR_PINCH_IN || m_dir == TRACKPAD_GESTURE_DIR_PINCH_OUT)) {
+            // distance = MS * 400 * (PINCH_IN ? -Δ : 1.6Δ), Δ = lastScale - newScale
+            const float PER = MS * 400.F * (m_dir == TRACKPAD_GESTURE_DIR_PINCH_IN ? -1.F : 1.6F);
+            pinch           = *m_lastPinch;
+            pinch.delta     = {};
+            pinch.scale     = m_lastPinch->scale + sc<double>(m_delta / PER);
+            rewind.pinch    = &pinch;
+            built           = true;
+        } else if (m_lastSwipe) {
+            swipe       = *m_lastSwipe;
+            swipe.delta = {};
+            switch (m_dir) {
+                case TRACKPAD_GESTURE_DIR_UP: swipe.delta.y = m_delta / MS; built = true; break;
+                case TRACKPAD_GESTURE_DIR_DOWN:
+                case TRACKPAD_GESTURE_DIR_VERTICAL: swipe.delta.y = -m_delta / MS; built = true; break;
+                case TRACKPAD_GESTURE_DIR_LEFT: swipe.delta.x = m_delta / MS; built = true; break;
+                case TRACKPAD_GESTURE_DIR_RIGHT:
+                case TRACKPAD_GESTURE_DIR_HORIZONTAL: swipe.delta.x = -m_delta / MS; built = true; break;
+                default: break; // a SWIPE's distance is a length and cannot go back
+            }
+            rewind.swipe = &swipe;
+        }
+
+        if (built)
+            m_native.update(rewind);
+    }
+
+    m_native.end(e);
 }

@@ -781,6 +781,8 @@ class CScrollOverview : public IOverview {
     // the pill's own dock curve; its goal is written each frame by the strip
     // label, which runs before the search step.
     PHLANIMVAR<float>                pillNudge;
+    // Logical px the grid is slid down for a strip label under the strip.
+    PHLANIMVAR<float>                gridNudge;
     float                            pillNudgeWant = 0.F;
     // How far the detached scratchpad cell is out (0 hidden, 1 shown). The
     // strip's own layout reads it, which is what slides the strip left to make

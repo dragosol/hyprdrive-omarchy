@@ -174,6 +174,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // one curve while the panel it uncovers grows on another reads as two events.
     Animation::mgr()->createAnimation(0.F, searchDock, searchAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(0.F, pillNudge, searchAnimConfig, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(0.F, gridNudge, searchAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(0.F, scratchpadReveal, searchAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(0.F, altStripsReveal, searchAnimConfig, AVARDAMAGE_NONE);
     syncPluginAnimEnabled();
@@ -190,6 +191,10 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     resultsWidth->setUpdateCallback([this](auto) { damage(); });
     searchDock->setUpdateCallback([this](auto) { damage(); });
     pillNudge->setUpdateCallback([this](auto) { damage(); });
+    gridNudge->setUpdateCallback([this](auto) {
+        searchLayoutHere().gridShiftL = gridNudge->value();
+        damage();
+    });
     scratchpadReveal->setUpdateCallback([this](auto) { damage(); });
     altStripsReveal->setUpdateCallback([this](auto) { damage(); });
 
@@ -4118,6 +4123,7 @@ std::string CScrollOverview::frameDebugLine() const {
     var("resultsWidth", resultsWidth);
     var("searchDock", searchDock);
     var("pillNudge", pillNudge);
+    var("gridNudge", gridNudge);
     var("scratchpadReveal", scratchpadReveal);
     var("altStripsReveal", altStripsReveal);
 
@@ -7265,6 +7271,10 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // out of the way (0 when no label is up, so the pill settles back down).
     if (std::abs(pillNudge->goal() - pillNudgeWant) > 0.5F)
         *pillNudge = pillNudgeWant;
+    // The grid's slide, on the pill's curve: the two move out of the label's way
+    // as one gesture.
+    if (std::abs(gridNudge->goal() - searchLayoutHere().gridNudgeL) > 0.5F)
+        *gridNudge = searchLayoutHere().gridNudgeL;
 
     const uint8_t COL_MASK = QUERIED ? overviewSearchColMask(SECTIONS) : 0;
     const auto    COL_TGT  = overviewSearchColWidths(resultsWidth->value(), COL_MASK);
@@ -7316,6 +7326,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     LAYOUT.stripPlateL = searchLayoutHere().stripPlateL;
     LAYOUT.gridTiles   = GRID_TILES;
     LAYOUT.gridNudgeL  = searchLayoutHere().gridNudgeL;
+    LAYOUT.gridShiftL  = gridNudge->value();
 
     g_search.nav.selection = LAYOUT.selection;
     searchLayoutHere()     = std::move(LAYOUT);
@@ -7863,7 +7874,7 @@ bool CScrollOverview::shouldAllowRealtimePreviewSchedule() {
         return true;
 
     if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() ||
-        resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || stripTipAnimating())
+        resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || gridNudge->isBeingAnimated() || stripTipAnimating())
         return true;
 
     // Beside them for the same reason they are here: typing is the one moment
@@ -8146,7 +8157,7 @@ bool CScrollOverview::needsIdleRepaint() const {
         return true;
 
     if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() || resultsWidth->isBeingAnimated() ||
-        searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || stripTipAnimating() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
+        searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || gridNudge->isBeingAnimated() || stripTipAnimating() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
         return true;
 
     if (scratchpadReveal->isBeingAnimated() || altStripsReveal->isBeingAnimated())

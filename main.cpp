@@ -1328,6 +1328,12 @@ static std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount,
     if (action == "scroll")
         return add(makeUnique<COverviewScrollGesture>());
 
+    if (action == "scratchpad_show" || action == "scratchpad_hide")
+        return add(makeUnique<CScratchpadGesture>(action == "scratchpad_show"));
+
+    if (action == "fullscreen_on" || action == "unfullscreen_or_close")
+        return add(makeUnique<CFullscreenOrCloseGesture>(action == "fullscreen_on"));
+
     if (action == "close")
         return add(makeUnique<CCloseTrackpadGesture>());
 
@@ -2227,6 +2233,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // The drag-out zone's drift timer and stripe textures: the timer would fire
     // into unloaded code, and the textures need the context made current above.
     ScrollOverview::ScratchpadExit::shutdown();
+    shutdownClickGestures();
     // Get Info: its poll timer would fire into unloaded code, and its worker
     // must be joined (with any package query killed) before the code goes.
     ScrollOverview::Dock::stopInfoPoll();

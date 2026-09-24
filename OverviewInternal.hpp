@@ -1377,7 +1377,7 @@ inline float overviewStripStackL(PHLMONITOR monitor) {
     // the difference as a hole the user reads as "the windows sit too low".
     if (monitor) {
         if (const float PLATE = g_search.layoutOn(monitor->m_id).stripPlateL; PLATE > 0.F)
-            return PLATE + overviewChromeGapL(monitor) + std::max(0.F, g_search.layoutOn(monitor->m_id).gridNudgeL);
+            return PLATE + overviewChromeGapL(monitor);
     }
 
     const float PAD   = overviewStripPadL(monitor);

@@ -526,6 +526,9 @@ namespace OvInternal {
             return false;
 
         out = hit->slots[index];
+        // The strip label's slide (gridShiftL): every slot, after the solve, so
+        // the grid keeps its size and just moves.
+        out.y += g_search.layoutOn(monitor->m_id).gridShiftL;
         return true;
     }
 
