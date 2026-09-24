@@ -90,6 +90,7 @@ namespace AppSearch {
     // Pure filesystem: decode and texture upload belong to the render layer.
     // Falls back to a generic application icon when the named one is missing
     // from the theme chain -- an entry with no icon at all still gets a tile.
+    bool        iconExists(const std::string& iconName);
     std::string resolveIconPath(const std::string& iconName);
 
     // Detached, so the app outlives the overview closing.

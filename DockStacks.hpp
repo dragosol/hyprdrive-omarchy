@@ -98,6 +98,12 @@ namespace ScrollOverview::Stacks {
     // Opened by a click on a stack cell, and modelled on the Y1 hover panel:
     // one frosted plate per row, grown out of the icon it belongs to, hit-
     // tested against the box that was actually DRAWN last frame.
+    // A StackReader job landed (main thread, from the wake fd or inotify):
+    // refresh what the popup and the cells show, and damage what changed.
+    void onReaderReady();
+    // Plugin unload: the inotify fd source, the popup, a pending item drag.
+    void shutdown();
+
     void open(PHLMONITOR monitor, const Dock::SItem& item, const CBox& anchor);
     void close();
     // Drop a pending item drag on the floor (the overview closing under a held

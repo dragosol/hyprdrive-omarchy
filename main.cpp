@@ -48,6 +48,8 @@ using namespace Hyprutils::String;
 #include "ScratchpadExit.hpp"
 #include "ToolSearch.hpp"
 #include "TextInput.hpp"
+#include "StackReader.hpp"
+#include "DockStacks.hpp"
 #include "AppInfo.hpp"
 #include "CursorShape.hpp"
 #include "globals.hpp"
@@ -920,6 +922,7 @@ static int onFileResultsReady(int fd, uint32_t mask, void* data) {
         overview->damage();
         overview->requestInputFrame();
     }
+    ScrollOverview::Stacks::onReaderReady();
     return 0;
 }
 
@@ -2062,6 +2065,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
                     ::write(g_fileWakeFd, &one, sizeof(one));
                 }
             });
+            // Stack folder reads and trash jobs land off-thread too; same wake.
+            ScrollOverview::StackReader::setReadyCallback([]() {
+                if (g_fileWakeFd >= 0) {
+                    uint64_t one = 1;
+                    ::write(g_fileWakeFd, &one, sizeof(one));
+                }
+            });
             // The dictionary/translator answers off-thread too; same wake.
             ToolSearch::setReadyCallback([]() {
                 if (g_fileWakeFd >= 0) {
@@ -2154,6 +2164,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // into unloaded code, and the textures need the context made current above.
     ScrollOverview::ScratchpadExit::shutdown();
     shutdownClickGestures();
+    ScrollOverview::Stacks::shutdown();
+    ScrollOverview::StackReader::shutdown();
     // Get Info: its poll timer would fire into unloaded code, and its worker
     // must be joined (with any package query killed) before the code goes.
     ScrollOverview::Dock::stopInfoPoll();

@@ -1028,6 +1028,16 @@ namespace AppSearch {
         }
     }
 
+    // Is this exact name in the icon index? resolveIconPath answers the generic
+    // tile for a miss, which is right for an app and wrong for a caller walking
+    // a fallback list (a file's content-type icon names, most specific first).
+    bool iconExists(const std::string& iconName) {
+        if (iconName.empty())
+            return false;
+        warmIconIndex();
+        return g_iconIndex.contains(iconName);
+    }
+
     std::string resolveIconPath(const std::string& iconName) {
         if (iconName.empty())
             return "";

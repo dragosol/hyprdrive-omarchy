@@ -6,6 +6,7 @@
 #include "LauncherEntry.hpp"
 #include "OverviewRender.hpp"
 #include "OverviewPassElement.hpp"
+#include "StackReader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -202,13 +203,7 @@ namespace {
     }
 
     // ------------------------------------------------------------- contents --
-    struct SEntry {
-        std::string path;
-        std::string name;
-        std::string icon;
-        bool        dir = false;
-        int64_t     mtime = 0;
-    };
+    using SEntry = StackModel::SEntry;
 
     // GIcon -> the first themed name, which is what OverviewRender::appIcon
     // resolves. Locations.cpp has the same four lines in its own anonymous
@@ -270,64 +265,40 @@ namespace {
         return "folder";
     }
 
-    // Read once per OPEN, never per frame. A directory walk is a local syscall
-    // and this is the input path, not the render path -- but it is still not
-    // something to repeat 120 times a second, and the popup owns the answer for
-    // as long as it is up.
-    std::vector<SEntry> readDir(const std::string& dir, bool sortByTime) {
-        std::vector<SEntry> out;
-
-        std::error_code ec;
-        auto            it = std::filesystem::directory_iterator{dir, std::filesystem::directory_options::skip_permission_denied, ec};
-        if (ec)
-            return out;
-
-        // The reference caps at 500 "to prevent pathological memory bloat" and
-        // that number is right for the same reason here: past it the popup is
-        // not a browsing surface, it is a file manager nobody asked for.
-        constexpr size_t HARD_CAP = 500;
-
-        for (const auto& E : it) {
-            if (out.size() >= HARD_CAP)
+    // The popup's entries: the reader's listing (StackReader, off the compositor
+    // thread), sorted by the stack's key. Empty and `ready=false` until the
+    // first read lands; onReaderReady() fills the popup when it does.
+    // The reader hands every candidate icon name ('|'-joined, most specific
+    // first); the first one the user's theme has wins. Memoized per list.
+    std::string pickIcon(const std::string& names) {
+        static std::unordered_map<std::string, std::string> memo;
+        if (const auto IT = memo.find(names); IT != memo.end())
+            return IT->second;
+        std::string pick = "text-x-generic";
+        size_t      at   = 0;
+        while (at <= names.size()) {
+            const auto BAR  = names.find('|', at);
+            const auto NAME = names.substr(at, BAR == std::string::npos ? std::string::npos : BAR - at);
+            if (AppSearch::iconExists(NAME)) {
+                pick = NAME;
                 break;
-
-            const auto NAME = E.path().filename().string();
-            if (NAME.empty() || NAME[0] == '.') // hidden, as the reference does
-                continue;
-
-            std::error_code e2;
-            const bool      IS_DIR = E.is_directory(e2);
-
-            int64_t mtime = 0;
-            if (const auto T = std::filesystem::last_write_time(E.path(), e2); !e2)
-                mtime = sc<int64_t>(T.time_since_epoch().count());
-
-            out.emplace_back(SEntry{
-                .path  = E.path().string(),
-                .name  = NAME,
-                .icon  = IS_DIR ? folderIcon(canonical(E.path().string())) : iconNameForFile(E.path().string(), false),
-                .dir   = IS_DIR,
-                .mtime = mtime,
-            });
+            }
+            if (BAR == std::string::npos)
+                break;
+            at = BAR + 1;
         }
-
-        // DEVIATION from the reference, which sorts by mtime only and does not
-        // group directories. Directories first is what every file manager on
-        // this desktop does, and a stack whose folders are scattered through
-        // its files reads as a bug rather than as a choice.
-        std::ranges::sort(out, [sortByTime](const SEntry& a, const SEntry& b) {
-            if (a.dir != b.dir)
-                return a.dir;
-            if (sortByTime)
-                return a.mtime > b.mtime; // newest first, as the reference does
-            // Case-insensitive, because "Zebra" sorting before "apple" is the
-            // ASCII table talking and not the user's alphabet.
-            return std::lexicographical_compare(a.name.begin(), a.name.end(), b.name.begin(), b.name.end(),
-                                                [](unsigned char x, unsigned char y) { return std::tolower(x) < std::tolower(y); });
-        });
-
-        return out;
+        return memo[names] = pick;
     }
+
+    StackReader::SListing sortedListing(const std::string& dir, StackModel::ESort sort) {
+        auto L = StackReader::listing(dir);
+        for (auto& E : L.entries)
+            E.icon = E.dir ? folderIcon(canonical(E.path)) : pickIcon(E.icon);
+        StackModel::sortEntries(L.entries, sort);
+        return L;
+    }
+
+    wl_event_source* g_inotifySource = nullptr;
 
     // ------------------------------------------------------------- geometry --
     //
@@ -388,6 +359,9 @@ namespace {
         MONITORID           monitor = MONITOR_INVALID;
         CBox                anchor;  // the cell it grew out of
         std::vector<SEntry> entries;
+        bool                loading   = true;  // no listing yet
+        bool                truncated = false; // past StackReader::MAX_ENTRIES
+        uint64_t            readerGen = 0;
         size_t              shown = 0;   // rows drawn before the action row
         size_t              hidden = 0;  // how many "N more..." stands for
         std::vector<SRow>   rows;        // published for the pointer
@@ -728,6 +702,22 @@ namespace ScrollOverview::Stacks {
 
         S.checkedAt = NOW;
         reload(S);
+
+        // Watch exactly the pinned folders, so a file landing in one refreshes
+        // its cell and an open popup (StackReader, inotify on the event loop).
+        std::vector<std::string> dirs;
+        for (const auto& ST : S.items)
+            if (ST.isDir)
+                dirs.push_back(ST.path);
+        StackReader::watch(dirs);
+        if (!g_inotifySource && StackReader::inotifyFd() >= 0 && g_pCompositor && g_pCompositor->m_wlEventLoop)
+            g_inotifySource = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, StackReader::inotifyFd(), WL_EVENT_READABLE,
+                                                   [](int, uint32_t, void*) -> int {
+                                                       StackReader::drainInotify();
+                                                       Stacks::onReaderReady();
+                                                       return 0;
+                                                   },
+                                                   nullptr);
         return S.items;
     }
 
@@ -859,7 +849,11 @@ namespace ScrollOverview::Stacks {
         p.grid       = p.view == StackModel::EView::Grid;
         p.monitor    = monitor->m_id;
         p.anchor     = anchor;
-        p.entries    = readDir(CANON, p.sort == StackModel::ESort::Modified);
+        auto L       = sortedListing(CANON, p.sort);
+        p.entries    = std::move(L.entries);
+        p.loading    = !L.ready;
+        p.truncated  = L.truncated;
+        p.readerGen  = StackReader::generation();
         p.shown      = std::min<size_t>(p.entries.size(), FAN_MAX);
         p.hidden     = p.entries.size() - p.shown;
         p.since      = Time::steadyNow();
@@ -868,6 +862,39 @@ namespace ScrollOverview::Stacks {
         // returns early and the click does nothing at all, which is
         // indistinguishable from a broken dock.
         g_popup = std::move(p);
+    }
+
+    void onReaderReady() {
+        // The wake fd is shared with the overview's file search and the
+        // dictionary: only a job of OURS is a reason to rebuild and repaint.
+        static uint64_t seen = 0;
+        if (StackReader::generation() == seen)
+            return;
+        seen = StackReader::generation();
+
+        if (g_popup && !g_popup->leaving && g_popup->readerGen != StackReader::generation()) {
+            auto L             = sortedListing(g_popup->path, g_popup->sort);
+            g_popup->entries   = std::move(L.entries);
+            g_popup->loading   = !L.ready;
+            g_popup->truncated = L.truncated;
+            g_popup->readerGen = StackReader::generation();
+            g_popup->shown     = std::min<size_t>(g_popup->entries.size(), FAN_MAX);
+            g_popup->hidden    = g_popup->entries.size() - g_popup->shown;
+            damagePopupMonitor();
+        }
+        ++g_storeGeneration; // the dock's item cache (and the pile, later) key on this
+        for (const auto& M : State::monitorState()->monitors())
+            if (M)
+                g_pHyprRenderer->damageMonitor(M);
+    }
+
+    void shutdown() {
+        if (g_inotifySource) {
+            wl_event_source_remove(g_inotifySource);
+            g_inotifySource = nullptr;
+        }
+        g_popup.reset();
+        g_itemDrag.reset();
     }
 
     void close() {
@@ -1014,12 +1041,11 @@ namespace ScrollOverview::Stacks {
                     // is the spec's: "bounce fires only AFTER the move reports
                     // success".
                     armBounce(DEST);
+                    // Both folders changed; the reader re-reads them and
+                    // onReaderReady() refreshes the popup when it lands.
+                    StackReader::invalidate(DEST);
                     if (g_popup)
-                        g_popup->entries = readDir(g_popup->path, g_popup->sort == StackModel::ESort::Modified);
-                    if (g_popup) {
-                        g_popup->shown  = std::min<size_t>(g_popup->entries.size(), FAN_MAX);
-                        g_popup->hidden = g_popup->entries.size() - g_popup->shown;
-                    }
+                        StackReader::invalidate(g_popup->path);
                 } else
                     armShake(DEST); // refused: the file is exactly where it was
 

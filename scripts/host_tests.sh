@@ -47,6 +47,8 @@ run workspace_plan_test scripts/workspace_plan_test.cpp
 run strip_layout_test scripts/strip_layout_test.cpp
 run tool_search_test scripts/tool_search_test.cpp
 run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
+# shellcheck disable=SC2046
+run stack_reader_test scripts/stack_reader_test.cpp StackReader.cpp StackModel.cpp $(pkg-config --cflags --libs gio-2.0)
 run omarchy_search_test scripts/omarchy_search_test.cpp OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 
 exit $fail
