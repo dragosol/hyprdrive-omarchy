@@ -9,6 +9,8 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/gl/GLTexture.hpp>
 #include <drm_fourcc.h>
+#include <pango/pangocairo.h>
+#include <format>
 #include <hyprgraphics/image/Image.hpp>
 #include "AppSearch.hpp"
 #include "Config.hpp"
@@ -375,16 +377,77 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
     return texture;
 }
 
+// A REAL WRAP (user, 2026-09-24: "dictionary could use better wrapping on
+// definitions - we're leaving space on the table"). This used to hand off to
+// text(), i.e. Hyprland's renderText, which sets a width AND
+// PANGO_ELLIPSIZE_END with no height -- one line, cut with an ellipsis. Every
+// "wrapped" caller (the dictionary rows, the inspector's preview and details)
+// was one line however much room it had. Now it is Pango word-wrapping at maxW,
+// as many lines as maxH holds, the ellipsis on the last one that fits.
+namespace {
+    std::unordered_map<std::string, SP<Render::ITexture>> g_wrapCache;
+    constexpr size_t                                      WRAP_CACHE_MAX = 256;
+}
+
 SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color, int fontSize, int maxW, int maxH, bool italic, const std::string& fontFamily, int weight) {
-    if (str.empty() || maxW < 8 || maxH < 8)
+    if (str.empty() || maxW < 8 || maxH < 8 || fontSize < 1)
         return nullptr;
 
-    return text(str, color, fontSize, italic, fontFamily, maxW, weight);
+    const std::string& FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+    const std::string  KEY    = std::format("{}\x1f{}\x1f{:x}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}", str, FAMILY, color.getAsHex(), fontSize, maxW, maxH, weight, italic ? 1 : 0);
+    if (const auto IT = g_wrapCache.find(KEY); IT != g_wrapCache.end())
+        return IT->second;
+    if (g_wrapCache.size() >= WRAP_CACHE_MAX)
+        g_wrapCache.clear();
+
+    PangoFontMap*         fontMap = pango_cairo_font_map_get_default();
+    PangoContext*         context = pango_font_map_create_context(fontMap);
+    PangoLayout*          layout  = pango_layout_new(context);
+    PangoFontDescription* fd      = pango_font_description_new();
+    pango_font_description_set_family(fd, FAMILY.c_str());
+    pango_font_description_set_absolute_size(fd, fontSize * PANGO_SCALE);
+    pango_font_description_set_style(fd, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
+    pango_font_description_set_weight(fd, sc<PangoWeight>(weight));
+    pango_layout_set_font_description(layout, fd);
+    pango_layout_set_text(layout, str.c_str(), -1);
+    pango_layout_set_width(layout, maxW * PANGO_SCALE);
+    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_height(layout, maxH * PANGO_SCALE); // positive: a pixel budget, ellipsis on the last line that fits
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+
+    PangoRectangle ink, logical;
+    pango_layout_get_pixel_extents(layout, &ink, &logical);
+    const int W = std::clamp(logical.width, 1, maxW);
+    const int H = std::clamp(logical.height, 1, std::max(maxH, fontSize * 2));
+
+    SP<Render::ITexture> texture;
+    cairo_surface_t*     surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
+    if (cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS) {
+        cairo_t* cr = cairo_create(surface);
+        cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+        cairo_paint(cr);
+        cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+        cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
+        cairo_move_to(cr, -logical.x, -logical.y);
+        pango_cairo_show_layout(cr, layout);
+        cairo_surface_flush(surface);
+        texture = g_pHyprRenderer->createTexture(surface);
+        cairo_destroy(cr);
+    }
+    cairo_surface_destroy(surface);
+
+    pango_font_description_free(fd);
+    g_object_unref(layout);
+    g_object_unref(context);
+
+    g_wrapCache.emplace(KEY, texture);
+    return texture;
 }
 
 void clearTextCache() {
     g_textCache.clear();
     g_textCacheOld.clear();
+    g_wrapCache.clear();
 }
 
 void flushPass(PHLMONITOR monitor) {

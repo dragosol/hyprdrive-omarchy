@@ -6499,9 +6499,13 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
         float y = CONTAINER_YL + OVERVIEW_TOOL_PADL + OVERVIEW_TOOL_HEADL;
         for (size_t i = 0; i < RESULTS.size(); ++i) {
-            if (y + OVERVIEW_TOOL_ROWHL > FOOT)
+            // Measured against the FULL span, as the band was: the container is
+            // easing toward it, and measuring the eased width would re-wrap every
+            // frame of the entrance.
+            const float ROWHL = overviewToolRowHL(RESULTS[i], MAX_SPANWL);
+            if (y + ROWHL > FOOT)
                 break; // the band decides how many fit; the rest wait for a taller one
-            CBox row = getOverviewGlobalBox(CBox{LEFT, y, WIDTH, OVERVIEW_TOOL_ROWHL}, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
+            CBox row = getOverviewGlobalBox(CBox{LEFT, y, WIDTH, ROWHL}, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
             row.round();
             out.hits.emplace_back(SSearchRowHit{.box = row, .desktopId = "", .icon = "", .index = sc<int>(i), .column = 0, .rowInCol = sc<int>(i)});
             out.tool.entries.push_back(SSearchLayout::SToolPane::SEntry{
@@ -6512,7 +6516,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
                 .status   = RESULTS[i].toolStatus,
                 .selected = g_search.nav.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
             });
-            y += OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL;
+            y += ROWHL + OVERVIEW_TOOL_GAPL;
         }
         return out;
     }
@@ -7050,18 +7054,38 @@ static void drawSearch(const SSearchLayout& L) {
 
         textY = std::max(textY, sc<float>(IBOX.y + PADL + ICOND)) + std::round(10.F * SCALE);
 
-        paintWrap(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), std::max(1, sc<int>(std::round(12.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(48.F * SCALE),
+        // THE SUBTITLE GETS WHAT THE CARD HAS LEFT (user, 2026-09-24: "wrap
+        // needs to scale with panel size"). A fixed line budget cut a definition
+        // off with most of the card still empty. So the details and the hints at
+        // the foot are measured first, and the subtitle may fill everything
+        // between the header and them -- a tall card shows the whole answer, a
+        // short one ellipsizes on the last line that fits.
+        const auto DETCOL  = ScrollOverview::Config::themeMutedText();
+        const int  DETPX   = std::max(1, sc<int>(std::round(11.F * SCALE)));
+        const int  DET3PX  = std::max(1, sc<int>(std::round(10.F * SCALE)));
+        const int  HINTPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
+        const auto HINTCOL = ScrollOverview::Config::themeMutedText();
+        const int  WRAPW   = std::max(16, ((FULLW + 15) / 16) * 16);
+        const auto measure = [&](const std::string& str, const CHyprColor& col, int px, int weight, int maxH, float gapAfter) -> float {
+            if (str.empty())
+                return 0.F;
+            const auto TEX = OverviewRender::textWrapped(str, col, px, WRAPW, maxH, false, "", weight);
+            return (TEX && TEX->ok()) ? sc<float>(TEX->m_size.y) + gapAfter : 0.F;
+        };
+        const int DET1H = sc<int>(40.F * SCALE), DET2H = sc<int>(44.F * SCALE), DET3H = sc<int>(36.F * SCALE), HINTH = sc<int>(36.F * SCALE);
+        const float BELOW = measure(L.inspector.detail1, DETCOL, DETPX, 400, DET1H, std::round(6.F * SCALE)) +
+            measure(L.inspector.detail2, DETCOL, DETPX, 400, DET2H, std::round(6.F * SCALE)) + measure(L.inspector.detail3, DETCOL, DET3PX, 400, DET3H, std::round(8.F * SCALE)) +
+            measure(L.inspector.shortcutHint2, HINTCOL, HINTPX, 500, HINTH, std::round(4.F * SCALE)) +
+            measure(L.inspector.shortcutHint, HINTCOL, HINTPX, 500, HINTH, std::round(4.F * SCALE)) + std::round(16.F * SCALE);
+        const int SUBH = std::max(sc<int>(48.F * SCALE), sc<int>(CLIPB - textY - BELOW));
+
+        paintWrap(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), std::max(1, sc<int>(std::round(12.F * SCALE))), 400, IBOX.x + PADL, FULLW, SUBH,
                   std::round(8.F * SCALE));
-        const auto DETCOL = ScrollOverview::Config::themeMutedText();
-        const int  DETPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
-        paintWrap(L.inspector.detail1, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, sc<int>(40.F * SCALE), std::round(6.F * SCALE));
-        paintWrap(L.inspector.detail2, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, sc<int>(28.F * SCALE), std::round(6.F * SCALE));
-        paintWrap(L.inspector.detail3, DETCOL, std::max(1, sc<int>(std::round(10.F * SCALE))), 400, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE),
-                  std::round(8.F * SCALE));
+        paintWrap(L.inspector.detail1, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, DET1H, std::round(6.F * SCALE));
+        paintWrap(L.inspector.detail2, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, DET2H, std::round(6.F * SCALE));
+        paintWrap(L.inspector.detail3, DETCOL, DET3PX, 400, IBOX.x + PADL, FULLW, DET3H, std::round(8.F * SCALE));
 
         float hintY = CLIPB;
-        const int HINTPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
-        const auto HINTCOL = ScrollOverview::Config::themeMutedText();
         const auto measureHint = [&](const std::string& s) -> float {
             if (s.empty())
                 return 0.F;
@@ -7252,7 +7276,15 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // Show Windows has no panel at all: no band to reserve between the pill and
     // the strip (user, 2026-09-24: "all this empty unused space").
     const bool  PANEL  = QUERIED && !g_search.query.windowsOnly;
-    const float TARGET = PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, !RESULTS.empty() && RESULTS[0].tool != 0) : 0.F;
+    const bool TOOLPANE = !RESULTS.empty() && RESULTS[0].tool != 0;
+    float      toolRowsHL = -1.F;
+    if (PANEL && TOOLPANE) {
+        const float SPAN = overviewResultsSpanW(monitor);
+        toolRowsHL       = 0.F;
+        for (const auto& ROW : RESULTS)
+            toolRowsHL += overviewToolRowHL(ROW, SPAN) + OVERVIEW_TOOL_GAPL;
+    }
+    const float TARGET = PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, TOOLPANE, toolRowsHL) : 0.F;
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 

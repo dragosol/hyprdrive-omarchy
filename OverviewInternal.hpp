@@ -1482,6 +1482,31 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
     return std::clamp(sc<float>(monitor->m_size.x) * 0.84F, 880.F, std::max(1.F, sc<float>(monitor->m_size.x) - (GAPL * 2.F)));
 }
 
+// A DICTIONARY/TRANSLATOR ROW IS AS TALL AS ITS TEXT (user, 2026-09-24:
+// "better wrapping on definitions - we're leaving space on the table"). The
+// rows were a fixed OVERVIEW_TOOL_ROWHL, so a long definition was cut at two
+// lines and a short one sat in a gap. Measured at LOGICAL scale with the same
+// fonts and columns the drawing uses (scrollOverview.cpp's tool pane), so the
+// layout and the pixels agree; OVERVIEW_TOOL_ROWHL stays the floor.
+inline constexpr float OVERVIEW_TOOL_ROWPADL = 10.F, OVERVIEW_TOOL_TEXTPX = 14.F, OVERVIEW_TOOL_EXPX = 11.F, OVERVIEW_TOOL_VPADL = 5.F;
+inline constexpr float OVERVIEW_TOOL_MAXLINES = 6.F;
+inline float overviewToolTagWL(uint8_t kind) {
+    return kind == 1 ? 92.F : 52.F;
+}
+inline float overviewToolTextWL(uint8_t kind, float containerWL) {
+    return std::max(16.F, containerWL - (2.F * OVERVIEW_TOOL_PADL) - (2.F * OVERVIEW_TOOL_ROWPADL) - overviewToolTagWL(kind));
+}
+inline float overviewToolRowHL(const SSearchRow& row, float containerWL) {
+    if (row.toolStatus || row.name.empty())
+        return OVERVIEW_TOOL_ROWHL;
+    const int   W    = std::max(16, ((sc<int>(overviewToolTextWL(row.tool, containerWL)) + 15) / 16) * 16);
+    const auto  TX   = OverviewRender::textWrapped(row.name, CHyprColor{1.F, 1.F, 1.F, 1.F}, sc<int>(OVERVIEW_TOOL_TEXTPX), W,
+                                                   sc<int>(OVERVIEW_TOOL_TEXTPX * 1.35F * OVERVIEW_TOOL_MAXLINES), false, "", 400);
+    const float TXH  = TX && TX->ok() ? sc<float>(TX->m_size.y) : OVERVIEW_TOOL_TEXTPX * 1.35F;
+    const float EXH  = row.toolExample.empty() ? 0.F : OVERVIEW_TOOL_EXPX * 1.5F;
+    return std::max(OVERVIEW_TOOL_ROWHL, TXH + EXH + (2.F * OVERVIEW_TOOL_VPADL) + 8.F);
+}
+
 // Unified search panel: visible columns + inspector fill the container.
 // Empty columns ease to width 0; leftover is split by flex (files take more
 // when present so paths fit).
@@ -1677,7 +1702,7 @@ inline float overviewResultsWidthTarget(PHLMONITOR monitor, const std::vector<SS
     return overviewResultsSpanW(monitor);
 }
 
-inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections, size_t gridTiles, bool toolPane = false) {
+inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections, size_t gridTiles, bool toolPane = false, float toolRowsHL = -1.F) {
     if (sections.empty() || !monitor)
         return 0.F;
 
@@ -1692,7 +1717,8 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
     // arrive already trimmed to overviewResultsRowCap, so this only has to
     // honour what actually survived.
     const float CARD_H = toolPane ?
-        (2.F * OVERVIEW_TOOL_PADL) + OVERVIEW_TOOL_HEADL + (sc<float>(maxRows) * (OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL)) + (OVERVIEW_RESULT_PANELGAPL * 2.F) :
+        (2.F * OVERVIEW_TOOL_PADL) + OVERVIEW_TOOL_HEADL + (toolRowsHL >= 0.F ? toolRowsHL : sc<float>(maxRows) * (OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL)) +
+            (OVERVIEW_RESULT_PANELGAPL * 2.F) :
         OVERVIEW_RESULT_CARD_CHROMEL + (sc<float>(maxRows) * OVERVIEW_RESULT_ROWHL_FULL) + (OVERVIEW_RESULT_PANELGAPL * 2.F);
 
     return std::min(CARD_H, overviewResultsBudgetL(monitor, gridTiles));
