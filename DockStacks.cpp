@@ -15,6 +15,8 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sstream>
+#include <utility>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -45,8 +47,8 @@ namespace {
     //
     //     # hyprdrive stacks v1
     //     fan<TAB>name<TAB>/home/dragos/Downloads
-    constexpr const char* STORE_HEADER  = "# hyprdrive stacks v1";
-    constexpr int         STORE_VERSION = 1;
+    // The FORMAT lives in StackModel (host-tested: v1 upgrade, v2 round trip,
+    // a newer build's file read-only); this file only does the I/O.
 
     // Same reasoning as FAVORITES_POLL_MS: all() is on the layout path, which
     // runs about ten times a frame, and the file changes about once a week.
@@ -107,16 +109,33 @@ namespace {
     // of them touches the filesystem, so this is deliberately on the store's
     // read path and not on the dock's build path -- see SStack in the header.
     void decorate(Stacks::SStack& stack);
+    void writeStore();
+
+    struct SStoreState {
+        bool seeded   = false;
+        bool readOnly = false; // written by a newer build: never write it back
+    };
+    SStoreState g_storeState;
 
     void reload(SStore& s) {
         std::error_code ec;
-        const auto      PATH = storePath();
-        if (PATH.empty() || !std::filesystem::exists(PATH, ec)) {
-            // No file is no stacks. Unlike favourites there is nothing to seed
-            // with: a stack is a path on THIS machine and there is no neutral
-            // default that is not a guess about the user's home.
+        const auto      PATH   = storePath();
+        const bool      EXISTS = !PATH.empty() && std::filesystem::exists(PATH, ec);
+
+        if (!EXISTS) {
             s.loaded = true;
-            if (!s.items.empty()) {
+            if (StackModel::shouldSeed(false, StackModel::SStore{.seeded = g_storeState.seeded})) {
+                // FIRST RUN: Downloads, as macOS does (dock stacks A). `seeded` is
+                // written with it, so removing Downloads later keeps it removed.
+                g_storeState.seeded = true;
+                s.items.clear();
+                if (const char* DL = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD); DL && std::filesystem::is_directory(DL, ec)) {
+                    s.items.emplace_back(Stacks::SStack{.path = canonical(DL)});
+                    decorate(s.items.back());
+                }
+                ++g_storeGeneration;
+                writeStore();
+            } else if (!s.items.empty()) {
                 s.items.clear();
                 ++g_storeGeneration;
             }
@@ -129,63 +148,46 @@ namespace {
 
         s.loaded = true;
         s.stamp  = WRITTEN;
-        s.items.clear();
         ++g_storeGeneration;
 
-        std::ifstream file(PATH);
-        std::string   line;
-        int           version = STORE_VERSION;
-        bool          first   = true;
-        while (std::getline(file, line)) {
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
-                line.pop_back();
-            if (line.empty())
-                continue;
+        std::ifstream     file(PATH);
+        std::stringstream buf;
+        buf << file.rdbuf();
+        const auto PARSED = StackModel::parseStore(buf.str());
 
-            if (first && line.starts_with("# hyprdrive stacks v")) {
-                first   = false;
-                version = std::atoi(line.c_str() + 20);
-                if (version > STORE_VERSION) {
-                    // A file written by a newer build. Read nothing, and --
-                    // load-bearing -- do not write either: see writeStore.
-                    s.items.clear();
-                    return;
-                }
-                continue;
-            }
-            first = false;
-            if (line[0] == '#')
-                continue;
-
-            const auto PARTS = split(line, '\t', 3);
-            if (PARTS.size() < 3 || PARTS[2].empty())
-                continue;
-
-            s.items.emplace_back(Stacks::SStack{
-                .path       = canonical(PARTS[2]),
-                .grid       = PARTS[0] == "grid",
-                .sortByTime = PARTS[1] == "mtime",
-            });
+        g_storeState.readOnly = PARSED.readOnly;
+        // A v1 file, or any file with stacks in it, means the user has been here:
+        // never seed on top of it.
+        g_storeState.seeded = true;
+        s.items.clear();
+        for (const auto& R : PARSED.records) {
+            s.items.emplace_back(Stacks::SStack{.path = canonical(R.path), .sort = R.sort, .display = R.display, .view = R.view, .customLabel = R.label});
             decorate(s.items.back());
         }
     }
 
     void writeStore() {
         const auto PATH = storePath();
-        if (PATH.empty())
+        if (PATH.empty() || g_storeState.readOnly)
             return;
+
+        StackModel::SStore out;
+        out.seeded = g_storeState.seeded;
+        for (const auto& S : store().items)
+            out.records.push_back({.path = S.path, .sort = S.sort, .display = S.display, .view = S.view, .label = S.customLabel});
 
         std::error_code ec;
         std::filesystem::create_directories(PATH.parent_path(), ec);
+        const auto TMP = PATH.string() + ".tmp";
         {
-            std::ofstream out(PATH, std::ios::trunc);
-            out << STORE_HEADER << "\n";
-            for (const auto& S : store().items)
-                out << (S.grid ? "grid" : "fan") << "\t" << (S.sortByTime ? "mtime" : "name") << "\t" << S.path << "\n";
+            std::ofstream f(TMP, std::ios::trunc);
+            f << StackModel::formatStore(out);
+            if (!f)
+                return;
         }
+        std::filesystem::rename(TMP, PATH, ec); // atomic on one filesystem: a crash leaves the old file or the new one
         // Adopt our own mtime so the next poll does not read our output back --
-        // which is exactly why the generation has to move HERE as well: reload()
-        // will never notice this write, and the dock's item cache hangs off it.
+        // which is why the generation moves HERE too.
         store().stamp = std::filesystem::last_write_time(PATH, ec);
         ++g_storeGeneration;
     }
@@ -380,8 +382,9 @@ namespace {
 
     struct SPopup {
         std::string         path;
-        bool                grid = false;
-        bool                sortByTime = false;
+        StackModel::ESort   sort = StackModel::ESort::Name;
+        StackModel::EView   view = StackModel::EView::Auto;
+        bool                grid = false; // decided at open: view==Grid, or the fan does not fit
         MONITORID           monitor = MONITOR_INVALID;
         CBox                anchor;  // the cell it grew out of
         std::vector<SEntry> entries;
@@ -611,7 +614,8 @@ namespace {
         stack.icon  = stack.isDir ? folderIcon(stack.path) : iconNameForFile(stack.path, false);
 
         const auto SLASH = stack.path.rfind('/');
-        stack.label      = SLASH == std::string::npos ? stack.path : stack.path.substr(SLASH + 1);
+        const auto BASE  = SLASH == std::string::npos ? stack.path : stack.path.substr(SLASH + 1);
+        stack.label      = stack.customLabel.empty() ? BASE : stack.customLabel;
     }
 
     void launchPath(const std::string& path) {
@@ -683,6 +687,26 @@ namespace {
         sd_bus_message_unref(m);
     }
 
+    // Every setter: re-read, change one field, write, and re-show an open popup
+    // that belongs to this stack.
+    template <typename F>
+    bool editStack(const std::string& path, F&& change) {
+        Stacks::all();
+        auto* S = find(path);
+        if (!S || !change(*S))
+            return false;
+        decorate(*S);
+        writeStore();
+        if (g_popup && g_popup->path == canonical(path)) {
+            g_popup->sort  = S->sort;
+            g_popup->view  = S->view;
+            g_popup->grid  = S->view == StackModel::EView::Grid;
+            g_popup->since = Time::steadyNow();
+            damagePopupMonitor();
+        }
+        return true;
+    }
+
 } // anonymous namespace
 
 // ============================================================================
@@ -743,40 +767,34 @@ namespace ScrollOverview::Stacks {
         return true;
     }
 
-    bool setView(const std::string& path, bool grid) {
-        all();
-        auto* S = find(path);
-        if (!S || S->grid == grid)
-            return false;
-        S->grid = grid;
-        writeStore();
-
-        // A view change with the popup up re-renders it in the new view rather
-        // than leaving a fan the menu says is a grid.
-        if (g_popup && g_popup->path == canonical(path)) {
-            g_popup->grid  = grid;
-            g_popup->since = Time::steadyNow();
-            g_popup->scroll = 0.F;
-            damagePopupMonitor();
-        }
-        return true;
+    bool setSort(const std::string& path, StackModel::ESort sort) {
+        return editStack(path, [&](SStack& s) { return std::exchange(s.sort, sort) != sort; });
+    }
+    bool setDisplay(const std::string& path, StackModel::EDisplay display) {
+        return editStack(path, [&](SStack& s) { return std::exchange(s.display, display) != display; });
+    }
+    bool setViewMode(const std::string& path, StackModel::EView view) {
+        return editStack(path, [&](SStack& s) { return std::exchange(s.view, view) != view; });
+    }
+    bool setLabel(const std::string& path, const std::string& label) {
+        return editStack(path, [&](SStack& s) { return std::exchange(s.customLabel, label) != label; });
     }
 
-    bool setSort(const std::string& path, bool byTime) {
+    bool moveTo(const std::string& path, size_t index) {
         all();
-        auto* S = find(path);
-        if (!S || S->sortByTime == byTime)
+        auto&      ITEMS = store().items;
+        const auto CANON = canonical(path);
+        const auto IT    = std::ranges::find_if(ITEMS, [&](const SStack& s) { return s.path == CANON; });
+        if (IT == ITEMS.end())
             return false;
-        S->sortByTime = byTime;
+        const size_t FROM = sc<size_t>(IT - ITEMS.begin());
+        index             = std::min(index, ITEMS.size() - 1);
+        if (FROM == index)
+            return false;
+        auto moved = std::move(*IT);
+        ITEMS.erase(IT);
+        ITEMS.insert(ITEMS.begin() + sc<long>(index), std::move(moved));
         writeStore();
-
-        if (g_popup && g_popup->path == canonical(path)) {
-            g_popup->sortByTime = byTime;
-            g_popup->entries    = readDir(g_popup->path, byTime);
-            g_popup->shown      = std::min<size_t>(g_popup->entries.size(), FAN_MAX);
-            g_popup->hidden     = g_popup->entries.size() - g_popup->shown;
-            damagePopupMonitor();
-        }
         return true;
     }
 
@@ -836,11 +854,12 @@ namespace ScrollOverview::Stacks {
 
         SPopup p;
         p.path       = CANON;
-        p.grid       = S && S->grid;
-        p.sortByTime = S && S->sortByTime;
+        p.sort       = S ? S->sort : StackModel::ESort::Name;
+        p.view       = S ? S->view : StackModel::EView::Auto;
+        p.grid       = p.view == StackModel::EView::Grid;
         p.monitor    = monitor->m_id;
         p.anchor     = anchor;
-        p.entries    = readDir(CANON, p.sortByTime);
+        p.entries    = readDir(CANON, p.sort == StackModel::ESort::Modified);
         p.shown      = std::min<size_t>(p.entries.size(), FAN_MAX);
         p.hidden     = p.entries.size() - p.shown;
         p.since      = Time::steadyNow();
@@ -996,7 +1015,7 @@ namespace ScrollOverview::Stacks {
                     // success".
                     armBounce(DEST);
                     if (g_popup)
-                        g_popup->entries = readDir(g_popup->path, g_popup->sortByTime);
+                        g_popup->entries = readDir(g_popup->path, g_popup->sort == StackModel::ESort::Modified);
                     if (g_popup) {
                         g_popup->shown  = std::min<size_t>(g_popup->entries.size(), FAN_MAX);
                         g_popup->hidden = g_popup->entries.size() - g_popup->shown;

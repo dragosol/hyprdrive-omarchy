@@ -2,6 +2,7 @@
 
 #include "globals.hpp"
 #include "Dock.hpp"
+#include "StackModel.hpp"
 
 #include <cstdint>
 #include <string>
@@ -52,19 +53,18 @@
 namespace ScrollOverview::Stacks {
 
     struct SStack {
-        std::string path;               // absolute, no trailing slash
-        bool        grid       = false; // its view. Per-stack, persisted.
-        bool        sortByTime = false; // false: by name. Per-stack, persisted.
+        std::string          path; // absolute, no trailing slash
+        StackModel::ESort    sort    = StackModel::ESort::Name;
+        StackModel::EDisplay display = StackModel::EDisplay::Stack;
+        StackModel::EView    view    = StackModel::EView::Auto;
+        std::string          customLabel; // the dock label the user chose; "" = the basename
 
         // WHAT THE CELL DRAWS, resolved ONCE when the store is read rather than
-        // on every build of the dock's item list (user, 2026-09-14). iconFor()
-        // stats the path and asks gio to guess a content type, and dockItems()
-        // was calling it -- plus a second is_directory of its own -- for every
-        // stack, several times per frame per monitor. None of the three answers
-        // changes without the store changing, which is what reload() is.
-        std::string icon;               // themed icon NAME for the cell
-        std::string label;              // the basename the cell and its tooltip show
-        bool        isDir = false;      // a folder fans; a file just opens
+        // on every build of the dock's item list (user, 2026-09-14): iconFor()
+        // stats the path and asks gio to guess a content type.
+        std::string icon;          // themed icon NAME for the cell
+        std::string label;         // customLabel, or the basename
+        bool        isDir = false; // a folder fans; a file just opens
     };
 
     // The store, cached and poll-refreshed exactly as favourites() is -- the
@@ -77,8 +77,11 @@ namespace ScrollOverview::Stacks {
     // changed, which is what the dispatcher reports.
     bool pin(const std::string& path);
     bool unpin(const std::string& path);
-    bool setView(const std::string& path, bool grid);
-    bool setSort(const std::string& path, bool byTime);
+    bool setSort(const std::string& path, StackModel::ESort sort);
+    bool setDisplay(const std::string& path, StackModel::EDisplay display);
+    bool setViewMode(const std::string& path, StackModel::EView view);
+    bool setLabel(const std::string& path, const std::string& label); // dock label only; "" = basename
+    bool moveTo(const std::string& path, size_t index);                // reorder among stacks
     void clearAll(); // gate_slate: no stacks means no shifted cell predictions
 
     // What the dock draws in the cell, and what the tooltip says.

@@ -1646,15 +1646,16 @@ static SDispatchResult onStackDispatcher(std::string arg) {
             path.erase(path.begin());
 
         if (VERB == "view") {
-            if (MODE != "fan" && MODE != "grid")
-                return {.success = false, .error = "expected fan or grid"};
-            ScrollOverview::Stacks::setView(path, MODE == "grid");
+            if (MODE != "fan" && MODE != "grid" && MODE != "auto")
+                return {.success = false, .error = "expected auto (fan) or grid"};
+            ScrollOverview::Stacks::setViewMode(path, MODE == "grid" ? ScrollOverview::StackModel::EView::Grid : ScrollOverview::StackModel::EView::Auto);
             return {};
         }
 
-        if (MODE != "name" && MODE != "mtime")
-            return {.success = false, .error = "expected name or mtime"};
-        ScrollOverview::Stacks::setSort(path, MODE == "mtime");
+        const auto SORT = MODE == "mtime" ? std::optional{ScrollOverview::StackModel::ESort::Modified} : ScrollOverview::StackModel::sortFromName(MODE);
+        if (!SORT)
+            return {.success = false, .error = "expected name, added, modified (mtime) or kind"};
+        ScrollOverview::Stacks::setSort(path, *SORT);
         return {};
     }
 

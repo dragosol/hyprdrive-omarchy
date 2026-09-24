@@ -2993,7 +2993,7 @@ std::string elide(const std::string& text) {
 bool stackIsGrid(const SItem& item) {
     for (const auto& S : Stacks::all()) {
         if (S.path == item.stackPath)
-            return S.grid;
+            return S.view == StackModel::EView::Grid;
     }
     return false;
 }
@@ -3001,7 +3001,7 @@ bool stackIsGrid(const SItem& item) {
 bool stackIsByTime(const SItem& item) {
     for (const auto& S : Stacks::all()) {
         if (S.path == item.stackPath)
-            return S.sortByTime;
+            return S.sort == StackModel::ESort::Modified;
     }
     return false;
 }
@@ -3205,8 +3205,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         // V11 V4. Per-STACK, and written straight to the store: the toggle is
         // the setting, so there is nowhere else for it to live.
-        case ERow::StackView: Stacks::setView(item.stackPath, !stackIsGrid(item)); return;
-        case ERow::StackSort: Stacks::setSort(item.stackPath, !stackIsByTime(item)); return;
+        case ERow::StackView: Stacks::setViewMode(item.stackPath, stackIsGrid(item) ? StackModel::EView::Auto : StackModel::EView::Grid); return;
+        case ERow::StackSort: Stacks::setSort(item.stackPath, stackIsByTime(item) ? StackModel::ESort::Name : StackModel::ESort::Modified); return;
         case ERow::StackOpen: Locations::activate(item.uri); return;
         case ERow::StackUnpin: Stacks::unpin(item.stackPath); return;
 

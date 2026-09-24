@@ -104,8 +104,9 @@ item" that the fan and pane draw enlarged.
 - Keyboard: arrows move the highlight, Space previews, Enter opens, Esc closes
   the preview first, then the fan.
 - Dragging an item out of the fan is unchanged.
-- Sushi is a normal client; "beside the fan" is a float + move request, as the
-  overview's Sushi handling already does. If the placement is ignored it opens
+- Sushi is a normal client; "beside the fan" is a move of the Sushi window when it
+  maps (Hyprland's own close gesture moves windows with the public
+  `window->move()`). If the placement is ignored it opens
   centred — acceptable.
 
 ## The pane
@@ -142,9 +143,11 @@ item" that the fan and pane draw enlarged.
 - **Display as Folder:** the folder's themed icon.
 - **Empty stack:** the theme's folder icon inside the same outline, until C
   supplies the empty-stack artwork.
-- A GIO file monitor on the folder refreshes the cell within ~1 s of a
-  change. The pile is rendered once into a cached texture and redrawn only
-  when the newest four change, never per frame.
+- An inotify watch on the folder, on the compositor's event loop (Hyprland
+  never iterates GLib's main context, so a GFileMonitor would never fire),
+  refreshes the cell within ~1 s of a
+  change. The pile is drawn from cached per-item textures (no per-frame
+  decode or file access).
 
 ## The context menu
 
