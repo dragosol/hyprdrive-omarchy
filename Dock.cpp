@@ -62,6 +62,7 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/history/WindowHistoryTracker.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
@@ -2230,8 +2231,65 @@ struct STooltip {
     // and then drew the plate at the other monitor's pixel coordinates -- the
     // label on the wrong screen (user, 2026-09-14). Only this monitor touches it.
     MONITORID       monitor = MONITOR_INVALID;
+    // The real windows the hover is about, labelled inside themselves (see
+    // renderWindowPeek). Kept with the plate so they fade out with it.
+    std::vector<PHLWINDOWREF> peek;
 };
 STooltip g_tip;
+
+// "App · Title" INSIDE THE WINDOW (user, 2026-09-24: "a little tooltip inside
+// the window when I'm hovering the dock ... that way I know which terminal
+// window I'm chatting with ... centered at the top inside the app window. This
+// is not meant for overview"). Hovering an icon labels every one of the app's
+// windows on screen; hovering a preview labels that one window. Same pill as
+// the dock's own tooltip, on the same fade, so the two read as one gesture.
+constexpr float PEEK_TOP_GAPL  = 10.F;
+constexpr size_t PEEK_TITLE_MAX = 72;
+
+std::vector<PHLWINDOW> peekWindowsOn(PHLMONITOR monitor, const std::vector<PHLWINDOW>& windows) {
+    std::vector<PHLWINDOW> out;
+    if (!monitor)
+        return out;
+    for (const auto& WINDOW : windows) {
+        if (!WINDOW || !WINDOW->m_isMapped || WINDOW->m_monitor != monitor || !WINDOW->m_workspace || Minimize::isMinimized(WINDOW))
+            continue;
+        if (WINDOW->m_workspace == monitor->m_activeWorkspace || WINDOW->m_workspace == monitor->m_activeSpecialWorkspace)
+            out.emplace_back(WINDOW);
+    }
+    return out;
+}
+
+void renderWindowPeek(PHLMONITOR monitor, float alpha) {
+    if (alpha <= 0.F || g_tip.peek.empty() || scrollOverviewForMonitor(monitor))
+        return;
+
+    const float S = std::max(monitor->m_scale, 0.01F);
+    for (const auto& REF : g_tip.peek) {
+        const auto WINDOW = REF.lock();
+        if (!WINDOW || !WINDOW->m_isMapped || Minimize::isMinimized(WINDOW) || WINDOW->m_monitor != monitor)
+            continue;
+
+        std::string app = AppSearch::appNameForClass(AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title));
+        if (app.empty())
+            app = WINDOW->m_class;
+        std::string title = WINDOW->m_title;
+        if (title.size() > PEEK_TITLE_MAX) {
+            size_t cut = PEEK_TITLE_MAX - 1;
+            while (cut > 0 && (sc<unsigned char>(title[cut]) & 0xC0) == 0x80)
+                --cut;
+            title = title.substr(0, cut) + "…";
+        }
+        const std::string TEXT = title.empty() || title == app ? app : app + "  \u00b7  " + title;
+
+        const auto  POS = WINDOW->m_realPosition->value() - monitor->m_position;
+        const auto  SZ  = WINDOW->m_realSize->value();
+        const CBox  BOX{POS.x * S, POS.y * S, SZ.x * S, SZ.y * S};
+        const CBox  PLATE = OverviewRender::labelPillBox(monitor, TEXT, 0.0, 0.0, S);
+        if (PLATE.height < 1 || PLATE.width > BOX.width || PLATE.height + PEEK_TOP_GAPL * S > BOX.height)
+            continue; // a window too small to hold its own label keeps it off
+        OverviewRender::labelPill(monitor, TEXT, BOX.x + BOX.width / 2.0, BOX.y + PEEK_TOP_GAPL * S + PLATE.height, alpha, S);
+    }
+}
 
 std::string tooltipSubject(const PHLWINDOW& window) {
     return "w:" + std::to_string(reinterpret_cast<uintptr_t>(window.get()));
@@ -2255,7 +2313,8 @@ std::string tooltipSubject(const SItem& item) {
 // (sliding to the next icon), not when the same window's title ticks -- a
 // streaming Grok/browser title used to punch the plate back to zero alpha
 // every update.
-void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& NAME, float bottomY = 0.F, const std::string& subject = {}) {
+void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& NAME, float bottomY = 0.F, const std::string& subject = {},
+                   const std::vector<PHLWINDOW>& peek = {}) {
     const bool LIVE = !subject.empty() || !NAME.empty();
 
     // Nothing to show here and the tooltip is another monitor's: leave it alone.
@@ -2280,6 +2339,9 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
         // outlives the hover so it can fade away, and by then the cell it was
         // labelling may be gone.
         g_tip.bottomY = bottomY;
+        g_tip.peek.clear();
+        for (const auto& WINDOW : peek)
+            g_tip.peek.emplace_back(WINDOW);
     } else {
         if (g_tip.name.empty())
             return;
@@ -2296,11 +2358,14 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
     if (g_tip.out && T >= 1.F) {
         g_tip.name.clear();
         g_tip.subject.clear();
+        g_tip.peek.clear();
         return;
     }
 
     // Entrances decelerate, exits accelerate: the house rule, both directions.
     const float ALPHA = g_tip.out ? 1.F - houseEase(false, T) : houseEase(true, T);
+
+    renderWindowPeek(monitor, ALPHA);
 
     // The frames this fade needs are asked for by needsFrames(), which reads the
     // same g_tip clock this line does. A pointer resting on an icon emits no
@@ -2406,6 +2471,17 @@ PHLWINDOW frontWindow(const std::vector<PHLWINDOW>& windows) {
     }
 
     return windows.empty() ? nullptr : windows.front();
+}
+
+// The one of `windows` focused most recently, by Hyprland's own focus history
+// (newest last); frontWindow when none of them is in it yet.
+PHLWINDOW recentWindow(const std::vector<PHLWINDOW>& windows) {
+    const auto& HISTORY = Desktop::History::windowTracker()->fullHistory();
+    for (auto it = HISTORY.rbegin(); it != HISTORY.rend(); ++it) {
+        if (const auto WINDOW = it->lock(); WINDOW && std::ranges::find(windows, WINDOW) != windows.end())
+            return WINDOW;
+    }
+    return frontWindow(windows);
 }
 
 // Seat is held while the pointer is on dock chrome so axis events cannot
@@ -2678,6 +2754,26 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
         return;
     }
 
+    // SWITCH BACK FIRST (user, 2026-09-24: "I have multiple ghostty windows
+    // open. I switch to zen. I then click on the ghostty icon in dock. First
+    // click on that should immediately switch me back to the last used window
+    // of that process, same with every other app"). While another app has the
+    // focus, a click is "take me back to this app": its most recently used
+    // window, wherever that is -- another desktop, the scratchpad, minimized.
+    // Only once the app HAS the focus do the rules below (minimize/restore the
+    // windows here) apply, so a second click still puts it away.
+    if (const auto ALL = itemWindows(item); !ALL.empty()) {
+        const auto FOCUSED = Desktop::focusState()->window();
+        if (!FOCUSED || std::ranges::find(ALL, FOCUSED) == ALL.end()) {
+            const auto TARGET = recentWindow(ALL);
+            if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW && !Minimize::isMinimized(TARGET))
+                OVERVIEW->selectAndClose(TARGET);
+            else
+                activateWindow(TARGET);
+            return;
+        }
+    }
+
     // "Click it again and it goes away", for an app that lives in the
     // scratchpad. Its windows are not on any desktop, so `here` is empty and
     // the branches below would focus a window that is already up -- the click
@@ -2811,6 +2907,8 @@ enum class ERow : uint8_t {
     InfoReveal, // Show in Files
     InfoCopyAll,
     InfoBack,
+    // The overview, filtered on the app (user, 2026-09-24).
+    ShowWindows,
 };
 
 // OMARCHY-STYLE ROWS: a Nerd Font glyph column, the label, and a dim hint on the
@@ -2910,6 +3008,12 @@ bool stackIsByTime(const SItem& item) {
 
 // Spec §13.9 X28, in the order the spec lists them: .desktop Actions, window
 // list, Show Details, Add/Remove from Favorites, Quit.
+// A pinned app that is not running has a desktop id and no window class, so
+// every lookup keyed on the class came back empty for it.
+std::string itemDesktopId(const SItem& item) {
+    return !item.desktopId.empty() ? item.desktopId : AppSearch::idForClass(item.wmClass);
+}
+
 std::vector<SRow> buildRows(const SItem& item) {
     std::vector<SRow> rows;
 
@@ -2951,14 +3055,14 @@ std::vector<SRow> buildRows(const SItem& item) {
 
     const auto& wmClass = item.wmClass;
     const auto  WINDOWS = itemWindows(item);
-    const auto  ID      = AppSearch::idForClass(wmClass);
+    const auto  ID      = itemDesktopId(item);
 
     // New Window first when there is something to launch: the one thing a
     // running app's icon cannot do on a click, which focuses instead.
     if (!ID.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::NewWindow, .label = "New Window", .glyph = MenuGlyph::NEW});
 
-    for (const auto& ACTION : AppSearch::actionsForClass(wmClass))
+    for (const auto& ACTION : AppSearch::actionsForId(ID))
         rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec, .glyph = MenuGlyph::ACTION});
 
     if (!rows.empty() && !WINDOWS.empty())
@@ -2979,6 +3083,11 @@ std::vector<SRow> buildRows(const SItem& item) {
             where = WINDOW->m_workspace->m_name;
         rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
     }
+
+    // Every window of the app at once, where they can be compared: the overview
+    // filtered on the app's name.
+    if (!WINDOWS.empty())
+        rows.emplace_back(SRow{.kind = ERow::ShowWindows, .label = "Show Windows", .glyph = MenuGlyph::GRID});
 
     // Whole-app minimize / restore, offered in whichever direction does
     // something. The flight into (and out of) the icon is the dock's own.
@@ -3019,7 +3128,7 @@ std::vector<SRow> buildRows(const SItem& item) {
 // in `exec` (the hint is elided to fit) so a click copies all of it.
 std::vector<SRow> infoRows(const SItem& item) {
     std::vector<SRow> rows;
-    const auto*       ENTRY = AppSearch::entryForId(AppSearch::idForClass(item.wmClass));
+    const auto*       ENTRY = AppSearch::entryForId(itemDesktopId(item));
 
     const auto line = [&](const char* glyph, const std::string& key, std::string value) {
         if (value.empty())
@@ -3075,8 +3184,9 @@ std::vector<SRow> infoRows(const SItem& item) {
         line(MenuGlyph::FILE, "Desktop file", ENTRY->path);
     }
 
+    // Clickable, unlike the lines around it: it opens the windows it counts.
     if (const auto N = itemWindows(item).size(); N > 0)
-        line(MenuGlyph::WINDOW, "Open windows", std::to_string(N));
+        rows.emplace_back(SRow{.kind = ERow::ShowWindows, .label = "Open windows", .glyph = MenuGlyph::WINDOW, .hint = std::to_string(N) + "  \uf054"});
 
     rows.emplace_back(SRow{.kind = ERow::Separator});
     if (ENTRY)
@@ -3151,7 +3261,13 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
                     .runAsync();
             return;
 
-        case ERow::Favorite: toggleFavorite(AppSearch::idForClass(wmClass)); return;
+        case ERow::Favorite: toggleFavorite(itemDesktopId(item)); return;
+
+        case ERow::ShowWindows: {
+            const auto* ENTRY = AppSearch::entryForId(itemDesktopId(item));
+            openScrollOverviewWithQuery(monitor, ENTRY && !ENTRY->name.empty() ? ENTRY->name : wmClass);
+            return;
+        }
 
         case ERow::Quit:
             for (const auto& WINDOW : itemWindows(item))
@@ -4017,6 +4133,10 @@ bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
                 Minimize::restore(WINDOW);
 
             if (const auto OVERVIEW = scrollOverviewForMonitor(monitor)) {
+                // Same story for a window the SEARCH hides (user, 2026-09-24:
+                // dragging another app's preview under Show Windows "refuses to
+                // do it"): the filter goes, and the drag is the ordinary one.
+                overviewAdmitWindow(WINDOW);
                 OVERVIEW->beginWindowDragFrom(WINDOW, HOME); // grows out of the cell
                 // IMMEDIATELY, not on the next frame. The overview syncs this
                 // flag once per frame (scrollOverview.cpp, end of render), and a
@@ -6031,10 +6151,12 @@ void render(PHLMONITOR monitor) {
     if (g_menu)
         renderTooltip(monitor, LAYOUT, CBox{}, "");
     else if (CELL)
-        renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y), tooltipSubject(CELL->second));
+        renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y), tooltipSubject(CELL->second),
+                      peekWindowsOn(monitor, {CELL->second}));
     else if (HASHOVER) {
         const float ABOVE = (panelOn(monitor) && g_hover.drawn.height >= 1) ? sc<float>(g_hover.drawn.y) : 0.F;
-        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM), ABOVE, HOVEREDITEM->subject);
+        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM), ABOVE, HOVEREDITEM->subject,
+                      HOVEREDITEM->uri.empty() && !HOVEREDITEM->scratchpad ? peekWindowsOn(monitor, itemWindows(*HOVEREDITEM)) : std::vector<PHLWINDOW>{});
     } else if (HOVERAPPS)
         renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications", 0.F, "show-apps");
     else

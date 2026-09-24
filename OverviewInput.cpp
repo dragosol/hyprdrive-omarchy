@@ -988,4 +988,7 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
         info.cancelled = true;
 }
 
-
+bool overviewSearchHides(const PHLWINDOW& window) {
+    const auto SHOWN = getOverviewWindowToShow(window);
+    return SHOWN && !shouldShowOverviewWindow(SHOWN);
+}

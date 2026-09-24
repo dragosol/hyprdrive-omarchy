@@ -7243,11 +7243,14 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
 
     searchLayoutHere().gridTiles = GRID_TILES;
 
-    const float TARGET = QUERIED ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, !RESULTS.empty() && RESULTS[0].tool != 0) : 0.F;
+    // Show Windows has no panel at all: no band to reserve between the pill and
+    // the strip (user, 2026-09-24: "all this empty unused space").
+    const bool  PANEL  = QUERIED && !g_search.query.windowsOnly;
+    const float TARGET = PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, !RESULTS.empty() && RESULTS[0].tool != 0) : 0.F;
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 
-    const float WIDTH_TARGET = QUERIED ? overviewResultsWidthTarget(monitor, SECTIONS) : 0.F;
+    const float WIDTH_TARGET = PANEL ? overviewResultsWidthTarget(monitor, SECTIONS) : 0.F;
     // Grow from the pill, not from 0: a 0→span ease spends its first frames
     // on an invisible sliver, then pops. Warp onto the pill width once.
     if (WIDTH_TARGET > 50.F && resultsWidth->value() < 50.F)
@@ -7693,6 +7696,7 @@ void CScrollOverview::renderListShadow() {
 }
 
 void CScrollOverview::redrawAll(bool forcelowres) {
+    lastBuiltQuery = g_search.query.text;
     rebuildWorkspaceImages();
     seedRememberedSelections();
 
@@ -9087,6 +9091,14 @@ void CScrollOverview::onPreRender() {
         lastQueryEmpty = QUERYEMPTY;
         rebuildPending = true;
     }
+
+    // The same reasoning, for the lists' OTHER assumption: they were built for
+    // one query and a longer query only narrows it. "Ghostty" replaced by "f"
+    // (Show Windows, then typing) never passes through empty, and the windows
+    // "f" matches that "Ghostty" did not -- the scratchpad's among them -- were
+    // laid out by the grid but never drawn (user, 2026-09-24).
+    if (!g_search.query.text.starts_with(lastBuiltQuery))
+        rebuildPending = true;
 
     if (rebuildPending) {
         rebuildPending = false;

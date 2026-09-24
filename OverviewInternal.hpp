@@ -486,6 +486,9 @@ inline std::vector<SSearchRow> overviewSearchRowsLive();
 // generation to key on, and it is never on the per-frame path (renderSearch
 // asks for rows only once something is typed or a menu is open).
 inline std::vector<SSearchRow> overviewSearchRows() {
+    if (g_search.query.windowsOnly)
+        return {};
+
     const std::string& Q           = g_search.query.text;
     const bool         MENU_BROWSE = OmarchySearch::canNavigateMenuBack();
 

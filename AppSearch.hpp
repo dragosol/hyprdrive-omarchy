@@ -147,6 +147,9 @@ namespace AppSearch {
     // the .desktop file: this is asked once per right-click, not per frame, so
     // the inventory stays the small thing the search path wants.
     std::vector<SAction> actionsForClass(const std::string& wmClass);
+    // The same for a desktop id: a pinned app that is not running has no window
+    // class to go through, and its menu used to come up empty (user, 2026-09-24).
+    std::vector<SAction> actionsForId(const std::string& id);
 
     // X28. Detached spawn of a raw Exec= string, field codes stripped. The
     // action half of launch(); a desktop action is never Terminal=.

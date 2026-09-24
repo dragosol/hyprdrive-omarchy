@@ -343,6 +343,56 @@ bool openScrollOverview(PHLMONITOR monitor) {
     return openOverview(monitor);
 }
 
+static void afterQueryEdit();
+
+bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
+    if (!monitor)
+        return false;
+    if (!openScrollOverviewForMonitor(monitor)) {
+        resetSearchSession();
+        if (!openOverview(monitor))
+            return false;
+    }
+
+    g_search.query.text             = query;
+    g_search.query.active           = !query.empty();
+    g_search.nav.zone               = EOverviewNavZone::Search;
+    g_search.nav.selection          = -1;
+    g_search.nav.explicitSelection  = false;
+    g_search.nav.selectFirstPending = false;
+    g_search.nav.intent             = ESearchIntent::Typing;
+    g_search.nav.hoverIndex         = -1;
+    afterQueryEdit();
+    // After the edit, which clears it. With no results there is nothing for
+    // the search zone to hold: the keyboard starts on the tiles.
+    g_search.query.windowsOnly      = !query.empty();
+    if (g_search.query.windowsOnly) {
+        g_search.nav.zone               = EOverviewNavZone::Tile;
+        g_search.nav.selection          = -1;
+        g_search.nav.selectFirstPending = false;
+    }
+    for (const auto& overview : scrollOverviews())
+        if (overview)
+            overview->damage();
+    return true;
+}
+
+void overviewAdmitWindow(const PHLWINDOW& window) {
+    if (!window || (g_search.query.text.empty() && !g_search.query.active))
+        return;
+    if (!overviewSearchHides(window))
+        return;
+
+    g_search.query.text.clear();
+    g_search.query.active  = false;
+    g_search.nav.zone      = EOverviewNavZone::Tile;
+    g_search.nav.selection = -1;
+    afterQueryEdit();
+    for (const auto& overview : scrollOverviews())
+        if (overview)
+            overview->damage();
+}
+
 static void resetCompose();
 
 // Every open starts unfiltered, on the tiles, holding nothing. ONE call: this
@@ -732,6 +782,8 @@ static void armLetterTick() {
 
 // The trailing work every edit to the query owes, whatever made the edit.
 static void afterQueryEdit() {
+    g_search.query.windowsOnly = false;
+
     // The gate reads the query twice -- "is it empty" for the Y9 minimized rule
     // and the text itself for the match -- so every edit changes its answer.
     Membership::bump("query edit");
@@ -836,6 +888,12 @@ static bool handleSearchPress(uint32_t keycode) {
                     overview->damage();
         }
         resetCompose();
+        if (g_search.query.windowsOnly) {
+            g_search.query.text.clear();
+            g_search.query.active = false;
+            afterQueryEdit();
+            return true;
+        }
         if (g_search.nav.zone == EOverviewNavZone::Result && g_search.query.text.empty()) {
             if (OmarchySearch::navigateMenuBack()) {
                 g_search.nav.selection = 0;
@@ -882,6 +940,8 @@ static bool handleSearchPress(uint32_t keycode) {
     if (KEY.starts)
         g_search.query.active = true;
 
+    if (g_search.query.windowsOnly)
+        g_search.query.text.clear();
     g_search.query.text += KEY.text;
     afterQueryEdit();
     return true;

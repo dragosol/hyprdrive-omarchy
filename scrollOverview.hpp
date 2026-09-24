@@ -556,6 +556,11 @@ class CScrollOverview : public IOverview {
     // the window list is not rebuilt on its own, so the edge has to be noticed.
     // Starts true because every open starts unfiltered (main.cpp:282).
     bool   lastQueryEmpty           = true;
+    // The query the window lists were last built for (redrawAll). Appending
+    // to it only narrows the matches, so the lists stay good; anything else --
+    // Backspace, or the dock's Show Windows query being typed over -- can bring
+    // in windows they never had, so it rebuilds.
+    std::string lastBuiltQuery;
 
     COverviewFrostCache frost;
 

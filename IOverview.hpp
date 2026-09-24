@@ -188,6 +188,20 @@ void                              dropScrollOverviewsForMonitor(PHLMONITOR monit
 // filter mid-close-animation.
 bool                              openScrollOverview(PHLMONITOR monitor);
 
+// The dock's Show Windows (user, 2026-09-24): the overview, filtered as if
+// `query` had been typed. Starts a fresh session when the overview is not
+// already open; an open one just has its query replaced.
+bool                              openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query);
+
+// A window about to be dragged INTO the overview from outside it (the dock's
+// hover previews). If the search is filtering it out, the search is dropped --
+// as the first Esc would -- because every drag path requires the window to be
+// in the overview, and one the filter hides could not be picked up at all.
+void                              overviewAdmitWindow(const PHLWINDOW& window);
+// Whether the running search keeps `window` out of the overview (OverviewInput.cpp,
+// which can see the gate).
+bool                              overviewSearchHides(const PHLWINDOW& window);
+
 // Start a NEW search session: no query, no selection, nothing held, no
 // half-typed compose sequence. What the dispatcher does before every open, for
 // the entry points that are not the dispatcher.

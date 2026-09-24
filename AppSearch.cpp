@@ -1253,12 +1253,25 @@ namespace AppSearch {
         return found == std::string::npos ? nullptr : &INV[found];
     }
 
+    std::vector<SAction> actionsFromFile(const std::string& path);
+
     std::vector<SAction> actionsForClass(const std::string& wmClass) {
         const auto IDX = entryIndexForClass(wmClass);
-        if (IDX == std::string::npos || inventory()[IDX].path.empty())
+        if (IDX == std::string::npos)
+            return {};
+        return actionsFromFile(inventory()[IDX].path);
+    }
+
+    std::vector<SAction> actionsForId(const std::string& id) {
+        const auto* ENTRY = entryForId(id);
+        return ENTRY ? actionsFromFile(ENTRY->path) : std::vector<SAction>{};
+    }
+
+    std::vector<SAction> actionsFromFile(const std::string& path) {
+        if (path.empty())
             return {};
 
-        std::ifstream file(inventory()[IDX].path);
+        std::ifstream file(path);
         if (!file.is_open())
             return {};
 

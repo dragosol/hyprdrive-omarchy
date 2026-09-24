@@ -417,6 +417,12 @@ struct SSearchSession {
         // this, not text.empty(), which cannot represent that state.
         bool        active = false;
 
+        // The dock's Show Windows (user, 2026-09-24): the query was put there
+        // for the user, not typed -- it filters the windows and shows no results
+        // panel. Any edit clears it; the first typed key REPLACES the query, the
+        // way typing over a selected field does, and Backspace drops it whole.
+        bool        windowsOnly = false;
+
         // G6. How many results each provider offered, INCLUDING the ones the cap
         // and the trim never showed. Filled by overviewSearchRows(); read by the
         // section header to say "%d more".
