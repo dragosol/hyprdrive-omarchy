@@ -379,7 +379,9 @@ namespace {
     };
     const SFanMotion& fanMotion() {
         static const SFanMotion EXT{140.F, 140.F, 11.F, 1e9F, 84.F, 120.F, false};
-        static const SFanMotion SERP{280.F, 260.F, 40.F, 300.F, 150.F, 220.F, true};
+        // Serpantinum's numbers x0.8 (user, 2026-09-24: "the curve is nice,
+        // maybe 20% faster").
+        static const SFanMotion SERP{224.F, 208.F, 32.F, 240.F, 120.F, 176.F, true};
         return ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_motion") == "extension" ? EXT : SERP;
     }
     float outQuad(float t) { return 1.F - (1.F - t) * (1.F - t); }
@@ -408,6 +410,7 @@ namespace {
         float       k      = 1.F; // fan: the row's scale on its way in or out
         float       e      = 1.F; // fan: the row's eased progress (0 in the cell)
         float       a      = 1.F; // fan: the row's opacity
+        float       rot    = 0.F; // fan: the row's turn right now (radians)
     };
 
     struct SPopup {
@@ -526,13 +529,39 @@ namespace {
         return ROWS > 1 ? std::min(M.staggerMs, M.staggerCapMs / sc<float>(ROWS - 1)) : M.staggerMs;
     }
 
+    // A THROWN PACK, NOT A DEALT ONE (user, 2026-09-24: "like I just threw a
+    // pack of papers on the ground and they happened to land in a fan"). In
+    // the serpantinum motion each paper gets its own small, repeatable
+    // randomness -- seeded by the stack's path and the row, so a stack always
+    // lands the same way: when it leaves (roughly together, not strictly one
+    // after another), how far its path bows to one side, and how far off its
+    // final tilt it starts spinning from.
+    float rowJitter(const SPopup& p, size_t i, int salt) {
+        const double SEED = sc<double>(std::hash<std::string>{}(p.path) % 997) * 0.37 + sc<double>(i) * 12.9898 + salt * 78.233;
+        const double F    = std::sin(SEED) * 43758.5453;
+        return sc<float>((F - std::floor(F)) * 2.0 - 1.0); // -1..1
+    }
+
+    float rowDelay(const SPopup& p, size_t i) {
+        const float STAGGER = fanStagger(p);
+        const float I       = sc<float>(std::min(i, STAGGER_ROWS));
+        if (!fanMotion().serp)
+            return STAGGER * I;
+        // Bottom papers still tend to land first -- they have least far to go --
+        // but a pack does not leave in file order.
+        return STAGGER * (0.55F * I + 0.9F * (rowJitter(p, i, 1) + 1.F) / 2.F);
+    }
+
     // How long the opening timeline is: the pane's grow, or the fan's last
     // row landing.
     float timelineSpan(const SPopup& p) {
         if (p.grid)
             return PANE_OPEN_MS;
-        const size_t ROWS = std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0));
-        return fanMotion().rowMs + fanStagger(p) * sc<float>(std::min(ROWS, STAGGER_ROWS) - 1);
+        const size_t ROWS = std::min(std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0)), STAGGER_ROWS);
+        float        last = 0.F;
+        for (size_t i = 0; i < ROWS; ++i)
+            last = std::max(last, rowDelay(p, i));
+        return fanMotion().rowMs + last;
     }
 
     // THE CLOCK IS THE FRAMES, not the wall (2026-09-24: "it lags, then loads
@@ -592,16 +621,17 @@ namespace {
     // Row i's three channels on the fan's timeline: where it is (0 in the
     // cell, 1 in place), how big (may pass 1 -- the OutBack pop), how opaque.
     struct SRowEase {
-        float pos = 0.F, scale = 0.F, alpha = 0.F;
+        float pos = 0.F, scale = 0.F, alpha = 0.F, spin = 1.F; // spin: 0 thrown, 1 settled at its tilt
     };
     SRowEase fanRowEase(const SPopup& p, size_t i, float progress) {
         const auto& M  = fanMotion();
-        const float T  = progress * timelineSpan(p) - fanStagger(p) * sc<float>(std::min(i, STAGGER_ROWS));
+        const float T  = progress * timelineSpan(p) - rowDelay(p, i);
         const float TR = std::clamp(T / M.rowMs, 0.F, 1.F);
         const float TA = std::clamp(T / M.alphaMs, 0.F, 1.F);
         if (!M.serp)
-            return {outQuad(TR), outQuad(TR), outQuad(TR)};
-        return {outQuint(TR), outBack(TR, 1.1F), outCubic(TA)};
+            return {outQuad(TR), outQuad(TR), outQuad(TR), 1.F};
+        // The spin settles with a small wobble past its tilt, as paper does.
+        return {outQuint(TR), outBack(TR, 1.1F), outCubic(TA), outBack(TR, 1.4F)};
     }
 
     // ------------------------------------------------------------ fan layout --
@@ -667,7 +697,24 @@ namespace {
             const double K  = 0.1 + 0.9 * EZ.scale;
             const double C1X = rest.x + rest.width - FAN_PAD_X * SCALE - ICONW / 2.0, C1Y = rest.y + rest.height / 2.0;
             const double C0X = p.anchor.x + p.anchor.width / 2.0, C0Y = p.anchor.y + p.anchor.height / 2.0;
-            const double CXN = C0X + (C1X - C0X) * E, CYN = C0Y + (C1Y - C0Y) * E;
+            // The path: a straight line for the extension; for the thrown pack
+            // a curve that bows to one side by up to a third of the distance
+            // (quadratic Bezier, control point off the midpoint, square to
+            // the line), so each paper arrives on its own arc.
+            double CXN = C0X + (C1X - C0X) * E, CYN = C0Y + (C1Y - C0Y) * E;
+            if (fanMotion().serp) {
+                const double DX = C1X - C0X, DY = C1Y - C0Y, LEN = std::max(1.0, std::hypot(DX, DY));
+                const double BOW = LEN * 0.33 * rowJitter(p, i, 2);
+                const double MX = (C0X + C1X) / 2.0 - DY / LEN * BOW, MY = (C0Y + C1Y) / 2.0 + DX / LEN * BOW;
+                const double U = 1.0 - E;
+                CXN            = U * U * C0X + 2.0 * U * E * MX + E * E * C1X;
+                CYN            = U * U * C0Y + 2.0 * U * E * MY + E * E * C1Y;
+            }
+            // ...and it turns as it flies: from up to 40 degrees off its final
+            // tilt, settling onto it.
+            const float TILT  = FAN_TILT_DEG * FI * 3.14159265F / 180.F;
+            const float THROW = fanMotion().serp ? rowJitter(p, i, 3) * 40.F * 3.14159265F / 180.F : 0.F;
+            const float RROT  = TILT + THROW * (1.F - EZ.spin);
             CBox         box{CXN - (C1X - rest.x) * K, CYN - (C1Y - rest.y) * K, rest.width * K, rest.height * K};
 
             p.rows.emplace_back(SRow{
@@ -680,6 +727,7 @@ namespace {
                 .k      = sc<float>(K),
                 .e      = E,
                 .a      = EZ.alpha,
+                .rot    = RROT,
             });
         }
     }
@@ -2000,7 +2048,7 @@ namespace ScrollOverview::Stacks {
         g_popup->hoverKey.clear(); // re-found below, from the row actually under the pointer
         for (size_t i = 0; i < g_popup->rows.size(); ++i) {
             const auto& R   = g_popup->rows[i];
-            const float ROT = FAN_TILT_DEG * sc<float>(i) * 3.14159265F / 180.F;
+            const float ROT = R.rot; // its tilt, or where it is in its spin
             const SPileItem* FROMPILE = nullptr;
             for (const auto& PI : PILE)
                 if (!R.action && PI.entry.path == R.path)
