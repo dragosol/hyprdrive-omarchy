@@ -227,6 +227,37 @@ static SP<Render::ITexture> builtinIcon(const std::string& name, int px) {
     return texture;
 }
 
+static std::unordered_map<std::string, SP<Render::ITexture>> g_roundedRects;
+
+SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& color) {
+    if (w < 2 || h < 2)
+        return nullptr;
+    const auto KEY = std::format("{}x{}r{}#{:.3f},{:.3f},{:.3f},{:.3f}", w, h, radius, color.r, color.g, color.b, color.a);
+    if (const auto IT = g_roundedRects.find(KEY); IT != g_roundedRects.end())
+        return IT->second;
+    if (g_roundedRects.size() > 128)
+        g_roundedRects.clear();
+
+    auto* const SURF = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    auto* const CR   = cairo_create(SURF);
+    const double R   = std::clamp<double>(radius, 0.0, std::min(w, h) / 2.0);
+    cairo_new_sub_path(CR);
+    cairo_arc(CR, w - R, R, R, -M_PI / 2, 0);
+    cairo_arc(CR, w - R, h - R, R, 0, M_PI / 2);
+    cairo_arc(CR, R, h - R, R, M_PI / 2, M_PI);
+    cairo_arc(CR, R, R, R, M_PI, 3 * M_PI / 2);
+    cairo_close_path(CR);
+    cairo_set_source_rgba(CR, color.r, color.g, color.b, color.a);
+    cairo_fill(CR);
+    cairo_surface_flush(SURF);
+    SP<Render::ITexture> texture = makeShared<Render::GL::CGLTexture>(DRM_FORMAT_ARGB8888, cairo_image_surface_get_data(SURF), sc<uint32_t>(cairo_image_surface_get_stride(SURF)),
+                                                                      Vector2D{sc<double>(w), sc<double>(h)});
+    cairo_destroy(CR);
+    cairo_surface_destroy(SURF);
+    g_roundedRects[KEY] = texture;
+    return texture;
+}
+
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
     if (iconName.empty())
         return nullptr;
@@ -527,6 +558,7 @@ void clearTextCache() {
     g_wrapCache.clear();
     g_imageFiles.clear();
     g_builtinIcons.clear();
+    g_roundedRects.clear();
 }
 
 void flushPass(PHLMONITOR monitor) {

@@ -357,6 +357,7 @@ namespace {
     // so the fold takes FAN_CLOSE_MS from fully open), and every visual is a
     // pure function of that position -- so turning round mid-flight starts
     // from exactly where everything is, with no jump.
+    constexpr size_t FAN_MAX_ITEMS = 12; // the extension's fan-threshold default
     constexpr float FAN_ROW_MS     = 140.F;
     constexpr float FAN_STAGGER_MS = 11.F;
     constexpr float FAN_CLOSE_MS   = 84.F;
@@ -758,7 +759,9 @@ namespace {
             return true;
         if (p.view == StackModel::EView::Fan || !monitor)
             return false;
-        return !StackModel::fanFits(std::max<size_t>(1, p.entries.size()), fanFit(p, monitor));
+        // Automatic, as the extension: the pane past 12 items or when the fan
+        // would not fit the screen.
+        return p.entries.size() > FAN_MAX_ITEMS || !StackModel::fanFits(std::max<size_t>(1, p.entries.size()), fanFit(p, monitor));
     }
 
     // The pane's search: which entries the query keeps, in display order.
@@ -773,8 +776,9 @@ namespace {
         // the stack's sort order, and the last row says how many more there
         // are and opens the folder -- the reference's fan does the same.
         p.overflow = 0;
-        if (!p.grid && p.fanCap > 0 && p.visible.size() > p.fanCap) {
-            const size_t KEEP = std::max<size_t>(1, p.fanCap - 1);
+        const size_t CAP = std::min(p.fanCap > 0 ? p.fanCap : FAN_MAX_ITEMS + 1, FAN_MAX_ITEMS + 1); // rows, the "more" row included
+        if (!p.grid && p.visible.size() > CAP - 1) {
+            const size_t KEEP = std::max<size_t>(1, std::min(CAP - 1, FAN_MAX_ITEMS));
             p.overflow        = p.visible.size() - KEEP;
             p.visible.resize(KEEP);
         }
@@ -1866,41 +1870,51 @@ namespace ScrollOverview::Stacks {
             if (A <= 0.02F && !FROMPILE)
                 continue;
 
-            // The frost cannot be rotated -- queueFrost takes a box, and the
-            // blur pass has no transform. So the PLATE is axis-aligned and only
-            // the artwork on it tilts. Measured against the alternative (no
-            // tilt at all) that reads as the reference's fan; measured against
-            // a rotated plate, which is not available, it is the honest
-            // approximation and it is recorded here as one.
-            // Dock stacks A: the previewed row is enlarged 1.15x with an accent
-            // ring; the keyboard's selection and the pointer's row get the same
-            // ring, lighter. Nothing opens on hover.
+            // The previewed row is enlarged 1.15x; it, the keyboard's selection
+            // and the pointer's row take the accent on their label pill.
             const bool PREV  = !R.action && sc<int>(i) == g_popup->previewing;
             const bool SEL   = !R.action && g_popup->keyboard && sc<int>(i) == g_popup->hover;
             const bool HOVER = !R.action && !g_popup->keyboard && rowHit(R, MOUSE);
             const float KS   = PREV ? 1.15F : 1.F; // the preview's enlargement
             const float K    = KS * R.k;             // ... times the row's flight scale
-            CBox        box  = R.box;
-            if (PREV) {
-                box.x -= box.width * 0.075;
-                box.y -= box.height * 0.075;
-                box.width *= 1.15;
-                box.height *= 1.15;
-            }
-            drawPlate(box, FAN_RADIUS * R.k, A);
-            if (PREV || SEL || HOVER) {
-                CBorderPassElement::SBorderData ring;
-                ring.box        = box;
-                ring.grad1      = ::Config::CGradientValueData(Dock::accentColor().modifyA(A * (PREV ? 1.F : SEL ? 0.6F : 0.35F)));
-                ring.round      = sc<int>(std::round(FAN_RADIUS * SCALE * R.k));
-                ring.borderSize = std::max(1, sc<int>(std::round(2.F * SCALE)));
-                if (drawableBox(ring.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
+
+            // THE ROW TURNS AS ONE PIECE about its icon's centre -- the pivot the
+            // extension sets -- so the label rides the same arc as the icon
+            // (2026-09-24: each part turning about its own centre slid the labels
+            // off). No plate behind the row: like the extension's, a row is its
+            // icon and its label on a pill of its own, and a pill is a texture,
+            // so it can turn with the row where a frost region cannot.
+            const float  ICON = FAN_ICON * SCALE * K;
+            const CBox&  box  = R.box;
+            const double PX   = box.x + box.width - FAN_PAD_X * SCALE * R.k - FAN_ICON * SCALE * R.k / 2.0;
+            const double PY   = box.y + box.height / 2.0;
+            const double CS = std::cos(ROT), SN = std::sin(ROT);
+            // Where a part centred at (x, y) on the upright row lands once turned.
+            const auto turned = [&](double x, double y, double w, double h) {
+                const double DX = x - PX, DY = y - PY;
+                return CBox{PX + DX * CS - DY * SN - w / 2.0, PY + DX * SN + DY * CS - h / 2.0, w, h};
+            };
+            const CBox ib = turned(PX, PY, ICON, ICON).round();
+
+            if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * KS)), false, "",
+                                                      sc<int>(std::round(FAN_LABEL_MAX * SCALE * KS)), 500);
+                TEX && TEX->ok()) {
+                // Rendered at the row's full size (one cached texture) and drawn
+                // scaled with the row, rather than re-rasterised at every size.
+                const double LW = TEX->m_size.x * R.k, LH = TEX->m_size.y * R.k;
+                const double PADX = 10.0 * SCALE * K, PADY = 5.0 * SCALE * K;
+                const double RIGHT = PX - ICON / 2.0 - 8.0 * SCALE * K; // the pill ends just left of the icon
+                const double CXL = RIGHT - PADX - LW / 2.0;
+
+                // The pill: the theme's background, the accent for the row the
+                // pointer, the keyboard or the preview is on.
+                const auto PILLW = sc<int>(std::round((TEX->m_size.x + 20.0 * SCALE * KS))), PILLH = sc<int>(std::round(TEX->m_size.y + 10.0 * SCALE * KS));
+                const CHyprColor BG = (PREV || SEL || HOVER) ? Dock::accentColor().modifyA(PREV ? 0.95F : SEL ? 0.8F : 0.65F)
+                                                             : Config::dockBackgroundColor().modifyA(0.92F);
+                drawTex(OverviewRender::roundedRect(PILLW, PILLH, sc<int>(std::round(8.F * SCALE * KS)), BG), turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY).round(), A, ROT);
+                drawTex(TEX, turned(CXL, PY, LW, LH).round(), A, ROT);
             }
 
-            const float ICON = FAN_ICON * SCALE * K;
-            CBox        ib{std::round(sc<float>(box.x) + sc<float>(box.width) - FAN_PAD_X * SCALE * K - ICON),
-                    std::round(sc<float>(box.y) + (sc<float>(box.height) - ICON) / 2.F), std::round(ICON), std::round(ICON)};
             if (FROMPILE) {
                 // Lerp box and angle from the pile slot to the row; drawn opaque
                 // throughout, because it never stops being on screen.
@@ -1909,17 +1923,6 @@ namespace ScrollOverview::Stacks {
                 drawTex(iconTexture(FROMPILE->entry, sc<int>(std::round(FAN_ICON * SCALE * KS))), fly.round(), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
             } else
                 drawTex(OverviewRender::appIcon(R.icon), ib, A, ROT);
-
-            // Rendered at the row's full size (one cached texture) and drawn
-            // scaled with the row, rather than re-rasterised at every size of
-            // the flight.
-            if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * KS)), false, "",
-                                                      sc<int>(std::round(FAN_LABEL_MAX * SCALE * KS)), 500);
-                TEX && TEX->ok()) {
-                const double LW = TEX->m_size.x * R.k, LH = TEX->m_size.y * R.k;
-                CBox         lb{std::round(sc<float>(box.x) + FAN_PAD_X * SCALE * K), std::round(box.y + (box.height - LH) / 2.0), std::round(LW), std::round(LH)};
-                drawTex(TEX, lb, A, ROT);
-            }
         }
 
         drawGhost();
