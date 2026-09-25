@@ -409,6 +409,44 @@ void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& 
     g_pHyprRenderer->m_renderPass.add(makeUnique<CDockTiltPassElement>(CDockTiltPassElement::SData{.tex = tex, .box = box, .alpha = alpha, .pose = pose}));
 }
 
+bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alpha) {
+    if (!tex || !tex->ok() || boxIn.width < 1 || boxIn.height < 1 || alpha <= 0.F || !g_pHyprRenderer->m_renderData.pMonitor)
+        return false;
+    const auto PROGRAM = tex->m_type == Render::TEXTURE_RGBA && tex->m_transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(tex) ? shader() : nullptr;
+    if (!PROGRAM)
+        return false;
+
+    CBox box = boxIn;
+    g_pHyprRenderer->m_renderData.renderModif.applyToBox(box);
+    const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(box, tex->m_transform);
+
+    Render::GL::g_pHyprOpenGL->blend(true);
+    glBlendFunc(GL_ONE, GL_ONE); // summed, not layered: the samples average out
+
+    glActiveTexture(GL_TEXTURE0);
+    tex->bind();
+    tex->setTexParameter(GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    tex->setTexParameter(GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    tex->setTexParameter(GL_TEXTURE_MAG_FILTER, tex->magFilter);
+    tex->setTexParameter(GL_TEXTURE_MIN_FILTER, tex->minFilter);
+
+    const auto S = Render::GL::g_pHyprOpenGL->useShader(PROGRAM);
+    S->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, MATRIX.getMatrix());
+    S->setUniformInt(SHADER_TEX, 0);
+    S->setUniformFloat(SHADER_ALPHA, std::clamp(alpha, 0.F, 1.F));
+    glUniform3f(g_locGlare, 0.5F, 0.5F, 0.F);
+    glUniform1f(g_locSigma, GLARE_SIGMA);
+
+    glBindVertexArray(S->getUniformLocation(SHADER_SHADER_VAO));
+    Render::GL::g_pHyprOpenGL->scissor(nullptr);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    tex->unbind();
+
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // Hyprland's premultiplied default
+    return true;
+}
+
 void shutdown() {
     g_tilts.clear();
     if (g_shader && Render::GL::g_pHyprOpenGL) {

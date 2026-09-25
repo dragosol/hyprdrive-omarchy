@@ -50,6 +50,7 @@ using namespace Hyprutils::String;
 #include "TextInput.hpp"
 #include "StackReader.hpp"
 #include "DockDrop.hpp"
+#include "StackBlur.hpp"
 #include "DockStacks.hpp"
 #include "AppInfo.hpp"
 #include "CursorShape.hpp"
@@ -2252,13 +2253,14 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // and clearGestures() is what already answers it for them.
     if (g_pHyprRenderer) {
         for (const char* TYPE : {"COverviewBlurPassElement", "COverviewSplitBorderPassElement", "COverviewShadowPassElement", "CDockLivePreviewPassElement",
-                                 "CDockTiltPassElement"})
+                                 "CDockTiltPassElement", "CStackBlurPassElement"})
             g_pHyprRenderer->m_renderPass.removeAllOfType(TYPE);
     }
 
     // After the purge: nothing queued can reach the tilt shader any more, and
     // its GL program has to go while this object's code is still mapped.
     ScrollOverview::DockTilt::shutdown();
+    ScrollOverview::StackBlur::shutdown();
 
     HyprlandAPI::reloadConfig(); // re-adds built-in gestures cleared above
 }

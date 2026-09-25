@@ -648,6 +648,9 @@ static void registerConfigValuesFor() {
                                   "hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:isolate_locations"),
                                   "hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations)", true));
+    addKey(makeShared<CIntValue>(KEY("dock:stack_motion_blur"),
+                                 "dock stacks: motion blur samples while the fan moves (0 = off); each frame averages this many instants", 8,
+                                 SIntValueOptions{.min = 0, .max = 32}));
     addKey(makeShared<CStringValue>(KEY("dock:stack_motion"),
                                     "dock stacks: the fan's motion -- serpantinum (OutQuint travel, OutBack pop, 40 ms stagger) or extension (dock-stacks' 140 ms ease-out-quad)",
                                     Hyprlang::STRING{"serpantinum"}));

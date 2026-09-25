@@ -3,6 +3,7 @@
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
+#include "StackBlur.hpp"
 #include "DockDrop.hpp"
 
 #include "AppSearch.hpp"
@@ -448,6 +449,7 @@ namespace {
         std::unordered_map<std::string, float> hoverAmt; // fan: row key -> 0..1 of its hover blow-up
         bool                hoverMoving = false;         // a blow-up still easing (asks for frames)
         std::string         hoverKey;                    // the row the pointer is on this frame
+        float               lastProgress = 0.F;          // last frame's, for the motion blur's shutter
         Time::steady_tp     lastTick{};      // when tick() last advanced it
         bool                ticked  = false;
     };
@@ -1910,9 +1912,31 @@ namespace ScrollOverview::Stacks {
             }
         };
 
+        // Motion blur (StackBlur): while the fan's rows are sampled, what they
+        // draw is collected rather than queued.
+        std::vector<StackBlur::SSample>* sink    = nullptr;
+        float                            sinkMul = 1.F;
+        CBox                             sinkBounds;
         const auto drawTex = [&](const SP<Render::ITexture>& tex, const CBox& box, float alpha, float rot = 0.F) {
             if (!tex || !tex->ok() || !drawableBox(box))
                 return;
+            if (sink) {
+                CBox b = box;
+                b.rot  = rot;
+                sink->push_back(StackBlur::SSample{.tex = tex, .box = b, .alpha = alpha * sinkMul});
+                // Bounds that hold the box however it is turned.
+                const double R  = std::hypot(box.width, box.height) / 2.0 + 2.0;
+                const double CX = box.x + box.width / 2.0, CY = box.y + box.height / 2.0;
+                const CBox   B{CX - R, CY - R, 2 * R, 2 * R};
+                if (sinkBounds.width < 1)
+                    sinkBounds = B;
+                else {
+                    const double X0 = std::min(sinkBounds.x, B.x), Y0 = std::min(sinkBounds.y, B.y);
+                    const double X1 = std::max(sinkBounds.x + sinkBounds.width, B.x + B.width), Y1 = std::max(sinkBounds.y + sinkBounds.height, B.y + B.height);
+                    sinkBounds = CBox{X0, Y0, X1 - X0, Y1 - Y0};
+                }
+                return;
+            }
             CTexPassElement::SRenderData d;
             d.tex     = tex;
             d.box     = box;
@@ -2068,8 +2092,9 @@ namespace ScrollOverview::Stacks {
         const auto PILE = pileLayout(g_popup->path, g_popup->anchor);
 
         g_popup->hoverKey.clear(); // re-found below, from the row actually under the pointer
-        for (size_t i = 0; i < g_popup->rows.size(); ++i) {
-            const auto& R   = g_popup->rows[i];
+        const auto drawFanRows = [&](const std::vector<SRow>& ROWS) {
+        for (size_t i = 0; i < ROWS.size(); ++i) {
+            const auto& R   = ROWS[i];
             const float ROT = R.rot; // its tilt, or where it is in its spin
             const SPileItem* FROMPILE = nullptr;
             for (const auto& PI : PILE)
@@ -2162,6 +2187,28 @@ namespace ScrollOverview::Stacks {
             } else
                 drawTex(OverviewRender::appIcon(R.icon), ib, A, ROT);
         }
+        };
+
+        // REAL MOTION BLUR (user, 2026-09-24; StackBlur.hpp): while the fan
+        // moves, lay it out at SAMPLES instants across the time this frame
+        // covers and let StackBlur average them. The last sample is "now", so
+        // p.rows -- what clicks are tested against -- ends as the current layout.
+        const int  SAMPLES = std::clamp(Config::getValue<int>("plugin:hyprdrive:dock:stack_motion_blur"), 0, 32);
+        const bool MOVING  = std::abs(PROGRESS - g_popup->lastProgress) > 1e-4F;
+        if (SAMPLES > 1 && MOVING && StackBlur::usable(monitor)) {
+            std::vector<StackBlur::SSample> samples;
+            sink    = &samples;
+            sinkMul = 1.F / sc<float>(SAMPLES);
+            for (int k = SAMPLES - 1; k >= 0; --k) {
+                const float PK = std::clamp(PROGRESS - (PROGRESS - g_popup->lastProgress) * sc<float>(k) / sc<float>(SAMPLES), 0.F, 1.F);
+                layoutFan(*g_popup, monitor, layout.pill, PK);
+                drawFanRows(g_popup->rows);
+            }
+            sink = nullptr;
+            StackBlur::queue(std::move(samples), sinkBounds);
+        } else
+            drawFanRows(g_popup->rows);
+        g_popup->lastProgress = PROGRESS;
 
         drawGhost();
     }

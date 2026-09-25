@@ -80,6 +80,12 @@ bool pressEnabled();
 // A flat pose -- or a frame the shader cannot serve -- is an ordinary texture.
 void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& pose);
 
+// Draw `tex` flat into `box` (render px, may carry rot) with ADDITIVE blending
+// (GL_ONE, GL_ONE) into whatever framebuffer is bound -- the stack fan's motion
+// blur sums its sub-frame samples this way (StackBlur). Only from inside a
+// pass element's draw(). False when this texture cannot go through the shader.
+bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& box, float alpha);
+
 // PLUGIN_EXIT: the shader program belongs to this object's GL state.
 void shutdown();
 
