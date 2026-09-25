@@ -2243,10 +2243,10 @@ namespace ScrollOverview::Stacks {
             // and the pointer's row take the accent on their label pill.
             const bool PREV  = !R.action && sc<int>(i) == g_popup->previewing;
             const bool SEL   = !R.action && g_popup->keyboard && sc<int>(i) == g_popup->hover;
-            const bool HOVER = !R.action && !g_popup->keyboard && rowHit(R, MOUSE);
+            const bool HOVER = !g_popup->keyboard && rowHit(R, MOUSE); // the "N more" row too: it opens the folder (2026-09-25)
             // The hover blow-up: this row's eased 0..1 on the frame clock.
             const std::string ROWKEY = R.path.empty() ? R.name : R.path;
-            if (HOVER && !R.action) {
+            if (HOVER) {
                 if (g_popup->hoverKey != ROWKEY)
                     g_popup->hoverMoving = true; // a new target: keep the frames coming
                 g_popup->hoverKey = ROWKEY;
