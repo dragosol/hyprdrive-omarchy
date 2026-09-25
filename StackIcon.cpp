@@ -3,6 +3,7 @@
 // a dimmed icon for a folder that is gone, the folder inside the outline for an
 // empty one. Everything here draws from cached textures; the listing comes from
 // StackReader, never from the disk on this thread.
+#include "BuiltinIcons.hpp"
 #include "DockStacks.hpp"
 #include "Config.hpp"
 #include "OverviewRender.hpp"
@@ -177,8 +178,18 @@ namespace ScrollOverview::Stacks {
 
         const auto PILEITEMS = pileLayout(S->path, iconBox);
         if (PILEITEMS.empty()) {
-            // EMPTY (or not read yet): the folder inside the outline, until
-            // sub-project C draws its own empty-stack artwork.
+            // EMPTY (or not read yet). Dock stacks C: hyprdrive's open tray with
+            // two ghost cards in the accent, and the folder's own icon small on
+            // its front, so an empty Downloads is still Downloads. With
+            // builtin_icons off: the theme's folder inside the outline.
+            if (Config::getValue<bool>("plugin:hyprdrive:dock:builtin_icons")) {
+                CBox tray = outline;
+                tray.expand(-outline.width * 0.04);
+                add(OverviewRender::appIcon(std::string(BuiltinIcons::STACK_EMPTY)), tray, 0.F, alpha);
+                const double S2 = tray.width * 0.30;
+                add(OverviewRender::appIcon(S->icon), CBox{tray.x + (tray.width - S2) / 2.0, tray.y + tray.height * 0.705 - S2 / 2.0, S2, S2}, 0.F, alpha);
+                return true;
+            }
             CBox inner = outline;
             inner.expand(-outline.width * 0.18);
             add(OverviewRender::appIcon(S->icon), inner, 0.F, alpha * 0.85F);

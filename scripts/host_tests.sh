@@ -49,6 +49,8 @@ run tool_search_test scripts/tool_search_test.cpp
 run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
 run dock_drop_test scripts/dock_drop_test.cpp
 # shellcheck disable=SC2046
+run builtin_icons_test scripts/builtin_icons_test.cpp BuiltinIcons.cpp $(pkg-config --cflags --libs librsvg-2.0)
+# shellcheck disable=SC2046
 run stack_reader_test scripts/stack_reader_test.cpp StackReader.cpp StackModel.cpp $(pkg-config --cflags --libs gio-2.0)
 run omarchy_search_test scripts/omarchy_search_test.cpp OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 

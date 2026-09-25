@@ -14,6 +14,7 @@
 #include <format>
 #include <hyprgraphics/image/Image.hpp>
 #include "AppSearch.hpp"
+#include "BuiltinIcons.hpp"
 #include "Config.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
@@ -188,9 +189,49 @@ SP<Render::ITexture> imageFile(const std::string& path, int px) {
     return texture;
 }
 
+// Dock stacks C: hyprdrive's own artwork (BuiltinIcons), rasterised from the
+// embedded SVG at `px`. Keyed on the accent as well, which the empty stack is
+// drawn in, so a theme change redraws it.
+static std::unordered_map<std::string, SP<Render::ITexture>> g_builtinIcons;
+
+static SP<Render::ITexture> builtinIcon(const std::string& name, int px) {
+    const auto A   = ScrollOverview::Config::highlightColor();
+    const auto HEX = std::format("#{:02x}{:02x}{:02x}", sc<int>(std::clamp(A.r, 0.0, 1.0) * 255.0), sc<int>(std::clamp(A.g, 0.0, 1.0) * 255.0),
+                                 sc<int>(std::clamp(A.b, 0.0, 1.0) * 255.0));
+    const auto KEY = name + "\x01" + std::to_string(px) + "\x01" + HEX;
+    if (const auto IT = g_builtinIcons.find(KEY); IT != g_builtinIcons.end())
+        return IT->second;
+    if (g_builtinIcons.size() > 32)
+        g_builtinIcons.clear();
+
+    SP<Render::ITexture> texture;
+    const auto           SVG = ScrollOverview::BuiltinIcons::svg(name, HEX);
+    if (!SVG.empty()) {
+        Hyprgraphics::CImage image(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(SVG.data()), SVG.size()}, Hyprgraphics::IMAGE_FORMAT_SVG,
+                                   {sc<double>(px), sc<double>(px)});
+        if (image.success()) {
+            if (const auto SURFACE = image.cairoSurface(); SURFACE && SURFACE->cairo()) {
+                auto* const CAIRO = SURFACE->cairo();
+                cairo_surface_flush(CAIRO);
+                auto* const    DATA   = cairo_image_surface_get_data(CAIRO);
+                const int      W      = cairo_image_surface_get_width(CAIRO);
+                const int      H      = cairo_image_surface_get_height(CAIRO);
+                const int      STRIDE = cairo_image_surface_get_stride(CAIRO);
+                const uint32_t FORMAT = cairo_image_surface_get_format(CAIRO) == CAIRO_FORMAT_RGB24 ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_ARGB8888;
+                if (DATA && W > 0 && H > 0)
+                    texture = makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
+            }
+        }
+    }
+    g_builtinIcons[KEY] = texture;
+    return texture;
+}
+
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
     if (iconName.empty())
         return nullptr;
+    if (iconName.starts_with(ScrollOverview::BuiltinIcons::PREFIX))
+        return builtinIcon(iconName, 192);
 
     // The tinted and untinted textures are different pixels, so they are
     // different cache entries. \x01 cannot appear in an icon name.
@@ -485,6 +526,7 @@ void clearTextCache() {
     g_textCacheOld.clear();
     g_wrapCache.clear();
     g_imageFiles.clear();
+    g_builtinIcons.clear();
 }
 
 void flushPass(PHLMONITOR monitor) {

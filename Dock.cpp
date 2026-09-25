@@ -35,6 +35,7 @@
 #include "LauncherEntry.hpp"
 #include "StackReader.hpp"
 #include "TextInput.hpp"
+#include "BuiltinIcons.hpp"
 #include "DockDrop.hpp"
 #include "DockStacks.hpp"
 #include "DockTilt.hpp"
@@ -324,6 +325,7 @@ constexpr const char* KEY_MIDDLE_CLICK  = "plugin:hyprdrive:dock:middle_click_ac
 constexpr const char* KEY_SHIFT_MIDDLE  = "plugin:hyprdrive:dock:shift_middle_click_action";
 constexpr const char* KEY_ISOLATE_WS    = "plugin:hyprdrive:dock:isolate_workspaces";
 constexpr const char* KEY_ISOLATE_LOCATIONS = "plugin:hyprdrive:dock:isolate_locations";
+constexpr const char* KEY_BUILTIN_ICONS     = "plugin:hyprdrive:dock:builtin_icons";
 constexpr const char* KEY_AGNOSTIC_URG  = "plugin:hyprdrive:dock:workspace_agnostic_urgent";
 
 // X34, one key per reference setting: `hot-keys`, `hotkeys-overlay`,
@@ -897,8 +899,10 @@ std::vector<SItem> buildDockItems() {
         for (const auto& LOCATION : Locations::items()) {
             if (LOCATION.mount != MOUNTS)
                 continue;
+            // Dock stacks C: hyprdrive's own Trash, unless the theme's is asked for.
+            const bool OWNTRASH = LOCATION.uri == "trash:///" && Config::getValue<bool>(KEY_BUILTIN_ICONS);
             out.emplace_back(SItem{
-                .icon         = LOCATION.icon,
+                .icon         = OWNTRASH ? std::string(LOCATION.empty ? BuiltinIcons::TRASH_EMPTY : BuiltinIcons::TRASH_FULL) : LOCATION.icon,
                 .running      = ISOLATE && Locations::openWindows(LOCATION.uri),
                 .uri          = LOCATION.uri,
                 .locationName = LOCATION.name,
@@ -1004,7 +1008,8 @@ SItemsKey itemsKey() {
     key.config            = (Config::getValue<bool>(KEY_SHOW_FAVORITES) ? 1U : 0U) |      //
         (ISOLATE_WS ? 2U : 0U) |                                                          //
         (Config::getValue<bool>(KEY_AGNOSTIC_URG) ? 4U : 0U) |                            //
-        (Config::getValue<bool>(KEY_ISOLATE_LOCATIONS) ? 8U : 0U);
+        (Config::getValue<bool>(KEY_ISOLATE_LOCATIONS) ? 8U : 0U) |                       //
+        (Config::getValue<bool>(KEY_BUILTIN_ICONS) ? 16U : 0U);
 
     // Only with isolation on does WHICH desktop is focused change the list.
     // Reading it unconditionally would throw the cache away on every workspace

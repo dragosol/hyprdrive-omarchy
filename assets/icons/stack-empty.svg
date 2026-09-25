@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- hyprdrive's empty stack (dock stacks C). Original artwork: an open
+       frosted tray with two ghost cards where the pile would be. #ACCENT is
+       replaced with the theme accent when the texture is built. -->
+  <defs>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f7fa" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#b8c2cd" stop-opacity="0.92"/>
+    </linearGradient>
+    <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7f8a97" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3a414b" stop-opacity="0.7"/>
+    </linearGradient>
+    <radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#000" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <ellipse cx="128" cy="222" rx="92" ry="12" fill="url(#shadow)"/>
+
+  <!-- back wall of the tray -->
+  <path d="M58 124 Q58 110 72 110 L184 110 Q198 110 198 124 L204 170 L52 170 Z" fill="url(#back)"/>
+
+  <!-- ghost cards: dashed, in the theme accent -->
+  <g fill="#ACCENT" fill-opacity="0.10" stroke="#ACCENT" stroke-opacity="0.85" stroke-width="4" stroke-dasharray="11 8" stroke-linecap="round">
+    <rect x="82" y="84" width="80" height="86" rx="10" transform="rotate(-8 122 127)"/>
+    <rect x="96" y="78" width="80" height="86" rx="10" transform="rotate(6 136 121)"/>
+  </g>
+
+  <!-- front of the tray -->
+  <path d="M40 150 Q40 140 50 140 L206 140 Q216 140 216 150 L210 202 Q209 214 197 214 L59 214 Q47 214 46 202 Z" fill="url(#front)" stroke="#7d8895" stroke-opacity="0.6" stroke-width="1.6"/>
+  <path d="M50 146 L206 146" stroke="#ffffff" stroke-opacity="0.9" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M62 206 L194 206" stroke="#5f6a77" stroke-opacity="0.35" stroke-width="2" stroke-linecap="round"/>
+</svg>

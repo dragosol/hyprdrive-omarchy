@@ -31,7 +31,9 @@ is the original plugin; this repo is the Omarchy adaptation.
   Dock. Downloads is pinned on first run; drag stacks to reorder them. Drop
   files from any file manager onto a stack to move them in (copied across
   drives, never overwriting) or onto Trash to trash them; drag a folder onto
-  the dock and it parts to make room -- let go to pin it there. The
+  the dock and it parts to make room -- let go to pin it there. Trash and
+  empty stacks use hyprdrive's own artwork (`dock:builtin_icons = false` for
+  the icon theme's). The
   store is `~/.local/state/hyprdrive/stacks`; removing a stack never touches
   the folder.
 

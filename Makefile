@@ -43,6 +43,9 @@ all: hyprdrive.so check
 hyprdrive.so: $(OBJS)
 	$(CXX) -shared $(OBJS) -o $@ $(LDLIBS)
 
+# dock stacks C: the icons are #embed-ded, so their object depends on them.
+.build/BuiltinIcons.o: $(wildcard assets/icons/*.svg)
+
 .build/%.o: %.cpp | $(VERSION_HEADER)
 	@mkdir -p .build
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@

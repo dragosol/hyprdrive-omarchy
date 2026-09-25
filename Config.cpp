@@ -648,6 +648,8 @@ static void registerConfigValuesFor() {
                                   "hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:isolate_locations"),
                                   "hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations)", true));
+    addKey(makeShared<CBoolValue>(KEY("dock:builtin_icons"),
+                                  "dock stacks: hyprdrive's own Trash and empty-stack artwork (false = the icon theme's)", true));
 
     addKey(makeShared<CColorValue>(KEY("dock:background_color"),
                                    "hyprgnomedock: pill hue (alpha 0 = Omarchy terminal background, else misc:background_color; opacity is background_opacity)",

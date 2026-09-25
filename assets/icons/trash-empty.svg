@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- hyprdrive's own Trash (dock stacks C). Original artwork: a frosted,
+       ribbed glass bin seen slightly from above. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#9aa5b1"/>
+      <stop offset="0.16" stop-color="#e9eef3"/>
+      <stop offset="0.42" stop-color="#f7f9fb"/>
+      <stop offset="0.78" stop-color="#cfd6de"/>
+      <stop offset="1" stop-color="#8f9aa7"/>
+    </linearGradient>
+    <linearGradient id="bodyShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2129" stop-opacity="0.38"/>
+      <stop offset="0.22" stop-color="#1c2129" stop-opacity="0"/>
+      <stop offset="0.85" stop-color="#1c2129" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1c2129" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#dfe5eb"/>
+      <stop offset="1" stop-color="#96a1ad"/>
+    </linearGradient>
+    <radialGradient id="mouth" cx="0.5" cy="0.2" r="0.75">
+      <stop offset="0" stop-color="#4c5561"/>
+      <stop offset="1" stop-color="#20252c"/>
+    </radialGradient>
+    <radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#000" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="bodyClip">
+      <path d="M50 74 L66 218 A62 13 0 0 0 190 218 L206 74 Z"/>
+    </clipPath>
+  </defs>
+
+  <ellipse cx="128" cy="230" rx="84" ry="13" fill="url(#shadow)"/>
+
+  <!-- body -->
+  <path d="M50 74 L66 218 A62 13 0 0 0 190 218 L206 74 Z" fill="url(#body)"/>
+  <g clip-path="url(#bodyClip)">
+    <!-- ribs: grooves that follow the taper, each with a lit edge -->
+    <g stroke-linecap="round">
+      <g stroke="#6f7a87" stroke-opacity="0.55" stroke-width="7">
+        <line x1="80.4" y1="98" x2="90.8" y2="214"/>
+        <line x1="110.8" y1="98" x2="115.6" y2="216"/>
+        <line x1="145.2" y1="98" x2="140.4" y2="216"/>
+        <line x1="175.6" y1="98" x2="165.2" y2="214"/>
+      </g>
+      <g stroke="#ffffff" stroke-opacity="0.75" stroke-width="2.2">
+        <line x1="84.6" y1="100" x2="94.6" y2="212"/>
+        <line x1="115" y1="100" x2="119.4" y2="214"/>
+        <line x1="149.4" y1="100" x2="144.6" y2="214"/>
+        <line x1="179.8" y1="100" x2="169.4" y2="212"/>
+      </g>
+    </g>
+    <rect x="40" y="60" width="176" height="180" fill="url(#bodyShade)"/>
+    <!-- gloss -->
+    <path d="M62 84 L72 84 L84 214 L78 214 Z" fill="#ffffff" fill-opacity="0.55"/>
+  </g>
+  <path d="M50 74 L66 218 A62 13 0 0 0 190 218 L206 74" fill="none" stroke="#5f6a77" stroke-opacity="0.55" stroke-width="2"/>
+
+  <!-- rim + opening -->
+  <ellipse cx="128" cy="74" rx="82" ry="17" fill="url(#rim)" stroke="#7d8895" stroke-opacity="0.7" stroke-width="1.6"/>
+  <ellipse cx="128" cy="73" rx="71" ry="11.5" fill="url(#mouth)"/>
+  <path d="M57 73 A71 11.5 0 0 0 199 73" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5"/>
+</svg>
