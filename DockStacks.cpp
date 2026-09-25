@@ -467,6 +467,10 @@ namespace {
     bool rowHit(const SRow& R, const Vector2D& point) {
         if (!R.box.containsPoint(point))
             return false;
+        // A fan row in flight is not a target yet: only once it has (nearly)
+        // landed -- a click aimed at the stack must not catch a passing paper.
+        if (R.e < 0.9F)
+            return false;
         return !g_popup || !g_popup->grid || g_popup->gridBox.empty() || g_popup->gridBox.containsPoint(point);
     }
 
@@ -549,7 +553,13 @@ namespace {
             return STAGGER * I;
         // Bottom papers still tend to land first -- they have least far to go --
         // but a pack does not leave in file order.
-        return STAGGER * (0.55F * I + 0.9F * (rowJitter(p, i, 1) + 1.F) / 2.F);
+        // Shifted so the earliest paper leaves at once: any lead-in before
+        // the first movement reads as the click lagging.
+        float lead = 1e9F;
+        const size_t ROWS = std::min(std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0)), STAGGER_ROWS);
+        for (size_t k = 0; k < ROWS; ++k)
+            lead = std::min(lead, STAGGER * (0.55F * sc<float>(k) + 0.9F * (rowJitter(p, k, 1) + 1.F) / 2.F));
+        return STAGGER * (0.55F * I + 0.9F * (rowJitter(p, i, 1) + 1.F) / 2.F) - lead;
     }
 
     // How long the opening timeline is: the pane's grow, or the fan's last
@@ -694,7 +704,10 @@ namespace {
             // The extension's flight: the row starts on the cell's centre at
             // 0.1x and flies to its place growing to full size, scaled about its
             // ICON (the pivot the extension sets), so the icons trace the arc.
-            const double K  = 0.1 + 0.9 * EZ.scale;
+            // Starts at 0.35x in the thrown motion so the first frame already
+            // shows paper leaving (0.1x read as a delay); 0.1x in the extension's.
+            const double K0 = fanMotion().serp ? 0.35 : 0.1;
+            const double K  = K0 + (1.0 - K0) * EZ.scale;
             const double C1X = rest.x + rest.width - FAN_PAD_X * SCALE - ICONW / 2.0, C1Y = rest.y + rest.height / 2.0;
             const double C0X = p.anchor.x + p.anchor.width / 2.0, C0Y = p.anchor.y + p.anchor.height / 2.0;
             // The path: a straight line for the extension; for the thrown pack
@@ -1695,6 +1708,15 @@ namespace ScrollOverview::Stacks {
 
             // Released over nothing that accepts it: no move, no acknowledgement.
             close();
+            return true;
+        }
+
+        // The stack's own cell is a toggle FIRST, whatever is flying over it:
+        // a paper on its way out passes across the cell, and a quick second
+        // click must fold the fan, not open that file (2026-09-24).
+        if (!release && g_popup->anchor.containsPoint(point)) {
+            close();
+            g_swallowToggleRelease = true;
             return true;
         }
 
