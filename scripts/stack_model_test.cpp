@@ -47,9 +47,10 @@ int main() {
     sortEntries(e, ESort::Name);
     check(names(e) == "zdir,a.png,B2.txt,b10.txt,Café.md", "name: " + names(e));
     sortEntries(e, ESort::Modified);
-    check(names(e) == "zdir,B2.txt,a.png,b10.txt,Café.md", "modified: " + names(e));
+    // By date, folders mix with files (2026-09-25): zdir is the oldest, so last.
+    check(names(e) == "B2.txt,a.png,b10.txt,Café.md,zdir", "modified: " + names(e));
     sortEntries(e, ESort::Added);
-    check(names(e) == "zdir,B2.txt,a.png,b10.txt,Café.md", "added: " + names(e));
+    check(names(e) == "B2.txt,a.png,b10.txt,Café.md,zdir", "added: " + names(e));
     sortEntries(e, ESort::Kind);
     check(names(e) == "zdir,a.png,Café.md,B2.txt,b10.txt", "kind: " + names(e));
 

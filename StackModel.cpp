@@ -82,7 +82,10 @@ namespace ScrollOverview::StackModel {
 
     void sortEntries(std::vector<SEntry>& entries, ESort sort) {
         std::ranges::stable_sort(entries, [sort](const SEntry& x, const SEntry& y) {
-            if (x.dir != y.dir)
+            // Folders first only where the reference groups them (by name, by
+            // kind). By DATE they mix with files, as macOS stacks do: a folder
+            // is not newer than a download just for being a folder (2026-09-25).
+            if ((sort == ESort::Name || sort == ESort::Kind) && x.dir != y.dir)
                 return x.dir;
             switch (sort) {
                 case ESort::Added:
