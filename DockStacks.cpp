@@ -633,8 +633,16 @@ namespace {
 
     // Turn round: whatever the popup is doing, it now heads the other way from
     // exactly where it is.
+    void damagePopupMonitor();
+
     void setDirection(SPopup& p, bool leaving) {
         p.leaving = leaving; // the clock simply runs the other way from here
+        // The clock only runs on DRAWN frames, and a fold on the press (its
+        // release swallowed) or a turn-round starts no other animation that
+        // would ask for one -- so the popup sat frozen at p=0 until something
+        // unrelated repainted (2026-09-24 trace). Every change of direction
+        // asks for its frame.
+        damagePopupMonitor();
     }
 
     // Row i's three channels on the fan's timeline: where it is (0 in the
@@ -1262,6 +1270,7 @@ namespace ScrollOverview::Stacks {
         // indistinguishable from a broken dock.
         g_popup = std::move(p);
         traceEvent("  -> NEW popup (opening)");
+        damagePopupMonitor(); // its first frame: nothing else is guaranteed to ask for it
         armSushiPlacement();
     }
 
