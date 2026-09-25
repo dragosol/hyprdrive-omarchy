@@ -2,6 +2,7 @@
 
 #include <systemd/sd-bus.h>
 
+#include <optional>
 #include <string>
 
 // OVERVIEW_CPP_SPEC §13.9 X31. Where the dock's badges come FROM.
@@ -23,15 +24,20 @@
 // main-thread act. Costs no thread, no mutex and no wake pipe.
 namespace ScrollOverview::LauncherEntry {
 
-// The protocol also carries `progress` / `progress-visible`, and the reference
-// draws them as a bar under the icon. X31 asks for indicators, counters and
-// urgency and does NOT ask for a progress bar, so those two are skipped rather
-// than parsed and left unused.
+// The protocol also carries `progress` / `progress-visible`. Dock stacks read
+// them (2026-09-24): Chromium-family browsers publish their download progress
+// this way, and the Downloads stack's bar shows it.
 struct SState {
-    long long count        = 0;
-    bool      countVisible = false;
-    bool      urgent       = false;
+    long long count           = 0;
+    bool      countVisible    = false;
+    bool      urgent          = false;
+    double    progress        = 0.0;
+    bool      progressVisible = false;
 };
+
+// The furthest-along progress any app is publishing right now (0..1), or
+// nullopt when none is. Only browsers publish one in practice.
+std::optional<double> anyProgress();
 
 // By DESKTOP ID ("org.gnome.Nautilus"), the same unit X28's favourites store
 // uses -- the protocol carries "application://org.gnome.Nautilus.desktop" and

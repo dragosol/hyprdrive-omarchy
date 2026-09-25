@@ -40,6 +40,13 @@ namespace ScrollOverview::StackModel {
         }
     }
 
+    bool isPartialDownload(const std::string& name) {
+        for (const std::string_view EXT : {".part", ".crdownload"})
+            if (name.size() > EXT.size() && name.ends_with(EXT))
+                return true;
+        return false;
+    }
+
     bool naturalLess(const std::string& a, const std::string& b) {
         size_t i = 0, j = 0;
         while (i < a.size() && j < b.size()) {

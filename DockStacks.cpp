@@ -455,6 +455,10 @@ namespace {
     };
 
     std::vector<SHop> g_bounces;
+
+    // Stack path -> browser partial files in it at the last listing. Only
+    // folders with a download in flight are kept.
+    std::unordered_map<std::string, size_t> g_downloads;
     std::vector<SHop> g_shakes;
 
     float elapsed(const Time::steady_tp& since) {
@@ -1063,6 +1067,25 @@ namespace ScrollOverview::Stacks {
             } else
                 armBounce(g_trashStack);
         }
+        // DOWNLOADS (2026-09-24, the macOS Downloads stack): a browser's partial
+        // file in a stack's folder puts a progress bar on the cell; when the
+        // count drops, a download finished (or was cancelled -- the folder
+        // cannot tell those apart) and the stack bounces.
+        for (const auto& S : all()) {
+            if (!S.isDir)
+                continue;
+            const auto ST = StackReader::status(S.path);
+            if (!ST.ready)
+                continue;
+            auto& was = g_downloads[S.path];
+            if (ST.downloads < was)
+                armBounce(S.path);
+            if (ST.downloads > 0)
+                LauncherEntry::start(); // Chromium's progress arrives on the session bus
+            was = ST.downloads;
+        }
+        std::erase_if(g_downloads, [](const auto& kv) { return kv.second == 0; });
+
         ++g_storeGeneration; // the dock's item cache (and the pile) key on this
         for (const auto& M : State::monitorState()->monitors())
             if (M)
@@ -1234,6 +1257,11 @@ namespace ScrollOverview::Stacks {
             return;
         g_trashStack = canonical(stackPath);
         StackReader::trash(std::move(paths));
+    }
+
+    size_t downloadsIn(const std::string& stackPath) {
+        const auto IT = g_downloads.find(canonical(stackPath));
+        return IT == g_downloads.end() ? 0 : IT->second;
     }
 
     std::string tooltipSuffix(const std::string& stackPath) {
@@ -1503,8 +1531,14 @@ namespace ScrollOverview::Stacks {
         return g_popup->leaving || popupProgress(*g_popup) < 1.F;
     }
 
+    bool anyDownloading() {
+        return !g_downloads.empty();
+    }
+
     bool animating() {
-        return !g_bounces.empty() || !g_shakes.empty();
+        // A download's bar moves every frame (the indeterminate slide, or the
+        // browser's progress arriving over D-Bus), so it keeps the dock drawing.
+        return !g_bounces.empty() || !g_shakes.empty() || anyDownloading();
     }
 
     std::string visualState() {

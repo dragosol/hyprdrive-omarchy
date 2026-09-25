@@ -139,6 +139,10 @@ int main() {
         check(empty.empty(), "pop empty");
     }
 
+    // Browser partial downloads (2026-09-24).
+    check(isPartialDownload("movie.mkv.part") && isPartialDownload("Unconfirmed 1234.crdownload") && isPartialDownload("a.crdownload"), "partials recognised");
+    check(!isPartialDownload(".part") && !isPartialDownload("part") && !isPartialDownload("spare.parts") && !isPartialDownload("x.partial"), "non-partials refused");
+
     // View as Fan (2026-09-24): capacity agrees with fanFits, the name round-trips.
     {
         for (float top : {300.F, 700.F, 1100.F, 2000.F}) {

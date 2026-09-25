@@ -29,6 +29,10 @@ namespace ScrollOverview::StackModel {
     // Digit runs compare as numbers, everything else ASCII-case-insensitively.
     bool naturalLess(const std::string& a, const std::string& b);
 
+    // A browser's download in progress: Firefox/Zen write `name.part`,
+    // Chromium-family browsers `name.crdownload` (dock stacks, 2026-09-24).
+    bool isPartialDownload(const std::string& name);
+
     // Directories first, then: Name (natural), Added (btime, newest first),
     // Modified (mtime, newest first), Kind (content type, then name). Stable.
     void sortEntries(std::vector<SEntry>& entries, ESort sort);

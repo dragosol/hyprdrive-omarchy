@@ -19,6 +19,7 @@ namespace ScrollOverview::StackReader {
         bool                             ready     = false;
         bool                             truncated = false;
         bool                             missing   = false;
+        size_t                           downloads = 0; // browser partial files (isPartialDownload)
         std::vector<StackModel::SEntry> entries;
     };
 
@@ -27,7 +28,8 @@ namespace ScrollOverview::StackReader {
     struct SStatus {
         bool   ready   = false;
         bool   missing = false;
-        size_t count   = 0;
+        size_t count     = 0;
+        size_t downloads = 0;
     };
     SStatus  status(const std::string& dir);
     void     invalidate(const std::string& dir);         // the next listing() re-reads

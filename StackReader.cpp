@@ -89,6 +89,8 @@ namespace {
                 out.truncated = true;
                 break;
             }
+            if (ScrollOverview::StackModel::isPartialDownload(NAME))
+                ++out.downloads;
             const auto  PATH = E.path().string();
             struct statx sx{};
             SEntry       e{.path = PATH, .name = NAME};
@@ -287,7 +289,7 @@ namespace ScrollOverview::StackReader {
             if (IT == g_cache.end())
                 return {};
         }
-        return SStatus{.ready = IT->second.ready, .missing = IT->second.missing, .count = IT->second.entries.size()};
+        return SStatus{.ready = IT->second.ready, .missing = IT->second.missing, .count = IT->second.entries.size(), .downloads = IT->second.downloads};
     }
 
     void invalidate(const std::string& dir) {

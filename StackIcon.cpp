@@ -5,6 +5,9 @@
 // StackReader, never from the disk on this thread.
 #include "BuiltinIcons.hpp"
 #include "DockStacks.hpp"
+#include <chrono>
+#include <hyprland/src/render/pass/RectPassElement.hpp>
+#include "LauncherEntry.hpp"
 #include "Config.hpp"
 #include "OverviewRender.hpp"
 #include "StackReader.hpp"
@@ -128,7 +131,56 @@ namespace ScrollOverview::Stacks {
         return out;
     }
 
+    // THE DOWNLOAD BAR (2026-09-24, the macOS Downloads stack): a thin bar along
+    // the bottom of the cell while a browser is downloading into the folder --
+    // the browser's own progress when it publishes one (Chromium-family, over
+    // the LauncherEntry protocol), else a segment sliding back and forth.
+    void drawDownloadBar(PHLMONITOR monitor, const std::string& path, const CBox& iconBox, float alpha) {
+        if (downloadsIn(path) == 0 || alpha <= 0.F)
+            return;
+        const double W     = iconBox.width;
+        const double H     = std::max(3.0, std::round(W * 0.075));
+        const CBox   TRACK = CBox{iconBox.x + W * 0.14, iconBox.y + iconBox.height - H - W * 0.02, W * 0.72, H}.round();
+        const int    ROUND = sc<int>(std::round(H / 2.0));
+
+        CRectPassElement::SRectData track;
+        track.box   = TRACK;
+        track.color = CHyprColor{0.F, 0.F, 0.F, 0.55F * alpha};
+        track.round = ROUND;
+        if (drawableBox(track.box))
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(track));
+
+        CBox fill = TRACK;
+        fill.expand(-std::max(1.0, std::round(sc<double>(monitor->m_scale))));
+        if (const auto P = LauncherEntry::anyProgress()) {
+            fill.width = std::max(fill.height, fill.width * *P);
+        } else {
+            const double MS  = sc<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+            const double T   = std::fmod(MS, 1600.0) / 1600.0;           // one sweep there and back
+            const double TRI = T < 0.5 ? T * 2.0 : 2.0 - T * 2.0;        // 0..1..0
+            const double E   = TRI * TRI * (3.0 - 2.0 * TRI);           // eased at both ends
+            const double SEG = fill.width * 0.32;
+            fill.x += (fill.width - SEG) * E;
+            fill.width = SEG;
+        }
+        CRectPassElement::SRectData bar;
+        bar.box   = fill.round();
+        bar.color = Config::highlightColor().modifyA(alpha);
+        bar.round = std::max(1, ROUND - 1);
+        if (drawableBox(bar.box))
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bar));
+    }
+
+    static bool drawCellBody(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose);
+
     bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose) {
+        const bool DREW = drawCellBody(monitor, item, iconBox, alpha, pose);
+        if (DREW && drawableBox(iconBox))
+            drawDownloadBar(monitor, item.stackPath, iconBox, alpha);
+        return DREW;
+    }
+
+    static bool drawCellBody(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose) {
         if (!item.stackDir)
             return false;
         const auto* S = findStack(item.stackPath);

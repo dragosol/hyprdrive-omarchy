@@ -3,6 +3,7 @@
 #include <systemd/sd-bus.h>
 #include <wayland-server.h>
 
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 
@@ -89,6 +90,16 @@ namespace {
         return ok;
     }
 
+    bool readDoubleVariant(sd_bus_message* m, double& out) {
+        if (sd_bus_message_enter_container(m, 'v', "d") <= 0)
+            return false;
+        double     v  = 0.0;
+        const bool OK = sd_bus_message_read_basic(m, 'd', &v) >= 0;
+        sd_bus_message_exit_container(m);
+        out = v;
+        return OK;
+    }
+
     bool readBoolVariant(sd_bus_message* m, bool& out) {
         int v = 0;
         if (sd_bus_message_enter_container(m, 'v', "b") <= 0)
@@ -134,6 +145,10 @@ namespace {
                 handled = readBoolVariant(m, state.countVisible);
             else if (K == "urgent")
                 handled = readBoolVariant(m, state.urgent);
+            else if (K == "progress")
+                handled = readDoubleVariant(m, state.progress);
+            else if (K == "progress-visible")
+                handled = readBoolVariant(m, state.progressVisible);
 
             if (!handled)
                 sd_bus_message_skip(m, "v");
@@ -142,7 +157,8 @@ namespace {
         }
         sd_bus_message_exit_container(m);
 
-        if (BEFORE.count == state.count && BEFORE.countVisible == state.countVisible && BEFORE.urgent == state.urgent)
+        if (BEFORE.count == state.count && BEFORE.countVisible == state.countVisible && BEFORE.urgent == state.urgent && BEFORE.progress == state.progress &&
+            BEFORE.progressVisible == state.progressVisible)
             return 0;
 
         g_states[ID] = state;
@@ -171,6 +187,14 @@ namespace {
         return 0;
     }
 
+}
+
+std::optional<double> anyProgress() {
+    std::optional<double> out;
+    for (const auto& [ID, S] : g_states)
+        if (S.progressVisible)
+            out = std::max(out.value_or(0.0), std::clamp(S.progress, 0.0, 1.0));
+    return out;
 }
 
 SState state(const std::string& desktopId) {
