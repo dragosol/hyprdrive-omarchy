@@ -41,6 +41,7 @@ namespace ScrollOverview::StackReader {
         uint64_t    seq   = 0;
         size_t      moved = 0;
         std::string error;
+        bool        trashed = false; // a trash job (the Trash hops), not a move
     };
     void         trash(std::vector<std::string> paths); // on the worker; result in lastTrashResult()
     // Dock stacks B: move `paths` into `dir` (copy when they are on another

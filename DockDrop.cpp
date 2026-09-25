@@ -40,6 +40,14 @@
 #include <hyprland/src/state/MonitorState.hpp>
 
 #include <cerrno>
+#include <sys/resource.h>
+#include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <fstream>
+#include <filesystem>
+#include <deque>
+#include <condition_variable>
 #include <chrono>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -53,9 +61,16 @@ namespace {
     struct SState {
         WP<IDataSource>          source; // the drag we asked
         std::string              data;   // text/uri-list so far
-        bool                     eof = false;
+        bool                     eof = false; // everything asked for has arrived
+        bool                     uriDone = true, imgDone = true;
         std::vector<std::string> paths;
         size_t                   files = 0, dirs = 0;
+
+        // FROM A BROWSER (2026-09-24): no local file, but a web address in the
+        // uri-list and/or the image itself in an image/* format.
+        std::vector<std::string> webUrls;
+        std::string              imgMime, imgData;
+        bool                     web = false;
 
         ECell       cell = ECell::None;
         std::string stack;     // the hovered stack's path
@@ -64,6 +79,8 @@ namespace {
     SState           g;
     wl_event_source* g_readSource = nullptr;
     int              g_readFd     = -1;
+    wl_event_source* g_imgSource  = nullptr;
+    int              g_imgFd      = -1;
     uint64_t         g_placeholderGen = 1;
 
     // A drop released before the source finished answering: acted on when the
@@ -77,13 +94,39 @@ namespace {
     std::string      g_placeholderPath;
     int              g_placeholderIndex = -1;
 
-    void closeRead() {
+    void closeUri() {
         if (g_readSource)
             wl_event_source_remove(g_readSource);
         g_readSource = nullptr;
         if (g_readFd >= 0)
             ::close(g_readFd);
         g_readFd = -1;
+    }
+    void closeImg() {
+        if (g_imgSource)
+            wl_event_source_remove(g_imgSource);
+        g_imgSource = nullptr;
+        if (g_imgFd >= 0)
+            ::close(g_imgFd);
+        g_imgFd = -1;
+    }
+    void closeRead() {
+        closeUri();
+        closeImg();
+    }
+
+    // http(s) lines of a uri-list (a browser's drag of a picture or a link).
+    std::vector<std::string> webUrlsOf(const std::string& data) {
+        std::vector<std::string> out;
+        std::istringstream       in(data);
+        std::string              line;
+        while (std::getline(in, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                line.pop_back();
+            if (line.starts_with("http://") || line.starts_with("https://"))
+                out.push_back(line);
+        }
+        return out;
     }
 
     void damageAll() {
@@ -113,8 +156,13 @@ namespace {
     // The list arrived: decode it and count files vs folders (a few local
     // stats, once per drag).
     void finishList() {
-        g.paths = DockDropModel::parseUriList(g.data);
+        g.paths   = DockDropModel::parseUriList(g.data);
+        g.webUrls = webUrlsOf(g.data);
         g.files = g.dirs = 0;
+        // Nothing local, but a picture or a web address: one thing to save.
+        g.web = g.paths.empty() && (!g.imgData.empty() || !g.webUrls.empty());
+        if (g.web)
+            g.files = 1;
         for (const auto& P : g.paths) {
             struct stat st{};
             if (::stat(P.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
@@ -124,7 +172,21 @@ namespace {
         }
     }
 
-    void perform(const Dock::SDropHit& hit, EAction act, const std::vector<std::string>& paths) {
+    struct SWeb {
+        bool                     web = false;
+        std::vector<std::string> urls;
+        std::string              mime, data;
+    };
+    void saveWeb(const std::string& stackPath, SWeb w); // below
+
+    void perform(const Dock::SDropHit& hit, EAction act, const std::vector<std::string>& paths, SWeb web = {}) {
+        if (web.web) {
+            // Only a stack takes something from the web: it is saved into the
+            // folder. Onto Trash or a gap it means nothing.
+            if (act == EAction::IntoStack)
+                saveWeb(hit.stackPath, std::move(web));
+            return;
+        }
         switch (act) {
             case EAction::IntoStack: Stacks::moveFrom(hit.stackPath, paths); break;
             case EAction::ToTrash: Stacks::trashFrom("", paths); break;
@@ -142,8 +204,17 @@ namespace {
             return;
         const bool FOLDER = g.dirs == 1 && g.files == 0;
         const auto& HIT   = FOLDER ? P.asFolder : P.asFiles;
-        perform(HIT, DockDropModel::resolve(HIT.cell, g.files, g.dirs), g.paths);
+        perform(HIT, DockDropModel::resolve(HIT.cell, g.files, g.dirs), g.paths, SWeb{g.web, g.webUrls, g.imgMime, g.imgData});
         g = SState{};
+    }
+
+    void maybeComplete() {
+        if (!g.uriDone || !g.imgDone)
+            return;
+        g.eof = true;
+        finishList();
+        finishPending();
+        damageAll();
     }
 
     int onReadable(int fd, uint32_t, void*) {
@@ -157,11 +228,28 @@ namespace {
                 continue;
             }
             if (N == 0 || errno != EAGAIN) {
-                g.eof = true;
-                closeRead();
-                finishList();
-                finishPending();
-                damageAll();
+                g.uriDone = true;
+                closeUri();
+                maybeComplete();
+            }
+            break;
+        }
+        return 0;
+    }
+
+    int onImgReadable(int fd, uint32_t, void*) {
+        char buf[65536];
+        for (;;) {
+            const ssize_t N = ::read(fd, buf, sizeof(buf));
+            if (N > 0) {
+                if (g.imgData.size() < (64u << 20)) // a 64 MB picture is the limit
+                    g.imgData.append(buf, sc<size_t>(N));
+                continue;
+            }
+            if (N == 0 || errno != EAGAIN) {
+                g.imgDone = true;
+                closeImg();
+                maybeComplete();
             }
             break;
         }
@@ -171,22 +259,40 @@ namespace {
     void requestList(const SP<IDataSource>& src) {
         g_pending.reset();
         closeRead();
+        g        = SState{};
         g.source = src;
-        g.data.clear();
-        g.eof = false;
-        g.paths.clear();
-        g.files = g.dirs = 0;
-        bool hasUris = false;
-        for (const auto& M : src->mimes())
+        const auto MIMES = src->mimes();
+        bool       hasUris = false;
+        std::string img;
+        std::string all;
+        for (const auto& M : MIMES) {
             hasUris |= M == "text/uri-list";
-        if (!hasUris)
-            return; // not a drag of files: the dock ignores it
-        int fds[2];
-        if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0)
-            return;
-        g_readFd     = fds[0];
-        g_readSource = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, fds[0], WL_EVENT_READABLE, onReadable, nullptr);
-        src->send("text/uri-list", Hyprutils::OS::CFileDescriptor{fds[1]}); // the source owns the write end now
+            all += M + " ";
+        }
+        for (const char* WANT : {"image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "image/bmp"})
+            if (img.empty() && std::ranges::find(MIMES, std::string{WANT}) != MIMES.end())
+                img = WANT;
+        Stacks::traceEvent("drag offers: " + all);
+        if (!hasUris && img.empty())
+            return; // neither files nor a picture: the dock ignores it
+
+        const auto ASK = [&](const char* mime, int& fd, wl_event_source*& source, wl_event_loop_fd_func_t cb) {
+            int fds[2];
+            if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0)
+                return false;
+            fd     = fds[0];
+            source = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, fds[0], WL_EVENT_READABLE, cb, nullptr);
+            src->send(mime, Hyprutils::OS::CFileDescriptor{fds[1]}); // the source owns the write end now
+            return true;
+        };
+        if (hasUris)
+            g.uriDone = !ASK("text/uri-list", g_readFd, g_readSource, onReadable);
+        if (!img.empty()) {
+            g.imgMime = img;
+            g.imgDone = !ASK(img.c_str(), g_imgFd, g_imgSource, onImgReadable);
+        }
+        if (g.uriDone && g.imgDone)
+            maybeComplete();
     }
 }
 
@@ -257,6 +363,123 @@ namespace {
 
     bool outActive() {
         return g_out && !g_out->m_over && PROTO::data && PROTO::data->m_dnd.currentSource.lock() == g_out;
+    }
+}
+
+namespace {
+    // ---- SAVING WHAT A BROWSER DROPPED (2026-09-24) -------------------------
+    // Off the compositor: a worker writes the picture's bytes -- or downloads
+    // the address with curl -- into a staging folder beside the user's cache
+    // (same filesystem as home, so the final step is a rename), then hands the
+    // file to StackReader's move job like any other drop, whose result bounces
+    // the stack (or shakes it with the error).
+    struct SFetch {
+        std::string dir, name, url, data;
+    };
+    std::mutex              g_fetchMutex;
+    std::condition_variable g_fetchCv;
+    std::deque<SFetch>      g_fetchQueue;
+    std::thread             g_fetchWorker;
+    bool                    g_fetchStop = false;
+
+    std::string percentDecode(const std::string& in) {
+        gchar* out = g_uri_unescape_string(in.c_str(), nullptr);
+        std::string r = out ? out : in;
+        g_free(out);
+        return r;
+    }
+
+    // A file name for what came from `url`: its last path segment, decoded,
+    // without query or fragment, made safe; `ext` appended when it has none
+    // that matches.
+    std::string nameFor(const std::string& url, const std::string& ext) {
+        std::string path = url;
+        if (const auto Q = path.find_first_of("?#"); Q != std::string::npos)
+            path.resize(Q);
+        std::string base = path.substr(path.find_last_of('/') + 1);
+        base             = percentDecode(base);
+        std::erase_if(base, [](char c) { return c == '/' || c == '\0' || c == '\\'; });
+        while (!base.empty() && base.front() == '.')
+            base.erase(base.begin());
+        if (base.size() > 180)
+            base.resize(180);
+        if (base.empty())
+            base = ext.empty() ? "download" : "image";
+        if (!ext.empty()) {
+            const auto DOT = base.find_last_of('.');
+            const auto CUR = DOT == std::string::npos ? std::string{} : base.substr(DOT);
+            const bool OK  = CUR == ext || (ext == ".jpg" && CUR == ".jpeg");
+            if (!OK)
+                base += ext;
+        }
+        return base;
+    }
+
+    void fetchMain() {
+        ::setpriority(PRIO_PROCESS, 0, 5);
+        std::unique_lock lock(g_fetchMutex);
+        while (!g_fetchStop) {
+            g_fetchCv.wait(lock, [] { return g_fetchStop || !g_fetchQueue.empty(); });
+            if (g_fetchStop)
+                break;
+            auto job = std::move(g_fetchQueue.front());
+            g_fetchQueue.pop_front();
+            lock.unlock();
+
+            std::error_code ec;
+            const auto      STAGE = std::string(g_get_user_cache_dir()) + "/hyprdrive/drops/" + std::to_string(::getpid()) + "-" +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+            std::filesystem::create_directories(STAGE, ec);
+            const auto FILE = STAGE + "/" + job.name;
+            bool       ok   = false;
+            if (!job.data.empty()) {
+                std::ofstream out(FILE, std::ios::binary);
+                out.write(job.data.data(), sc<std::streamsize>(job.data.size()));
+                ok = out.good();
+            } else if (!job.url.empty()) {
+                std::vector<std::string> args{"curl", "-fsSL", "--max-time", "20", "-o", FILE, job.url};
+                std::vector<char*>       argv;
+                for (auto& a : args)
+                    argv.push_back(a.data());
+                argv.push_back(nullptr);
+                gint status = -1;
+                ok = g_spawn_sync(nullptr, argv.data(), nullptr, static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL),
+                                  nullptr, nullptr, nullptr, nullptr, &status, nullptr) &&
+                    g_spawn_check_wait_status(status, nullptr) && std::filesystem::exists(FILE, ec);
+            }
+            if (ok)
+                StackReader::moveOrCopyInto(job.dir, {FILE}); // its result bounces (or shakes) the stack
+            // The staging folder of an earlier drop is empty by now; tidy them.
+            for (const auto& E : std::filesystem::directory_iterator(std::string(g_get_user_cache_dir()) + "/hyprdrive/drops", ec))
+                if (E.is_directory(ec) && std::filesystem::is_empty(E.path(), ec))
+                    std::filesystem::remove(E.path(), ec);
+            lock.lock();
+        }
+    }
+
+    void saveWeb(const std::string& stackPath, SWeb w) {
+        static const std::unordered_map<std::string, std::string> EXT{{"image/png", ".png"},  {"image/jpeg", ".jpg"}, {"image/webp", ".webp"},
+                                                                       {"image/gif", ".gif"},  {"image/avif", ".avif"}, {"image/bmp", ".bmp"}};
+        SFetch job;
+        job.dir = stackPath;
+        const std::string URL = w.urls.empty() ? std::string{} : w.urls.front();
+        if (!w.data.empty()) {
+            const auto IT = EXT.find(w.mime);
+            job.name      = nameFor(URL, IT == EXT.end() ? std::string{} : IT->second);
+            job.data      = std::move(w.data);
+        } else if (!URL.empty()) {
+            job.name = nameFor(URL, "");
+            job.url  = URL;
+        } else
+            return;
+        Stacks::expectJobFor(stackPath); // the result bounces this stack
+        std::scoped_lock lock(g_fetchMutex);
+        if (g_fetchStop)
+            return;
+        g_fetchQueue.push_back(std::move(job));
+        if (!g_fetchWorker.joinable())
+            g_fetchWorker = std::thread(fetchMain);
+        g_fetchCv.notify_one();
     }
 }
 
@@ -386,7 +609,7 @@ namespace ScrollOverview::DockDrop {
         // Aimed at the dock: the dock takes it. The drag is CANCELLED whatever
         // happens next, so the window under the dock never receives it and the
         // source never thinks its files were moved.
-        if (!g.eof && g_readFd >= 0) {
+        if (!g.eof && (g_readFd >= 0 || g_imgFd >= 0)) {
             // The source has not finished answering: take the drop now, act
             // when the list lands.
             g_pending = SPending{Dock::dropCellAt(monitor, local, false), Dock::dropCellAt(monitor, local, true), std::chrono::steady_clock::now()};
@@ -400,9 +623,10 @@ namespace ScrollOverview::DockDrop {
         const auto HIT   = Dock::dropCellAt(monitor, local, g.eof && g.dirs == 1 && g.files == 0);
         const auto ACT   = g.eof ? DockDropModel::resolve(HIT.cell, g.files, g.dirs) : EAction::None;
         const auto PATHS = g.paths;
+        SWeb       WEB{g.web, g.webUrls, g.imgMime, g.imgData};
         PROTO::data->abortDndIfPresent();
         reset();
-        perform(HIT, ACT, PATHS);
+        perform(HIT, ACT, PATHS, std::move(WEB));
         return true;
     }
 
@@ -424,6 +648,14 @@ namespace ScrollOverview::DockDrop {
     }
 
     void shutdown() {
+        {
+            std::scoped_lock lock(g_fetchMutex);
+            g_fetchStop = true;
+            g_fetchQueue.clear();
+        }
+        g_fetchCv.notify_all();
+        if (g_fetchWorker.joinable())
+            g_fetchWorker.join(); // at most one curl's --max-time
         // Our source's code is about to be unloaded: a drag of ours must not
         // outlive it (the drag state and the offers hold it only weakly).
         if (outActive())

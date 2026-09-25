@@ -1367,7 +1367,8 @@ namespace ScrollOverview::Stacks {
                 armShake(g_trashStack);
             } else {
                 armBounce(g_trashStack);
-                armBounce("trash:///"); // the Trash cell's hop key: it hops when something lands in it (user, 2026-09-24)
+                if (R.trashed)
+                    armBounce("trash:///"); // the Trash hops only when something landed in IT
             }
         }
         // DOWNLOADS (2026-09-24, the macOS Downloads stack): a browser's partial
@@ -1580,6 +1581,10 @@ namespace ScrollOverview::Stacks {
 
     bool popupShowsStack(const std::string& stackPath) {
         return g_popup && g_popup->path == canonical(stackPath) && !g_popup->grid;
+    }
+
+    void expectJobFor(const std::string& stackPath) {
+        g_trashStack = canonical(stackPath);
     }
 
     void moveFrom(const std::string& stackPath, std::vector<std::string> paths) {

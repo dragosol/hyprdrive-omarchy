@@ -217,6 +217,9 @@ namespace ScrollOverview::Stacks {
     // Move (or copy, across drives) `paths` into the stack's folder, on the
     // worker; the stack bounces when it lands, or shakes with the error.
     void moveFrom(const std::string& stackPath, std::vector<std::string> paths);
+    // The next StackReader job result belongs to this stack (it bounces or
+    // shakes): for a move enqueued from a worker (DockDrop's browser drops).
+    void expectJobFor(const std::string& stackPath);
     // Appended to a stack's tooltip: "Folder not found", a recent trash error, or "".
     std::string tooltipSuffix(const std::string& stackPath);
     // A stack icon name in the icon theme dock:stack_icon_theme picks: the

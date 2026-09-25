@@ -97,7 +97,11 @@ namespace {
             if (statx(AT_FDCWD, PATH.c_str(), AT_STATX_SYNC_AS_STAT, STATX_BTIME | STATX_MTIME | STATX_CTIME | STATX_TYPE, &sx) == 0) {
                 e.dir   = S_ISDIR(sx.stx_mode);
                 e.mtime = sx.stx_mtime.tv_sec;
-                e.btime = (sx.stx_mask & STATX_BTIME) ? sx.stx_btime.tv_sec : sx.stx_ctime.tv_sec;
+                // "Added" = added to THIS FOLDER (user, 2026-09-24): a file moved
+                // in keeps its birth time from wherever it was made, but the
+                // move changes its ctime -- and a file created here has
+                // ctime == birth. ctime can only be later than birth.
+                e.btime = sx.stx_ctime.tv_sec;
             }
             e.kind = contentKind(PATH, e.dir);
             e.icon = iconFor(e.kind);
@@ -239,6 +243,7 @@ namespace {
                     }
                     ++r.moved;
                 }
+                r.trashed = true;
                 lock.lock();
                 r.seq   = ++g_trashSeq;
                 g_trash = r;
