@@ -414,6 +414,9 @@ namespace {
         Time::steady_tp     since{};
         bool                leaving = false;
         float               tl      = 0.F;   // position on the opening timeline, ms
+        std::unordered_map<std::string, float> hoverAmt; // fan: row key -> 0..1 of its hover blow-up
+        bool                hoverMoving = false;         // a blow-up still easing (asks for frames)
+        std::string         hoverKey;                    // the row the pointer is on this frame
         Time::steady_tp     lastTick{};      // when tick() last advanced it
         bool                ticked  = false;
     };
@@ -507,6 +510,10 @@ namespace {
     // folder's listing, so the rows fly out with their contents, not over a
     // "Loading" row.
     constexpr float MAX_TICK_MS  = 34.F;
+    // The fan row under the pointer blows up (user, 2026-09-24), on the
+    // extension's hover curve: 120 ms ease-out-quad, here to 1.1x.
+    constexpr float HOVER_MS     = 120.F;
+    constexpr float HOVER_SCALE  = 1.10F;
     constexpr float OPEN_WAIT_MS = 400.F;
 
     void tick(SPopup& p) {
@@ -518,6 +525,15 @@ namespace {
         // has its previous entries to show, and shows them.
         if (!p.leaving && p.loading && p.entries.empty() && elapsed(p.since) < OPEN_WAIT_MS)
             DT = 0.F;
+        // The hover blow-ups ride the same frame clock.
+        p.hoverMoving = false;
+        for (auto& [KEY, amt] : p.hoverAmt) {
+            const bool ON = KEY == p.hoverKey;
+            amt           = std::clamp(amt + (ON ? 1.F : -1.F) * DT / HOVER_MS, 0.F, 1.F);
+            p.hoverMoving |= ON ? amt < 1.F : amt > 0.F;
+        }
+        std::erase_if(p.hoverAmt, [&](const auto& kv) { return kv.second <= 0.F && kv.first != p.hoverKey; });
+
         const float SPAN = timelineSpan(p);
         if (p.leaving)
             p.tl = std::max(0.F, p.tl - DT * SPAN / (p.grid ? PANE_CLOSE_MS : FAN_CLOSE_MS));
@@ -1677,7 +1693,7 @@ namespace ScrollOverview::Stacks {
         // it was up. The two things that CAN change it while it sits there --
         // a wheel tick on a grid, and the view/sort rows of its menu -- damage
         // the monitor themselves now, because nothing else would.
-        return g_popup->leaving || popupProgress(*g_popup) < 1.F;
+        return g_popup->leaving || popupProgress(*g_popup) < 1.F || g_popup->hoverMoving;
     }
 
     bool anyDownloading() {
@@ -1938,6 +1954,7 @@ namespace ScrollOverview::Stacks {
         // outline meanwhile (popupShowsStack), so they visibly left it.
         const auto PILE = pileLayout(g_popup->path, g_popup->anchor);
 
+        g_popup->hoverKey.clear(); // re-found below, from the row actually under the pointer
         for (size_t i = 0; i < g_popup->rows.size(); ++i) {
             const auto& R   = g_popup->rows[i];
             const float ROT = FAN_TILT_DEG * sc<float>(i) * 3.14159265F / 180.F;
@@ -1959,7 +1976,22 @@ namespace ScrollOverview::Stacks {
             const bool PREV  = !R.action && sc<int>(i) == g_popup->previewing;
             const bool SEL   = !R.action && g_popup->keyboard && sc<int>(i) == g_popup->hover;
             const bool HOVER = !R.action && !g_popup->keyboard && rowHit(R, MOUSE);
-            const float KS   = PREV ? 1.15F : 1.F; // the preview's enlargement
+            // The hover blow-up: this row's eased 0..1 on the frame clock.
+            const std::string ROWKEY = R.path.empty() ? R.name : R.path;
+            if (HOVER && !R.action) {
+                if (g_popup->hoverKey != ROWKEY)
+                    g_popup->hoverMoving = true; // a new target: keep the frames coming
+                g_popup->hoverKey = ROWKEY;
+                g_popup->hoverAmt.try_emplace(ROWKEY, 0.F);
+            }
+            float HB = 1.F;
+            if (const auto IT = g_popup->hoverAmt.find(ROWKEY); IT != g_popup->hoverAmt.end()) {
+                const float U = IT->second;
+                HB            = 1.F + (HOVER_SCALE - 1.F) * (1.F - (1.F - U) * (1.F - U));
+            }
+
+            const float KT   = PREV ? 1.15F : 1.F; // the preview's enlargement (the size text is rasterised at)
+            const float KS   = KT * HB;              // ... and the hover blow-up
             const float K    = KS * R.k;             // ... times the row's flight scale
 
             // THE ROW TURNS AS ONE PIECE about its icon's centre -- the pivot the
@@ -1980,22 +2012,31 @@ namespace ScrollOverview::Stacks {
             };
             const CBox ib = turned(PX, PY, ICON, ICON).round();
 
-            if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * KS)), false, "",
-                                                      sc<int>(std::round(FAN_LABEL_MAX * SCALE * KS)), 500);
+            if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * KT)), false, "",
+                                                      sc<int>(std::round(FAN_LABEL_MAX * SCALE * KT)), 500);
                 TEX && TEX->ok()) {
                 // Rendered at the row's full size (one cached texture) and drawn
-                // scaled with the row, rather than re-rasterised at every size.
-                const double LW = TEX->m_size.x * R.k, LH = TEX->m_size.y * R.k;
+                // scaled with the row -- flight and blow-up -- rather than
+                // re-rasterised at every size.
+                const double LW = TEX->m_size.x * R.k * HB, LH = TEX->m_size.y * R.k * HB;
                 const double PADX = 10.0 * SCALE * K, PADY = 5.0 * SCALE * K;
                 const double RIGHT = PX - ICON / 2.0 - 8.0 * SCALE * K; // the pill ends just left of the icon
                 const double CXL = RIGHT - PADX - LW / 2.0;
 
                 // The pill: the theme's background, the accent for the row the
                 // pointer, the keyboard or the preview is on.
-                const auto PILLW = sc<int>(std::round((TEX->m_size.x + 20.0 * SCALE * KS))), PILLH = sc<int>(std::round(TEX->m_size.y + 10.0 * SCALE * KS));
-                const CHyprColor BG = (PREV || SEL || HOVER) ? Dock::accentColor().modifyA(PREV ? 0.95F : SEL ? 0.8F : 0.65F)
-                                                             : Config::dockBackgroundColor().modifyA(0.92F);
-                drawTex(OverviewRender::roundedRect(PILLW, PILLH, sc<int>(std::round(8.F * SCALE * KS)), BG), turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY).round(), A, ROT);
+                const auto PILLW = sc<int>(std::round((TEX->m_size.x + 20.0 * SCALE * KT))), PILLH = sc<int>(std::round(TEX->m_size.y + 10.0 * SCALE * KT));
+                // Always the dock's own dark, so the label stays readable; the
+                // row being pointed at, selected or previewed says so with the
+                // blow-up and a heavier outline, not an accent fill (an accent
+                // behind light text washed it out, 2026-09-24).
+                const CHyprColor BG = Config::dockBackgroundColor().modifyA(0.92F);
+                // Bordered like the dock itself (user, 2026-09-24): the theme
+                // accent at Hyprland's border weight, baked into the pill so
+                // it turns with it.
+                const int BORDER = std::max(1, Config::getValue<int>("general:border_size")) * ((PREV || SEL || HOVER) ? 2 : 1);
+                drawTex(OverviewRender::roundedRect(PILLW, PILLH, sc<int>(std::round(8.F * SCALE * KT)), BG, Config::highlightColor(), BORDER),
+                        turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY).round(), A, ROT);
                 drawTex(TEX, turned(CXL, PY, LW, LH).round(), A, ROT);
             }
 

@@ -44,7 +44,7 @@ SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted = 
 // A filled rounded rectangle as a TEXTURE, so it can be drawn rotated (a rect
 // pass element cannot be). Cached by size, radius and colour; cleared with the
 // text cache. Dock stacks: the fan's label pills.
-SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& color);
+SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& color, const CHyprColor& border = CHyprColor{0, 0, 0, 0}, int borderPx = 0);
 
 // OVERVIEW_CPP_SPEC 13.12 X57. The label plate, drawn ONCE for both surfaces
 // that need one: hyprgnomedock's icon tooltip and the overview tile's caption.

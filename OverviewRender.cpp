@@ -240,10 +240,11 @@ static SP<Render::ITexture> builtinIcon(const std::string& name, int px) {
 
 static std::unordered_map<std::string, SP<Render::ITexture>> g_roundedRects;
 
-SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& color) {
+SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& color, const CHyprColor& border, int borderPx) {
     if (w < 2 || h < 2)
         return nullptr;
-    const auto KEY = std::format("{}x{}r{}#{:.3f},{:.3f},{:.3f},{:.3f}", w, h, radius, color.r, color.g, color.b, color.a);
+    const auto KEY = std::format("{}x{}r{}#{:.3f},{:.3f},{:.3f},{:.3f}b{}#{:.3f},{:.3f},{:.3f},{:.3f}", w, h, radius, color.r, color.g, color.b, color.a, borderPx, border.r, border.g,
+                                 border.b, border.a);
     if (const auto IT = g_roundedRects.find(KEY); IT != g_roundedRects.end())
         return IT->second;
     if (g_roundedRects.size() > 128)
@@ -259,7 +260,18 @@ SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& col
     cairo_arc(CR, R, R, R, M_PI, 3 * M_PI / 2);
     cairo_close_path(CR);
     cairo_set_source_rgba(CR, color.r, color.g, color.b, color.a);
-    cairo_fill(CR);
+    if (borderPx > 0 && border.a > 0.0) {
+        cairo_fill_preserve(CR);
+        // Stroked on the inside of the edge (clip to the shape, double width),
+        // so the outline never grows the texture past w x h.
+        cairo_save(CR);
+        cairo_clip_preserve(CR);
+        cairo_set_line_width(CR, borderPx * 2.0);
+        cairo_set_source_rgba(CR, border.r, border.g, border.b, border.a);
+        cairo_stroke(CR);
+        cairo_restore(CR);
+    } else
+        cairo_fill(CR);
     cairo_surface_flush(SURF);
     SP<Render::ITexture> texture = makeShared<Render::GL::CGLTexture>(DRM_FORMAT_ARGB8888, cairo_image_surface_get_data(SURF), sc<uint32_t>(cairo_image_surface_get_stride(SURF)),
                                                                       Vector2D{sc<double>(w), sc<double>(h)});
