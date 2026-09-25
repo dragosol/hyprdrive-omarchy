@@ -144,9 +144,9 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // the path is checked by the filesystem, which is the only thing
             // that can actually answer.
             .name            = "stack",
-            .argPattern      = std::regex{"^(clear|(pin|unpin|toggle) .+|view (fan|grid|auto) .+|sort (name|mtime|added|modified|kind) .+)$"},
+            .argPattern      = std::regex{"^(clear|(pin|unpin|toggle|open) .+|view (fan|grid|auto) .+|sort (name|mtime|added|modified|kind) .+)$"},
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | view auto|fan|grid <path> | sort name|added|modified|kind <path> | clear",
+            .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | open <path> | view auto|fan|grid <path> | sort name|added|modified|kind <path> | clear",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "stack"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.stack");
@@ -648,6 +648,9 @@ static void registerConfigValuesFor() {
                                   "hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:isolate_locations"),
                                   "hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations)", true));
+    addKey(makeShared<CStringValue>(KEY("dock:stack_motion"),
+                                    "dock stacks: the fan's motion -- serpantinum (OutQuint travel, OutBack pop, 40 ms stagger) or extension (dock-stacks' 140 ms ease-out-quad)",
+                                    Hyprlang::STRING{"serpantinum"}));
     addKey(makeShared<CBoolValue>(KEY("dock:builtin_icons"),
                                   "dock stacks: hyprdrive's own Trash and empty-stack artwork (false = the icon theme's)", true));
 

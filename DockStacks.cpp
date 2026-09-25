@@ -359,9 +359,36 @@ namespace {
     // pure function of that position -- so turning round mid-flight starts
     // from exactly where everything is, with no jump.
     constexpr size_t FAN_MAX_ITEMS = 12; // the extension's fan-threshold default
-    constexpr float FAN_ROW_MS     = 140.F;
-    constexpr float FAN_STAGGER_MS = 11.F;
-    constexpr float FAN_CLOSE_MS   = 84.F;
+    // TWO MOTIONS (user, 2026-09-24: "the fanning out doesn't seem natural
+    // enough ... try Serpantinum's curves and timing"), picked by
+    // dock:stack_motion so they can be compared on the real desktop:
+    //   extension   -- dragosol/dock-stacks' FanPopup: every channel one
+    //                  140 ms ease-out-quad, 11 ms stagger, 84 ms fold.
+    //   serpantinum -- ilyamiro/serpantinum's dock popups and lists: position
+    //                  280 ms OutQuint (a long soft landing), size 280 ms
+    //                  OutBack overshoot 1.1 (a slight pop past full size),
+    //                  opacity 260 ms OutCubic, rows 40 ms apart (its
+    //                  Dropdown), a 150 ms fold (its InQuint exit), hover
+    //                  220 ms OutCubic (its dock buttons). A long fan's stagger
+    //                  is squeezed so the whole entrance stays under 300 ms of
+    //                  stagger -- 13 rows x 40 ms would be three quarters of a
+    //                  second before the last row even starts.
+    struct SFanMotion {
+        float rowMs, alphaMs, staggerMs, staggerCapMs, closeMs, hoverMs;
+        bool  serp;
+    };
+    const SFanMotion& fanMotion() {
+        static const SFanMotion EXT{140.F, 140.F, 11.F, 1e9F, 84.F, 120.F, false};
+        static const SFanMotion SERP{280.F, 260.F, 40.F, 300.F, 150.F, 220.F, true};
+        return ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_motion") == "extension" ? EXT : SERP;
+    }
+    float outQuad(float t) { return 1.F - (1.F - t) * (1.F - t); }
+    float outCubic(float t) { return 1.F - std::pow(1.F - t, 3.F); }
+    float outQuint(float t) { return 1.F - std::pow(1.F - t, 5.F); }
+    float outBack(float t, float s) { // Qt's Easing.OutBack
+        t -= 1.F;
+        return t * t * ((s + 1.F) * t + s) + 1.F;
+    }
     constexpr float PANE_OPEN_MS   = 200.F;
     constexpr float PANE_CLOSE_MS  = 150.F;
 
@@ -380,6 +407,7 @@ namespace {
         int         vis    = -1; // index into SPopup::visible; -1 for the action row
         float       k      = 1.F; // fan: the row's scale on its way in or out
         float       e      = 1.F; // fan: the row's eased progress (0 in the cell)
+        float       a      = 1.F; // fan: the row's opacity
     };
 
     struct SPopup {
@@ -492,13 +520,19 @@ namespace {
         return std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count();
     }
 
+    float fanStagger(const SPopup& p) {
+        const auto&  M    = fanMotion();
+        const size_t ROWS = std::min(std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0)), STAGGER_ROWS);
+        return ROWS > 1 ? std::min(M.staggerMs, M.staggerCapMs / sc<float>(ROWS - 1)) : M.staggerMs;
+    }
+
     // How long the opening timeline is: the pane's grow, or the fan's last
     // row landing.
     float timelineSpan(const SPopup& p) {
         if (p.grid)
             return PANE_OPEN_MS;
         const size_t ROWS = std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0));
-        return FAN_ROW_MS + FAN_STAGGER_MS * sc<float>(std::min(ROWS, STAGGER_ROWS) - 1);
+        return fanMotion().rowMs + fanStagger(p) * sc<float>(std::min(ROWS, STAGGER_ROWS) - 1);
     }
 
     // THE CLOCK IS THE FRAMES, not the wall (2026-09-24: "it lags, then loads
@@ -512,7 +546,6 @@ namespace {
     constexpr float MAX_TICK_MS  = 34.F;
     // The fan row under the pointer blows up (user, 2026-09-24), on the
     // extension's hover curve: 120 ms ease-out-quad, here to 1.1x.
-    constexpr float HOVER_MS     = 120.F;
     constexpr float HOVER_SCALE  = 1.10F;
     constexpr float OPEN_WAIT_MS = 400.F;
 
@@ -529,14 +562,14 @@ namespace {
         p.hoverMoving = false;
         for (auto& [KEY, amt] : p.hoverAmt) {
             const bool ON = KEY == p.hoverKey;
-            amt           = std::clamp(amt + (ON ? 1.F : -1.F) * DT / HOVER_MS, 0.F, 1.F);
+            amt           = std::clamp(amt + (ON ? 1.F : -1.F) * DT / fanMotion().hoverMs, 0.F, 1.F);
             p.hoverMoving |= ON ? amt < 1.F : amt > 0.F;
         }
         std::erase_if(p.hoverAmt, [&](const auto& kv) { return kv.second <= 0.F && kv.first != p.hoverKey; });
 
         const float SPAN = timelineSpan(p);
         if (p.leaving)
-            p.tl = std::max(0.F, p.tl - DT * SPAN / (p.grid ? PANE_CLOSE_MS : FAN_CLOSE_MS));
+            p.tl = std::max(0.F, p.tl - DT * SPAN / (p.grid ? PANE_CLOSE_MS : fanMotion().closeMs));
         else
             p.tl = std::min(SPAN, p.tl + DT);
     }
@@ -556,11 +589,19 @@ namespace {
         p.leaving = leaving; // the clock simply runs the other way from here
     }
 
-    // Row i's own eased progress on the fan's timeline: 0 in the cell, 1 in place.
-    float fanRowEase(const SPopup& p, size_t i, float progress) {
-        const float T  = progress * timelineSpan(p) - FAN_STAGGER_MS * sc<float>(std::min(i, STAGGER_ROWS));
-        const float TI = std::clamp(T / FAN_ROW_MS, 0.F, 1.F);
-        return 1.F - (1.F - TI) * (1.F - TI); // ease-out-quad, as the extension
+    // Row i's three channels on the fan's timeline: where it is (0 in the
+    // cell, 1 in place), how big (may pass 1 -- the OutBack pop), how opaque.
+    struct SRowEase {
+        float pos = 0.F, scale = 0.F, alpha = 0.F;
+    };
+    SRowEase fanRowEase(const SPopup& p, size_t i, float progress) {
+        const auto& M  = fanMotion();
+        const float T  = progress * timelineSpan(p) - fanStagger(p) * sc<float>(std::min(i, STAGGER_ROWS));
+        const float TR = std::clamp(T / M.rowMs, 0.F, 1.F);
+        const float TA = std::clamp(T / M.alphaMs, 0.F, 1.F);
+        if (!M.serp)
+            return {outQuad(TR), outQuad(TR), outQuad(TR)};
+        return {outQuint(TR), outBack(TR, 1.1F), outCubic(TA)};
     }
 
     // ------------------------------------------------------------ fan layout --
@@ -587,7 +628,8 @@ namespace {
 
             // The row's own eased progress on the ONE timeline (fanRowEase):
             // the stagger and the reversal both come from there.
-            const float E = fanRowEase(p, i, progress);
+            const auto  EZ = fanRowEase(p, i, progress);
+            const float E  = EZ.pos;
 
             const float ROWH  = FAN_ROW_H * SCALE;
             const float RESTY = BASE - FAN_STEP * SCALE * (FI + 1.F);
@@ -622,7 +664,7 @@ namespace {
             // The extension's flight: the row starts on the cell's centre at
             // 0.1x and flies to its place growing to full size, scaled about its
             // ICON (the pivot the extension sets), so the icons trace the arc.
-            const double K  = 0.1 + 0.9 * E;
+            const double K  = 0.1 + 0.9 * EZ.scale;
             const double C1X = rest.x + rest.width - FAN_PAD_X * SCALE - ICONW / 2.0, C1Y = rest.y + rest.height / 2.0;
             const double C0X = p.anchor.x + p.anchor.width / 2.0, C0Y = p.anchor.y + p.anchor.height / 2.0;
             const double CXN = C0X + (C1X - C0X) * E, CYN = C0Y + (C1Y - C0Y) * E;
@@ -637,6 +679,7 @@ namespace {
                 .vis    = ACTION ? -1 : sc<int>(i),
                 .k      = sc<float>(K),
                 .e      = E,
+                .a      = EZ.alpha,
             });
         }
     }
@@ -1967,7 +2010,7 @@ namespace ScrollOverview::Stacks {
             // drawn at all rather than drawn at zero, which keeps its frost off
             // the queue too.
             const float E = R.e; // the row's own eased progress: 0 in the cell, 1 in place
-            const float A = E;   // it fades in as it flies, as the extension's does
+            const float A = R.a; // its own opacity channel
             if (A <= 0.02F && !FROMPILE)
                 continue;
 
@@ -1987,7 +2030,7 @@ namespace ScrollOverview::Stacks {
             float HB = 1.F;
             if (const auto IT = g_popup->hoverAmt.find(ROWKEY); IT != g_popup->hoverAmt.end()) {
                 const float U = IT->second;
-                HB            = 1.F + (HOVER_SCALE - 1.F) * (1.F - (1.F - U) * (1.F - U));
+                HB            = 1.F + (HOVER_SCALE - 1.F) * (fanMotion().serp ? outCubic(U) : outQuad(U));
             }
 
             const float KT   = PREV ? 1.15F : 1.F; // the preview's enlargement (the size text is rasterised at)

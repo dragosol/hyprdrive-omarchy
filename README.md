@@ -148,7 +148,7 @@ one above it.
 | `window` | `select`, `close`, `click` | Act on the window under the cursor |
 | `minimize` | `window`, `restore` | Minimize into the dock, or restore |
 | `hotkey` | `overlay`, or `1`–`10` | Dock slot (unbound here; Super+digit is workspaces) |
-| `stack` | `pin`/`unpin`/`toggle` `<path>`, `view auto\|fan\|grid <path>`, `sort name\|added\|modified\|kind <path>`, `clear` | Pin and configure dock stacks |
+| `stack` | `pin`/`unpin`/`toggle`/`open` `<path>`, `view auto\|fan\|grid <path>`, `sort name\|added\|modified\|kind <path>`, `clear` | Pin and configure dock stacks |
 
 ```lua
 hl.bind("SUPER + SHIFT + D", hl.plugin.hyprdrive.overview("toggle"))

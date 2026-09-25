@@ -1658,6 +1658,27 @@ static SDispatchResult onStackDispatcher(std::string arg) {
         return {};
     }
 
+    // `open <path>`: open (or, if it is open, fold) that stack's fan or pane on
+    // the focused monitor's dock, as a click on its cell would -- for keybinds,
+    // and for testing without touching the pointer.
+    if (VERB == "open") {
+        const auto MONITOR = Desktop::focusState()->monitor();
+        if (!MONITOR)
+            return {.success = false, .error = "no focused monitor"};
+        std::string want = rest;
+        while (want.size() > 1 && want.back() == '/')
+            want.pop_back();
+        for (const auto& ITEM : ScrollOverview::Dock::layout(MONITOR).items) {
+            if (ITEM.stack && !ITEM.placeholder && ITEM.stackPath == want) {
+                ScrollOverview::Stacks::open(MONITOR, ITEM, ITEM.iconBox);
+                ScrollOverview::Dock::damageIfChanged(MONITOR);
+                g_pHyprRenderer->damageMonitor(MONITOR);
+                return {};
+            }
+        }
+        return {.success = false, .error = "no such stack on this dock"};
+    }
+
     if (VERB == "view" || VERB == "sort") {
         const auto CUT2 = rest.find(' ');
         if (CUT2 == std::string::npos)
