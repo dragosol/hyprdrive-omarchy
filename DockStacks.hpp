@@ -210,6 +210,9 @@ namespace ScrollOverview::Stacks {
     std::string pickIcon(const std::string& names);
     // Is this stack's fan/pane open or closing? (its pile items are in flight)
     bool popupShowsStack(const std::string& stackPath);
+    // Move `paths` to the Trash off the compositor thread, remembering whose
+    // they were: the stack bounces when it lands, or shakes with the error.
+    void trashFrom(const std::string& stackPath, std::vector<std::string> paths);
     // Appended to a stack's tooltip: "Folder not found", a recent trash error, or "".
     std::string tooltipSuffix(const std::string& stackPath);
 

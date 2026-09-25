@@ -1026,6 +1026,12 @@ static void                registerRawKeyHooks() {
                 // Esc, Space; the pane also types). handleKey claims SPACE only
                 // when there is an item to preview, so everywhere else the key
                 // falls through untouched -- the scope rule above still holds.
+                // The dock menu's Rename field, while it is up, owns the keyboard.
+                if (ScrollOverview::Dock::menuWantsKeyboard() && ScrollOverview::Dock::menuHandleKey(event.keycode)) {
+                    g_consumedPresses.insert(event.keycode);
+                    info.cancelled = true;
+                    return;
+                }
                 if (ScrollOverview::Stacks::keyboardActive() && ScrollOverview::Stacks::handleKey(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;

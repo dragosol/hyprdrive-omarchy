@@ -388,6 +388,11 @@ namespace {
         bool                leaving = false;
     };
 
+    std::string     g_trashStack;   // whose trash job is in flight (Stacks::trashFrom)
+    uint64_t        g_trashSeenSeq = 0;
+    std::string     g_trashError;   // shown in that stack's tooltip for 3 s
+    Time::steady_tp g_trashErrorAt{};
+
     std::optional<SPopup> g_popup;
 
     // THE MOVE GESTURE. Dragging a file out of a fan/grid and onto another
@@ -967,7 +972,19 @@ namespace ScrollOverview::Stacks {
             applyListing(*g_popup, sortedListing(g_popup->path, g_popup->sort), popupMonitorPtr());
             damagePopupMonitor();
         }
-        ++g_storeGeneration; // the dock's item cache (and the pile, later) key on this
+        // A trash job landed: bounce the stack on success; on a failure shake it
+        // and put the error (and how many made it) in its tooltip.
+        if (const auto R = StackReader::lastTrashResult(); R.seq != g_trashSeenSeq) {
+            g_trashSeenSeq = R.seq;
+            StackReader::invalidate(g_trashStack);
+            if (!R.error.empty()) {
+                g_trashError   = R.error + (R.moved ? " (" + std::to_string(R.moved) + " moved)" : "");
+                g_trashErrorAt = Time::steadyNow();
+                armShake(g_trashStack);
+            } else
+                armBounce(g_trashStack);
+        }
+        ++g_storeGeneration; // the dock's item cache (and the pile) key on this
         for (const auto& M : State::monitorState()->monitors())
             if (M)
                 g_pHyprRenderer->damageMonitor(M);
@@ -1124,9 +1141,19 @@ namespace ScrollOverview::Stacks {
         return g_popup && g_popup->path == canonical(stackPath) && !g_popup->grid;
     }
 
+    void trashFrom(const std::string& stackPath, std::vector<std::string> paths) {
+        if (paths.empty())
+            return;
+        g_trashStack = canonical(stackPath);
+        StackReader::trash(std::move(paths));
+    }
+
     std::string tooltipSuffix(const std::string& stackPath) {
-        if (const auto L = StackReader::listing(canonical(stackPath)); L.ready && L.missing)
+        const auto CANON = canonical(stackPath);
+        if (const auto L = StackReader::listing(CANON); L.ready && L.missing)
             return "Folder not found";
+        if (CANON == g_trashStack && !g_trashError.empty() && elapsed(g_trashErrorAt) < 3000.F)
+            return g_trashError;
         return {};
     }
 

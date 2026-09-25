@@ -33,6 +33,8 @@
 #include "DropDecision.hpp" // V3: where a released icon drag goes, as a pure function
 #include "IOverview.hpp"
 #include "LauncherEntry.hpp"
+#include "StackReader.hpp"
+#include "TextInput.hpp"
 #include "DockStacks.hpp"
 #include "DockTilt.hpp"
 #include "Locations.hpp"
@@ -2905,6 +2907,18 @@ enum class ERow : uint8_t {
     InfoBack,
     // The overview, filtered on the app (user, 2026-09-24).
     ShowWindows,
+    // Dock stacks A: the stack's own menu.
+    StackRecent,      // exec = the file's path
+    StackSortKey,     // exec = sort name
+    StackDisplayKey,  // exec = "stack" | "folder"
+    StackViewKey,     // exec = "auto" | "grid"
+    StackShowParent,
+    StackRename,
+    StackRenameField,
+    StackTrashNewest,
+    StackEmptyAsk,
+    StackEmptyConfirm,
+    StackEmptyCancel,
 };
 
 // OMARCHY-STYLE ROWS: a Nerd Font glyph column, the label, and a dim hint on the
@@ -2939,6 +2953,8 @@ namespace MenuGlyph {
     inline constexpr const char* DISK     = "\uf1c0"; // database
     inline constexpr const char* SOURCE   = "\uf0e8"; // sitemap
     inline constexpr const char* TEXT     = "\uf036"; // align-left
+    inline constexpr const char* CHECK    = "\uf00c"; // check
+    inline constexpr const char* PENCIL   = "\uf040"; // pencil
 }
 
 struct SRow {
@@ -2966,6 +2982,11 @@ struct SMenu {
     CBox              anchor; // the icon cell the menu hangs off
     CBox              box;    // the whole plate, filled by renderMenu
     std::vector<SRow> rows;
+
+    // Dock stacks A: Rename in Dock turns the menu into a one-line field.
+    bool        editing = false;
+    std::string editText;
+    bool        editFresh = false; // the name is "selected": the first key replaces it
 };
 
 std::optional<SMenu> g_menu;
@@ -2986,21 +3007,6 @@ std::string elide(const std::string& text) {
 // V11 V4. What the stack's own store says about it, for the menu labels --
 // the row has to name the state it will move TO, so it has to read the state
 // it is in.
-bool stackIsGrid(const SItem& item) {
-    for (const auto& S : Stacks::all()) {
-        if (S.path == item.stackPath)
-            return S.view == StackModel::EView::Grid;
-    }
-    return false;
-}
-
-bool stackIsByTime(const SItem& item) {
-    for (const auto& S : Stacks::all()) {
-        if (S.path == item.stackPath)
-            return S.sort == StackModel::ESort::Modified;
-    }
-    return false;
-}
 
 // Spec §13.9 X28, in the order the spec lists them: .desktop Actions, window
 // list, Show Details, Add/Remove from Favorites, Quit.
@@ -3022,13 +3028,54 @@ std::vector<SRow> buildRows(const SItem& item) {
     // design mistake (its stack icon has no context menu at all, and a folder
     // can only be unpinned from a GTK preferences window two clicks away).
     if (item.stack) {
-        if (item.stackDir) {
-            rows.emplace_back(SRow{.kind = ERow::StackView, .label = stackIsGrid(item) ? "Show as Fan" : "Show as Grid", .glyph = MenuGlyph::GRID});
-            rows.emplace_back(SRow{.kind = ERow::StackSort, .label = stackIsByTime(item) ? "Sort by Name" : "Sort by Date", .glyph = MenuGlyph::SORT});
+        // Dock stacks A: the stack's menu, in eight groups.
+        const Stacks::SStack* S = nullptr;
+        for (const auto& X : Stacks::all())
+            if (X.path == item.stackPath)
+                S = &X;
+        if (item.stackDir && S) {
+            // 1. Recent items: the 5 newest files, with how long ago they arrived.
+            auto L = StackReader::listing(S->path);
+            std::erase_if(L.entries, [](const StackModel::SEntry& e) { return e.dir; });
+            StackModel::sortEntries(L.entries, StackModel::ESort::Added);
+            const int64_t NOW = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            for (size_t i = 0; i < std::min<size_t>(5, L.entries.size()); ++i)
+                rows.emplace_back(SRow{.kind  = ERow::StackRecent,
+                                       .label = elide(L.entries[i].name),
+                                       .exec  = L.entries[i].path,
+                                       .glyph = MenuGlyph::FILE,
+                                       .hint  = StackModel::relativeAge(NOW, L.entries[i].btime)});
+            if (!L.entries.empty())
+                rows.emplace_back(SRow{.kind = ERow::Separator});
+
+            // 2-4. Sort by / Display as / View as, the current one checked.
+            const auto CHECKED = [](bool on) { return on ? std::string{MenuGlyph::CHECK} : std::string{}; };
+            static const char* SORTNAMES[] = {"Name", "Date Added", "Date Modified", "Kind"};
+            for (const auto K : {StackModel::ESort::Name, StackModel::ESort::Added, StackModel::ESort::Modified, StackModel::ESort::Kind})
+                rows.emplace_back(SRow{.kind  = ERow::StackSortKey,
+                                       .label = std::string("Sort by ") + SORTNAMES[sc<int>(K)],
+                                       .exec  = StackModel::sortName(K),
+                                       .glyph = CHECKED(S->sort == K)});
+            rows.emplace_back(SRow{.kind = ERow::Separator});
+            rows.emplace_back(SRow{.kind = ERow::StackDisplayKey, .label = "Display as Stack", .exec = "stack", .glyph = CHECKED(S->display == StackModel::EDisplay::Stack)});
+            rows.emplace_back(SRow{.kind = ERow::StackDisplayKey, .label = "Display as Folder", .exec = "folder", .glyph = CHECKED(S->display == StackModel::EDisplay::Folder)});
+            rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Automatic", .exec = "auto", .glyph = CHECKED(S->view == StackModel::EView::Auto)});
+            rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Grid", .exec = "grid", .glyph = CHECKED(S->view == StackModel::EView::Grid)});
             rows.emplace_back(SRow{.kind = ERow::Separator});
         }
+        // 5-6.
         rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = "Open in Files", .glyph = MenuGlyph::FOLDER});
-        rows.emplace_back(SRow{.kind = ERow::StackUnpin, .label = "Unpin from Dock", .glyph = MenuGlyph::UNPIN});
+        rows.emplace_back(SRow{.kind = ERow::StackShowParent, .label = "Show in Files", .glyph = MenuGlyph::FOLDER});
+        rows.emplace_back(SRow{.kind = ERow::StackRename, .label = "Rename in Dock\u2026", .glyph = MenuGlyph::PENCIL});
+        // 7. Both trash, never delete; in the warning colour.
+        if (item.stackDir) {
+            rows.emplace_back(SRow{.kind = ERow::Separator});
+            rows.emplace_back(SRow{.kind = ERow::StackTrashNewest, .label = "Move Newest to Trash", .glyph = MenuGlyph::TRASH, .danger = true});
+            rows.emplace_back(SRow{.kind = ERow::StackEmptyAsk, .label = "Empty Folder\u2026", .glyph = MenuGlyph::TRASH, .danger = true});
+        }
+        // 8. Removing a stack never touches the folder.
+        rows.emplace_back(SRow{.kind = ERow::Separator});
+        rows.emplace_back(SRow{.kind = ERow::StackUnpin, .label = "Remove from Dock", .glyph = MenuGlyph::UNPIN});
         return rows;
     }
 
@@ -3201,10 +3248,41 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         // V11 V4. Per-STACK, and written straight to the store: the toggle is
         // the setting, so there is nowhere else for it to live.
-        case ERow::StackView: Stacks::setViewMode(item.stackPath, stackIsGrid(item) ? StackModel::EView::Auto : StackModel::EView::Grid); return;
-        case ERow::StackSort: Stacks::setSort(item.stackPath, stackIsByTime(item) ? StackModel::ESort::Name : StackModel::ESort::Modified); return;
+        case ERow::StackRecent: Locations::activate("file://" + row.exec); return;
+        case ERow::StackSortKey:
+            if (const auto K = StackModel::sortFromName(row.exec))
+                Stacks::setSort(item.stackPath, *K);
+            return;
+        case ERow::StackDisplayKey: Stacks::setDisplay(item.stackPath, row.exec == "folder" ? StackModel::EDisplay::Folder : StackModel::EDisplay::Stack); return;
+        case ERow::StackViewKey: Stacks::setViewMode(item.stackPath, row.exec == "grid" ? StackModel::EView::Grid : StackModel::EView::Auto); return;
+        case ERow::StackShowParent:
+            // FileManager1.ShowItems: the parent folder, this one selected.
+            Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method",
+                                              "org.freedesktop.FileManager1.ShowItems", "['file://" + item.stackPath + "']", ""})
+                .runAsync();
+            return;
+        case ERow::StackTrashNewest: {
+            auto L = StackReader::listing(item.stackPath);
+            std::erase_if(L.entries, [](const StackModel::SEntry& e) { return e.dir; });
+            StackModel::sortEntries(L.entries, StackModel::ESort::Added);
+            if (!L.entries.empty())
+                Stacks::trashFrom(item.stackPath, {L.entries.front().path});
+            return;
+        }
+        case ERow::StackEmptyConfirm: {
+            std::vector<std::string> paths;
+            for (const auto& E : StackReader::listing(item.stackPath).entries)
+                paths.push_back(E.path);
+            Stacks::trashFrom(item.stackPath, std::move(paths));
+            return;
+        }
+        // In-place views: handled in menuClick, never activated.
+        case ERow::StackRename:
+        case ERow::StackRenameField:
+        case ERow::StackEmptyAsk:
+        case ERow::StackEmptyCancel: return;
         case ERow::StackOpen: Locations::activate(item.uri); return;
-        case ERow::StackUnpin: Stacks::unpin(item.stackPath); return;
+        case ERow::StackUnpin: Stacks::unpin(item.stackPath); return; // "Remove from Dock": the folder is untouched
 
         case ERow::EmptyTrash: Locations::emptyTrash(); return;
         case ERow::Mount: Locations::mount(item.uri); return;
@@ -4379,6 +4457,50 @@ void closeMenu() {
     g_menu.reset();
 }
 
+bool menuWantsKeyboard() {
+    return g_menu && g_menu->editing;
+}
+
+// The Rename field's keys. Enter saves (an unchanged or empty name restores the
+// folder's own), Esc cancels, and every other key belongs to the field while it
+// is up -- nothing typed at it reaches the window underneath.
+bool menuHandleKey(uint32_t keycode) {
+    if (!menuWantsKeyboard())
+        return false;
+    auto& M = *g_menu;
+    if (keycode == 28) { // ENTER
+        const auto BASE = Stacks::labelFor(M.item.stackPath);
+        Stacks::setLabel(M.item.stackPath, M.editText == BASE ? std::string{} : M.editText);
+        closeMenu();
+        return true;
+    }
+    if (keycode == 1) { // ESC
+        closeMenu();
+        return true;
+    }
+    switch (keycode) {
+        case 29: case 42: case 54: case 56: case 97: case 100: case 125: case 126: return false; // modifiers
+        default: break;
+    }
+    if (keycode == 14) { // BACKSPACE: on the untouched name, clears it all
+        if (M.editFresh)
+            M.editText.clear();
+        else
+            TextInput::popCodepoint(M.editText);
+    } else if (const auto K = TextInput::keyFor(overviewActiveXkbState(), keycode); K.consume) {
+        if (M.editFresh)
+            M.editText.clear(); // typing over the selected name, as any rename field does
+        M.editText += K.text;
+    } else
+        return true;
+    M.editFresh = false;
+    M.rows.front().label = M.editText + "\u2502";
+    for (const auto& MON : State::monitorState()->monitors())
+        if (MON && MON->m_id == M.monitor)
+            g_pHyprRenderer->damageMonitor(MON);
+    return true;
+}
+
 bool menuContains(PHLMONITOR monitor, const Vector2D& point) {
     return g_menu && monitor && g_menu->monitor == monitor->m_id && !g_menu->box.empty() && g_menu->box.containsPoint(point);
 }
@@ -4431,6 +4553,31 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
         return false; // the plate, between rows: swallowed by the caller, menu stays up
 
     // Get Info / Back: the menu stays up and changes what it shows.
+    // Dock stacks A: Empty Folder asks first, in place; Rename becomes a field.
+    if (ROW->kind == ERow::StackEmptyAsk) {
+        const auto N = StackReader::listing(g_menu->item.stackPath).entries.size();
+        g_menu->rows = {
+            SRow{.kind = ERow::InfoLine, .label = "Move " + std::to_string(N) + (N == 1 ? " item" : " items") + " to Trash?", .glyph = MenuGlyph::TRASH},
+            SRow{.kind = ERow::Separator},
+            SRow{.kind = ERow::StackEmptyCancel, .label = "Cancel", .glyph = MenuGlyph::BACK},
+            SRow{.kind = ERow::StackEmptyConfirm, .label = "Move to Trash", .glyph = MenuGlyph::TRASH, .danger = true},
+        };
+        return true;
+    }
+    if (ROW->kind == ERow::StackEmptyCancel) {
+        g_menu->rows = buildRows(g_menu->item);
+        return true;
+    }
+    if (ROW->kind == ERow::StackRename) {
+        g_menu->editing   = true;
+        g_menu->editText  = g_menu->item.locationName;
+        g_menu->editFresh = true;
+        g_menu->rows     = {SRow{.kind = ERow::StackRenameField, .label = g_menu->editText + "\u2502", .glyph = MenuGlyph::PENCIL, .hint = "type to rename \u00b7 \u21b5 save"}};
+        return true;
+    }
+    if (ROW->kind == ERow::StackRenameField || ROW->kind == ERow::InfoLine)
+        return true; // the field and the question are not buttons
+
     if (ROW->kind == ERow::Details || ROW->kind == ERow::InfoBack) {
         const bool INFO    = ROW->kind == ERow::Details;
         const auto ITEM    = g_menu->item;
