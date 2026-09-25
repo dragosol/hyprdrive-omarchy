@@ -1839,7 +1839,12 @@ namespace ScrollOverview::Stacks {
         // The stack's own cell is a toggle FIRST, whatever is flying over it:
         // a paper on its way out passes across the cell, and a quick second
         // click must fold the fan, not open that file (2026-09-24).
-        if (!release && g_popup->anchor.containsPoint(point)) {
+        // The DOCK's hit box, not the bare icon: a press on the pad around the
+        // icon is still a click on this cell to the dock, and testing only the
+        // icon here folded the fan as a dismissal while the release reopened
+        // it -- open/close flicker on every click near the edge (trace,
+        // 2026-09-25).
+        if (!release && Dock::cellHitBox(g_popup->anchor, monitor->m_scale).containsPoint(point)) {
             traceEvent("  -> own cell press: FOLD");
             close();
             g_swallowToggleRelease = true;

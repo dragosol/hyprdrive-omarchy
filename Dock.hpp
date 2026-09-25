@@ -112,6 +112,9 @@ void    render(PHLMONITOR monitor);
 // handling asks this before it asks any workspace: the pill floats over the main
 // area, so the card underneath would otherwise claim the drop.
 bool    pillContains(PHLMONITOR monitor, const Vector2D& point);
+// The box a click on a cell is tested against (the icon plus the hover pad) --
+// anything that must agree with the dock about "was that my cell" uses this.
+CBox    cellHitBox(const CBox& iconBox, float scale);
 
 // Dock stacks B. What a drag of files is over. `folderOffer`: the drag is ONE
 // folder, so everything on the pill except a stack's centre and Trash is a gap

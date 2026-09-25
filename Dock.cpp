@@ -3761,6 +3761,10 @@ CBox caretBox(const SLayout& layout, int index, float scale) {
 
 }
 
+CBox cellHitBox(const CBox& iconBox, float scale) {
+    return hoverBox(iconBox, scale);
+}
+
 bool pillContains(PHLMONITOR monitor, const Vector2D& point) {
     if (!monitor)
         return false;
