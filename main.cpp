@@ -51,6 +51,7 @@ using namespace Hyprutils::String;
 #include "StackReader.hpp"
 #include "DockDrop.hpp"
 #include "StackBlur.hpp"
+#include "Thumbs.hpp"
 #include "DockStacks.hpp"
 #include "AppInfo.hpp"
 #include "CursorShape.hpp"
@@ -2124,6 +2125,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
                 }
             });
             // Stack folder reads and trash jobs land off-thread too; same wake.
+            ScrollOverview::Thumbs::setReadyCallback([]() {
+                if (g_fileWakeFd >= 0) {
+                    uint64_t one = 1;
+                    ::write(g_fileWakeFd, &one, sizeof(one));
+                }
+            });
             ScrollOverview::StackReader::setReadyCallback([]() {
                 if (g_fileWakeFd >= 0) {
                     uint64_t one = 1;
@@ -2168,6 +2175,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // (review 2026-09-24).
     ScrollOverview::Stacks::shutdown();
     ScrollOverview::StackReader::shutdown();
+    ScrollOverview::Thumbs::shutdown(); // before the wake fd closes: its worker writes to it
     if (g_fileWakeSource) {
         wl_event_source_remove(g_fileWakeSource);
         g_fileWakeSource = nullptr;

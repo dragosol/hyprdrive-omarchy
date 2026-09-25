@@ -5,6 +5,7 @@
 // StackReader, never from the disk on this thread.
 #include "BuiltinIcons.hpp"
 #include "DockStacks.hpp"
+#include "Thumbs.hpp"
 #include <chrono>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include "LauncherEntry.hpp"
@@ -67,17 +68,23 @@ namespace ScrollOverview::Stacks {
     // render path does it once per file, not once per frame.
     SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px, bool padded) {
         (void)px; // textures are drawn scaled; one size (the thumbnail's own) per file
-        if (!e.dir && (e.kind.starts_with("image/") || e.kind.starts_with("video/"))) {
-            static std::unordered_map<std::string, std::string> thumbFor; // path|mtime -> thumbnail ("" = none)
+        if (!e.dir && (e.kind.starts_with("image/") || e.kind.starts_with("video/") || e.kind == "application/pdf")) {
+            // path|mtime -> thumbnail ("" = none yet). A "none" is asked again
+            // once Thumbs has generated something (its generation moved).
+            struct SMemo {
+                std::string thumb;
+                uint64_t    gen = 0;
+            };
+            static std::unordered_map<std::string, SMemo> thumbFor;
             const std::string KEY = e.path + "|" + std::to_string(e.mtime);
             auto              IT  = thumbFor.find(KEY);
-            if (IT == thumbFor.end()) {
+            if (IT == thumbFor.end() || (IT->second.thumb.empty() && IT->second.gen != Thumbs::generation())) {
                 if (thumbFor.size() > 4096)
                     thumbFor.clear();
-                IT = thumbFor.emplace(KEY, cachedThumbnail(e.path)).first;
+                IT = thumbFor.insert_or_assign(KEY, SMemo{Thumbs::lookup(e.path, e.kind), Thumbs::generation()}).first;
             }
-            if (!IT->second.empty())
-                if (auto tex = OverviewRender::imageFile(IT->second, 256, true, padded); tex)
+            if (!IT->second.thumb.empty())
+                if (auto tex = OverviewRender::imageFile(IT->second.thumb, 256, true, padded); tex)
                     return tex;
         }
         return OverviewRender::appIcon(themedIcon(e.icon), false, padded);

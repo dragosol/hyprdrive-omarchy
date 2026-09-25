@@ -3,6 +3,7 @@
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
+#include "Thumbs.hpp"
 #include "BuiltinIcons.hpp"
 #include <sys/stat.h>
 #include "StackBlur.hpp"
@@ -1336,10 +1337,20 @@ namespace ScrollOverview::Stacks {
     void onReaderReady() {
         // The wake fd is shared with the overview's file search and the
         // dictionary: only a job of OURS is a reason to rebuild and repaint.
-        static uint64_t seen = 0;
-        if (StackReader::generation() == seen)
+        static uint64_t seen = 0, seenThumbs = 0;
+        if (StackReader::generation() == seen && Thumbs::generation() == seenThumbs)
             return;
-        seen = StackReader::generation();
+        // A thumbnail landing is only a repaint: the pile and the popup pick
+        // it up from Thumbs::lookup on their next frame.
+        if (StackReader::generation() == seen) {
+            seenThumbs = Thumbs::generation();
+            for (const auto& M : State::monitorState()->monitors())
+                if (M)
+                    g_pHyprRenderer->damageMonitor(M);
+            return;
+        }
+        seen       = StackReader::generation();
+        seenThumbs = Thumbs::generation();
 
         if (g_popup && !g_popup->leaving && g_popup->readerGen != StackReader::generation()) {
             applyListing(*g_popup, sortedListing(g_popup->path, g_popup->sort), popupMonitorPtr());
@@ -2296,8 +2307,11 @@ namespace ScrollOverview::Stacks {
                 drawTex(FLYTEX, OverviewRender::padBox(fly, FLYTEX), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
             } else
             {
-                // Padded, so its turned edge is filtered, not stair-stepped.
-                const auto ICONTEX = OverviewRender::appIcon(themedIcon(R.icon), false, true);
+                // Padded, so its turned edge is filtered, not stair-stepped. A
+                // file's real preview when it has one (2026-09-24).
+                const bool HASENTRY = R.vis >= 0 && sc<size_t>(R.vis) < g_popup->visible.size() && g_popup->visible[sc<size_t>(R.vis)] < g_popup->entries.size();
+                const auto ICONTEX  = HASENTRY ? iconTexture(g_popup->entries[g_popup->visible[sc<size_t>(R.vis)]], sc<int>(std::round(ICON)), true) :
+                                                 OverviewRender::appIcon(themedIcon(R.icon), false, true);
                 drawTex(ICONTEX, OverviewRender::padBox(ib, ICONTEX), A, ROT);
             }
         }
