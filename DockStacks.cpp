@@ -3,6 +3,7 @@
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
+#include <unordered_set>
 #include "Thumbs.hpp"
 #include "BuiltinIcons.hpp"
 #include <sys/stat.h>
@@ -532,6 +533,9 @@ namespace {
     // Stack path -> browser partial files in it at the last listing. Only
     // folders with a download in flight are kept.
     std::unordered_map<std::string, size_t> g_downloads;
+    // Stack path -> the entry names its folder had at the last listing (for the
+    // arrival bounce).
+    std::unordered_map<std::string, std::unordered_set<std::string>> g_seenNames;
     std::vector<SHop> g_shakes;
 
     float elapsed(const Time::steady_tp& since) {
@@ -1384,6 +1388,32 @@ namespace ScrollOverview::Stacks {
             auto& was = g_downloads[S.path];
             if (ST.downloads < was)
                 armBounce(S.path);
+
+            // SOMETHING ARRIVED (user, 2026-09-25: "when something is added to
+            // Downloads the folder should bounce"): a name the last listing of
+            // this folder did not have. Not a browser's partial file, and not
+            // the placeholder Firefox/Zen create under the final name when a
+            // download STARTS (its .part is still beside it) -- that one bounces
+            // when the download finishes, above. The first listing only records.
+            {
+                const auto L = StackReader::listing(S.path);
+                if (L.ready && !L.missing) {
+                    std::unordered_set<std::string> now;
+                    now.reserve(L.entries.size());
+                    for (const auto& E : L.entries)
+                        now.insert(E.name);
+                    auto [IT, FIRST] = g_seenNames.try_emplace(S.path);
+                    if (!FIRST) {
+                        for (const auto& N : now) {
+                            if (IT->second.contains(N) || StackModel::isPartialDownload(N) || now.contains(N + ".part"))
+                                continue;
+                            armBounce(S.path);
+                            break;
+                        }
+                    }
+                    IT->second = std::move(now);
+                }
+            }
             if (ST.downloads > 0)
                 LauncherEntry::start(); // Chromium's progress arrives on the session bus
             was = ST.downloads;
