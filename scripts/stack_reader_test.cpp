@@ -46,6 +46,22 @@ int main() {
     auto M = ScrollOverview::StackReader::readNow((DIR / "nope").string());
     check(M.ready && M.missing && M.entries.empty(), "missing dir");
 
+    // Dock stacks B: move into a folder, never overwriting, never into itself.
+    const auto DEST = DIR / "dest";
+    fs::create_directories(DEST);
+    std::ofstream(DEST / "one.txt") << "old";
+    std::ofstream(DIR / "one.txt") << "new";
+    std::ofstream(DIR / "two.txt") << "two";
+    auto R = ScrollOverview::StackReader::moveOrCopyNow(DEST.string(), {(DIR / "one.txt").string(), (DIR / "two.txt").string()});
+    check(R.error.empty() && R.moved == 2, "moved 2: " + R.error);
+    check(fs::exists(DEST / "one (2).txt") && fs::exists(DEST / "two.txt") && !fs::exists(DIR / "one.txt"), "conflict renamed, sources gone");
+    std::ifstream kept(DEST / "one.txt");
+    std::string   keptText;
+    kept >> keptText;
+    check(keptText == "old", "the existing file was not overwritten");
+    auto SELF = ScrollOverview::StackReader::moveOrCopyNow((DEST).string(), {DIR.string()});
+    check(!SELF.error.empty() && SELF.moved == 0, "a folder into its own child refused");
+
     fs::remove_all(DIR);
     std::printf("stack_reader_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

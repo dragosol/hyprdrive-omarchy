@@ -1,4 +1,5 @@
 #include "StackReader.hpp"
+#include "DockDropModel.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -90,10 +91,59 @@ namespace {
     }
 
     struct SJob {
-        enum class EKind { List, Trash } kind = EKind::List;
+        enum class EKind { List, Trash, Move } kind = EKind::List;
         std::string              dir;
         std::vector<std::string> paths;
     };
+
+    STrashResult moveOrCopy(const std::string& dir, const std::vector<std::string>& paths) {
+        STrashResult r;
+        struct stat  dst{};
+        if (::stat(dir.c_str(), &dst) != 0 || !S_ISDIR(dst.st_mode)) {
+            r.error = "the stack's folder is gone";
+            return r;
+        }
+        for (const auto& P : paths) {
+            if (ScrollOverview::DockDropModel::isInside(dir, P)) {
+                r.error = "a folder cannot go inside itself";
+                break;
+            }
+            struct stat src{};
+            if (::lstat(P.c_str(), &src) != 0) {
+                r.error = "not found: " + P;
+                break;
+            }
+            const auto SLASH = P.find_last_of('/');
+            const auto BASE  = SLASH == std::string::npos ? P : P.substr(SLASH + 1);
+            // Already here (dropped onto its own stack): nothing to do.
+            if (P.substr(0, SLASH == std::string::npos ? 0 : SLASH) == dir)
+                continue;
+            const auto NAME = ScrollOverview::DockDropModel::uniqueName(dir, BASE, [](const std::string& p) {
+                struct stat st{};
+                return ::lstat(p.c_str(), &st) == 0;
+            });
+            const bool SAMEFS = src.st_dev == dst.st_dev;
+            if (!SAMEFS && S_ISDIR(src.st_mode)) {
+                r.error = "folders are not copied between drives";
+                break;
+            }
+            GFile*     from = g_file_new_for_path(P.c_str());
+            GFile*     to   = g_file_new_for_path((dir + "/" + NAME).c_str());
+            GError*    err  = nullptr;
+            const bool OK   = SAMEFS ? g_file_move(from, to, G_FILE_COPY_NONE, nullptr, nullptr, nullptr, &err) :
+                                       g_file_copy(from, to, G_FILE_COPY_NONE, nullptr, nullptr, nullptr, &err);
+            g_object_unref(from);
+            g_object_unref(to);
+            if (!OK) {
+                r.error = err && err->message ? err->message : "could not move";
+                if (err)
+                    g_error_free(err);
+                break;
+            }
+            ++r.moved;
+        }
+        return r;
+    }
 
     std::mutex                                g_mutex;
     std::condition_variable                   g_cv;
@@ -136,6 +186,12 @@ namespace {
                 lock.lock();
                 g_cache[job.dir]    = std::move(result);
                 g_inflight[job.dir] = false;
+                lock.unlock();
+            } else if (job.kind == SJob::EKind::Move) {
+                auto r = moveOrCopy(job.dir, job.paths);
+                lock.lock();
+                r.seq   = ++g_trashSeq;
+                g_trash = r;
                 lock.unlock();
             } else {
                 STrashResult r;
@@ -246,6 +302,15 @@ namespace ScrollOverview::StackReader {
     void trash(std::vector<std::string> paths) {
         std::lock_guard l(g_mutex);
         enqueue(SJob{.kind = SJob::EKind::Trash, .paths = std::move(paths)});
+    }
+
+    void moveOrCopyInto(const std::string& dir, std::vector<std::string> paths) {
+        std::lock_guard l(g_mutex);
+        enqueue(SJob{.kind = SJob::EKind::Move, .dir = dir, .paths = std::move(paths)});
+    }
+
+    STrashResult moveOrCopyNow(const std::string& dir, const std::vector<std::string>& paths) {
+        return moveOrCopy(dir, paths);
     }
 
     STrashResult lastTrashResult() {

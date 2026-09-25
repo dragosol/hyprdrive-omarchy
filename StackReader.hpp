@@ -34,6 +34,13 @@ namespace ScrollOverview::StackReader {
         std::string error;
     };
     void         trash(std::vector<std::string> paths); // on the worker; result in lastTrashResult()
+    // Dock stacks B: move `paths` into `dir` (copy when they are on another
+    // filesystem; a directory is never copied across filesystems -- refused
+    // instead). Never overwrites: a taken name becomes "name (2).ext". A path
+    // that IS `dir` or contains it is refused. Result in lastTrashResult() too:
+    // one job slot for every file operation the dock starts.
+    void         moveOrCopyInto(const std::string& dir, std::vector<std::string> paths);
+    STrashResult moveOrCopyNow(const std::string& dir, const std::vector<std::string>& paths); // the worker's code, synchronously (host test)
     STrashResult lastTrashResult();
 
     uint64_t generation();                                // moves when a listing or a trash job lands
