@@ -1026,13 +1026,18 @@ static void                registerRawKeyHooks() {
                 // Esc, Space; the pane also types). handleKey claims SPACE only
                 // when there is an item to preview, so everywhere else the key
                 // falls through untouched -- the scope rule above still holds.
+                // Neither a stack popup nor the Rename field takes a CHORD (Super/
+                // Ctrl/Alt held) or a desktop key (Print, volume, brightness):
+                // those always reach their binds (review 2026-09-24).
+                const bool PLAINKEY = g_heldGuardKeys.empty() && !isGlobalPassthroughKeycode(event.keycode);
+
                 // The dock menu's Rename field, while it is up, owns the keyboard.
-                if (ScrollOverview::Dock::menuWantsKeyboard() && ScrollOverview::Dock::menuHandleKey(event.keycode)) {
+                if (PLAINKEY && ScrollOverview::Dock::menuWantsKeyboard() && ScrollOverview::Dock::menuHandleKey(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;
                 }
-                if (ScrollOverview::Stacks::keyboardActive() && ScrollOverview::Stacks::handleKey(event.keycode)) {
+                if (PLAINKEY && ScrollOverview::Stacks::keyboardActive() && ScrollOverview::Stacks::handleKey(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;
@@ -2040,6 +2045,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         dropScrollOverviewsForMonitor(monitor);
         if (monitor)
             ScrollOverview::Dock::forgetMonitor(monitor->m_id);
+        // A stack popup on the monitor that went away must not keep the keyboard.
+        if (monitor && ScrollOverview::Stacks::popupMonitor() == monitor->m_id)
+            ScrollOverview::Stacks::close();
     });
 
     ScrollOverview::Config::registerDispatcher("overview", ::onOverviewDispatcher);
@@ -2119,6 +2127,11 @@ APICALL EXPORT void PLUGIN_EXIT() {
     }
     OmarchySearch::setResultsCallback(nullptr);
     ToolSearch::shutdown();
+    // BEFORE the wake fd below is closed: the reader's worker writes to it when
+    // a job lands, and a job landing after the close would write to a reused fd
+    // (review 2026-09-24).
+    ScrollOverview::Stacks::shutdown();
+    ScrollOverview::StackReader::shutdown();
     if (g_fileWakeSource) {
         wl_event_source_remove(g_fileWakeSource);
         g_fileWakeSource = nullptr;
@@ -2178,8 +2191,6 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // into unloaded code, and the textures need the context made current above.
     ScrollOverview::ScratchpadExit::shutdown();
     shutdownClickGestures();
-    ScrollOverview::Stacks::shutdown();
-    ScrollOverview::StackReader::shutdown();
     // Get Info: its poll timer would fire into unloaded code, and its worker
     // must be joined (with any package query killed) before the code goes.
     ScrollOverview::Dock::stopInfoPoll();

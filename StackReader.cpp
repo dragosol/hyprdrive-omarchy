@@ -18,6 +18,18 @@
 
 namespace {
     using ScrollOverview::StackModel::SEntry;
+
+    // UNLOAD MUST NOT WAIT ON A LONG JOB (review 2026-09-24): every loop below
+    // checks this per entry / per file, and copies take the cancellable, so
+    // shutdown() interrupts a 5 000-entry read, an Empty Folder or a cross-drive
+    // copy instead of joining behind it.
+    std::atomic<bool> g_abort{false};
+    GCancellable*     g_cancel = nullptr;
+    GCancellable*     cancellable() {
+        if (!g_cancel)
+            g_cancel = g_cancellable_new();
+        return g_cancel;
+    }
     using ScrollOverview::StackReader::SListing;
     using ScrollOverview::StackReader::STrashResult;
 
@@ -68,6 +80,8 @@ namespace {
             return out;
         }
         for (const auto& E : it) {
+            if (g_abort.load())
+                break;
             const auto NAME = E.path().filename().string();
             if (NAME.empty() || NAME[0] == '.')
                 continue;
@@ -104,6 +118,10 @@ namespace {
             return r;
         }
         for (const auto& P : paths) {
+            if (g_abort.load()) {
+                r.error = "stopped";
+                break;
+            }
             if (ScrollOverview::DockDropModel::isInside(dir, P)) {
                 r.error = "a folder cannot go inside itself";
                 break;
@@ -130,8 +148,8 @@ namespace {
             GFile*     from = g_file_new_for_path(P.c_str());
             GFile*     to   = g_file_new_for_path((dir + "/" + NAME).c_str());
             GError*    err  = nullptr;
-            const bool OK   = SAMEFS ? g_file_move(from, to, G_FILE_COPY_NONE, nullptr, nullptr, nullptr, &err) :
-                                       g_file_copy(from, to, G_FILE_COPY_NONE, nullptr, nullptr, nullptr, &err);
+            const bool OK   = SAMEFS ? g_file_move(from, to, G_FILE_COPY_NONE, cancellable(), nullptr, nullptr, &err) :
+                                       g_file_copy(from, to, G_FILE_COPY_NONE, cancellable(), nullptr, nullptr, &err);
             g_object_unref(from);
             g_object_unref(to);
             if (!OK) {
@@ -150,6 +168,7 @@ namespace {
     std::deque<SJob>                          g_jobs;
     std::unordered_map<std::string, SListing> g_cache;     // dir -> last listing
     std::unordered_map<std::string, bool>     g_inflight;  // dir -> a read is queued
+    std::unordered_map<std::string, bool>     g_dirty;     // dir -> changed while its read was in flight
     std::thread                               g_thread;
     bool                                      g_stop = false;
     std::atomic<uint64_t>                     g_generation{1};
@@ -186,6 +205,14 @@ namespace {
                 lock.lock();
                 g_cache[job.dir]    = std::move(result);
                 g_inflight[job.dir] = false;
+                // The folder changed while it was being read: this answer may
+                // predate the change, so read it again (review 2026-09-24).
+                if (g_dirty[job.dir]) {
+                    g_dirty[job.dir]         = false;
+                    g_cache[job.dir].ready   = false;
+                    g_inflight[job.dir]      = true;
+                    g_jobs.push_back(SJob{.kind = SJob::EKind::List, .dir = job.dir});
+                }
                 lock.unlock();
             } else if (job.kind == SJob::EKind::Move) {
                 auto r = moveOrCopy(job.dir, job.paths);
@@ -196,9 +223,11 @@ namespace {
             } else {
                 STrashResult r;
                 for (const auto& P : job.paths) {
+                    if (g_abort.load())
+                        break;
                     GFile*  f   = g_file_new_for_path(P.c_str());
                     GError* err = nullptr;
-                    const bool OK = g_file_trash(f, nullptr, &err);
+                    const bool OK = g_file_trash(f, cancellable(), &err);
                     g_object_unref(f);
                     if (!OK) {
                         r.error = err && err->message ? err->message : "could not move to Trash";
@@ -219,6 +248,7 @@ namespace {
     }
 
     void enqueue(SJob job) {
+        cancellable(); // created HERE, on the compositor thread, never lazily on the worker
         if (!g_thread.joinable()) {
             g_stop   = false;
             g_thread = std::thread(workerMain);
@@ -246,8 +276,24 @@ namespace ScrollOverview::StackReader {
         return IT != g_cache.end() ? IT->second : SListing{};
     }
 
+    SStatus status(const std::string& dir) {
+        std::lock_guard l(g_mutex);
+        const auto      IT = g_cache.find(dir);
+        if (IT == g_cache.end() || !IT->second.ready) {
+            if (!g_inflight[dir]) {
+                g_inflight[dir] = true;
+                enqueue(SJob{.kind = SJob::EKind::List, .dir = dir});
+            }
+            if (IT == g_cache.end())
+                return {};
+        }
+        return SStatus{.ready = IT->second.ready, .missing = IT->second.missing, .count = IT->second.entries.size()};
+    }
+
     void invalidate(const std::string& dir) {
         std::lock_guard l(g_mutex);
+        if (g_inflight[dir])
+            g_dirty[dir] = true;
         if (auto IT = g_cache.find(dir); IT != g_cache.end())
             IT->second.ready = false; // keep the old entries to draw until the new read lands
     }
@@ -334,9 +380,17 @@ namespace ScrollOverview::StackReader {
             g_jobs.clear();
             g_ready = nullptr;
         }
+        g_abort.store(true);
+        if (g_cancel)
+            g_cancellable_cancel(g_cancel);
         g_cv.notify_all();
         if (g_thread.joinable())
             g_thread.join();
+        g_abort.store(false); // a reload starts a fresh worker
+        if (g_cancel) {
+            g_object_unref(g_cancel);
+            g_cancel = nullptr;
+        }
         if (g_inotify >= 0) {
             ::close(g_inotify);
             g_inotify = -1;
@@ -345,5 +399,6 @@ namespace ScrollOverview::StackReader {
         std::lock_guard l(g_mutex);
         g_cache.clear();
         g_inflight.clear();
+        g_dirty.clear();
     }
 }

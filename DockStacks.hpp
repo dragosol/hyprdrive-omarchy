@@ -220,6 +220,9 @@ namespace ScrollOverview::Stacks {
     // Move `paths` to the Trash off the compositor thread, remembering whose
     // they were: the stack bounces when it lands, or shakes with the error.
     void trashFrom(const std::string& stackPath, std::vector<std::string> paths);
+    // Move (or copy, across drives) `paths` into the stack's folder, on the
+    // worker; the stack bounces when it lands, or shakes with the error.
+    void moveFrom(const std::string& stackPath, std::vector<std::string> paths);
     // Appended to a stack's tooltip: "Folder not found", a recent trash error, or "".
     std::string tooltipSuffix(const std::string& stackPath);
 

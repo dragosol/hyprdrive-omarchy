@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -91,6 +92,7 @@ namespace AppSearch {
     // Falls back to a generic application icon when the named one is missing
     // from the theme chain -- an entry with no icon at all still gets a tile.
     bool        iconExists(const std::string& iconName);
+    std::optional<bool> iconExistsNow(const std::string& iconName); // nullopt: the index is busy/unbuilt, ask again
     std::string resolveIconPath(const std::string& iconName);
 
     // Detached, so the app outlives the overview closing.

@@ -120,6 +120,7 @@ namespace {
     // read path and not on the dock's build path -- see SStack in the header.
     void decorate(Stacks::SStack& stack);
     void writeStore();
+    void showPreviewClose();
 
     struct SStoreState {
         bool seeded   = false;
@@ -288,7 +289,10 @@ namespace {
         while (at <= names.size()) {
             const auto BAR  = names.find('|', at);
             const auto NAME = names.substr(at, BAR == std::string::npos ? std::string::npos : BAR - at);
-            if (AppSearch::iconExists(NAME)) {
+            const auto HAS  = AppSearch::iconExistsNow(NAME);
+            if (!HAS)
+                return pick; // the index is busy (startup scan): answer generic, do NOT memoize, ask next time
+            if (*HAS) {
                 pick = NAME;
                 break;
             }
@@ -379,6 +383,7 @@ namespace {
         bool                keyboard   = false; // the keyboard moved last: `hover` is its selection
         int                 cols       = 1;     // the pane's column count (Task 7); 1 for the fan
         Vector2D            lastMouse;
+        Time::steady_tp     lastDrawn{};                  // keyboardActive: only a popup actually on screen takes keys
         std::string         query;                        // the pane's search field
         CBox                fieldBox, headerBox, sortBox; // the pane's chrome, as DRAWN
         std::vector<SRow>   rows;        // published for the pointer
@@ -677,6 +682,11 @@ namespace {
 
     // The pane's search: which entries the query keeps, in display order.
     void refilter(SPopup& p) {
+        // The preview ring indexes `visible`, which is about to change under it.
+        if (p.previewing >= 0) {
+            showPreviewClose();
+            p.previewing = -1;
+        }
         p.visible = StackModel::filter(p.entries, p.grid ? p.query : std::string{});
         if (p.hover >= sc<int>(p.visible.size()))
             p.hover = p.visible.empty() ? -1 : 0;
@@ -1001,6 +1011,7 @@ namespace ScrollOverview::Stacks {
     }
 
     void close() {
+        g_itemDrag.reset(); // a drag cannot outlive the popup it started in (review 2026-09-24)
         if (!g_popup || g_popup->leaving)
             return;
         if (g_popup->previewing >= 0) {
@@ -1141,6 +1152,13 @@ namespace ScrollOverview::Stacks {
         return g_popup && g_popup->path == canonical(stackPath) && !g_popup->grid;
     }
 
+    void moveFrom(const std::string& stackPath, std::vector<std::string> paths) {
+        if (paths.empty())
+            return;
+        g_trashStack = canonical(stackPath);
+        StackReader::moveOrCopyInto(g_trashStack, std::move(paths));
+    }
+
     void trashFrom(const std::string& stackPath, std::vector<std::string> paths) {
         if (paths.empty())
             return;
@@ -1150,15 +1168,23 @@ namespace ScrollOverview::Stacks {
 
     std::string tooltipSuffix(const std::string& stackPath) {
         const auto CANON = canonical(stackPath);
-        if (const auto L = StackReader::listing(CANON); L.ready && L.missing)
-            return "Folder not found";
+        // A pinned FILE is not a folder: never ask the reader to list it (it would
+        // read as missing and every pinned file would say "Folder not found").
+        const auto* S = find(CANON);
+        if (S && S->isDir)
+            if (const auto L = StackReader::status(CANON); L.ready && L.missing)
+                return "Folder not found";
         if (CANON == g_trashStack && !g_trashError.empty() && elapsed(g_trashErrorAt) < 3000.F)
             return g_trashError;
         return {};
     }
 
+    // Only a popup that is really in front of the user takes keys: not leaving,
+    // its monitor still there, and drawn within the last half second (a popup
+    // whose dock stopped drawing -- hidden, another monitor -- must not keep
+    // swallowing the keyboard; review 2026-09-24).
     bool keyboardActive() {
-        return g_popup && !g_popup->leaving;
+        return g_popup && !g_popup->leaving && popupMonitorPtr() && elapsed(g_popup->lastDrawn) < 500.F;
     }
 
     // Arrows move the selection, Enter opens, Esc closes the preview first and
@@ -1218,11 +1244,11 @@ namespace ScrollOverview::Stacks {
                     return false;
                 P.hover = N == 0 ? -1 : std::min(N - 1, FROM + 1);
                 break;
-            case 28: // ENTER
-                if (P.hover >= 0 && P.hover < N) {
-                    launchPath(P.entries[P.visible[sc<size_t>(P.hover)]].path);
-                    close();
-                }
+            case 28: // ENTER: only when something is selected
+                if (P.hover < 0 || P.hover >= N)
+                    return false;
+                launchPath(P.entries[P.visible[sc<size_t>(P.hover)]].path);
+                close();
                 return true;
             case 1: // ESC
                 if (P.previewing >= 0) {
@@ -1259,8 +1285,15 @@ namespace ScrollOverview::Stacks {
     }
 
     bool click(PHLMONITOR monitor, const Vector2D& point, bool release) {
-        if (!g_popup || g_popup->leaving || !monitor || g_popup->monitor != monitor->m_id)
+        if (!g_popup || g_popup->leaving || !monitor)
             return false;
+        if (g_popup->monitor != monitor->m_id) {
+            // A press on ANOTHER monitor dismisses it too -- otherwise it stays up,
+            // unseen, holding the keyboard.
+            if (!release)
+                close();
+            return false;
+        }
 
         // A RELEASE always belongs to the press that started it, wherever the
         // pointer has since gone -- that is the dock's own rule (dragPending),
@@ -1291,20 +1324,14 @@ namespace ScrollOverview::Stacks {
                 if (!ITEM.iconBox.containsPoint(point))
                     continue;
 
+                // On the reader's worker, never here: a move to another drive is
+                // a copy, and it used to freeze the compositor for its length
+                // (review 2026-09-24). The bounce (or the shake and the error in
+                // the tooltip) comes when the job lands, in onReaderReady.
                 const auto DEST = canonical(ITEM.stackPath);
-                std::string err;
-                if (moveInto(DEST, DRAG.srcPath, err)) {
-                    // Y8's hop, and ONLY after gio reported success. The order
-                    // is the spec's: "bounce fires only AFTER the move reports
-                    // success".
-                    armBounce(DEST);
-                    // Both folders changed; the reader re-reads them and
-                    // onReaderReady() refreshes the popup when it lands.
-                    StackReader::invalidate(DEST);
-                    if (g_popup)
-                        StackReader::invalidate(g_popup->path);
-                } else
-                    armShake(DEST); // refused: the file is exactly where it was
+                if (g_popup)
+                    StackReader::invalidate(g_popup->path);
+                moveFrom(DEST, {DRAG.srcPath});
 
                 close();
                 return true;
@@ -1444,15 +1471,18 @@ namespace ScrollOverview::Stacks {
         }
         if (!found || layout.pill.empty()) {
             g_popup.reset();
+            g_itemDrag.reset();
             return;
         }
 
         const float PROGRESS = popupProgress(*g_popup);
         if (g_popup->leaving && PROGRESS >= 1.F) {
             g_popup.reset();
+            g_itemDrag.reset();
             return;
         }
 
+        g_popup->lastDrawn = Time::steadyNow();
         const float SCALE = std::max(monitor->m_scale, 0.01F);
         const float ALPHA = g_popup->leaving ? 1.F - houseEase(false, PROGRESS) : houseEase(true, PROGRESS);
 

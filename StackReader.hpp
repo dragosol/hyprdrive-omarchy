@@ -23,6 +23,13 @@ namespace ScrollOverview::StackReader {
     };
 
     SListing listing(const std::string& dir);            // never blocks; starts a read when stale
+    // What a dock CELL needs every frame, without copying the entries.
+    struct SStatus {
+        bool   ready   = false;
+        bool   missing = false;
+        size_t count   = 0;
+    };
+    SStatus  status(const std::string& dir);
     void     invalidate(const std::string& dir);         // the next listing() re-reads
     void     watch(const std::vector<std::string>& dirs); // inotify on exactly these dirs
     int      inotifyFd();                                // for wl_event_loop_add_fd; -1 if none

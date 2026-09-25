@@ -1031,11 +1031,22 @@ namespace AppSearch {
     // Is this exact name in the icon index? resolveIconPath answers the generic
     // tile for a miss, which is right for an app and wrong for a caller walking
     // a fallback list (a file's content-type icon names, most specific first).
-    bool iconExists(const std::string& iconName) {
+    // Called from the RENDER path (a stack's pile), so it must never wait: under
+    // try_lock, and "not known yet" while the startup scan holds the index --
+    // the caller then falls back to a generic icon and asks again later
+    // (review 2026-09-24: an unlocked read raced the rebuild, and a blocking
+    // lock stalled the frame for the whole startup scan).
+    std::optional<bool> iconExistsNow(const std::string& iconName) {
         if (iconName.empty())
             return false;
-        warmIconIndex();
+        std::unique_lock lock(g_iconIndexMutex, std::try_to_lock);
+        if (!lock.owns_lock() || g_iconIndex.empty())
+            return std::nullopt;
         return g_iconIndex.contains(iconName);
+    }
+
+    bool iconExists(const std::string& iconName) {
+        return iconExistsNow(iconName).value_or(false);
     }
 
     std::string resolveIconPath(const std::string& iconName) {

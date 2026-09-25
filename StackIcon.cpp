@@ -10,6 +10,8 @@
 
 #include <gio/gio.h>
 
+#include <unordered_map>
+
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
@@ -53,17 +55,54 @@ namespace ScrollOverview::Stacks {
         }
     }
 
+    // A thumbnail from the freedesktop cache when one EXISTS -- never a decode of
+    // the original (review 2026-09-24: Hyprgraphics ignores the size for raster
+    // images, so a 24 MP photo was decoded full-size on the render thread, per
+    // frame, into a ~96 MB texture). Cached thumbnails are <= 256 px, and the
+    // lookup (uri + md5 + two stats) is remembered per path + mtime, so the
+    // render path does it once per file, not once per frame.
     SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px) {
+        (void)px; // textures are drawn scaled; one size (the thumbnail's own) per file
         if (!e.dir && (e.kind.starts_with("image/") || e.kind.starts_with("video/"))) {
-            if (const auto T = cachedThumbnail(e.path); !T.empty())
-                if (auto tex = OverviewRender::imageFile(T, px); tex)
-                    return tex;
-            // An image with no cached thumbnail is its own best picture.
-            if (e.kind.starts_with("image/") && e.kind != "image/svg+xml")
-                if (auto tex = OverviewRender::imageFile(e.path, px); tex)
+            static std::unordered_map<std::string, std::string> thumbFor; // path|mtime -> thumbnail ("" = none)
+            const std::string KEY = e.path + "|" + std::to_string(e.mtime);
+            auto              IT  = thumbFor.find(KEY);
+            if (IT == thumbFor.end()) {
+                if (thumbFor.size() > 4096)
+                    thumbFor.clear();
+                IT = thumbFor.emplace(KEY, cachedThumbnail(e.path)).first;
+            }
+            if (!IT->second.empty())
+                if (auto tex = OverviewRender::imageFile(IT->second, 256); tex)
                     return tex;
         }
         return OverviewRender::appIcon(e.icon);
+    }
+
+    // The pile's four newest files, per folder, recomputed only when the reader
+    // reports a change -- not by copying and sorting the whole listing (up to
+    // 5 000 entries) every frame for every cell (review 2026-09-24).
+    const std::vector<StackModel::SEntry>& newestFour(const std::string& dir) {
+        struct SCached {
+            uint64_t                        gen = 0;
+            std::vector<StackModel::SEntry> top;
+        };
+        static std::unordered_map<std::string, SCached> cache;
+        auto&                                            C = cache[dir];
+        if (C.gen != StackReader::generation() || C.gen == 0) {
+            auto L = StackReader::listing(dir);
+            C.top.clear();
+            if (L.ready && !L.missing) {
+                std::erase_if(L.entries, [](const StackModel::SEntry& e) { return e.dir; });
+                StackModel::sortEntries(L.entries, StackModel::ESort::Added);
+                for (size_t k = 0; k < std::min<size_t>(4, L.entries.size()); ++k) {
+                    C.top.push_back(L.entries[k]);
+                    C.top.back().icon = pickIcon(C.top.back().icon); // the reader hands every candidate name
+                }
+                C.gen = StackReader::generation();
+            }
+        }
+        return C.top;
     }
 
     std::vector<SPileItem> pileLayout(const std::string& stackPath, const CBox& iconBox) {
@@ -71,14 +110,10 @@ namespace ScrollOverview::Stacks {
         const auto*            S = findStack(stackPath);
         if (!S || !S->isDir || S->display != StackModel::EDisplay::Stack)
             return out;
-        auto L = StackReader::listing(S->path);
-        if (!L.ready || L.missing)
-            return out;
-        std::erase_if(L.entries, [](const StackModel::SEntry& e) { return e.dir; });
-        StackModel::sortEntries(L.entries, StackModel::ESort::Added);
+        struct SView {
+            std::vector<StackModel::SEntry> entries;
+        } L{.entries = newestFour(S->path)};
         const size_t N = std::min<size_t>(4, L.entries.size());
-        for (size_t k = 0; k < N; ++k)
-            L.entries[k].icon = pickIcon(L.entries[k].icon); // the reader hands every candidate name
         for (size_t k = 0; k < N; ++k) {
             const auto& E  = L.entries[N - 1 - k]; // the oldest of the four first, the newest on top
             const auto& SL = PILE[4 - N + k];
@@ -113,7 +148,7 @@ namespace ScrollOverview::Stacks {
             g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
         };
 
-        const auto L = StackReader::listing(S->path);
+        const auto L = StackReader::status(S->path);
         // A FOLDER THAT IS GONE: dimmed, and the tooltip says why (tooltipSuffix).
         if (L.ready && L.missing) {
             add(OverviewRender::appIcon(S->icon), iconBox, 0.F, alpha * 0.35F);

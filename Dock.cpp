@@ -1987,7 +1987,7 @@ CBox hoverBox(const CBox& iconBox, float scale) {
 // m_blurFB here was wrong for the desktop path (no behind-chrome pre-blur
 // exists) and broke once the shared draw path was rewritten.
 static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alpha) {
-    if (box.empty() || alpha <= 0.F)
+    if (!Stacks::drawableBox(box) || alpha <= 0.F) // box.empty() lets a NEGATIVE box through
         return;
 
     // Same switch window frost and overview chrome capture use. Dock keys of
@@ -5030,6 +5030,12 @@ CHyprColor accentColor() {
 }
 
 void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha) {
+    // Every caller (the dock, the stacks' fan/pane/field, the menu) comes
+    // through here: a zero or negative box would RASSERT in Hyprland's renderer
+    // and take the compositor down (review 2026-09-24: the pane's search field
+    // on its first frame, with a small dock icon).
+    if (!Stacks::drawableBox(box) || alpha <= 0.F)
+        return;
     queueDockFrost(monitor, box, rounding, alpha);
 
     const auto                  TINT = background();
