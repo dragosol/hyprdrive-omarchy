@@ -23,7 +23,14 @@ is the original plugin; this repo is the Omarchy adaptation.
 - Dash-to-Dock behaviour counted over the desktop you are on: launch, focus,
   cycle, whole-app minimize/restore, favorites, running dots, badges, autohide.
 - Minimize/restore flies into the icon. Hover an icon for live window previews.
-- Stacks: pin a folder, open it as a fan or grid, Space for Nautilus quick look.
+- Stacks, macOS style: a pinned folder shows its 4 newest files as a pile;
+  click it and they fan out, or it opens as a searchable pane when the fan
+  would not fit. Space previews the hovered item (GNOME Sushi), arrows and
+  Enter work, and the right-click menu has recent items, sort, Display as
+  Stack/Folder, View as Grid, Rename in Dock, Trash actions and Remove from
+  Dock. Downloads is pinned on first run; drag stacks to reorder them. The
+  store is `~/.local/state/hyprdrive/stacks`; removing a stack never touches
+  the folder.
 
 **Search tools** (opt-in, see below):
 
@@ -136,7 +143,7 @@ one above it.
 | `window` | `select`, `close`, `click` | Act on the window under the cursor |
 | `minimize` | `window`, `restore` | Minimize into the dock, or restore |
 | `hotkey` | `overlay`, or `1`–`10` | Dock slot (unbound here; Super+digit is workspaces) |
-| `stack` | `pin`/`unpin`/`toggle` `<path>` | Pin a file or folder as a dock stack |
+| `stack` | `pin`/`unpin`/`toggle` `<path>`, `view auto\|grid <path>`, `sort name\|added\|modified\|kind <path>`, `clear` | Pin and configure dock stacks |
 
 ```lua
 hl.bind("SUPER + SHIFT + D", hl.plugin.hyprdrive.overview("toggle"))

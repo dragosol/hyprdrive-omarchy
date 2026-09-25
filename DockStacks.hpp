@@ -53,6 +53,13 @@
 //     an item out of an open fan/grid and onto another stack's cell. That
 //     drag begins inside the plugin's own input machinery, so it is ours end
 //     to end. Same gio semantics, same bounce, same shake.
+// DOCK STACKS A (2026-09-24, docs/superpowers/specs/2026-09-24-dock-stacks-a-design.md)
+// added: StackModel (sort/filter/store v2, host-tested), StackReader (folder
+// reads, trash jobs, inotify -- off the compositor thread), TextInput (shared
+// typing), StackPane.cpp (the searchable pane's geometry), StackIcon.cpp (the
+// pile cell). The paragraph above about XDG drags is TOO STRONG: seeing a drag
+// is public and its data source is reachable -- see the spec's "Correction
+// recorded for B"; sub-project B rewrites it.
 namespace ScrollOverview::Stacks {
 
     // EVERY box handed to the render pass goes through this (2026-09-24: a
