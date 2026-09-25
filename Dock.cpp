@@ -1887,7 +1887,10 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
         // the user can trigger the reveal anywhere along the bottom edge, and
         // holding the cursor there outside the physical dock pill must keep it
         // visible rather than oscillating (hide/show loop).
-        if (menuOpen() || panelHoldsDock(monitor) || Stacks::holdsDock(monitor) || dragging() || ghostFlying() || ATEDGE)
+        // And a FILE pulled out of a stack's fan (DockDrop): the fan folds as
+        // the drag starts, and the Trash or another stack may be where it is
+        // headed (user, 2026-09-24) -- the dock stays until the drag ends.
+        if (menuOpen() || panelHoldsDock(monitor) || Stacks::holdsDock(monitor) || dragging() || ghostFlying() || DockDrop::draggingOut() || ATEDGE)
             want = true;
         else if (CBox reach = slidPill(monitor); !reach.empty()) {
             // X77: the SLID pill, not the resting one. While it is still easing
