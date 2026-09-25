@@ -377,6 +377,9 @@ void armBounce(const std::string& wmClass);
 // into being two different hops. `t` runs 0..1 across HOP_MS, and the result is
 // how far the icon is lifted out of the pill, in `iconHeight`'s own units.
 inline constexpr float HOP_MS = 420.F;
+// A stack's bounce seen from a HIDDEN dock: its pile peeks up from the edge --
+// longer than the hop, or it is gone before anyone sees it.
+inline constexpr float STACK_PEEK_MS = 900.F;
 float                  hopLift(float t, float iconHeight);
 
 // Z15. A flight click kills the Y1 hover panel INSTANTLY -- leaving it alive

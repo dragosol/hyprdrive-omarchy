@@ -6110,6 +6110,39 @@ void renderUrgentHop(PHLMONITOR monitor) {
     }
 }
 
+// THE STACK PEEK (user, 2026-09-25: "show the bounce so we see the tip of the
+// stack that bounced"). With the dock hidden, a stack whose folder just got
+// something new pops the top of its pile up from the screen edge on its hop's
+// arc, where its cell would be -- the stacks' own kind of urgent hop.
+void renderStackPeek(PHLMONITOR monitor) {
+    const auto& BASE = baseLayout(monitor);
+    const float EDGE = sc<float>(monitor->m_size.y * monitor->m_scale); // monitor-local render px
+    for (const auto& ITEM : BASE.items) {
+        if (!ITEM.stack || ITEM.placeholder || ITEM.stackPath.empty())
+            continue;
+        const CBox& IB  = ITEM.iconBox;
+        const float AGE = Stacks::bounceAgeMs(ITEM.stackPath);
+        if (AGE < 0.F || AGE >= STACK_PEEK_MS)
+            continue;
+        // Up quickly, hold so it registers, back down: rise over the first 22%,
+        // hold to 70%, sink over the rest -- a bit over half the pile showing.
+        const float T     = AGE / STACK_PEEK_MS;
+        const float RISE  = std::clamp(T / 0.22F, 0.F, 1.F), FALL = std::clamp((T - 0.70F) / 0.30F, 0.F, 1.F);
+        const float CURVE = T < 0.70F ? 1.F - (1.F - RISE) * (1.F - RISE) : 1.F - FALL * FALL;
+        const float UP    = std::round(CURVE * 0.55F * sc<float>(IB.height));
+        if (UP < 1.F)
+            continue;
+        const CBox  AT{IB.x, EDGE - UP, IB.width, IB.height};
+        if (!Stacks::drawCell(monitor, ITEM, AT, 1.F, DockTilt::SPose{}))
+            if (const auto TEX = OverviewRender::appIcon(ITEM.icon); TEX && TEX->ok() && Stacks::drawableBox(AT)) {
+                CTexPassElement::SRenderData d;
+                d.tex = TEX;
+                d.box = AT;
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            }
+    }
+}
+
 void render(PHLMONITOR monitor) {
     // Y6/Y8. Retire what has run its course before anything asks whether the
     // dock still needs frames.
@@ -6122,6 +6155,13 @@ void render(PHLMONITOR monitor) {
     const auto LAYOUT = layout(monitor);
     if (LAYOUT.pill.empty()) {
         renderUrgentHop(monitor);
+        if (Config::getValue<bool>(KEY_AUTOHIDE)) {
+            renderStackPeek(monitor);
+            // This branch returns before the frame pump at the end of render(),
+            // so the peek asks for its own next frame while a hop is running.
+            if (Stacks::needsFrames(monitor->m_id))
+                pumpFrame(monitor);
+        }
         return;
     }
 

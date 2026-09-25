@@ -184,6 +184,8 @@ namespace ScrollOverview::Stacks {
     void armBounce(const std::string& path);
     // Applied by the dock's icon loop, beside bounceLift/wiggleRadians.
     float bounceLift(const std::string& path, float iconHeight);
+    // ms since this stack's latest bounce started, -1 if none is running.
+    float bounceAgeMs(const std::string& path);
     float shakeOffset(const std::string& path, float iconHeight);
     bool  animating();
 

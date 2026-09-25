@@ -1167,6 +1167,12 @@ namespace ScrollOverview::Stacks {
             if (ST.isDir)
                 dirs.push_back(ST.path);
         StackReader::watch(dirs);
+        // Read each folder now, dock drawn or not: the arrival bounce compares
+        // against the last listing, and with the dock autohidden from the start
+        // nothing else would read it before the first arrival (which the first
+        // listing only records).
+        for (const auto& D : dirs)
+            StackReader::status(D);
         if (!g_inotifySource && StackReader::inotifyFd() >= 0 && g_pCompositor && g_pCompositor->m_wlEventLoop)
             g_inotifySource = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, StackReader::inotifyFd(), WL_EVENT_READABLE,
                                                    [](int, uint32_t, void*) -> int {
@@ -2004,7 +2010,9 @@ namespace ScrollOverview::Stacks {
 
     // ---------------------------------------------------------------- paint --
     void render(PHLMONITOR monitor, const Dock::SLayout& layout) {
-        std::erase_if(g_bounces, [](const SHop& h) { return elapsed(h.startedAt) > Dock::HOP_MS; });
+        // Kept for the hidden dock's longer peek too (Dock::STACK_PEEK_MS); the
+        // on-dock hop itself is over at HOP_MS and draws nothing after.
+        std::erase_if(g_bounces, [](const SHop& h) { return elapsed(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
         std::erase_if(g_shakes, [](const SHop& h) { return elapsed(h.startedAt) > SHAKE_MS; });
 
         if (!g_popup || !monitor || g_popup->monitor != monitor->m_id)
@@ -2433,6 +2441,15 @@ namespace ScrollOverview::Stacks {
         const auto CANON = canonical(path);
         std::erase_if(g_shakes, [&](const SHop& h) { return h.path == CANON; });
         g_shakes.emplace_back(SHop{.path = CANON, .startedAt = Time::steadyNow()});
+    }
+
+    float bounceAgeMs(const std::string& path) {
+        const auto CANON = canonical(path);
+        float      age   = -1.F;
+        for (const auto& B : g_bounces)
+            if (B.path == CANON)
+                age = age < 0.F ? elapsed(B.startedAt) : std::min(age, elapsed(B.startedAt));
+        return age;
     }
 
     float bounceLift(const std::string& path, float iconHeight) {
