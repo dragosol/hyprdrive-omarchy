@@ -56,7 +56,7 @@ namespace ScrollOverview::Stacks {
 
     struct SStack {
         std::string          path; // absolute, no trailing slash
-        StackModel::ESort    sort    = StackModel::ESort::Name;
+        StackModel::ESort    sort    = StackModel::ESort::Added; // newest first
         StackModel::EDisplay display = StackModel::EDisplay::Stack;
         StackModel::EView    view    = StackModel::EView::Auto;
         std::string          customLabel; // the dock label the user chose; "" = the basename
@@ -201,7 +201,8 @@ namespace ScrollOverview::Stacks {
     // `pose`: the dock's hover/press tilt for this cell, applied to every texture of it.
     bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose);
     // A thumbnail (cached, or the image itself) or the themed icon.
-    SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px);
+    // `padded`: for drawing turned (see OverviewRender::appIcon); into padBox().
+    SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px, bool padded = false);
     // The first of a '|'-joined list of icon names the user's theme has.
     std::string pickIcon(const std::string& names);
     // Is this stack's fan/pane open or closing? (its pile items are in flight)
@@ -218,6 +219,12 @@ namespace ScrollOverview::Stacks {
     void moveFrom(const std::string& stackPath, std::vector<std::string> paths);
     // Appended to a stack's tooltip: "Folder not found", a recent trash error, or "".
     std::string tooltipSuffix(const std::string& stackPath);
+    // A stack icon name in the icon theme dock:stack_icon_theme picks: the
+    // Omarchy theme's (default) or GTK's. Returns "@<theme>:<name>" for
+    // OverviewRender::appIcon, or `name` itself for the GTK one.
+    std::string themedIcon(const std::string& name);
+    // "@<theme>:" for the Trash under dock:trash_icon (omarchy|gtk), "" otherwise.
+    std::string themePrefix(const std::string& which);
 
     // ---- the pane's geometry (StackPane.cpp) ---------------------------------
     namespace Pane {

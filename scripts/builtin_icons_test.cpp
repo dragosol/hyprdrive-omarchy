@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace ScrollOverview;
 
@@ -46,8 +47,14 @@ static double coverage(const std::string& svg) {
 }
 
 int main() {
-    for (const auto NAME : {BuiltinIcons::TRASH_EMPTY, BuiltinIcons::TRASH_FULL, BuiltinIcons::STACK_EMPTY}) {
+    std::vector<std::string> names{std::string(BuiltinIcons::STACK_EMPTY)};
+    for (const bool EMPTY : {true, false})
+        for (const char* T : {"light", "dark", "clear"})
+            for (const char* P : {"white", "color"})
+                names.push_back(BuiltinIcons::trashName(EMPTY, T, P));
+    for (const auto& NAME : names) {
         const auto SVG = BuiltinIcons::svg(NAME, "#12ab34");
+        CHECK(SVG.find("#A_") == std::string::npos && SVG.find("#G_") == std::string::npos && SVG.find("#LIP") == std::string::npos);
         CHECK(SVG.starts_with("<svg"));
         CHECK(SVG.find("#ACCENT") == std::string::npos);
         const double C = coverage(SVG);
@@ -55,7 +62,11 @@ int main() {
     }
     CHECK(BuiltinIcons::svg(BuiltinIcons::STACK_EMPTY, "#12ab34").find("#12ab34") != std::string::npos);
     CHECK(BuiltinIcons::svg("hyprdrive-nope", "#fff").empty());
-    CHECK(BuiltinIcons::TRASH_EMPTY.starts_with(BuiltinIcons::PREFIX));
+    CHECK(BuiltinIcons::trashName(true, "x", "y") == "hyprdrive-trash-empty-light-white");
+    CHECK(BuiltinIcons::trashName(false, "dark", "color") == "hyprdrive-trash-full-dark-color");
+    CHECK(BuiltinIcons::svg(BuiltinIcons::trashName(true, "light", "white"), "#fff").find("<!--PAPERS-->") == std::string::npos);
+    CHECK(BuiltinIcons::svg(BuiltinIcons::trashName(false, "light", "white"), "#fff").find("iri)\"") == std::string::npos ||
+          BuiltinIcons::svg(BuiltinIcons::trashName(false, "light", "white"), "#fff").find("<!--COLOR") == std::string::npos);
     std::printf("builtin_icons_test: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

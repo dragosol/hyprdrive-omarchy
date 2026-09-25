@@ -34,16 +34,22 @@ void                 clearFrameChromeBlur();
 // are monochrome near-black shapes -- GTK recolours them from the stylesheet at
 // draw time and this render path cannot, so an icon meant to sit on a dark
 // surface arrives invisible. Cached separately from the untinted one.
-SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false);
+// `padded`: the same pixels inside a TEX_PAD transparent border -- for anything
+// drawn ROTATED, whose hard quad edge would otherwise stair-step (2026-09-24);
+// draw it into padBox(box, tex) so the artwork keeps its size.
+SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false, bool padded = false);
+inline constexpr int TEX_PAD = 2;
+CBox                 padBox(const CBox& box, const SP<Render::ITexture>& tex);
 // An image FILE at `px` (a thumbnail), cached on path + size + mtime.
 // `budgeted`: a decode that is not cached yet is skipped (nullptr, not
 // remembered) once ~6 ms of decoding has been spent in the current ~16 ms --
 // the caller draws a stand-in and gets the image on a later frame, rather than
 // one frame stalling on a folder's worth of thumbnails.
-SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted = false);
+SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted = false, bool padded = false);
 // A filled rounded rectangle as a TEXTURE, so it can be drawn rotated (a rect
 // pass element cannot be). Cached by size, radius and colour; cleared with the
-// text cache. Dock stacks: the fan's label pills.
+// text cache. Dock stacks: the fan's label pills. Always PADDED (see appIcon):
+// draw it into padBox().
 SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& color, const CHyprColor& border = CHyprColor{0, 0, 0, 0}, int borderPx = 0);
 
 // OVERVIEW_CPP_SPEC 13.12 X57. The label plate, drawn ONCE for both surfaces

@@ -65,7 +65,7 @@ namespace ScrollOverview::Stacks {
     // frame, into a ~96 MB texture). Cached thumbnails are <= 256 px, and the
     // lookup (uri + md5 + two stats) is remembered per path + mtime, so the
     // render path does it once per file, not once per frame.
-    SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px) {
+    SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px, bool padded) {
         (void)px; // textures are drawn scaled; one size (the thumbnail's own) per file
         if (!e.dir && (e.kind.starts_with("image/") || e.kind.starts_with("video/"))) {
             static std::unordered_map<std::string, std::string> thumbFor; // path|mtime -> thumbnail ("" = none)
@@ -77,10 +77,10 @@ namespace ScrollOverview::Stacks {
                 IT = thumbFor.emplace(KEY, cachedThumbnail(e.path)).first;
             }
             if (!IT->second.empty())
-                if (auto tex = OverviewRender::imageFile(IT->second, 256, true); tex)
+                if (auto tex = OverviewRender::imageFile(IT->second, 256, true, padded); tex)
                     return tex;
         }
-        return OverviewRender::appIcon(e.icon);
+        return OverviewRender::appIcon(themedIcon(e.icon), false, padded);
     }
 
     // The pile's four newest files, per folder, recomputed only when the reader
@@ -203,11 +203,11 @@ namespace ScrollOverview::Stacks {
         const auto L = StackReader::status(S->path);
         // A FOLDER THAT IS GONE: dimmed, and the tooltip says why (tooltipSuffix).
         if (L.ready && L.missing) {
-            add(OverviewRender::appIcon(S->icon), iconBox, 0.F, alpha * 0.35F);
+            add(OverviewRender::appIcon(themedIcon(S->icon)), iconBox, 0.F, alpha * 0.35F);
             return true;
         }
         if (S->display == StackModel::EDisplay::Folder) {
-            add(OverviewRender::appIcon(S->icon), iconBox, 0.F, alpha);
+            add(OverviewRender::appIcon(themedIcon(S->icon)), iconBox, 0.F, alpha);
             return true;
         }
 
@@ -238,17 +238,20 @@ namespace ScrollOverview::Stacks {
                 tray.expand(-outline.width * 0.04);
                 add(OverviewRender::appIcon(std::string(BuiltinIcons::STACK_EMPTY)), tray, 0.F, alpha);
                 const double S2 = tray.width * 0.30;
-                add(OverviewRender::appIcon(S->icon), CBox{tray.x + (tray.width - S2) / 2.0, tray.y + tray.height * 0.705 - S2 / 2.0, S2, S2}, 0.F, alpha);
+                add(OverviewRender::appIcon(themedIcon(S->icon)), CBox{tray.x + (tray.width - S2) / 2.0, tray.y + tray.height * 0.705 - S2 / 2.0, S2, S2}, 0.F, alpha);
                 return true;
             }
             CBox inner = outline;
             inner.expand(-outline.width * 0.18);
-            add(OverviewRender::appIcon(S->icon), inner, 0.F, alpha * 0.85F);
+            add(OverviewRender::appIcon(themedIcon(S->icon)), inner, 0.F, alpha * 0.85F);
             return true;
         }
         const int PX = sc<int>(std::round(iconBox.width));
         for (const auto& P : PILEITEMS)
-            add(iconTexture(P.entry, PX), P.box, P.rot, alpha);
+            // Padded: the pile's papers are turned, and a hard texture edge
+            // would stair-step (2026-09-24).
+            if (const auto TEX = iconTexture(P.entry, PX, true))
+                add(TEX, OverviewRender::padBox(P.box, TEX), P.rot, alpha);
         return true;
     }
 }

@@ -655,7 +655,14 @@ static void registerConfigValuesFor() {
                                     "dock stacks: the fan's motion -- serpantinum (OutQuint travel, OutBack pop, 40 ms stagger) or extension (dock-stacks' 140 ms ease-out-quad)",
                                     Hyprlang::STRING{"serpantinum"}));
     addKey(makeShared<CBoolValue>(KEY("dock:builtin_icons"),
-                                  "dock stacks: hyprdrive's own Trash and empty-stack artwork (false = the icon theme's)", true));
+                                  "dock stacks: hyprdrive's own empty-stack artwork (false = the folder icon)", true));
+    addKey(makeShared<CStringValue>(KEY("dock:stack_icon_theme"),
+                                    "dock stacks: icon theme for stacks and their files -- omarchy (the current Omarchy theme's icons) or gtk",
+                                    Hyprlang::STRING{"omarchy"}));
+    addKey(makeShared<CStringValue>(KEY("dock:trash_icon"), "dock: the Trash's icon -- hyprdrive (its own artwork), omarchy or gtk", Hyprlang::STRING{"hyprdrive"}));
+    addKey(makeShared<CStringValue>(KEY("dock:trash_style"), "dock: hyprdrive Trash glass -- auto (follows the theme), light, dark or clear",
+                                    Hyprlang::STRING{"auto"}));
+    addKey(makeShared<CStringValue>(KEY("dock:trash_papers"), "dock: what fills hyprdrive's full Trash -- white or color", Hyprlang::STRING{"white"}));
 
     addKey(makeShared<CColorValue>(KEY("dock:background_color"),
                                    "hyprgnomedock: pill hue (alpha 0 = Omarchy terminal background, else misc:background_color; opacity is background_opacity)",

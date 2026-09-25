@@ -10,11 +10,16 @@
 
 namespace ScrollOverview::BuiltinIcons {
     inline constexpr std::string_view PREFIX      = "hyprdrive-";
-    inline constexpr std::string_view TRASH_EMPTY = "hyprdrive-trash-empty";
-    inline constexpr std::string_view TRASH_FULL  = "hyprdrive-trash-full";
+    // The Trash is one template in nine variants (2026-09-24):
+    // "hyprdrive-trash-<empty|full>-<light|dark|clear>-<white|color>".
+    inline constexpr std::string_view TRASH_PREFIX = "hyprdrive-trash-";
     inline constexpr std::string_view STACK_EMPTY = "hyprdrive-stack-empty";
 
     // The SVG source for `name`, with #ACCENT replaced by `accentHex`
     // ("#rrggbb"). Empty for an unknown name.
     std::string svg(std::string_view name, std::string_view accentHex);
+
+    // The Trash's icon name for its state and the user's choices. `style`:
+    // light | dark | clear (anything else = light); `papers`: white | color.
+    std::string trashName(bool empty, std::string_view style, std::string_view papers);
 }

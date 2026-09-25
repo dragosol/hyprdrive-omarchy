@@ -94,6 +94,13 @@ namespace AppSearch {
     bool        iconExists(const std::string& iconName);
     std::optional<bool> iconExistsNow(const std::string& iconName); // nullopt: the index is busy/unbuilt, ask again
     std::string resolveIconPath(const std::string& iconName);
+    // The same, in another icon theme (its own index, built on a worker the
+    // first time; answers from the main theme until then).
+    std::string resolveIconPathInTheme(const std::string& iconName, const std::string& theme);
+    // The icon theme the current Omarchy theme names
+    // (~/.local/state/omarchy/current/theme/icons.theme), re-read at most every
+    // 2 s so a theme switch is picked up; "" when there is none.
+    std::string omarchyIconTheme();
 
     // Detached, so the app outlives the overview closing.
     // terminalCmd is used only for Terminal=true entries; empty falls back to

@@ -51,7 +51,7 @@ namespace ScrollOverview::StackModel {
     // v1 lines are `fan|grid<TAB>name|mtime<TAB>path`. Order in the file is dock order.
     struct SRecord {
         std::string path;
-        ESort       sort    = ESort::Name;
+        ESort       sort    = ESort::Added; // newest first (user, 2026-09-24)
         EDisplay    display = EDisplay::Stack;
         EView       view    = EView::Auto;
         std::string label; // empty = the folder's basename

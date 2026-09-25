@@ -3,6 +3,7 @@
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
+#include "BuiltinIcons.hpp"
 #include <sys/stat.h>
 #include "StackBlur.hpp"
 #include "DockDrop.hpp"
@@ -417,7 +418,7 @@ namespace {
 
     struct SPopup {
         std::string         path;
-        StackModel::ESort   sort = StackModel::ESort::Name;
+        StackModel::ESort   sort = StackModel::ESort::Added;
         StackModel::EView   view = StackModel::EView::Auto;
         bool                grid = false; // decided at open: view==Grid, or the fan does not fit
         size_t              fanCap   = 0; // View as Fan: rows the screen holds (0 = no cap)
@@ -678,6 +679,7 @@ namespace {
 
         p.rows.clear();
         p.rows.reserve(ROWS);
+        double minLeft = 1e9; // the settled fan's leftmost point, labels turned
         for (size_t i = 0; i < ROWS; ++i) {
             const bool  ACTION = EMPTYROW || i >= p.visible.size(); // the empty row, or "N more
             const float FI     = sc<float>(i);
@@ -745,6 +747,12 @@ namespace {
             const float TILT  = FAN_TILT_DEG * FI * 3.14159265F / 180.F;
             const float THROW = fanMotion().serp ? rowJitter(p, i, 3) * 40.F * 3.14159265F / 180.F : 0.F;
             const float RROT  = TILT + THROW * (1.F - EZ.spin);
+            // Where this row's label ends up once settled and turned: its far
+            // end swings up and left about the icon by the row's tilt.
+            // (The label is drawn from the ICON leftwards -- gap, then its pill
+            // -- not from the row box, which is clamped.)
+            const double REACH = (ICONW / 2.0 + 8.0 * SCALE + labelW + 20.0 * SCALE) * HOVER_SCALE; // room for the hover blow-up
+            minLeft = std::min(minLeft, C1X - REACH * std::cos(TILT) - rest.height / 2.0 * std::sin(TILT));
             CBox         box{CXN - (C1X - rest.x) * K, CYN - (C1Y - rest.y) * K, rest.width * K, rest.height * K};
 
             p.rows.emplace_back(SRow{
@@ -760,6 +768,14 @@ namespace {
                 .rot    = RROT,
             });
         }
+
+        // A fan near the screen's left edge would put its turned labels off it
+        // (2026-09-24): the whole settled fan moves right by the shortfall,
+        // arc intact, each row by as much of it as it has flown.
+        const double MARGIN = 8.0 * SCALE;
+        if (minLeft < MARGIN)
+            for (auto& R : p.rows)
+                R.box.x += (MARGIN - minLeft) * R.e;
     }
 
     // THE PANE (dock stacks A): a searchable grid of the VISIBLE entries,
@@ -915,6 +931,35 @@ namespace {
         };
     }
 
+    // THE FAN'S REAL HEIGHT (2026-09-24: the top rows' labels ran off the
+    // screen). Each row turns about its icon by FAN_TILT_DEG per row, so the
+    // far (left) end of its label rises by width x sin(angle) -- 30 degrees by
+    // the 12th row. How many rows, in order, fit under `roomL` (logical px
+    // above the fan's base) when each label is as long as its name makes it?
+    float labelSpanL(const std::string& name) {
+        // The fan font is monospaced at FAN_FONT px: ~0.6 em per character,
+        // capped where the label ellipsizes; plus the pill's padding and the gap.
+        return std::min(sc<float>(name.size()) * FAN_FONT * 0.6F, sc<float>(FAN_LABEL_MAX)) + 20.F + 8.F + FAN_ICON / 2.F;
+    }
+    size_t rotatedFanCapacity(const SPopup& p, const std::vector<std::string>& names, float roomL) {
+        constexpr float MARGIN = 8.F;
+        size_t          n      = 0;
+        for (size_t i = 0; i < names.size(); ++i) {
+            const float TILT = FAN_TILT_DEG * sc<float>(i) * 3.14159265F / 180.F;
+            const float UP   = FAN_STEP * sc<float>(i + 1) + labelSpanL(names[i]) * std::sin(TILT) + FAN_ROW_H * 0.15F;
+            if (UP + MARGIN > roomL)
+                break;
+            n = i + 1;
+        }
+        return n;
+    }
+    std::vector<std::string> fanNames(const SPopup& p, size_t rows) {
+        std::vector<std::string> out;
+        for (size_t k = 0; k < std::min(rows, p.entries.size()); ++k)
+            out.push_back(p.entries[k].name);
+        return out;
+    }
+
     bool chooseGrid(const SPopup& p, PHLMONITOR monitor) {
         if (p.view == StackModel::EView::Grid)
             return true;
@@ -922,7 +967,11 @@ namespace {
             return false;
         // Automatic, as the extension: the pane past 12 items or when the fan
         // would not fit the screen.
-        return p.entries.size() > FAN_MAX_ITEMS || !StackModel::fanFits(std::max<size_t>(1, p.entries.size()), fanFit(p, monitor));
+        if (p.entries.size() > FAN_MAX_ITEMS)
+            return true;
+        const auto  F    = fanFit(p, monitor);
+        const float ROOM = F.pillTopL - F.gapL - F.topLimitL;
+        return rotatedFanCapacity(p, fanNames(p, p.entries.size()), ROOM) < std::max<size_t>(1, p.entries.size());
     }
 
     // The pane's search: which entries the query keeps, in display order.
@@ -955,7 +1004,17 @@ namespace {
         p.truncated = L.truncated;
         p.readerGen = StackReader::generation();
         p.grid   = chooseGrid(p, monitor);
-        p.fanCap = (p.view == StackModel::EView::Fan && monitor) ? std::max<size_t>(1, StackModel::fanCapacity(fanFit(p, monitor))) : 0;
+        p.fanCap = 0;
+        if (!p.grid && monitor) {
+            // Rows that fit with their tilt, the "N more" row included (it is
+            // measured as the row after the last item it would follow).
+            const auto  F     = fanFit(p, monitor);
+            const float ROOM  = F.pillTopL - F.gapL - F.topLimitL;
+            auto        names = fanNames(p, FAN_MAX_ITEMS + 1);
+            if (p.entries.size() > names.size() - (names.size() > 0 ? 0 : 0))
+                names.push_back("999 more in Files");
+            p.fanCap = std::max<size_t>(1, rotatedFanCapacity(p, names, ROOM));
+        }
         refilter(p);
         if (p.hover >= sc<int>(p.visible.size()))
             p.hover = p.visible.empty() ? -1 : 0;
@@ -1258,7 +1317,7 @@ namespace ScrollOverview::Stacks {
 
         SPopup p;
         p.path       = CANON;
-        p.sort       = S ? S->sort : StackModel::ESort::Name;
+        p.sort       = S ? S->sort : StackModel::ESort::Added;
         p.view       = S ? S->view : StackModel::EView::Auto;
         p.monitor    = monitor->m_id;
         p.anchor     = anchor;
@@ -1377,7 +1436,7 @@ namespace ScrollOverview::Stacks {
         if (MOUSE.distance(g_itemDrag->start) <= DRAG_THRESHOLD * std::max(MON->m_scale, 0.01F))
             return;
         const auto DRAG = *g_itemDrag;
-        if (DockDrop::startFileDrag({DRAG.srcPath}, DRAG.icon)) {
+        if (DockDrop::startFileDrag({DRAG.srcPath}, themedIcon(DRAG.icon))) {
             g_itemDrag.reset();
             close();
         } else
@@ -1557,9 +1616,22 @@ namespace ScrollOverview::Stacks {
         }
         for (int n = 0; n < 3 && !todo.empty(); ++n) {
             iconTexture(todo.back(), 64);
-            OverviewRender::appIcon(todo.back().icon);
+            OverviewRender::appIcon(themedIcon(todo.back().icon));
             todo.pop_back();
         }
+    }
+
+    std::string themePrefix(const std::string& which) {
+        if (which != "omarchy")
+            return "";
+        const auto T = AppSearch::omarchyIconTheme();
+        return T.empty() ? "" : "@" + T + ":";
+    }
+
+    std::string themedIcon(const std::string& name) {
+        if (name.empty() || name.starts_with('@') || name.starts_with('/') || name.starts_with(BuiltinIcons::PREFIX))
+            return name;
+        return themePrefix(ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme")) + name;
     }
 
     size_t downloadsIn(const std::string& stackPath) {
@@ -1995,7 +2067,7 @@ namespace ScrollOverview::Stacks {
             if (!g_itemDrag || !g_itemDrag->live)
                 return;
             const float SZ = GHOST_SIZE * SCALE;
-            drawTex(OverviewRender::appIcon(g_itemDrag->icon), CBox{std::round(MOUSE.x - SZ / 2.0), std::round(MOUSE.y - SZ / 2.0), std::round(SZ), std::round(SZ)},
+            drawTex(OverviewRender::appIcon(themedIcon(g_itemDrag->icon)), CBox{std::round(MOUSE.x - SZ / 2.0), std::round(MOUSE.y - SZ / 2.0), std::round(SZ), std::round(SZ)},
                     Dock::DRAG_GHOST_ALPHA);
         };
 
@@ -2083,7 +2155,7 @@ namespace ScrollOverview::Stacks {
                 const float ICON = GRID_ICON * SCALE * (PREV ? 1.15F : 1.F);
                 CBox        ib{std::round(cell.x + (cell.width - ICON) / 2.0), std::round(cell.y + 8.F * SCALE), std::round(ICON), std::round(ICON)};
                 const auto TEX = R.vis >= 0 && R.vis < sc<int>(P.visible.size()) ? iconTexture(P.entries[P.visible[sc<size_t>(R.vis)]], sc<int>(std::round(ICON))) :
-                                                                                  OverviewRender::appIcon(R.icon);
+                                                                                  OverviewRender::appIcon(themedIcon(R.icon));
                 if (TEX && TEX->ok() && drawableBox(ib)) {
                     CTexPassElement::SRenderData d;
                     d.tex     = TEX;
@@ -2210,8 +2282,8 @@ namespace ScrollOverview::Stacks {
                 // accent at Hyprland's border weight, baked into the pill so
                 // it turns with it.
                 const int BORDER = std::max(1, Config::getValue<int>("general:border_size")) * ((PREV || SEL || HOVER) ? 2 : 1);
-                drawTex(OverviewRender::roundedRect(PILLW, PILLH, sc<int>(std::round(8.F * SCALE * KT)), BG, Config::highlightColor(), BORDER),
-                        turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY).round(), A, ROT);
+                const auto PILLTEX = OverviewRender::roundedRect(PILLW, PILLH, sc<int>(std::round(8.F * SCALE * KT)), BG, Config::highlightColor(), BORDER);
+                drawTex(PILLTEX, OverviewRender::padBox(turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY), PILLTEX), A, ROT);
                 drawTex(TEX, turned(CXL, PY, LW, LH).round(), A, ROT);
             }
 
@@ -2220,9 +2292,14 @@ namespace ScrollOverview::Stacks {
                 // throughout, because it never stops being on screen.
                 const CBox& P0 = FROMPILE->box;
                 CBox        fly{P0.x + (ib.x - P0.x) * E, P0.y + (ib.y - P0.y) * E, P0.width + (ib.width - P0.width) * E, P0.height + (ib.height - P0.height) * E};
-                drawTex(iconTexture(FROMPILE->entry, sc<int>(std::round(FAN_ICON * SCALE * KS))), fly.round(), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
+                const auto FLYTEX = iconTexture(FROMPILE->entry, sc<int>(std::round(FAN_ICON * SCALE * KS)), true);
+                drawTex(FLYTEX, OverviewRender::padBox(fly, FLYTEX), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
             } else
-                drawTex(OverviewRender::appIcon(R.icon), ib, A, ROT);
+            {
+                // Padded, so its turned edge is filtered, not stair-stepped.
+                const auto ICONTEX = OverviewRender::appIcon(themedIcon(R.icon), false, true);
+                drawTex(ICONTEX, OverviewRender::padBox(ib, ICONTEX), A, ROT);
+            }
         }
         };
 

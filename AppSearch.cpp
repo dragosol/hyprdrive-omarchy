@@ -826,9 +826,9 @@ namespace AppSearch {
     static std::string                                     g_iconIndexTheme;
     static bool                                            g_iconIndexBuilt = false;
 
-    static std::vector<std::string> iconRoots() {
+    static std::vector<std::string> iconRoots(const std::string& theme) {
         std::vector<std::string> roots;
-        for (const auto& THEME : themeChain(iconThemeName())) {
+        for (const auto& THEME : themeChain(theme)) {
             for (const auto& BASE : iconBases())
                 roots.emplace_back(BASE + "/" + THEME);
         }
@@ -856,11 +856,11 @@ namespace AppSearch {
 
     // The walk itself, into a map nobody else can see yet. Pure apart from the
     // filesystem, so it can run on the worker while readers keep the old index.
-    static std::unordered_map<std::string, SIconCandidate> buildIconIndex() {
+    static std::unordered_map<std::string, SIconCandidate> buildIconIndex(const std::string& theme) {
         std::unordered_map<std::string, SIconCandidate> index;
 
         std::error_code ec;
-        const auto      ROOTS = iconRoots();
+        const auto      ROOTS = iconRoots(theme);
 
         for (size_t r = 0; r < ROOTS.size(); ++r) {
             if (!std::filesystem::is_directory(ROOTS[r], ec))
@@ -901,7 +901,7 @@ namespace AppSearch {
         if (g_iconIndexBuilt && g_iconIndexTheme == THEME)
             return;
 
-        g_iconIndex      = buildIconIndex();
+        g_iconIndex      = buildIconIndex(THEME);
         g_iconIndexTheme = THEME;
         g_iconIndexBuilt = true;
         ++g_iconIndexGen;
@@ -939,9 +939,69 @@ namespace AppSearch {
         });
     }
 
+    // ---- OTHER THEMES (dock stacks, 2026-09-24) ------------------------------
+    // The stacks and the Trash can draw from a theme other than the one the
+    // dock's app icons use (the Omarchy theme's icons.theme, or GTK's). Each
+    // such theme gets its own index, built once on its own worker exactly as
+    // the main one is -- a cold theme walk has measured in seconds -- and
+    // until it lands a lookup answers from the main theme.
+    std::mutex                                                              g_altMutex;
+    std::unordered_map<std::string, std::unordered_map<std::string, SIconCandidate>> g_altIndex; // theme -> index
+    std::string                                                             g_altBuilding;       // theme on the worker
+    std::thread                                                             g_altWorker;
+
+    std::string omarchyIconTheme() {
+        static std::string                           cached;
+        static std::chrono::steady_clock::time_point at{};
+        const auto                                   NOW = std::chrono::steady_clock::now();
+        if (at != std::chrono::steady_clock::time_point{} && NOW - at < std::chrono::seconds(2))
+            return cached;
+        at               = NOW;
+        const char* HOME = std::getenv("HOME");
+        std::string name;
+        if (HOME && *HOME) {
+            std::ifstream f(std::string{HOME} + "/.local/state/omarchy/current/theme/icons.theme");
+            std::getline(f, name);
+            name = trim(name);
+        }
+        cached = name;
+        return cached;
+    }
+
+    std::string resolveIconPathInTheme(const std::string& iconName, const std::string& theme) {
+        if (iconName.empty() || iconName.starts_with('/') || theme.empty() || theme == iconThemeName())
+            return resolveIconPath(iconName);
+        {
+            std::scoped_lock lock(g_altMutex);
+            if (const auto IT = g_altIndex.find(theme); IT != g_altIndex.end()) {
+                if (const auto HIT = IT->second.find(iconName); HIT != IT->second.end())
+                    return HIT->second.path;
+                return resolveIconPath(iconName); // not in that theme's chain at all
+            }
+            if (g_altBuilding.empty()) {
+                if (g_altWorker.joinable())
+                    g_altWorker.join(); // the previous theme's worker, long finished
+                g_altBuilding = theme;
+                g_altWorker   = std::thread([theme] {
+                    ::setpriority(PRIO_PROCESS, 0, 10);
+                    auto index = buildIconIndex(theme);
+                    {
+                        std::scoped_lock lock(g_altMutex);
+                        g_altIndex[theme] = std::move(index);
+                        g_altBuilding.clear();
+                    }
+                    ++g_iconIndexGen; // textures keyed on names re-resolve
+                });
+            }
+        }
+        return resolveIconPath(iconName);
+    }
+
     void shutdownIconIndex() {
         if (g_iconIndexWorker.joinable())
             g_iconIndexWorker.join();
+        if (g_altWorker.joinable())
+            g_altWorker.join();
     }
 
     uint64_t iconIndexGeneration() {
@@ -1014,8 +1074,13 @@ namespace AppSearch {
             g_iconRebuildRunning = true;
             g_iconIndexWorker    = std::thread([] {
                 ::setpriority(PRIO_PROCESS, 0, 10);
-                auto       fresh = buildIconIndex();
                 const auto THEME = iconThemeName();
+                auto       fresh = buildIconIndex(THEME);
+                {
+                    std::scoped_lock alt(g_altMutex);
+                    if (g_altBuilding.empty())
+                        g_altIndex.clear(); // rebuilt on their next lookup
+                }
                 {
                     std::scoped_lock lock(g_iconIndexMutex);
                     g_iconIndex      = std::move(fresh);

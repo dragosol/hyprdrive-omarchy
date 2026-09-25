@@ -1,6 +1,8 @@
 #include "OverviewRender.hpp"
 #include "OverviewPassElement.hpp"
 #include <chrono>
+#include <cstring>
+#include <vector>
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
@@ -159,12 +161,35 @@ static std::unordered_map<std::string, SP<Render::ITexture>> g_overviewAppIcons;
 // so a replaced thumbnail is picked up; bounded, and cleared at unload.
 static std::unordered_map<std::string, SP<Render::ITexture>> g_imageFiles;
 
-SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted) {
+// Upload `data` inside a TEX_PAD transparent border (see appIcon's `padded`).
+static SP<Render::ITexture> uploadPadded(const uint8_t* data, int w, int h, int stride, uint32_t format) {
+    const int            P = TEX_PAD, W2 = w + 2 * P, H2 = h + 2 * P;
+    std::vector<uint8_t> buf(sc<size_t>(W2) * sc<size_t>(H2) * 4, 0);
+    for (int y = 0; y < h; ++y) {
+        auto* dst = buf.data() + (sc<size_t>(y + P) * W2 + P) * 4;
+        std::memcpy(dst, data + sc<size_t>(y) * stride, sc<size_t>(w) * 4);
+        if (format == DRM_FORMAT_XRGB8888)
+            for (int x = 0; x < w; ++x)
+                dst[x * 4 + 3] = 255; // no alpha in the source: opaque, and the border stays clear
+    }
+    return makeShared<Render::GL::CGLTexture>(DRM_FORMAT_ARGB8888, buf.data(), sc<uint32_t>(W2 * 4), Vector2D{sc<double>(W2), sc<double>(H2)});
+}
+
+CBox padBox(const CBox& box, const SP<Render::ITexture>& tex) {
+    if (!tex || tex->m_size.x <= 2 * TEX_PAD || tex->m_size.y <= 2 * TEX_PAD)
+        return box;
+    const double FX = box.width * TEX_PAD / (tex->m_size.x - 2.0 * TEX_PAD), FY = box.height * TEX_PAD / (tex->m_size.y - 2.0 * TEX_PAD);
+    CBox         out{box.x - FX, box.y - FY, box.width + 2 * FX, box.height + 2 * FY};
+    out.rot = box.rot;
+    return out;
+}
+
+SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted, bool padded) {
     if (path.empty() || px < 1)
         return nullptr;
     std::error_code ec;
     const auto      MT  = std::filesystem::last_write_time(path, ec);
-    const auto      KEY = path + "\x01" + std::to_string(px) + "\x01" + std::to_string(ec ? 0 : MT.time_since_epoch().count());
+    const auto      KEY = path + "\x01" + std::to_string(px) + "\x01" + std::to_string(ec ? 0 : MT.time_since_epoch().count()) + (padded ? "\x03pad" : "");
     if (const auto IT = g_imageFiles.find(KEY); IT != g_imageFiles.end())
         return IT->second;
     if (g_imageFiles.size() > 256)
@@ -192,7 +217,8 @@ SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted) {
             const int      STRIDE = cairo_image_surface_get_stride(CAIRO);
             const uint32_t FORMAT = cairo_image_surface_get_format(CAIRO) == CAIRO_FORMAT_RGB24 ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_ARGB8888;
             if (DATA && W > 0 && H > 0)
-                texture = makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
+                texture = padded ? uploadPadded(DATA, W, H, STRIDE, FORMAT) :
+                                   makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
         }
     }
     spentMs += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - T0).count();
@@ -250,8 +276,10 @@ SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& col
     if (g_roundedRects.size() > 128)
         g_roundedRects.clear();
 
-    auto* const SURF = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    // PADDED (see appIcon): the shape sits inside a TEX_PAD clear border.
+    auto* const SURF = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w + 2 * TEX_PAD, h + 2 * TEX_PAD);
     auto* const CR   = cairo_create(SURF);
+    cairo_translate(CR, TEX_PAD, TEX_PAD);
     const double R   = std::clamp<double>(radius, 0.0, std::min(w, h) / 2.0);
     cairo_new_sub_path(CR);
     cairo_arc(CR, w - R, R, R, -M_PI / 2, 0);
@@ -274,14 +302,14 @@ SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& col
         cairo_fill(CR);
     cairo_surface_flush(SURF);
     SP<Render::ITexture> texture = makeShared<Render::GL::CGLTexture>(DRM_FORMAT_ARGB8888, cairo_image_surface_get_data(SURF), sc<uint32_t>(cairo_image_surface_get_stride(SURF)),
-                                                                      Vector2D{sc<double>(w), sc<double>(h)});
+                                                                      Vector2D{sc<double>(w + 2 * TEX_PAD), sc<double>(h + 2 * TEX_PAD)});
     cairo_destroy(CR);
     cairo_surface_destroy(SURF);
     g_roundedRects[KEY] = texture;
     return texture;
 }
 
-SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
+SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool padded) {
     if (iconName.empty())
         return nullptr;
     if (iconName.starts_with(ScrollOverview::BuiltinIcons::PREFIX))
@@ -289,7 +317,7 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
 
     // The tinted and untinted textures are different pixels, so they are
     // different cache entries. \x01 cannot appear in an icon name.
-    const std::string KEY = tintWhite ? iconName + "\x01white" : iconName;
+    const std::string KEY = (tintWhite ? iconName + "\x01white" : iconName) + (padded ? "\x03pad" : "");
 
     // What a NAME resolves to changes when the icon index is rebuilt -- an icon
     // installed after the first lookup, which until then cached as nothing (or
@@ -313,7 +341,15 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
     const auto T0  = Prof::clock::now();
     auto       UP0 = T0;
 
-    if (const auto PATH = AppSearch::resolveIconPath(iconName); !PATH.empty()) {
+    // "@<theme>:<name>": that icon from another theme (dock stacks, 2026-09-24:
+    // the stacks and the Trash follow the Omarchy theme's icons, or GTK's).
+    std::string resolved;
+    if (iconName.starts_with('@')) {
+        if (const auto COLON = iconName.find(':'); COLON != std::string::npos)
+            resolved = AppSearch::resolveIconPathInTheme(iconName.substr(COLON + 1), iconName.substr(1, COLON - 1));
+    } else
+        resolved = AppSearch::resolveIconPath(iconName);
+    if (const auto PATH = resolved; !PATH.empty()) {
         const auto T1 = Prof::clock::now();
         Prof::icoResolveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(T1 - T0).count();
 
@@ -353,7 +389,8 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
                 }
 
                 if (DATA && W > 0 && H > 0)
-                    texture = makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
+                    texture = padded ? uploadPadded(DATA, W, H, STRIDE, FORMAT) :
+                                       makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
             }
         }
     }

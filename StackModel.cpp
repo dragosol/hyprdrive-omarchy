@@ -183,7 +183,7 @@ namespace ScrollOverview::StackModel {
                 continue;
             out.records.push_back(SRecord{
                 .path    = P[5],
-                .sort    = sortFromName(P[1]).value_or(ESort::Name),
+                .sort    = sortFromName(P[1]).value_or(ESort::Added),
                 .display = P[2] == "folder" ? EDisplay::Folder : EDisplay::Stack,
                 .view    = P[3] == "grid" ? EView::Grid : P[3] == "fan" ? EView::Fan : EView::Auto,
                 .label   = P[4],

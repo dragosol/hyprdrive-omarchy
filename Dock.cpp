@@ -326,6 +326,7 @@ constexpr const char* KEY_SHIFT_MIDDLE  = "plugin:hyprdrive:dock:shift_middle_cl
 constexpr const char* KEY_ISOLATE_WS    = "plugin:hyprdrive:dock:isolate_workspaces";
 constexpr const char* KEY_ISOLATE_LOCATIONS = "plugin:hyprdrive:dock:isolate_locations";
 constexpr const char* KEY_BUILTIN_ICONS     = "plugin:hyprdrive:dock:builtin_icons";
+constexpr const char* KEY_TRASH_ICON        = "plugin:hyprdrive:dock:trash_icon";
 constexpr const char* KEY_AGNOSTIC_URG  = "plugin:hyprdrive:dock:workspace_agnostic_urgent";
 
 // X34, one key per reference setting: `hot-keys`, `hotkeys-overlay`,
@@ -880,7 +881,7 @@ std::vector<SItem> buildDockItems() {
         if (stackIndex++ == DockDrop::placeholderIndex())
             PLACEHOLDER();
         out.emplace_back(SItem{
-            .icon         = STACK.icon,
+            .icon         = Stacks::themedIcon(STACK.icon),
             .uri          = "file://" + STACK.path,
             .locationName = STACK.label,
             .stack        = true,
@@ -899,10 +900,24 @@ std::vector<SItem> buildDockItems() {
         for (const auto& LOCATION : Locations::items()) {
             if (LOCATION.mount != MOUNTS)
                 continue;
-            // Dock stacks C: hyprdrive's own Trash, unless the theme's is asked for.
-            const bool OWNTRASH = LOCATION.uri == "trash:///" && Config::getValue<bool>(KEY_BUILTIN_ICONS);
+            // Dock stacks C: the Trash is hyprdrive's own artwork, or the
+            // user-trash icon from the Omarchy theme's icons or GTK's
+            // (dock:trash_icon, 2026-09-24).
+            std::string icon = LOCATION.icon;
+            if (LOCATION.uri == "trash:///") {
+                const auto WHICH = Config::getValue<std::string>(KEY_TRASH_ICON);
+                auto       style = Config::getValue<std::string>("plugin:hyprdrive:dock:trash_style");
+                if (style != "light" && style != "dark" && style != "clear") {
+                    // auto: light glass on a dark dock, dark glass on a light one.
+                    const auto BG = Config::dockBackgroundColor();
+                    style         = 0.2126 * BG.r + 0.7152 * BG.g + 0.0722 * BG.b < 0.5 ? "light" : "dark";
+                }
+                icon = WHICH == "gtk" || WHICH == "omarchy" ?
+                    Stacks::themePrefix(WHICH) + LOCATION.icon :
+                    BuiltinIcons::trashName(LOCATION.empty, style, Config::getValue<std::string>("plugin:hyprdrive:dock:trash_papers"));
+            }
             out.emplace_back(SItem{
-                .icon         = OWNTRASH ? std::string(LOCATION.empty ? BuiltinIcons::TRASH_EMPTY : BuiltinIcons::TRASH_FULL) : LOCATION.icon,
+                .icon         = icon,
                 .running      = ISOLATE && Locations::openWindows(LOCATION.uri),
                 .uri          = LOCATION.uri,
                 .locationName = LOCATION.name,
@@ -961,6 +976,7 @@ struct SItemsKey {
     uint64_t  locations  = 0;
     uint64_t  stacks     = 0;
     uint64_t  dropGap    = 0; // DockDrop's placeholder (the Moses gap)
+    uint64_t  themes     = 0; // icon themes + the Trash's look
     uint64_t  inventory  = 0;
     uint64_t  icons      = 0;
     long long activeWs   = 0;
@@ -1010,6 +1026,11 @@ SItemsKey itemsKey() {
         (Config::getValue<bool>(KEY_AGNOSTIC_URG) ? 4U : 0U) |                            //
         (Config::getValue<bool>(KEY_ISOLATE_LOCATIONS) ? 8U : 0U) |                       //
         (Config::getValue<bool>(KEY_BUILTIN_ICONS) ? 16U : 0U);
+    // The icon themes and the Trash's look are strings; a change of any of them
+    // is a different item list.
+    key.themes = std::hash<std::string>{}(AppSearch::omarchyIconTheme() + "|" + Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme") + "|" +
+                                          Config::getValue<std::string>(KEY_TRASH_ICON) + "|" + Config::getValue<std::string>("plugin:hyprdrive:dock:trash_style") + "|" +
+                                          Config::getValue<std::string>("plugin:hyprdrive:dock:trash_papers"));
 
     // Only with isolation on does WHICH desktop is focused change the list.
     // Reading it unconditionally would throw the cache away on every workspace
