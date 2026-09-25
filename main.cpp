@@ -49,6 +49,7 @@ using namespace Hyprutils::String;
 #include "ToolSearch.hpp"
 #include "TextInput.hpp"
 #include "StackReader.hpp"
+#include "DockDrop.hpp"
 #include "DockStacks.hpp"
 #include "AppInfo.hpp"
 #include "CursorShape.hpp"
@@ -1869,6 +1870,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // The scratchpad's drag-out zone rides the same motion (it is a desktop
         // surface like the dock, and a drag is nothing but motion).
         ScrollOverview::ScratchpadExit::onPointerMove(HIT ? HIT->first : PHLMONITOR{});
+        // Dock stacks B: a drag of files over the dock (prefetch + target).
+        ScrollOverview::DockDrop::onPointerMove(HIT ? HIT->first : PHLMONITOR{}, HIT ? HIT->second : Vector2D{});
 
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
@@ -1901,6 +1904,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (!HIT)
             return;
         const auto& [MONITOR, LOCAL] = *HIT;
+
+        // Dock stacks B: a drag of files released over the dock is the dock's.
+        // Runs before Hyprland's own drop listener (registered at drag start).
+        if (ScrollOverview::DockDrop::onButton(MONITOR, LOCAL, event.state == WL_POINTER_BUTTON_STATE_PRESSED)) {
+            info.cancelled = true;
+            return;
+        }
 
         // The plain desktop's button map is fixed: right opens the menu, middle
         // launches, left drives the pill. (The overview honours the left-handed
@@ -2158,6 +2168,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pDockConfigHook.reset();
     g_pDockHoverHook.reset();
     g_pDockClickHook.reset();
+    ScrollOverview::DockDrop::shutdown();
     g_pDockScrollHook.reset();
     g_pDockRenderHook.reset();
     g_pScratchExitRenderHook.reset();

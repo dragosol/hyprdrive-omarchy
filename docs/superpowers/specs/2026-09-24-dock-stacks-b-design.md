@@ -42,8 +42,14 @@ So B needs no helper process.
   and drops nothing.
 - **A folder onto a stack cell** moves into that folder (the cell wins over the
   gap: the gap is only between cells).
-- **Onto an app icon:** out of scope for B (no "open with" yet). The drop is
-  cancelled and nothing happens.
+- **Onto an app icon:** out of scope for B (no "open with" yet). FILES are
+  cancelled and nothing happens. A single FOLDER anywhere on the pill that is
+  not a stack's middle half or Trash opens the gap at the nearest stack slot
+  (changed during implementation: over the app icons it opens at the first
+  slot, so the gap is always reachable). A folder already pinned is moved.
+- **Prefetch timing (added during implementation):** the uri-list is asked for
+  as soon as the drag moves on the desktop, not when it reaches the dock, and a
+  drop released before the list arrives is acted on when it lands (3 s limit).
 - **Only on the plain desktop.** Inside the overview the overview owns drags.
 - **Feedback:** the target cell gets the accent ring and a small lift while
   hovered; a good drop bounces the cell; a failure shakes it and puts the error

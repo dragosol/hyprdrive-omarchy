@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DockDropModel.hpp"
+
 #include "globals.hpp"
 
 #include <hyprland/src/helpers/time/Time.hpp>  // Time::steady_tp: the frame clock a flight draw is stamped with
@@ -49,6 +51,9 @@ struct SItem {
     bool        stack    = false;
     std::string stackPath;          // absolute, no trailing slash
     bool        stackDir = false;   // a folder fans; a file just opens
+    // Dock stacks B: the faint cell a folder being dragged over the dock will
+    // become (DockDrop's Moses gap). Not a stack yet: nothing reads its path.
+    bool        placeholder = false;
 
     // THE SCRATCHPAD (Scratchpad.hpp). Not an app and not a location: it owns
     // no window class and no desktop id, so `scratchpadName` is its handle the
@@ -107,6 +112,16 @@ void    render(PHLMONITOR monitor);
 // handling asks this before it asks any workspace: the pill floats over the main
 // area, so the card underneath would otherwise claim the drop.
 bool    pillContains(PHLMONITOR monitor, const Vector2D& point);
+
+// Dock stacks B. What a drag of files is over. `folderOffer`: the drag is ONE
+// folder, so everything on the pill except a stack's centre and Trash is a gap
+// it can be pinned into (at `gapIndex`, a stack-slot index).
+struct SDropHit {
+    DockDropModel::ECell cell = DockDropModel::ECell::None;
+    std::string          stackPath;
+    int                  gapIndex = -1;
+};
+SDropHit dropCellAt(PHLMONITOR monitor, const Vector2D& point, bool folderOffer);
 // Pill or the hover-preview plate above it. Overview tile linger asks this so
 // a window title over the dock drops as soon as the pointer is on the dock.
 bool    uiContains(PHLMONITOR monitor, const Vector2D& point);

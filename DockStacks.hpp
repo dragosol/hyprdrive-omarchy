@@ -26,40 +26,21 @@
 // OUTSIDE any anonymous namespace in DockStacks.cpp, or the first click on a
 // stack is a lazy-bind SIGSEGV in the compositor.
 //
-// THE PIN ROUTE, AND WHY IT IS NOT A DRAG FROM NAUTILUS. Investigated against
-// the Hyprland 0.56 headers this plugin builds on, not assumed:
+// THE PIN ROUTES. `hyprdrive:stack pin|unpin|toggle|view|sort <path>`
+// dispatchers (scriptable, what the gates drive); dragging a FOLDER from any
+// file manager onto the dock (DockDrop.hpp, sub-project B); and, for moving a
+// file into a stack, either dropping it from the file manager onto the stack
+// or dragging an item out of an open fan/grid onto another stack's cell.
 //
-//   * the drop target of an XDG drag is ALWAYS a wl_surface --
-//     CSeatManager::m_state.dndPointerFocus is a WP<CWLSurfaceResource>, and
-//     the routing that fills it (CWLDataDeviceProtocol::updateDrag) sends
-//     enter/motion/drop to a CWLSurfaceResource and nothing else;
-//   * this dock is not a surface. It is drawn straight into the monitor's
-//     render pass. There is no object the compositor could focus;
-//   * and every member that would let a non-surface claim an offer --
-//     m_dnd.currentSource, initiateDrag, updateDrag, dropDrag -- is PRIVATE on
-//     CWLDataDeviceProtocol, with `friend` granted only to CSeatManager and
-//     the protocol's own resource classes. A plugin is neither.
-//
-// What IS public is renderDND(), dndActive() and abortDndIfPresent(): enough
-// to know a foreign drag exists, not enough to receive one. So a file dragged
-// out of Nautilus cannot reach this dock, and no amount of plugin hooking
-// changes that in 0.56. The honest routes, which is what is implemented:
-//
-//   * `hyprdrive:stack pin <path>` / `unpin` / `toggle` / `view` / `sort`
-//     dispatchers -- scriptable, and what the gates drive;
-//   * a Nautilus script dropped in ~/.local/share/nautilus/scripts, so the pin
-//     is a right-click away in the file manager's own UI;
-//   * and for MOVING a file into a stack, the gesture that CAN reach us: drag
-//     an item out of an open fan/grid and onto another stack's cell. That
-//     drag begins inside the plugin's own input machinery, so it is ours end
-//     to end. Same gio semantics, same bounce, same shake.
+// The dock is not a wl_surface, so a foreign drag cannot TARGET it through the
+// protocol -- but its data source is reachable and the drop can be taken over
+// (read the uri-list, act, cancel the drag). An earlier version of this comment
+// said a drag from Nautilus could never reach the dock; the B spike disproved it.
 // DOCK STACKS A (2026-09-24, docs/superpowers/specs/2026-09-24-dock-stacks-a-design.md)
 // added: StackModel (sort/filter/store v2, host-tested), StackReader (folder
 // reads, trash jobs, inotify -- off the compositor thread), TextInput (shared
 // typing), StackPane.cpp (the searchable pane's geometry), StackIcon.cpp (the
-// pile cell). The paragraph above about XDG drags is TOO STRONG: seeing a drag
-// is public and its data source is reachable -- see the spec's "Correction
-// recorded for B"; sub-project B rewrites it.
+// pile cell). DOCK STACKS B added drops from other apps (DockDrop.hpp).
 namespace ScrollOverview::Stacks {
 
     // EVERY box handed to the render pass goes through this (2026-09-24: a
@@ -102,6 +83,7 @@ namespace ScrollOverview::Stacks {
     bool setViewMode(const std::string& path, StackModel::EView view);
     bool setLabel(const std::string& path, const std::string& label); // dock label only; "" = basename
     bool moveTo(const std::string& path, size_t index);                // reorder among stacks
+    bool pinAt(const std::string& path, size_t index);                 // pin (or move) at a stack index
     void clearAll(); // gate_slate: no stacks means no shifted cell predictions
 
     // What the dock draws in the cell, and what the tooltip says.

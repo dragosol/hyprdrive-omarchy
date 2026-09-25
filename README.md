@@ -28,7 +28,10 @@ is the original plugin; this repo is the Omarchy adaptation.
   would not fit. Space previews the hovered item (GNOME Sushi), arrows and
   Enter work, and the right-click menu has recent items, sort, Display as
   Stack/Folder, View as Grid, Rename in Dock, Trash actions and Remove from
-  Dock. Downloads is pinned on first run; drag stacks to reorder them. The
+  Dock. Downloads is pinned on first run; drag stacks to reorder them. Drop
+  files from any file manager onto a stack to move them in (copied across
+  drives, never overwriting) or onto Trash to trash them; drag a folder onto
+  the dock and it parts to make room -- let go to pin it there. The
   store is `~/.local/state/hyprdrive/stacks`; removing a stack never touches
   the folder.
 

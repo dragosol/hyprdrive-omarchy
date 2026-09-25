@@ -35,6 +35,7 @@
 #include "LauncherEntry.hpp"
 #include "StackReader.hpp"
 #include "TextInput.hpp"
+#include "DockDrop.hpp"
 #include "DockStacks.hpp"
 #include "DockTilt.hpp"
 #include "Locations.hpp"
@@ -858,7 +859,24 @@ std::vector<SItem> buildDockItems() {
     // this file already has treat it as the not-an-app it is. Its icon, label
     // and is-a-directory answer are resolved when the STORE is read
     // (DockStacks.cpp, decorate), not here.
+    // Dock stacks B: a folder hovering the dock opens a gap among the stacks
+    // -- a faint cell for it, which the arrangement animation parts the
+    // neighbours around.
+    const auto PLACEHOLDER = [&] {
+        const auto& P = DockDrop::placeholderPath();
+        out.emplace_back(SItem{
+            .icon         = "folder",
+            .uri          = "file://" + P,
+            .locationName = P.substr(P.find_last_of('/') + 1),
+            .stack        = true,
+            .stackDir     = true,
+            .placeholder  = true,
+        });
+    };
+    int stackIndex = 0;
     for (const auto& STACK : Stacks::all()) {
+        if (stackIndex++ == DockDrop::placeholderIndex())
+            PLACEHOLDER();
         out.emplace_back(SItem{
             .icon         = STACK.icon,
             .uri          = "file://" + STACK.path,
@@ -868,6 +886,8 @@ std::vector<SItem> buildDockItems() {
             .stackDir     = STACK.isDir,
         });
     }
+    if (DockDrop::placeholderIndex() >= stackIndex)
+        PLACEHOLDER();
 
     // X35. Locations: mounts first, then everything else (Trash), so Trash
     // stays the last cell. `isolate_locations` TRUE makes a location's running
@@ -936,6 +956,7 @@ struct SItemsKey {
     uint64_t  favorites  = 0;
     uint64_t  locations  = 0;
     uint64_t  stacks     = 0;
+    uint64_t  dropGap    = 0; // DockDrop's placeholder (the Moses gap)
     uint64_t  inventory  = 0;
     uint64_t  icons      = 0;
     long long activeWs   = 0;
@@ -974,6 +995,7 @@ SItemsKey itemsKey() {
     key.favorites  = favoritesStore().generation;
     key.locations  = Locations::generation();
     key.stacks     = Stacks::generation();
+    key.dropGap    = DockDrop::placeholderGeneration();
     // The GENERATION: a rescan that swaps one entry for another keeps the size.
     key.inventory  = AppSearch::inventoryGeneration();
     key.icons      = AppSearch::iconIndexGeneration();
@@ -3644,7 +3666,7 @@ std::vector<size_t> favoriteSlots(const SLayout& layout) {
 std::vector<size_t> stackSlots(const SLayout& layout) {
     std::vector<size_t> out;
     for (size_t i = 0; i < layout.items.size(); ++i)
-        if (layout.items[i].stack)
+        if (layout.items[i].stack && !layout.items[i].placeholder)
             out.emplace_back(i);
     return out;
 }
@@ -3715,6 +3737,49 @@ bool pillContains(PHLMONITOR monitor, const Vector2D& point) {
 
     const auto PILL = layout(monitor).pill;
     return PILL.width >= 1 && PILL.height >= 1 && PILL.containsPoint(point);
+}
+
+SDropHit dropCellAt(PHLMONITOR monitor, const Vector2D& point, bool folderOffer) {
+    using DockDropModel::ECell;
+    SDropHit hit;
+    if (!pillContains(monitor, point))
+        return hit;
+    const auto LAYOUT = layout(monitor);
+
+    // The gap index: the midpoint rule over the REAL stacks. The placeholder is
+    // not one of them, so while it sits under the pointer its neighbours are
+    // pushed clear of it and the index holds still.
+    const auto SLOTS = stackSlots(LAYOUT);
+    hit.gapIndex     = sc<int>(SLOTS.size());
+    for (size_t k = 0; k < SLOTS.size(); ++k)
+        if (point.x < LAYOUT.items[SLOTS[k]].iconBox.x + LAYOUT.items[SLOTS[k]].iconBox.width / 2.0) {
+            hit.gapIndex = sc<int>(k);
+            break;
+        }
+
+    hit.cell        = folderOffer ? ECell::Gap : ECell::App;
+    const auto ITEM = std::ranges::find_if(LAYOUT.items, [&](const SItem& item) { return hoverBox(item.iconBox, monitor->m_scale).containsPoint(point); });
+    if (ITEM == LAYOUT.items.end())
+        return hit;
+    if (ITEM->placeholder)
+        return hit; // Gap for a folder
+    if (ITEM->stack && ITEM->stackDir) {
+        // A folder is dropped INTO a stack only at its middle; its outer
+        // quarters open a gap beside it, or no stack could ever be passed.
+        const double REL = (point.x - ITEM->iconBox.x) / std::max(1.0, ITEM->iconBox.width);
+        if (!folderOffer || (REL > 0.25 && REL < 0.75)) {
+            hit.cell      = ECell::Stack;
+            hit.stackPath = ITEM->stackPath;
+        }
+        return hit;
+    }
+    if (!ITEM->stack && ITEM->uri == "trash:///") {
+        hit.cell = ECell::Trash;
+        return hit;
+    }
+    if (!folderOffer)
+        hit.cell = ECell::App;
+    return hit;
 }
 
 bool uiContains(PHLMONITOR monitor, const Vector2D& point) {
@@ -6173,6 +6238,28 @@ void render(PHLMONITOR monitor) {
             // one -- its acknowledgement and its refusal are keyed on the path
             // instead. Both are additive with the app hop above, which cannot
             // be running on the same cell.
+            // Dock stacks B: the Moses gap's faint folder; nothing else of it.
+            if (ITEM.placeholder) {
+                data.a = 0.45F * std::clamp(ITEM.appear, 0.F, 1.F);
+                if (Stacks::drawableBox(data.box))
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+                continue;
+            }
+
+            // Dock stacks B: the cell a drag of files would land in lifts and
+            // takes the accent ring.
+            if ((ITEM.stack && !ITEM.stackPath.empty() && ITEM.stackPath == DockDrop::hoveredStack()) || (!ITEM.stack && ITEM.uri == "trash:///" && DockDrop::hoveringTrash())) {
+                data.box.y -= std::round(0.12 * ITEM.iconBox.height);
+                CBorderPassElement::SBorderData ring;
+                const double PAD = std::round(3.0 * monitor->m_scale);
+                ring.box        = CBox{data.box.x - PAD, data.box.y - PAD, data.box.width + 2 * PAD, data.box.height + 2 * PAD}.round();
+                ring.grad1      = ::Config::CGradientValueData(accentColor());
+                ring.round      = sc<int>(std::round(ring.box.width * 0.22));
+                ring.borderSize = std::max(1, sc<int>(std::round(2.0 * monitor->m_scale)));
+                if (Stacks::drawableBox(ring.box))
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
+            }
+
             if (ITEM.stack) {
                 data.box.y -= Stacks::bounceLift(ITEM.stackPath, sc<float>(ITEM.iconBox.height));
                 data.box.x += Stacks::shakeOffset(ITEM.stackPath, sc<float>(ITEM.iconBox.width));

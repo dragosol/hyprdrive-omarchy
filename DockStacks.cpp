@@ -846,6 +846,15 @@ namespace ScrollOverview::Stacks {
         return true;
     }
 
+    bool pinAt(const std::string& path, size_t index) {
+        // Already a stack: the drop only moves it (dragging Downloads out of
+        // the file manager onto the dock again reorders it rather than failing).
+        if (!pin(path) && !find(canonical(path)))
+            return false;
+        moveTo(path, index);
+        return true;
+    }
+
     bool unpin(const std::string& path) {
         const auto CANON = canonical(path);
         all();
