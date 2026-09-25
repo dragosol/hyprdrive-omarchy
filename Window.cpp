@@ -198,7 +198,10 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         return;
 
     const auto FBFORMAT     = g_pHyprRenderer->m_renderData.currentFB->m_drmFormat;
-    auto&      passElements = g_pHyprRenderer->m_renderPass.m_passElements;
+    // currentPass(), not m_renderPass: the dock's hover previews are queued into
+    // a REDIRECTED nested pass (CDockLivePreviewPassElement). For the overview
+    // the two are the same pass.
+    auto&      passElements = g_pHyprRenderer->currentPass().m_passElements;
 
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         if (!passElements[i].element)
@@ -1078,6 +1081,11 @@ void renderOverviewWindow(const SRenderParams& params) {
             // forced below so the cell still reads as a rounded thumbnail.
             g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
             roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement);
+            // The overview's U2 mipmap prefilter, for the dock's thumbnails too
+            // (user, 2026-09-24: "dock window previews lack antialiasing"): a
+            // window shrunk to a preview is minified well past bilinear's
+            // limit, which is what aliased its text and edges.
+            prefilterOverviewWindowTextures(WINDOW, MONITOR, S, firstElement);
             // Clip every surface of this window to the preview cell so nothing bleeds.
             for (size_t i = firstElement; i < passElements.size(); ++i) {
                 auto* surface = dc<CSurfacePassElement*>(passElements[i].element.get());
