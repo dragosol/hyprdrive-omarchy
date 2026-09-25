@@ -344,9 +344,24 @@ namespace {
     constexpr float GRID_RADIUS  = 14.F;
     constexpr int   GRID_FONT    = 11;
 
-    constexpr float OPEN_MS  = 220.F;
-    constexpr float STAGGER_MS = 14.F;
-    constexpr float CLOSE_MS = 165.F; // 25% quicker than the entrance, per the law
+    // THE MOTION, from the user's own GNOME extension (dragosol/dock-stacks,
+    // FanPopup/GridPopup), asked for by name on 2026-09-24 -- so these are its
+    // numbers, not the house band: each fan row flies out of the cell over
+    // 140 ms ease-out-quad, 11 ms after the one below it, growing from 0.1x
+    // and fading in, at its fixed tilt; the fan folds back in 84 ms. The pane
+    // grows over 200 ms and leaves in 150.
+    //
+    // ONE REVERSIBLE TIMELINE (user, same day: "spam click the stack and have
+    // the animation reverse itself"). The popup's state is a position on its
+    // opening timeline; opening runs it forward, closing runs it back (faster,
+    // so the fold takes FAN_CLOSE_MS from fully open), and every visual is a
+    // pure function of that position -- so turning round mid-flight starts
+    // from exactly where everything is, with no jump.
+    constexpr float FAN_ROW_MS     = 140.F;
+    constexpr float FAN_STAGGER_MS = 11.F;
+    constexpr float FAN_CLOSE_MS   = 84.F;
+    constexpr float PANE_OPEN_MS   = 200.F;
+    constexpr float PANE_CLOSE_MS  = 150.F;
 
     // Dock stacks A: there is NO item cap. The fan shows every item while it
     // fits the screen, and a stack that does not fit opens as the searchable
@@ -361,6 +376,8 @@ namespace {
         std::string icon;
         bool        action = false;
         int         vis    = -1; // index into SPopup::visible; -1 for the action row
+        float       k      = 1.F; // fan: the row's scale on its way in or out
+        float       e      = 1.F; // fan: the row's eased progress (0 in the cell)
     };
 
     struct SPopup {
@@ -394,6 +411,7 @@ namespace {
         float               scroll = 0.F;
         Time::steady_tp     since{};
         bool                leaving = false;
+        float               tl0     = 0.F; // timeline position (ms) at `since`
     };
 
     std::string     g_trashStack;   // whose trash job is in flight (Stacks::trashFrom)
@@ -465,6 +483,45 @@ namespace {
         return std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count();
     }
 
+    // How long the opening timeline is: the pane's grow, or the fan's last
+    // row landing.
+    float timelineSpan(const SPopup& p) {
+        if (p.grid)
+            return PANE_OPEN_MS;
+        const size_t ROWS = std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0));
+        return FAN_ROW_MS + FAN_STAGGER_MS * sc<float>(std::min(ROWS, STAGGER_ROWS) - 1);
+    }
+
+    float timelineNow(const SPopup& p) {
+        const float SPAN = timelineSpan(p);
+        const float DT   = elapsed(p.since);
+        if (p.leaving)
+            return std::max(0.F, p.tl0 - DT * SPAN / (p.grid ? PANE_CLOSE_MS : FAN_CLOSE_MS));
+        return std::min(SPAN, p.tl0 + DT);
+    }
+
+    // 0 closed .. 1 open, on the way in or out alike.
+    float popupProgress(const SPopup& p) {
+        return std::clamp(timelineNow(p) / std::max(1.F, timelineSpan(p)), 0.F, 1.F);
+    }
+
+    // Turn round: whatever the popup is doing, it now heads the other way from
+    // exactly where it is.
+    void setDirection(SPopup& p, bool leaving) {
+        if (p.leaving == leaving)
+            return;
+        p.tl0     = timelineNow(p);
+        p.since   = Time::steadyNow();
+        p.leaving = leaving;
+    }
+
+    // Row i's own eased progress on the fan's timeline: 0 in the cell, 1 in place.
+    float fanRowEase(const SPopup& p, size_t i, float progress) {
+        const float T  = progress * timelineSpan(p) - FAN_STAGGER_MS * sc<float>(std::min(i, STAGGER_ROWS));
+        const float TI = std::clamp(T / FAN_ROW_MS, 0.F, 1.F);
+        return 1.F - (1.F - TI) * (1.F - TI); // ease-out-quad, as the extension
+    }
+
     // ------------------------------------------------------------ fan layout --
     // Laid out into `rows`, in DRAWN coordinates, so the hit test and the paint
     // can never disagree: the same function fills both, exactly as renderMenu
@@ -487,18 +544,12 @@ namespace {
             const float FI     = sc<float>(i);
             const float SHIFT  = FAN_SHIFT_K * std::pow(FI, FAN_SHIFT_P) * SCALE;
 
-            // The stagger: row i has not started until i * STAGGER_MS has gone
-            // by, and then runs its own OPEN_MS. Read off ONE clock so the fan
-            // cannot tear.
-            const float T0 = FI * STAGGER_MS / std::max(1.F, OPEN_MS + STAGGER_MS * sc<float>(std::min(p.visible.size(), STAGGER_ROWS)));
-            const float TI = std::clamp((progress - T0) / std::max(0.001F, 1.F - T0), 0.F, 1.F);
-            const float E  = p.leaving ? 1.F - houseEase(false, TI) : houseEase(true, TI);
+            // The row's own eased progress on the ONE timeline (fanRowEase):
+            // the stagger and the reversal both come from there.
+            const float E = fanRowEase(p, i, progress);
 
-            const float ROWH = FAN_ROW_H * SCALE;
+            const float ROWH  = FAN_ROW_H * SCALE;
             const float RESTY = BASE - FAN_STEP * SCALE * (FI + 1.F);
-            // Grows OUT of the icon: at E=0 the row sits collapsed on the cell,
-            // which is the hover panel's entrance and the reference's both.
-            const float Y = sc<float>(p.anchor.y) + (RESTY - sc<float>(p.anchor.y)) * E;
 
             std::string LABEL, ICON;
             if (!ACTION) {
@@ -524,8 +575,17 @@ namespace {
             // Right-aligned on the anchor's centre plus the shift, so the ICON
             // column tracks the fan's arc and the labels ragged out to the left
             // -- which is the reference's shape.
-            CBox box{std::round(CX + SHIFT - W + ICONW / 2.F + FAN_PAD_X * SCALE), std::round(Y), std::round(W), std::round(ROWH)};
-            box.x = std::max(0.0, std::min(box.x, sc<double>(monitor->m_size.x * SCALE) - box.width));
+            CBox rest{std::round(CX + SHIFT - W + ICONW / 2.F + FAN_PAD_X * SCALE), std::round(RESTY), std::round(W), std::round(ROWH)};
+            rest.x = std::max(0.0, std::min(rest.x, sc<double>(monitor->m_size.x * SCALE) - rest.width));
+
+            // The extension's flight: the row starts on the cell's centre at
+            // 0.1x and flies to its place growing to full size, scaled about its
+            // ICON (the pivot the extension sets), so the icons trace the arc.
+            const double K  = 0.1 + 0.9 * E;
+            const double C1X = rest.x + rest.width - FAN_PAD_X * SCALE - ICONW / 2.0, C1Y = rest.y + rest.height / 2.0;
+            const double C0X = p.anchor.x + p.anchor.width / 2.0, C0Y = p.anchor.y + p.anchor.height / 2.0;
+            const double CXN = C0X + (C1X - C0X) * E, CYN = C0Y + (C1Y - C0Y) * E;
+            CBox         box{CXN - (C1X - rest.x) * K, CYN - (C1Y - rest.y) * K, rest.width * K, rest.height * K};
 
             p.rows.emplace_back(SRow{
                 .box    = box,
@@ -534,6 +594,8 @@ namespace {
                 .icon   = ICON,
                 .action = ACTION,
                 .vis    = ACTION ? -1 : sc<int>(i),
+                .k      = sc<float>(K),
+                .e      = E,
             });
         }
     }
@@ -587,11 +649,6 @@ namespace {
         }
     }
 
-    float popupProgress(const SPopup& p) {
-        const float MS   = elapsed(p.since);
-        const float SPAN = p.leaving ? CLOSE_MS : (OPEN_MS + STAGGER_MS * sc<float>(std::min(p.visible.size(), STAGGER_ROWS)));
-        return std::clamp(MS / std::max(1.F, SPAN), 0.F, 1.F);
-    }
 
     // Declared above reload(); defined here, where folderIcon/iconNameForFile
     // and canonical() are all in scope.
@@ -832,6 +889,7 @@ namespace {
             g_popup->view  = S->view;
             applyListing(*g_popup, sortedListing(g_popup->path, g_popup->sort), popupMonitorPtr());
             g_popup->since = Time::steadyNow();
+            g_popup->tl0   = 0.F; // replay the entrance with the new order
             damagePopupMonitor();
         }
         return true;
@@ -1005,8 +1063,11 @@ namespace ScrollOverview::Stacks {
 
         // A second click on the same cell closes it, which is the reference's
         // toggle and what every dock popup on this desktop does.
-        if (g_popup && g_popup->path == CANON && !g_popup->leaving) {
-            close();
+        if (g_popup && g_popup->path == CANON) {
+            if (!g_popup->leaving)
+                close();
+            else
+                setDirection(*g_popup, false); // caught on its way out: turn round
             return;
         }
 
@@ -1111,8 +1172,7 @@ namespace ScrollOverview::Stacks {
             showPreviewClose();
             g_popup->previewing = -1;
         }
-        g_popup->leaving = true;
-        g_popup->since   = Time::steadyNow();
+        setDirection(*g_popup, true);
     }
 
     // Only the popup's own rows can start an item drag, so a popup that goes
@@ -1590,7 +1650,7 @@ namespace ScrollOverview::Stacks {
         }
 
         const float PROGRESS = popupProgress(*g_popup);
-        if (g_popup->leaving && PROGRESS >= 1.F) {
+        if (g_popup->leaving && PROGRESS <= 0.F) {
             g_popup.reset();
             g_itemDrag.reset();
             return;
@@ -1598,7 +1658,7 @@ namespace ScrollOverview::Stacks {
 
         g_popup->lastDrawn = Time::steadyNow();
         const float SCALE = std::max(monitor->m_scale, 0.01F);
-        const float ALPHA = g_popup->leaving ? 1.F - houseEase(false, PROGRESS) : houseEase(true, PROGRESS);
+        const float ALPHA = houseEase(true, PROGRESS); // the same curve both ways, so a reversal is seamless
 
         if (g_popup->grid)
             layoutPane(*g_popup, monitor, layout.pill, PROGRESS);
@@ -1801,10 +1861,8 @@ namespace ScrollOverview::Stacks {
             // Per-row alpha: a row that has not started its stagger is not
             // drawn at all rather than drawn at zero, which keeps its frost off
             // the queue too.
-            const float T0 = sc<float>(i) * STAGGER_MS / std::max(1.F, OPEN_MS + STAGGER_MS * sc<float>(std::min(g_popup->visible.size(), STAGGER_ROWS)));
-            const float TI = std::clamp((PROGRESS - T0) / std::max(0.001F, 1.F - T0), 0.F, 1.F);
-            const float A  = (g_popup->leaving ? 1.F - houseEase(false, PROGRESS) : houseEase(true, TI));
-            const float E  = A; // the row's own eased progress: 0 on the pile, 1 in place
+            const float E = R.e; // the row's own eased progress: 0 in the cell, 1 in place
+            const float A = E;   // it fades in as it flies, as the extension's does
             if (A <= 0.02F && !FROMPILE)
                 continue;
 
@@ -1820,7 +1878,8 @@ namespace ScrollOverview::Stacks {
             const bool PREV  = !R.action && sc<int>(i) == g_popup->previewing;
             const bool SEL   = !R.action && g_popup->keyboard && sc<int>(i) == g_popup->hover;
             const bool HOVER = !R.action && !g_popup->keyboard && rowHit(R, MOUSE);
-            const float K    = PREV ? 1.15F : 1.F;
+            const float KS   = PREV ? 1.15F : 1.F; // the preview's enlargement
+            const float K    = KS * R.k;             // ... times the row's flight scale
             CBox        box  = R.box;
             if (PREV) {
                 box.x -= box.width * 0.075;
@@ -1828,12 +1887,12 @@ namespace ScrollOverview::Stacks {
                 box.width *= 1.15;
                 box.height *= 1.15;
             }
-            drawPlate(box, FAN_RADIUS, A);
+            drawPlate(box, FAN_RADIUS * R.k, A);
             if (PREV || SEL || HOVER) {
                 CBorderPassElement::SBorderData ring;
                 ring.box        = box;
                 ring.grad1      = ::Config::CGradientValueData(Dock::accentColor().modifyA(A * (PREV ? 1.F : SEL ? 0.6F : 0.35F)));
-                ring.round      = sc<int>(std::round(FAN_RADIUS * SCALE));
+                ring.round      = sc<int>(std::round(FAN_RADIUS * SCALE * R.k));
                 ring.borderSize = std::max(1, sc<int>(std::round(2.F * SCALE)));
                 if (drawableBox(ring.box))
                     g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
@@ -1847,16 +1906,19 @@ namespace ScrollOverview::Stacks {
                 // throughout, because it never stops being on screen.
                 const CBox& P0 = FROMPILE->box;
                 CBox        fly{P0.x + (ib.x - P0.x) * E, P0.y + (ib.y - P0.y) * E, P0.width + (ib.width - P0.width) * E, P0.height + (ib.height - P0.height) * E};
-                drawTex(iconTexture(FROMPILE->entry, sc<int>(std::round(ib.width))), fly.round(), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
+                drawTex(iconTexture(FROMPILE->entry, sc<int>(std::round(FAN_ICON * SCALE * KS))), fly.round(), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
             } else
                 drawTex(OverviewRender::appIcon(R.icon), ib, A, ROT);
 
-            if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * K)), false, "",
-                                                      sc<int>(std::round(FAN_LABEL_MAX * SCALE * K)), 500);
+            // Rendered at the row's full size (one cached texture) and drawn
+            // scaled with the row, rather than re-rasterised at every size of
+            // the flight.
+            if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * KS)), false, "",
+                                                      sc<int>(std::round(FAN_LABEL_MAX * SCALE * KS)), 500);
                 TEX && TEX->ok()) {
-                CBox lb{std::round(sc<float>(box.x) + FAN_PAD_X * SCALE * K), std::round(sc<float>(box.y) + (sc<float>(box.height) - sc<float>(TEX->m_size.y)) / 2.F),
-                        sc<double>(TEX->m_size.x), sc<double>(TEX->m_size.y)};
-                drawTex(TEX, lb, A);
+                const double LW = TEX->m_size.x * R.k, LH = TEX->m_size.y * R.k;
+                CBox         lb{std::round(sc<float>(box.x) + FAN_PAD_X * SCALE * K), std::round(box.y + (box.height - LH) / 2.0), std::round(LW), std::round(LH)};
+                drawTex(TEX, lb, A, ROT);
             }
         }
 

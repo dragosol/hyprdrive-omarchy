@@ -30,7 +30,10 @@ namespace ScrollOverview::Stacks::Pane {
         const float H      = CHROME + GRIDH;
 
         // Grows out of the stack's cell, like the popup always has.
-        const float E     = leaving ? 1.F - houseEase(false, progress) : houseEase(true, progress);
+        // One curve both ways: `progress` runs back down when it closes, so a
+        // reversal mid-flight has nothing to jump between (user, 2026-09-24).
+        (void)leaving;
+        const float E     = houseEase(true, progress);
         const float CX    = sc<float>(anchor.x) + sc<float>(anchor.width) / 2.F;
         const float RESTY = sc<float>(pill.y) - GAP * S - H;
         CBox        plate{sc<float>(anchor.x) + (CX - W / 2.F - sc<float>(anchor.x)) * E, sc<float>(anchor.y) + (RESTY - sc<float>(anchor.y)) * E,
