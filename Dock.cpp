@@ -2938,7 +2938,7 @@ enum class ERow : uint8_t {
     StackRecent,      // exec = the file's path
     StackSortKey,     // exec = sort name
     StackDisplayKey,  // exec = "stack" | "folder"
-    StackViewKey,     // exec = "auto" | "grid"
+    StackViewKey,     // exec = "auto" | "fan" | "grid"
     StackShowParent,
     StackRename,
     StackRenameField,
@@ -3087,6 +3087,7 @@ std::vector<SRow> buildRows(const SItem& item) {
             rows.emplace_back(SRow{.kind = ERow::StackDisplayKey, .label = "Display as Stack", .exec = "stack", .glyph = CHECKED(S->display == StackModel::EDisplay::Stack)});
             rows.emplace_back(SRow{.kind = ERow::StackDisplayKey, .label = "Display as Folder", .exec = "folder", .glyph = CHECKED(S->display == StackModel::EDisplay::Folder)});
             rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Automatic", .exec = "auto", .glyph = CHECKED(S->view == StackModel::EView::Auto)});
+            rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Fan", .exec = "fan", .glyph = CHECKED(S->view == StackModel::EView::Fan)});
             rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Grid", .exec = "grid", .glyph = CHECKED(S->view == StackModel::EView::Grid)});
             rows.emplace_back(SRow{.kind = ERow::Separator});
         }
@@ -3281,7 +3282,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
                 Stacks::setSort(item.stackPath, *K);
             return;
         case ERow::StackDisplayKey: Stacks::setDisplay(item.stackPath, row.exec == "folder" ? StackModel::EDisplay::Folder : StackModel::EDisplay::Stack); return;
-        case ERow::StackViewKey: Stacks::setViewMode(item.stackPath, row.exec == "grid" ? StackModel::EView::Grid : StackModel::EView::Auto); return;
+        case ERow::StackViewKey: Stacks::setViewMode(item.stackPath, StackModel::viewFromName(row.exec)); return;
         case ERow::StackShowParent:
             // FileManager1.ShowItems: the parent folder, this one selected.
             Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method",
@@ -3794,6 +3795,10 @@ bool uiContains(PHLMONITOR monitor, const Vector2D& point) {
 }
 
 bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
+    // The stack pane floats above everything else of the dock's (2026-09-24:
+    // its wheel ticks were going to the window under it).
+    if (Stacks::scroll(monitor, point, up))
+        return true;
     if (!pillContains(monitor, point))
         return occupiesPointer(monitor, point); // hover plate / menu: swallow, do not leak
 
@@ -5794,7 +5799,7 @@ void dismissHoverPanelNow() {
 bool occupiesPointer(PHLMONITOR monitor, const Vector2D& point) {
     if (!monitor)
         return false;
-    return pillContains(monitor, point) || panelContains(monitor, point) || menuContains(monitor, point);
+    return pillContains(monitor, point) || panelContains(monitor, point) || menuContains(monitor, point) || Stacks::contains(monitor, point);
 }
 
 static uint64_t g_dockSeatDoLaterSeq = 0;
@@ -6282,10 +6287,10 @@ void render(PHLMONITOR monitor) {
             // Dock stacks A: a stack draws its own cell -- the pile of its newest
             // items, the folder, or a dimmed missing folder -- without the tilt.
             const auto& PRESSKEY = ITEM.subject;
-            if (!(ITEM.stack && Stacks::drawCell(monitor, ITEM, data.box, std::clamp(ITEM.appear, 0.F, 1.F))))
-                DockTilt::queue(TEX, data.box, std::clamp(ITEM.appear, 0.F, 1.F),
-                            DockTilt::pose(monitor->m_id, PRESSKEY, pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, PRESSKEY),
-                                           pressAt(monitor->m_id, PRESSKEY)));
+            const auto  POSE     = DockTilt::pose(monitor->m_id, PRESSKEY, pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, PRESSKEY),
+                                                  pressAt(monitor->m_id, PRESSKEY));
+            if (!(ITEM.stack && Stacks::drawCell(monitor, ITEM, data.box, std::clamp(ITEM.appear, 0.F, 1.F), POSE)))
+                DockTilt::queue(TEX, data.box, std::clamp(ITEM.appear, 0.F, 1.F), POSE);
         }
 
         // Both of these are deliberately OUTSIDE the texture check: an app with
@@ -6456,7 +6461,9 @@ void render(PHLMONITOR monitor) {
     // the fade-OUT: without it the plate would pop off instead of leaving.
     const auto CELL = panelCellAt(monitor, MOUSE);
 
-    if (g_menu)
+    // An open stack's fan or pane covers where its tooltip would sit (user,
+    // 2026-09-24): the popup already says what it is.
+    if (g_menu || Stacks::isOpen())
         renderTooltip(monitor, LAYOUT, CBox{}, "");
     else if (CELL)
         renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y), tooltipSubject(CELL->second),

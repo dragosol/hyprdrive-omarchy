@@ -128,7 +128,7 @@ namespace ScrollOverview::Stacks {
         return out;
     }
 
-    bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha) {
+    bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose) {
         if (!item.stackDir)
             return false;
         const auto* S = findStack(item.stackPath);
@@ -141,12 +141,11 @@ namespace ScrollOverview::Stacks {
         const auto  add = [&](const SP<Render::ITexture>& tex, CBox box, float rot, float a) {
             if (!tex || !tex->ok() || !drawableBox(box))
                 return;
-            CTexPassElement::SRenderData d;
-            d.tex     = tex;
-            d.box     = box.round();
-            d.box.rot = rot;
-            d.a       = a;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            // The same 3D hover card as every other dock icon (user,
+            // 2026-09-24), one pose for the whole cell.
+            CBox b = box.round();
+            b.rot  = rot;
+            DockTilt::queue(tex, b, a, pose);
         };
 
         const auto L = StackReader::status(S->path);
@@ -160,21 +159,21 @@ namespace ScrollOverview::Stacks {
             return true;
         }
 
-        // The outline: a thin rounded box in the theme's muted colour.
+        // While its fan is open (or closing) the pile's items are IN the fan:
+        // only an outline stays behind, so they visibly left it. A closed stack
+        // is just the pile, no frame (user, 2026-09-24).
         CBox outline = iconBox;
         outline.expand(-iconBox.width * 0.06);
-        CBorderPassElement::SBorderData border;
-        border.box        = outline.round();
-        border.grad1      = ::Config::CGradientValueData(Config::themeMutedText().modifyA(alpha * 0.8F));
-        border.round      = sc<int>(std::round(outline.width * 0.18));
-        border.borderSize = std::max(1, sc<int>(std::round(1.5F * SC)));
-        if (drawableBox(border.box))
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
-
-        // While its fan is open (or closing) the pile's items are IN the fan:
-        // only the outline stays behind, so they visibly left it.
-        if (popupShowsStack(S->path))
+        if (popupShowsStack(S->path)) {
+            CBorderPassElement::SBorderData border;
+            border.box        = outline.round();
+            border.grad1      = ::Config::CGradientValueData(Config::themeMutedText().modifyA(alpha * 0.8F));
+            border.round      = sc<int>(std::round(outline.width * 0.18));
+            border.borderSize = std::max(1, sc<int>(std::round(1.5F * SC)));
+            if (drawableBox(border.box))
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
             return true;
+        }
 
         const auto PILEITEMS = pileLayout(S->path, iconBox);
         if (PILEITEMS.empty()) {

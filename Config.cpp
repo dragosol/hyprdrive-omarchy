@@ -146,7 +146,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .name            = "stack",
             .argPattern      = std::regex{"^(clear|(pin|unpin|toggle) .+|view (fan|grid|auto) .+|sort (name|mtime|added|modified|kind) .+)$"},
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | view auto|grid <path> | sort name|added|modified|kind <path> | clear",
+            .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | view auto|fan|grid <path> | sort name|added|modified|kind <path> | clear",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "stack"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.stack");

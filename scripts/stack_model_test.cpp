@@ -139,6 +139,19 @@ int main() {
         check(empty.empty(), "pop empty");
     }
 
+    // View as Fan (2026-09-24): capacity agrees with fanFits, the name round-trips.
+    {
+        for (float top : {300.F, 700.F, 1100.F, 2000.F}) {
+            const SFanFit F{.pillTopL = top, .topLimitL = 40.F};
+            const size_t  N = fanCapacity(F);
+            check(N == 0 ? !fanFits(1, F) : (fanFits(N, F) && !fanFits(N + 1, F)), "fanCapacity is the largest fitting row count");
+        }
+        check(viewFromName("fan") == EView::Fan && viewFromName("grid") == EView::Grid && viewFromName("auto") == EView::Auto && viewFromName("x") == EView::Auto, "viewFromName");
+        SStore st;
+        st.records.push_back({.path = "/d", .view = EView::Fan});
+        check(parseStore(formatStore(st)).records[0].view == EView::Fan, "fan view round-trips");
+    }
+
     std::printf("stack_model_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }

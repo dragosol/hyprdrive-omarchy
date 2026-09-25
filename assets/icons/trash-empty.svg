@@ -1,66 +1,67 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <!-- hyprdrive's own Trash (dock stacks C). Original artwork: a frosted,
-       ribbed glass bin seen slightly from above. -->
+  <!-- hyprdrive's own Trash (dock stacks C). Original artwork in the spirit
+       of a translucent glass bin: a frosted, see-through cylinder with a
+       fine perforated band, a bright rim and a soft floor shadow. -->
   <defs>
-    <linearGradient id="body" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#9aa5b1"/>
-      <stop offset="0.16" stop-color="#e9eef3"/>
-      <stop offset="0.42" stop-color="#f7f9fb"/>
-      <stop offset="0.78" stop-color="#cfd6de"/>
-      <stop offset="1" stop-color="#8f9aa7"/>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c9d3de" stop-opacity="0.62"/>
+      <stop offset="0.14" stop-color="#f4f7fa" stop-opacity="0.50"/>
+      <stop offset="0.36" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.7" stop-color="#e3e9ef" stop-opacity="0.30"/>
+      <stop offset="0.92" stop-color="#c4ced9" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#aab5c2" stop-opacity="0.7"/>
     </linearGradient>
-    <linearGradient id="bodyShade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1c2129" stop-opacity="0.38"/>
-      <stop offset="0.22" stop-color="#1c2129" stop-opacity="0"/>
-      <stop offset="0.85" stop-color="#1c2129" stop-opacity="0"/>
-      <stop offset="1" stop-color="#1c2129" stop-opacity="0.22"/>
+    <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#8793a1" stop-opacity="0.35"/>
     </linearGradient>
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.55" stop-color="#dfe5eb"/>
-      <stop offset="1" stop-color="#96a1ad"/>
+      <stop offset="0.6" stop-color="#e6ebf0"/>
+      <stop offset="1" stop-color="#b3bdc8"/>
     </linearGradient>
-    <radialGradient id="mouth" cx="0.5" cy="0.2" r="0.75">
-      <stop offset="0" stop-color="#4c5561"/>
-      <stop offset="1" stop-color="#20252c"/>
+    <radialGradient id="inside" cx="0.5" cy="0.25" r="0.8">
+      <stop offset="0" stop-color="#8d98a6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#48515c" stop-opacity="0.55"/>
     </radialGradient>
     <radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#000" stop-opacity="0.42"/>
+      <stop offset="0" stop-color="#000" stop-opacity="0.35"/>
       <stop offset="1" stop-color="#000" stop-opacity="0"/>
     </radialGradient>
-    <clipPath id="bodyClip">
-      <path d="M50 74 L66 218 A62 13 0 0 0 190 218 L206 74 Z"/>
+    <!-- perforation: a staggered field of small round holes -->
+    <pattern id="holes" width="10" height="9" patternUnits="userSpaceOnUse">
+      <circle cx="2.5" cy="2.5" r="1.7" fill="#5d6977" fill-opacity="0.55"/>
+      <circle cx="7.5" cy="7" r="1.7" fill="#5d6977" fill-opacity="0.55"/>
+    </pattern>
+    <clipPath id="body">
+      <path d="M56 70 L68 214 A60 13 0 0 0 188 214 L200 70 Z"/>
     </clipPath>
   </defs>
 
-  <ellipse cx="128" cy="230" rx="84" ry="13" fill="url(#shadow)"/>
+  <ellipse cx="128" cy="228" rx="80" ry="12" fill="url(#shadow)"/>
 
-  <!-- body -->
-  <path d="M50 74 L66 218 A62 13 0 0 0 190 218 L206 74 Z" fill="url(#body)"/>
-  <g clip-path="url(#bodyClip)">
-    <!-- ribs: grooves that follow the taper, each with a lit edge -->
-    <g stroke-linecap="round">
-      <g stroke="#6f7a87" stroke-opacity="0.55" stroke-width="7">
-        <line x1="80.4" y1="98" x2="90.8" y2="214"/>
-        <line x1="110.8" y1="98" x2="115.6" y2="216"/>
-        <line x1="145.2" y1="98" x2="140.4" y2="216"/>
-        <line x1="175.6" y1="98" x2="165.2" y2="214"/>
-      </g>
-      <g stroke="#ffffff" stroke-opacity="0.75" stroke-width="2.2">
-        <line x1="84.6" y1="100" x2="94.6" y2="212"/>
-        <line x1="115" y1="100" x2="119.4" y2="214"/>
-        <line x1="149.4" y1="100" x2="144.6" y2="214"/>
-        <line x1="179.8" y1="100" x2="169.4" y2="212"/>
-      </g>
-    </g>
-    <rect x="40" y="60" width="176" height="180" fill="url(#bodyShade)"/>
+  <!-- the back wall, seen through the glass -->
+  <path d="M68 214 A60 13 0 0 0 188 214 A60 13 0 0 0 68 214 Z" fill="#6c7785" fill-opacity="0.25"/>
+
+  <!-- body: see-through glass -->
+  <path d="M56 70 L68 214 A60 13 0 0 0 188 214 L200 70 Z" fill="url(#glass)"/>
+  <g clip-path="url(#body)">
+    <rect x="50" y="96" width="156" height="104" fill="url(#holes)"/>
+    <rect x="40" y="60" width="176" height="180" fill="url(#shade)"/>
+    <!-- two smooth bands that frame the perforation -->
+    <rect x="40" y="86" width="176" height="6" fill="#ffffff" fill-opacity="0.45"/>
+    <rect x="40" y="203" width="176" height="5" fill="#ffffff" fill-opacity="0.35"/>
     <!-- gloss -->
-    <path d="M62 84 L72 84 L84 214 L78 214 Z" fill="#ffffff" fill-opacity="0.55"/>
+    <path d="M70 80 L80 80 L90 210 L84 210 Z" fill="#ffffff" fill-opacity="0.55"/>
+    <path d="M178 80 L184 80 L176 208 L172 208 Z" fill="#ffffff" fill-opacity="0.25"/>
   </g>
-  <path d="M50 74 L66 218 A62 13 0 0 0 190 218 L206 74" fill="none" stroke="#5f6a77" stroke-opacity="0.55" stroke-width="2"/>
+  <path d="M56 70 L68 214 A60 13 0 0 0 188 214 L200 70" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.6"/>
+  <path d="M56 70 L68 214 A60 13 0 0 0 188 214 L200 70" fill="none" stroke="#5d6977" stroke-opacity="0.35" stroke-width="1"/>
 
   <!-- rim + opening -->
-  <ellipse cx="128" cy="74" rx="82" ry="17" fill="url(#rim)" stroke="#7d8895" stroke-opacity="0.7" stroke-width="1.6"/>
-  <ellipse cx="128" cy="73" rx="71" ry="11.5" fill="url(#mouth)"/>
-  <path d="M57 73 A71 11.5 0 0 0 199 73" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5"/>
+  <ellipse cx="128" cy="70" rx="76" ry="15" fill="url(#rim)"/>
+  <ellipse cx="128" cy="69.5" rx="68" ry="10.5" fill="url(#inside)"/>
+  <path d="M60 69.5 A68 10.5 0 0 0 196 69.5" fill="none" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1.4"/>
+  <ellipse cx="128" cy="70" rx="76" ry="15" fill="none" stroke="#7d8895" stroke-opacity="0.45" stroke-width="1.2"/>
 </svg>

@@ -13,7 +13,9 @@ namespace ScrollOverview::StackModel {
 
     enum class ESort : uint8_t { Name, Added, Modified, Kind };
     enum class EDisplay : uint8_t { Stack, Folder };
-    enum class EView : uint8_t { Auto, Grid };
+    // Auto: the fan while it fits, else the pane. Fan: always the fan, its
+    // overflow behind an "N more in Files" row. Grid: always the pane.
+    enum class EView : uint8_t { Auto, Grid, Fan };
 
     // One item of a folder. Times are unix seconds. `kind` is a content type
     // ("image/png", "inode/directory"); `icon` a themed icon name.
@@ -74,6 +76,10 @@ namespace ScrollOverview::StackModel {
         float gapL      = 10.F;
     };
     bool fanFits(size_t rows, const SFanFit& fit);
+    // The most rows that fit (0: not even one).
+    size_t fanCapacity(const SFanFit& fit);
+    // "fan" / "grid" / anything else = Auto.
+    EView viewFromName(const std::string& name);
 
     // "just now" (<60s), "5m ago", "2h ago", "3d ago", "10w ago".
     std::string relativeAge(int64_t nowSec, int64_t thenSec);

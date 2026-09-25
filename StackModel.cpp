@@ -36,7 +36,7 @@ namespace ScrollOverview::StackModel {
             return d == EDisplay::Folder ? "folder" : "stack";
         }
         const char* viewName(EView v) {
-            return v == EView::Grid ? "grid" : "auto";
+            return v == EView::Grid ? "grid" : v == EView::Fan ? "fan" : "auto";
         }
     }
 
@@ -178,7 +178,7 @@ namespace ScrollOverview::StackModel {
                 .path    = P[5],
                 .sort    = sortFromName(P[1]).value_or(ESort::Name),
                 .display = P[2] == "folder" ? EDisplay::Folder : EDisplay::Stack,
-                .view    = P[3] == "grid" ? EView::Grid : EView::Auto,
+                .view    = P[3] == "grid" ? EView::Grid : P[3] == "fan" ? EView::Fan : EView::Auto,
                 .label   = P[4],
             });
         }
@@ -206,6 +206,17 @@ namespace ScrollOverview::StackModel {
     bool fanFits(size_t rows, const SFanFit& fit) {
         const float TOP = fit.pillTopL - fit.gapL - static_cast<float>(rows) * fit.stepL;
         return TOP >= fit.topLimitL + fit.stepL;
+    }
+
+    EView viewFromName(const std::string& name) {
+        return name == "grid" ? EView::Grid : name == "fan" ? EView::Fan : EView::Auto;
+    }
+
+    size_t fanCapacity(const SFanFit& fit) {
+        if (fit.stepL <= 0.F)
+            return 0;
+        const float ROOM = fit.pillTopL - fit.gapL - fit.topLimitL - fit.stepL;
+        return ROOM < fit.stepL ? 0 : static_cast<size_t>(ROOM / fit.stepL);
     }
 
     std::string relativeAge(int64_t nowSec, int64_t thenSec) {

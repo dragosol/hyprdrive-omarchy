@@ -368,6 +368,8 @@ namespace {
         StackModel::ESort   sort = StackModel::ESort::Name;
         StackModel::EView   view = StackModel::EView::Auto;
         bool                grid = false; // decided at open: view==Grid, or the fan does not fit
+        size_t              fanCap   = 0; // View as Fan: rows the screen holds (0 = no cap)
+        size_t              overflow = 0; // entries behind the "N more in Files" row
         MONITORID           monitor = MONITOR_INVALID;
         CBox                anchor;  // the cell it grew out of
         std::vector<SEntry> entries;
@@ -388,6 +390,7 @@ namespace {
         CBox                fieldBox, headerBox, sortBox; // the pane's chrome, as DRAWN
         std::vector<SRow>   rows;        // published for the pointer
         CBox                plate;       // grid only: the whole panel, as drawn
+        CBox                gridBox;     // grid only: the scrolled viewport the cells show through
         float               scroll = 0.F;
         Time::steady_tp     since{};
         bool                leaving = false;
@@ -399,6 +402,19 @@ namespace {
     Time::steady_tp g_trashErrorAt{};
 
     std::optional<SPopup> g_popup;
+
+    // A row is only hit where it is SHOWN: the pane's cells scroll under a
+    // viewport, and the part of a cell past it (over the dock, 2026-09-24 bug)
+    // is not there to click.
+    bool rowHit(const SRow& R, const Vector2D& point) {
+        if (!R.box.containsPoint(point))
+            return false;
+        return !g_popup || !g_popup->grid || g_popup->gridBox.empty() || g_popup->gridBox.containsPoint(point);
+    }
+
+    // A press on the open stack's own cell closed it; its release must not
+    // reach the pill and open it again.
+    bool g_swallowToggleRelease = false;
 
     // THE MOVE GESTURE. Dragging a file out of a fan/grid and onto another
     // stack's cell -- which is the ONE drag that can reach this dock at all
@@ -457,13 +473,13 @@ namespace {
         // One row per item (no cap: a stack that does not fit opens as the pane).
         // An empty folder -- or one whose first listing has not landed -- still
         // shows ONE row saying so, so a click always shows something.
-        const size_t ROWS     = std::max<size_t>(1, p.visible.size());
+        const size_t ROWS     = std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0));
         const bool   EMPTYROW = p.visible.empty(); // "Loading…" / "Empty folder"
 
         p.rows.clear();
         p.rows.reserve(ROWS);
         for (size_t i = 0; i < ROWS; ++i) {
-            const bool  ACTION = EMPTYROW;
+            const bool  ACTION = EMPTYROW || i >= p.visible.size(); // the empty row, or "N more
             const float FI     = sc<float>(i);
             const float SHIFT  = FAN_SHIFT_K * std::pow(FI, FAN_SHIFT_P) * SCALE;
 
@@ -485,7 +501,7 @@ namespace {
                 LABEL = p.entries[p.visible[i]].name;
                 ICON  = p.entries[p.visible[i]].icon;
             } else {
-                LABEL = p.loading ? std::string{"Loading\xe2\x80\xa6"} : std::string{"Empty folder"};
+                LABEL = p.overflow > 0 ? std::to_string(p.overflow) + " more in Files" : p.loading ? std::string{"Loading\xe2\x80\xa6"} : std::string{"Empty folder"};
                 ICON  = "folder-open";
             }
 
@@ -527,6 +543,7 @@ namespace {
         p.plate       = L.plate;
         p.cols        = L.cols;
         p.fieldBox    = L.field;
+        p.gridBox     = L.grid;
         p.headerBox   = L.header;
         const float S = std::max(monitor->m_scale, 0.01F);
         const float SP = Stacks::Pane::SPACING * S;
@@ -665,19 +682,22 @@ namespace {
     // THE FIT (dock stacks A: "no fixed cap"). The fan is shown while every row
     // stays one step below the top bar; otherwise the pane. A stack set to
     // Always Grid always takes the pane.
-    bool chooseGrid(const SPopup& p, PHLMONITOR monitor) {
-        if (p.view == StackModel::EView::Grid)
-            return true;
-        if (!monitor)
-            return false;
+    StackModel::SFanFit fanFit(const SPopup& p, PHLMONITOR monitor) {
         const float S = std::max(monitor->m_scale, 0.01F);
-        const StackModel::SFanFit FIT{
+        return StackModel::SFanFit{
             .pillTopL  = sc<float>(p.anchor.y) / S,
             .topLimitL = OvInternal::overviewTopChromeBottomL(monitor) - sc<float>(monitor->m_position.y),
             .stepL     = FAN_STEP,
             .gapL      = FAN_GAP,
         };
-        return !StackModel::fanFits(std::max<size_t>(1, p.entries.size()), FIT);
+    }
+
+    bool chooseGrid(const SPopup& p, PHLMONITOR monitor) {
+        if (p.view == StackModel::EView::Grid)
+            return true;
+        if (p.view == StackModel::EView::Fan || !monitor)
+            return false;
+        return !StackModel::fanFits(std::max<size_t>(1, p.entries.size()), fanFit(p, monitor));
     }
 
     // The pane's search: which entries the query keeps, in display order.
@@ -688,6 +708,15 @@ namespace {
             p.previewing = -1;
         }
         p.visible = StackModel::filter(p.entries, p.grid ? p.query : std::string{});
+        // View as Fan on a folder taller than the screen: the first rows in
+        // the stack's sort order, and the last row says how many more there
+        // are and opens the folder -- the reference's fan does the same.
+        p.overflow = 0;
+        if (!p.grid && p.fanCap > 0 && p.visible.size() > p.fanCap) {
+            const size_t KEEP = std::max<size_t>(1, p.fanCap - 1);
+            p.overflow        = p.visible.size() - KEEP;
+            p.visible.resize(KEEP);
+        }
         if (p.hover >= sc<int>(p.visible.size()))
             p.hover = p.visible.empty() ? -1 : 0;
     }
@@ -699,7 +728,8 @@ namespace {
         p.loading   = !L.ready;
         p.truncated = L.truncated;
         p.readerGen = StackReader::generation();
-        p.grid = chooseGrid(p, monitor);
+        p.grid   = chooseGrid(p, monitor);
+        p.fanCap = (p.view == StackModel::EView::Fan && monitor) ? std::max<size_t>(1, StackModel::fanCapacity(fanFit(p, monitor))) : 0;
         refilter(p);
         if (p.hover >= sc<int>(p.visible.size()))
             p.hover = p.visible.empty() ? -1 : 0;
@@ -714,42 +744,72 @@ namespace {
     // unloaded code. If the move is ignored Sushi stays centred -- acceptable.
     CHyprSignalListener g_sushiOpen;
 
+    // Sushi picks its own size per file (and changes it when Space moves to the
+    // next item), so its placement is redone on every resize of its window.
+    CHyprSignalListener g_sushiResize;
+    bool                g_placingSushi = false;
+
+    // Beside the fan or pane, on the side with more room, and ABOVE the dock:
+    // the preview must never sit under the fan or the pill (user, 2026-09-24:
+    // it was clamped to the bottom of the screen and both covered it). Too big
+    // for that area: scaled down, aspect kept.
     void placeSushi(const PHLWINDOW& W) {
-        if (!W || !g_popup || g_popup->previewing < 0)
+        if (!W || !g_popup || g_popup->previewing < 0 || g_placingSushi)
             return;
         const auto MON = popupMonitorPtr();
         if (!MON)
             return;
-        const float S    = std::max(MON->m_scale, 0.01F);
-        const auto  SIZE = W->m_realSize->goal();
-        double left = 1e9, right = -1e9, top = 1e9;
+        const float S = std::max(MON->m_scale, 0.01F);
+        double left = 1e9, right = -1e9;
         if (g_popup->grid && !g_popup->plate.empty()) {
             left  = g_popup->plate.x / S;
             right = (g_popup->plate.x + g_popup->plate.width) / S;
-            top   = g_popup->plate.y / S;
         } else {
             for (const auto& R : g_popup->rows) {
                 left  = std::min(left, R.box.x / S);
                 right = std::max(right, (R.box.x + R.box.width) / S);
-                top   = std::min(top, R.box.y / S);
             }
         }
         if (right < left)
             return;
-        const double MONW       = MON->m_size.x;
-        const bool   RIGHT_SIDE = (MONW - right) >= left;
-        double       x          = RIGHT_SIDE ? right + 16.0 : left - 16.0 - SIZE.x;
-        x                       = std::clamp(x, 8.0, std::max(8.0, MONW - SIZE.x - 8.0));
-        const double Y          = std::clamp(top, 8.0, std::max(8.0, MON->m_size.y - SIZE.y - 8.0));
-        W->move(Vector2D{MON->m_position.x + x, MON->m_position.y + Y});
+
+        constexpr double MARGIN = 16.0;
+        const double     MONW   = MON->m_size.x;
+        const double     TOP    = std::max(0.0, sc<double>(OvInternal::overviewTopChromeBottomL(MON) - sc<float>(MON->m_position.y))) + MARGIN;
+        const auto       PILL   = Dock::layout(MON).pill;
+        const double     BOTTOM = (PILL.width >= 1 ? PILL.y / S : MON->m_size.y) - MARGIN;
+        const bool       RIGHT_SIDE = (MONW - right) >= left;
+        const double     AREAX  = RIGHT_SIDE ? right + MARGIN : MARGIN;
+        const double     AREAW  = RIGHT_SIDE ? MONW - right - 2 * MARGIN : left - 2 * MARGIN;
+        const double     AREAH  = BOTTOM - TOP;
+        if (AREAW < 64.0 || AREAH < 64.0)
+            return; // no room beside the fan: leave it where the rules put it
+
+        Vector2D   size = W->m_realSize->goal();
+        const auto K    = std::min({1.0, AREAW / std::max(1.0, size.x), AREAH / std::max(1.0, size.y)});
+        g_placingSushi  = true;
+        if (K < 1.0) {
+            size = Vector2D{std::floor(size.x * K), std::floor(size.y * K)};
+            W->resize(size);
+        }
+        // Hugging the fan's side, centred in the height above the dock.
+        const double X = RIGHT_SIDE ? AREAX : AREAX + AREAW - size.x;
+        const double Y = TOP + (AREAH - size.y) / 2.0;
+        W->move(Vector2D{MON->m_position.x + X, MON->m_position.y + Y});
+        g_placingSushi = false;
     }
 
     void armSushiPlacement() {
         if (g_sushiOpen)
             return;
         g_sushiOpen = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW w) {
-            if (w && w->m_class == "org.gnome.NautilusPreviewer")
-                placeSushi(w);
+            if (!w || w->m_class != "org.gnome.NautilusPreviewer")
+                return;
+            placeSushi(w);
+            g_sushiResize = w->m_events.resize.listen([weak = PHLWINDOWREF{w}]() {
+                if (const auto W = weak.lock())
+                    placeSushi(W);
+            });
         });
     }
 
@@ -1015,6 +1075,7 @@ namespace ScrollOverview::Stacks {
             g_inotifySource = nullptr;
         }
         g_sushiOpen.reset();
+        g_sushiResize.reset();
         g_popup.reset();
         g_itemDrag.reset();
     }
@@ -1061,7 +1122,7 @@ namespace ScrollOverview::Stacks {
             return true;
 
         for (const auto& R : g_popup->rows) {
-            if (R.box.containsPoint(point))
+            if (rowHit(R, point))
                 return true;
         }
         return false;
@@ -1092,7 +1153,7 @@ namespace ScrollOverview::Stacks {
         const Vector2D POINT = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
 
         for (const auto& R : g_popup->rows) {
-            if (!R.action && !R.path.empty() && R.box.containsPoint(POINT))
+            if (!R.action && !R.path.empty() && rowHit(R, POINT))
                 return R.path;
         }
         return {};
@@ -1294,6 +1355,8 @@ namespace ScrollOverview::Stacks {
     }
 
     bool click(PHLMONITOR monitor, const Vector2D& point, bool release) {
+        if (release && std::exchange(g_swallowToggleRelease, false))
+            return true;
         if (!g_popup || g_popup->leaving || !monitor)
             return false;
         if (g_popup->monitor != monitor->m_id) {
@@ -1314,7 +1377,7 @@ namespace ScrollOverview::Stacks {
             if (!DRAG.live) {
                 // Never moved: it was a click after all.
                 for (const auto& R : g_popup->rows) {
-                    if (!R.box.containsPoint(point))
+                    if (!rowHit(R, point))
                         continue;
                     launchPath(R.path.empty() ? g_popup->path : R.path);
                     close();
@@ -1356,8 +1419,16 @@ namespace ScrollOverview::Stacks {
             // A press that misses dismisses, and is NOT claimed: the click
             // belongs to whatever is under it. That is the hover panel's
             // behaviour and the menu's `menuMissLetsThrough` on the desktop.
-            if (!release)
+            if (!release) {
+                // Clicking the stack's own icon again folds it back (user,
+                // 2026-09-24), the reference's toggle.
+                const bool OWNCELL = g_popup->anchor.containsPoint(point);
                 close();
+                if (OWNCELL) {
+                    g_swallowToggleRelease = true;
+                    return true;
+                }
+            }
             return false;
         }
 
@@ -1371,7 +1442,7 @@ namespace ScrollOverview::Stacks {
         // press-drag off a row does not launch it.
         if (!release) {
             for (const auto& R : g_popup->rows) {
-                if (!R.box.containsPoint(point) || R.path.empty())
+                if (!rowHit(R, point) || R.path.empty())
                     continue;
                 g_itemDrag = SItemDrag{.srcPath = R.path, .icon = R.icon, .start = point};
                 break;
@@ -1380,7 +1451,7 @@ namespace ScrollOverview::Stacks {
         }
 
         for (const auto& R : g_popup->rows) {
-            if (!R.box.containsPoint(point))
+            if (!rowHit(R, point))
                 continue;
 
             launchPath(R.path.empty() ? g_popup->path : R.path);
@@ -1562,6 +1633,18 @@ namespace ScrollOverview::Stacks {
             const auto MUTED = Config::themeMutedText();
             const auto HEAD  = Config::themeHeading();
             drawPlate(P.plate, GRID_RADIUS, ALPHA);
+            // The dock's own outline (theme accent, Hyprland's border weight),
+            // so the pane reads as part of the dock (user, 2026-09-24).
+            {
+                CBorderPassElement::SBorderData border;
+                border.box           = P.plate.copy().round();
+                border.grad1         = ::Config::CGradientValueData(Config::highlightColor().modifyA(ALPHA));
+                border.borderSize    = std::max(1, Config::getValue<int>("general:border_size"));
+                border.round         = sc<int>(std::round(GRID_RADIUS * SCALE));
+                border.roundingPower = 2.F;
+                if (drawableBox(border.box))
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+            }
 
             // HEADER: the stack's label, "12 of 340", and the sort on the right
             // (click it to change it).
@@ -1608,7 +1691,7 @@ namespace ScrollOverview::Stacks {
             for (const auto& R : P.rows) {
                 const bool PREV  = R.vis >= 0 && R.vis == P.previewing;
                 const bool SEL   = R.vis >= 0 && P.keyboard && R.vis == P.hover;
-                const bool HOVER = !P.keyboard && R.box.containsPoint(MOUSE);
+                const bool HOVER = !P.keyboard && rowHit(R, MOUSE);
                 CBox       cell  = R.box;
                 if (PREV) {
                     cell.x -= cell.width * 0.075;
@@ -1702,7 +1785,7 @@ namespace ScrollOverview::Stacks {
             // ring, lighter. Nothing opens on hover.
             const bool PREV  = !R.action && sc<int>(i) == g_popup->previewing;
             const bool SEL   = !R.action && g_popup->keyboard && sc<int>(i) == g_popup->hover;
-            const bool HOVER = !R.action && !g_popup->keyboard && R.box.containsPoint(MOUSE);
+            const bool HOVER = !R.action && !g_popup->keyboard && rowHit(R, MOUSE);
             const float K    = PREV ? 1.15F : 1.F;
             CBox        box  = R.box;
             if (PREV) {

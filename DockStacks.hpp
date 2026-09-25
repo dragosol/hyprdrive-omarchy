@@ -2,6 +2,7 @@
 
 #include "globals.hpp"
 #include "Dock.hpp"
+#include "DockTilt.hpp"
 #include "StackModel.hpp"
 
 #include <hyprland/src/render/Texture.hpp>
@@ -192,7 +193,8 @@ namespace ScrollOverview::Stacks {
     // Display as Folder, a file, an empty, missing or unread folder).
     std::vector<SPileItem> pileLayout(const std::string& stackPath, const CBox& iconBox);
     // Draw a stack's dock cell. False: the caller draws its plain icon (a pinned FILE).
-    bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha);
+    // `pose`: the dock's hover/press tilt for this cell, applied to every texture of it.
+    bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose);
     // A thumbnail (cached, or the image itself) or the themed icon.
     SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px);
     // The first of a '|'-joined list of icon names the user's theme has.

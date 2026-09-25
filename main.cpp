@@ -1670,8 +1670,8 @@ static SDispatchResult onStackDispatcher(std::string arg) {
 
         if (VERB == "view") {
             if (MODE != "fan" && MODE != "grid" && MODE != "auto")
-                return {.success = false, .error = "expected auto (fan) or grid"};
-            ScrollOverview::Stacks::setViewMode(path, MODE == "grid" ? ScrollOverview::StackModel::EView::Grid : ScrollOverview::StackModel::EView::Auto);
+                return {.success = false, .error = "expected auto, fan or grid"};
+            ScrollOverview::Stacks::setViewMode(path, ScrollOverview::StackModel::viewFromName(MODE));
             return {};
         }
 
