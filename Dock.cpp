@@ -3973,10 +3973,13 @@ bool click(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle, b
         // a closing overview, where dropping the filter would pop the windows
         // it was hiding back into a close animation already under way.
         // Gate: scripts/gates/x32_showapps_fresh.
-        if (!scrollOverviewForMonitor(monitor)) {
+        // Show Overview / Exit Overview (user, 2026-09-24): the same button
+        // opens the overview from the desktop and, inside it, takes you back.
+        if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); !OVERVIEW) {
             resetSearchSession();
             openScrollOverview(monitor);
-        }
+        } else
+            OVERVIEW->close();
 
         return true;
     }
@@ -6509,7 +6512,7 @@ void render(PHLMONITOR monitor) {
         renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, tipName, ABOVE, HOVEREDITEM->subject,
                       HOVEREDITEM->uri.empty() && !HOVEREDITEM->scratchpad ? peekWindowsOn(monitor, itemWindows(*HOVEREDITEM)) : std::vector<PHLWINDOW>{});
     } else if (HOVERAPPS)
-        renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications", 0.F, "show-apps");
+        renderTooltip(monitor, LAYOUT, LAYOUT.showApps, scrollOverviewForMonitor(monitor) ? "Exit Overview" : "Show Overview", 0.F, "show-apps");
     else
         renderTooltip(monitor, LAYOUT, CBox{}, "");
 
