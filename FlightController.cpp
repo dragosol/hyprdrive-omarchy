@@ -449,6 +449,19 @@ void landingSanity(SFlight& flight, PHLMONITOR monitor, const char* reason) {
     } else
         warpRestoredWindowAnims(WINDOW);
 
+    // A TILED window lands where the layout wants it NOW (user, 2026-09-25:
+    // spam-minimizing two tiled windows left one drawn full-width while
+    // Hyprland reported it half-width). Its flight froze the layout's box at
+    // click time -- full width while its sibling was still stashed -- and the
+    // write above put that into the VALUE while the sibling's return had moved
+    // the GOAL to half: value != goal with no animation left to close the gap,
+    // so it stayed. Warp to the goal and make the client match.
+    if (!WINDOW->m_isFloating) {
+        WINDOW->m_realPosition->setValueAndWarp(WINDOW->m_realPosition->goal());
+        WINDOW->m_realSize->setValueAndWarp(WINDOW->m_realSize->goal());
+        WINDOW->sendWindowSize(true);
+    }
+
     WINDOW->alpha()[Desktop::View::WINDOW_ALPHA_FADE]->setValueAndWarp(1.F);
 
     // THE INVARIANT. value == goal for position and size, on a floating window

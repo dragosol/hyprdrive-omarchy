@@ -2818,10 +2818,19 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     // and restored ONE window. With all of them away here, the click is the
     // toggle below: restore them all.
     const bool ALLHERESTASHED = !here.empty() && std::ranges::all_of(here, [](const PHLWINDOW& w) { return Minimize::isMinimized(w); });
+    {
+        std::string st = "app click " + item.wmClass + " here=" + std::to_string(here.size()) + " allStashed=" + (ALLHERESTASHED ? "1" : "0") + " focus=" +
+            (Desktop::focusState()->window() ? Desktop::focusState()->window()->m_class : std::string("none"));
+        for (const auto& W : here)
+            st += std::format(" [{:x} min={} flight={} restoreFlight={} ws={}]", (uintptr_t)W.get(), Minimize::isMinimized(W) ? 1 : 0, Flight::hasFlight(W) ? 1 : 0,
+                              Flight::isRestoreFlight(W) ? 1 : 0, W->m_workspace ? W->m_workspace->m_name : "-");
+        Stacks::traceEvent(st);
+    }
     if (const auto ALL = itemWindows(item); !ALL.empty() && !ALLHERESTASHED) {
         const auto FOCUSED = Desktop::focusState()->window();
         if (!FOCUSED || std::ranges::find(ALL, FOCUSED) == ALL.end()) {
             const auto TARGET = recentWindow(ALL);
+            Stacks::traceEvent("  -> switch back to one window");
             if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW && !Minimize::isMinimized(TARGET))
                 OVERVIEW->selectAndClose(TARGET);
             else
@@ -2867,11 +2876,13 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
         }
 
         if (visible.empty()) {
+            Stacks::traceEvent("  -> restore " + std::to_string(here.size()));
             for (const auto& WINDOW : here)
                 Flight::restore(monitor, WINDOW);
             return;
         }
 
+        Stacks::traceEvent("  -> minimize " + std::to_string(visible.size()));
         for (const auto& WINDOW : visible)
             Flight::minimize(monitor, WINDOW);
         return;
