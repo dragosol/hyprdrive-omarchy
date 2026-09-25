@@ -593,6 +593,10 @@ static bool isGlobalPassthroughKeycode(uint32_t keycode) {
     return SYM == XKB_KEY_Print || SYM == XKB_KEY_Sys_Req || (SYM >= 0x1008FF00 && SYM <= 0x1008FFFF);
 }
 
+xkb_state* overviewActiveXkbState() {
+    return activeXkbState();
+}
+
 static bool overviewAcceptsSearch() {
     return std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && !overview->isClosing(); });
 }

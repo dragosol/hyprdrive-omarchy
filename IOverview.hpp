@@ -198,6 +198,8 @@ bool                              openScrollOverviewWithQuery(PHLMONITOR monitor
 // as the first Esc would -- because every drag path requires the window to be
 // in the overview, and one the filter hides could not be picked up at all.
 void                              overviewAdmitWindow(const PHLWINDOW& window);
+// The keyboard's xkb state (main.cpp), for the dock stack pane's typing.
+struct xkb_state* overviewActiveXkbState();
 // Whether the running search keeps `window` out of the overview (OverviewInput.cpp,
 // which can see the gate).
 bool                              overviewSearchHides(const PHLWINDOW& window);

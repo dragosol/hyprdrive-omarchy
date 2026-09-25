@@ -11,6 +11,7 @@
 #include "OverviewRender.hpp"
 #include "OverviewPassElement.hpp"
 #include "StackReader.hpp"
+#include "TextInput.hpp"
 
 #include <algorithm>
 #include <array>
@@ -33,6 +34,7 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
+#include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -354,6 +356,7 @@ namespace {
         std::string name;
         std::string icon;
         bool        action = false;
+        int         vis    = -1; // index into SPopup::visible; -1 for the action row
     };
 
     struct SPopup {
@@ -376,6 +379,8 @@ namespace {
         bool                keyboard   = false; // the keyboard moved last: `hover` is its selection
         int                 cols       = 1;     // the pane's column count (Task 7); 1 for the fan
         Vector2D            lastMouse;
+        std::string         query;                        // the pane's search field
+        CBox                fieldBox, headerBox, sortBox; // the pane's chrome, as DRAWN
         std::vector<SRow>   rows;        // published for the pointer
         CBox                plate;       // grid only: the whole panel, as drawn
         float               scroll = 0.F;
@@ -498,71 +503,43 @@ namespace {
                 .name   = LABEL,
                 .icon   = ICON,
                 .action = ACTION,
+                .vis    = ACTION ? -1 : sc<int>(i),
             });
         }
     }
 
-    void layoutGrid(SPopup& p, PHLMONITOR monitor, const CBox& pill, float progress) {
-        const float SCALE = std::max(monitor->m_scale, 0.01F);
-        const float CELLW = GRID_CELL_W * SCALE;
-        const float CELLH = GRID_CELL_H * SCALE;
-        const float SP    = GRID_SPACING * SCALE;
-        const float PAD   = GRID_PAD * SCALE;
-
-        const size_t N    = p.entries.size() + 1; // + the Open in Files action
-        const size_t COLS = sc<size_t>(GRID_COLS);
-        const size_t ROWS = (N + COLS - 1) / COLS;
-        const float  VIEWROWS = std::min(sc<float>(ROWS), GRID_MAX_ROWS);
-
-        const float W = PAD * 2.F + GRID_COLS * CELLW + (GRID_COLS - 1.F) * SP;
-        const float H = PAD * 2.F + VIEWROWS * CELLH + std::max(0.F, VIEWROWS - 1.F) * SP;
-
-        const float E = p.leaving ? 1.F - houseEase(false, progress) : houseEase(true, progress);
-
-        const float CX    = sc<float>(p.anchor.x) + sc<float>(p.anchor.width) / 2.F;
-        const float RESTY = sc<float>(pill.y) - FAN_GAP * SCALE - H;
-
-        // Grows out of the cell, like the hover panel: interpolate the whole
-        // plate from the anchor box to the settled one.
-        CBox plate{
-            sc<double>(sc<float>(p.anchor.x) + (CX - W / 2.F - sc<float>(p.anchor.x)) * E),
-            sc<double>(sc<float>(p.anchor.y) + (RESTY - sc<float>(p.anchor.y)) * E),
-            sc<double>(sc<float>(p.anchor.width) + (W - sc<float>(p.anchor.width)) * E),
-            sc<double>(sc<float>(p.anchor.height) + (H - sc<float>(p.anchor.height)) * E),
-        };
-        plate.x = std::clamp(plate.x, 0.0, std::max(0.0, monitor->m_size.x * SCALE - plate.width));
-        p.plate = plate;
-
-        // Scroll clamp, in whole rows of travel.
-        const float MAXSCROLL = std::max(0.F, sc<float>(ROWS) - VIEWROWS) * (CELLH + SP);
-        p.scroll              = std::clamp(p.scroll, 0.F, MAXSCROLL);
+    // THE PANE (dock stacks A): a searchable grid of the VISIBLE entries,
+    // scrolled, cells outside the viewport neither drawn nor hit.
+    void layoutPane(SPopup& p, PHLMONITOR monitor, const CBox& pill, float progress) {
+        // Sized by the whole FOLDER, not the matches: a pane that shrank with
+        // every letter typed would jump about under the pointer.
+        const auto L  = Stacks::Pane::layout(monitor, p.anchor, pill, p.entries.size(), progress, p.leaving);
+        p.plate       = L.plate;
+        p.cols        = L.cols;
+        p.fieldBox    = L.field;
+        p.headerBox   = L.header;
+        const float S = std::max(monitor->m_scale, 0.01F);
+        const float SP = Stacks::Pane::SPACING * S;
+        const int   ROWS = std::max(1, sc<int>((p.visible.size() + L.cols - 1) / L.cols));
+        const float MAXSCROLL = std::max(0.F, ROWS * (L.cellH + SP) - SP - sc<float>(L.grid.height));
+        // Keep the keyboard's selection in view.
+        if (p.keyboard && p.hover >= 0) {
+            const float ROWY = sc<float>(p.hover / L.cols) * (L.cellH + SP);
+            if (ROWY < p.scroll)
+                p.scroll = ROWY;
+            else if (ROWY + L.cellH > p.scroll + L.grid.height)
+                p.scroll = ROWY + L.cellH - sc<float>(L.grid.height);
+        }
+        p.scroll = std::clamp(p.scroll, 0.F, MAXSCROLL);
 
         p.rows.clear();
-        for (size_t i = 0; i < N; ++i) {
-            const bool  ACTION = i >= p.entries.size();
-            const float COL    = sc<float>(i % COLS);
-            const float ROW    = sc<float>(i / COLS);
-
-            CBox box{
-                std::round(sc<float>(plate.x) + PAD + COL * (CELLW + SP)),
-                std::round(sc<float>(plate.y) + PAD + ROW * (CELLH + SP) - p.scroll),
-                std::round(CELLW),
-                std::round(CELLH),
-            };
-
-            // Clipped OUT rather than clipped: there is no scissor on this
-            // path, so a cell that does not fit inside the plate is simply not
-            // a row this frame -- which also keeps it out of the hit test.
-            if (box.y < plate.y + PAD * 0.5 - 1 || box.y + box.height > plate.y + plate.height - PAD * 0.5 + 1)
+        for (size_t k = 0; k < p.visible.size(); ++k) {
+            const auto& E = p.entries[p.visible[k]];
+            CBox box{std::round(L.grid.x + (k % L.cols) * (L.cellW + SP)), std::round(L.grid.y + (k / L.cols) * (L.cellH + SP) - p.scroll), std::round(L.cellW),
+                     std::round(L.cellH)};
+            if (box.y + box.height < L.grid.y || box.y > L.grid.y + L.grid.height)
                 continue;
-
-            p.rows.emplace_back(SRow{
-                .box    = box,
-                .path   = ACTION ? std::string{} : p.entries[i].path,
-                .name   = ACTION ? std::string{"Open in Files"} : p.entries[i].name,
-                .icon   = ACTION ? std::string{"system-file-manager"} : p.entries[i].icon,
-                .action = ACTION,
-            });
+            p.rows.emplace_back(SRow{.box = box, .path = E.path, .name = E.name, .icon = E.icon, .vis = sc<int>(k)});
         }
     }
 
@@ -693,6 +670,13 @@ namespace {
         return !StackModel::fanFits(std::max<size_t>(1, p.entries.size()), FIT);
     }
 
+    // The pane's search: which entries the query keeps, in display order.
+    void refilter(SPopup& p) {
+        p.visible = StackModel::filter(p.entries, p.grid ? p.query : std::string{});
+        if (p.hover >= sc<int>(p.visible.size()))
+            p.hover = p.visible.empty() ? -1 : 0;
+    }
+
     // Everything a new listing changes: the entries, the visible order, the
     // fan-or-pane decision, and a selection that fell off the end.
     void applyListing(SPopup& p, StackReader::SListing&& L, PHLMONITOR monitor) {
@@ -700,10 +684,8 @@ namespace {
         p.loading   = !L.ready;
         p.truncated = L.truncated;
         p.readerGen = StackReader::generation();
-        p.visible.resize(p.entries.size());
-        for (size_t i = 0; i < p.entries.size(); ++i)
-            p.visible[i] = i;
         p.grid = chooseGrid(p, monitor);
+        refilter(p);
         if (p.hover >= sc<int>(p.visible.size()))
             p.hover = p.visible.empty() ? -1 : 0;
         if (p.previewing >= sc<int>(p.visible.size()))
@@ -1144,6 +1126,34 @@ namespace ScrollOverview::Stacks {
         // selection, else the item being previewed, else the row under the pointer.
         const int FROM = P.keyboard ? P.hover : (P.previewing >= 0 ? P.previewing : targetIndex());
 
+        if (P.grid) {
+            if (keycode == 14) { // BACKSPACE
+                if (!P.query.empty()) {
+                    TextInput::popCodepoint(P.query);
+                    refilter(P);
+                    P.scroll = 0.F;
+                    damagePopupMonitor();
+                }
+                return true;
+            }
+            if (keycode == 1 && !P.query.empty() && P.previewing < 0) { // ESC clears first
+                P.query.clear();
+                refilter(P);
+                damagePopupMonitor();
+                return true;
+            }
+            if (keycode != 57 && keycode != 28) { // SPACE previews, ENTER opens
+                if (const auto K = TextInput::keyFor(overviewActiveXkbState(), keycode); K.consume) {
+                    P.query += K.text;
+                    refilter(P);
+                    P.scroll = 0.F;
+                    P.hover  = P.visible.empty() ? -1 : 0;
+                    damagePopupMonitor();
+                    return true;
+                }
+            }
+        }
+
         switch (keycode) {
             case 103: // UP: the fan grows upward, so up is the next row; in the pane, the row above
                 P.hover = N == 0 ? -1 : std::clamp(FROM < 0 ? 0 : (P.grid ? FROM - STEP : FROM + 1), 0, N - 1);
@@ -1179,7 +1189,14 @@ namespace ScrollOverview::Stacks {
                 if (!P.keyboard && P.hover < 0 && hoveredItemPath().empty())
                     return false;
                 return previewHovered();
-            default: return false;
+            default:
+                // The pane owns the keyboard while it is up (the overview's
+                // rule): nothing typed at it reaches the window underneath.
+                // Modifiers pass, so chords still work.
+                switch (keycode) {
+                    case 29: case 42: case 54: case 56: case 97: case 100: case 125: case 126: return false;
+                    default: return P.grid;
+                }
         }
         P.keyboard = true;
         damagePopupMonitor();
@@ -1261,6 +1278,12 @@ namespace ScrollOverview::Stacks {
             return false;
         }
 
+        // The pane's sort, in its header: the next of the four keys.
+        if (g_popup->grid && !release && g_popup->sortBox.containsPoint(point)) {
+            setSort(g_popup->path, sc<StackModel::ESort>((sc<int>(g_popup->sort) + 1) % 4));
+            return true;
+        }
+
         // Press remembers, release decides -- the dock's own gesture, so a
         // press-drag off a row does not launch it.
         if (!release) {
@@ -1292,7 +1315,8 @@ namespace ScrollOverview::Stacks {
             return true; // the fan swallows the tick; it has nowhere to go
 
         const float SCALE = std::max(monitor->m_scale, 0.01F);
-        g_popup->scroll += (up ? -1.F : 1.F) * (GRID_CELL_H + GRID_SPACING) * SCALE * 0.5F;
+        g_popup->scroll += (up ? -1.F : 1.F) * (Pane::CELL_H + Pane::SPACING) * SCALE * 0.5F;
+        g_popup->keyboard = false;
         damagePopupMonitor();
         return true;
     }
@@ -1386,7 +1410,7 @@ namespace ScrollOverview::Stacks {
         const float ALPHA = g_popup->leaving ? 1.F - houseEase(false, PROGRESS) : houseEase(true, PROGRESS);
 
         if (g_popup->grid)
-            layoutGrid(*g_popup, monitor, layout.pill, PROGRESS);
+            layoutPane(*g_popup, monitor, layout.pill, PROGRESS);
         else
             layoutFan(*g_popup, monitor, layout.pill, PROGRESS);
 
@@ -1394,10 +1418,25 @@ namespace ScrollOverview::Stacks {
         // dock's own plate call, so the popup re-themes with the rest of the
         // dock rather than beside it. The 2 px floor is the popup's own: a
         // plate that thin is the entrance's first frame, not a surface.
+        // READABLE WITHOUT FROST (dock stacks A). With Hyprland's blur off the
+        // plate is only the theme tint at the window opacity (~0.72), and a pane
+        // of file names over a terminal of the same colour reads as two layers
+        // of text. The dock pill holds icons and is fine; these hold words. So
+        // a second pass of the SAME theme tint brings them to ~0.95 -- still the
+        // theme's colour, and with blur on the frost does this job instead.
+        const bool BLUR       = Config::getValue<bool>("decoration:blur:enabled");
         const auto drawPlate = [&](const CBox& box, float radius, float alpha) {
             if (box.width < 2.0 || box.height < 2.0)
                 return;
             Dock::frostedPlate(monitor, box, sc<int>(std::round(radius * SCALE)), alpha);
+            if (!BLUR) {
+                CRectPassElement::SRectData solid;
+                solid.box           = box;
+                solid.color         = Config::dockBackgroundColor().modifyA(0.8F * alpha);
+                solid.round         = sc<int>(std::round(radius * SCALE));
+                solid.roundingPower = 2.F;
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(solid));
+            }
         };
 
         const auto drawTex = [&](const SP<Render::ITexture>& tex, const CBox& box, float alpha, float rot = 0.F) {
@@ -1431,22 +1470,104 @@ namespace ScrollOverview::Stacks {
         };
 
         if (g_popup->grid) {
-            drawPlate(g_popup->plate, GRID_RADIUS, ALPHA);
+            auto&      P     = *g_popup;
+            const auto FG    = Config::themeForeground();
+            const auto MUTED = Config::themeMutedText();
+            const auto HEAD  = Config::themeHeading();
+            drawPlate(P.plate, GRID_RADIUS, ALPHA);
 
-            for (const auto& R : g_popup->rows) {
-                const float ICON = GRID_ICON * SCALE;
-                CBox        ib{std::round(sc<float>(R.box.x) + (sc<float>(R.box.width) - ICON) / 2.F), std::round(sc<float>(R.box.y) + GRID_SPACING * SCALE * 0.5F),
-                        std::round(ICON), std::round(ICON)};
-                drawTex(OverviewRender::appIcon(R.icon), ib, ALPHA);
+            // HEADER: the stack's label, "12 of 340", and the sort on the right
+            // (click it to change it).
+            std::string label;
+            for (const auto& ST : all())
+                if (ST.path == P.path)
+                    label = ST.label;
+            static const char* SORTS[] = {"Name", "Date Added", "Date Modified", "Kind"};
+            const std::string  COUNT   = std::to_string(P.visible.size()) + " of " + std::to_string(P.entries.size());
+            const std::string  SORTL   = std::string(SORTS[sc<int>(P.sort)]) + "  ";
+            float              hx      = sc<float>(P.headerBox.x);
+            if (const auto T = OverviewRender::text(label, FG, sc<int>(std::round(13.F * SCALE)), false, "", sc<int>(P.headerBox.width * 0.5), 600); T && T->ok()) {
+                drawTex(T, CBox{hx, P.headerBox.y + (P.headerBox.height - T->m_size.y) / 2.0, T->m_size.x, T->m_size.y}.round(), ALPHA);
+                hx += sc<float>(T->m_size.x) + 10.F * SCALE;
+            }
+            if (const auto T = OverviewRender::text(COUNT, MUTED, sc<int>(std::round(11.F * SCALE)), false, "", 0, 500); T && T->ok())
+                drawTex(T, CBox{hx, P.headerBox.y + (P.headerBox.height - T->m_size.y) / 2.0, T->m_size.x, T->m_size.y}.round(), ALPHA);
+            if (const auto T = OverviewRender::text(SORTL, HEAD, sc<int>(std::round(11.F * SCALE)), false, "", 0, 600); T && T->ok()) {
+                P.sortBox = CBox{P.headerBox.x + P.headerBox.width - T->m_size.x, P.headerBox.y + (P.headerBox.height - T->m_size.y) / 2.0, T->m_size.x, T->m_size.y}.round();
+                drawTex(T, P.sortBox, ALPHA);
+            }
 
-                if (const auto TEX = OverviewRender::text(R.name, CHyprColor{1.F, 1.F, 1.F, 0.95F}, sc<int>(std::round(GRID_FONT * SCALE)), false, "",
-                                                          sc<int>(std::round((GRID_CELL_W - 8.F) * SCALE)), 500);
-                    TEX && TEX->ok()) {
-                    CBox lb{std::round(sc<float>(R.box.x) + (sc<float>(R.box.width) - sc<float>(TEX->m_size.x)) / 2.F),
-                            std::round(sc<float>(ib.y) + ICON + 6.F * SCALE), sc<double>(TEX->m_size.x), sc<double>(TEX->m_size.y)};
-                    drawTex(TEX, lb, ALPHA);
+            // THE FIELD: an inset plate, the query or its placeholder, a caret.
+            Dock::frostedPlate(monitor, P.fieldBox, sc<int>(std::round(8.F * SCALE)), ALPHA * 0.5F);
+            const bool        EMPTYQ = P.query.empty();
+            const std::string SHOWN  = EMPTYQ ? (sushiAvailable() ? std::string{"Search"} : std::string{"Search · install sushi for previews"}) : P.query;
+            float             caretX = sc<float>(P.fieldBox.x) + 10.F * SCALE;
+            if (const auto T = OverviewRender::text(SHOWN, EMPTYQ ? MUTED : FG, sc<int>(std::round(13.F * SCALE)), false, "", sc<int>(P.fieldBox.width - 20.F * SCALE), 500);
+                T && T->ok()) {
+                drawTex(T, CBox{caretX, P.fieldBox.y + (P.fieldBox.height - T->m_size.y) / 2.0, T->m_size.x, T->m_size.y}.round(), ALPHA);
+                if (!EMPTYQ)
+                    caretX += sc<float>(T->m_size.x) + 1.F;
+            }
+            CRectPassElement::SRectData caret;
+            caret.box   = CBox{caretX, P.fieldBox.y + P.fieldBox.height * 0.25, std::max(1.0, 1.5 * SCALE), P.fieldBox.height * 0.5}.round();
+            caret.color = Dock::accentColor().modifyA(ALPHA);
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(caret));
+
+            // THE CELLS, clipped to the grid: icon, two-line name, and the
+            // previewed / selected / hovered highlight.
+            const double GTOP = P.fieldBox.y + P.fieldBox.height;
+            const CBox   CLIP{P.plate.x, GTOP, P.plate.width, std::max(0.0, P.plate.y + P.plate.height - GTOP)};
+            for (const auto& R : P.rows) {
+                const bool PREV  = R.vis >= 0 && R.vis == P.previewing;
+                const bool SEL   = R.vis >= 0 && P.keyboard && R.vis == P.hover;
+                const bool HOVER = !P.keyboard && R.box.containsPoint(MOUSE);
+                CBox       cell  = R.box;
+                if (PREV) {
+                    cell.x -= cell.width * 0.075;
+                    cell.y -= cell.height * 0.075;
+                    cell.width *= 1.15;
+                    cell.height *= 1.15;
+                }
+                if (PREV || SEL || HOVER) {
+                    CRectPassElement::SRectData hl;
+                    hl.box     = cell;
+                    hl.color   = Dock::accentColor().modifyA(ALPHA * (PREV ? 0.28F : SEL ? 0.2F : 0.12F));
+                    hl.round   = sc<int>(std::round(10.F * SCALE));
+                    hl.clipBox = CLIP;
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(hl));
+                }
+                const float ICON = GRID_ICON * SCALE * (PREV ? 1.15F : 1.F);
+                CBox        ib{std::round(cell.x + (cell.width - ICON) / 2.0), std::round(cell.y + 8.F * SCALE), std::round(ICON), std::round(ICON)};
+                if (const auto TEX = OverviewRender::appIcon(R.icon); TEX) {
+                    CTexPassElement::SRenderData d;
+                    d.tex     = TEX;
+                    d.box     = ib;
+                    d.a       = ALPHA;
+                    d.clipBox = CLIP;
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+                }
+                if (const auto T = OverviewRender::textWrapped(R.name, FG, sc<int>(std::round(11.F * SCALE)), sc<int>(cell.width - 8.F * SCALE), sc<int>(std::round(30.F * SCALE)),
+                                                               false, "", 500);
+                    T && T->ok()) {
+                    CTexPassElement::SRenderData l;
+                    l.tex     = T;
+                    l.box     = CBox{cell.x + (cell.width - T->m_size.x) / 2.0, ib.y + ICON + 6.F * SCALE, T->m_size.x, T->m_size.y}.round();
+                    l.a       = ALPHA;
+                    l.clipBox = CLIP;
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(l));
                 }
             }
+
+            // STATES: loading, no matches, and the read cap.
+            const char* STATE = P.loading && P.entries.empty() ? "Loading…" : (P.visible.empty() ? (P.query.empty() ? "Empty folder" : "No matches") : nullptr);
+            if (STATE)
+                if (const auto T = OverviewRender::text(STATE, MUTED, sc<int>(std::round(13.F * SCALE)), false, "", 0, 500); T && T->ok())
+                    drawTex(T, CBox{CLIP.x + (CLIP.width - T->m_size.x) / 2.0, CLIP.y + (CLIP.height - T->m_size.y) / 2.0, T->m_size.x, T->m_size.y}.round(), ALPHA);
+            if (P.truncated)
+                if (const auto T = OverviewRender::text("showing first 5 000", MUTED, sc<int>(std::round(10.F * SCALE)), false, "", 0, 500); T && T->ok())
+                    drawTex(T, CBox{P.plate.x + (P.plate.width - T->m_size.x) / 2.0, P.plate.y + P.plate.height - T->m_size.y - 4.F * SCALE, T->m_size.x, T->m_size.y}.round(),
+                            ALPHA);
+
             drawGhost();
             return;
         }

@@ -178,4 +178,16 @@ namespace ScrollOverview::Stacks {
     float bounceLift(const std::string& path, float iconHeight);
     float shakeOffset(const std::string& path, float iconHeight);
     bool  animating();
+
+    // ---- the pane's geometry (StackPane.cpp) ---------------------------------
+    namespace Pane {
+        inline constexpr float CELL_W = 104.F, CELL_H = 112.F, SPACING = 10.F, PAD = 14.F, HEADER_H = 30.F, FIELD_H = 34.F, GAP = 10.F;
+
+        struct SPaneLayout {
+            CBox  plate, header, field, grid; // monitor-local RENDER px
+            int   cols  = 1;
+            float cellW = 0.F, cellH = 0.F;
+        };
+        SPaneLayout layout(PHLMONITOR monitor, const CBox& anchor, const CBox& pill, size_t items, float progress, bool leaving);
+    }
 }
