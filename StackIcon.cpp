@@ -77,7 +77,7 @@ namespace ScrollOverview::Stacks {
                 IT = thumbFor.emplace(KEY, cachedThumbnail(e.path)).first;
             }
             if (!IT->second.empty())
-                if (auto tex = OverviewRender::imageFile(IT->second, 256); tex)
+                if (auto tex = OverviewRender::imageFile(IT->second, 256, true); tex)
                     return tex;
         }
         return OverviewRender::appIcon(e.icon);

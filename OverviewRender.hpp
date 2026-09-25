@@ -36,7 +36,11 @@ void                 clearFrameChromeBlur();
 // surface arrives invisible. Cached separately from the untinted one.
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false);
 // An image FILE at `px` (a thumbnail), cached on path + size + mtime.
-SP<Render::ITexture> imageFile(const std::string& path, int px);
+// `budgeted`: a decode that is not cached yet is skipped (nullptr, not
+// remembered) once ~6 ms of decoding has been spent in the current ~16 ms --
+// the caller draws a stand-in and gets the image on a later frame, rather than
+// one frame stalling on a folder's worth of thumbnails.
+SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted = false);
 // A filled rounded rectangle as a TEXTURE, so it can be drawn rotated (a rect
 // pass element cannot be). Cached by size, radius and colour; cleared with the
 // text cache. Dock stacks: the fan's label pills.

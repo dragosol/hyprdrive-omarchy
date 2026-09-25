@@ -413,7 +413,9 @@ namespace {
         float               scroll = 0.F;
         Time::steady_tp     since{};
         bool                leaving = false;
-        float               tl0     = 0.F; // timeline position (ms) at `since`
+        float               tl      = 0.F;   // position on the opening timeline, ms
+        Time::steady_tp     lastTick{};      // when tick() last advanced it
+        bool                ticked  = false;
     };
 
     std::string     g_trashStack;   // whose trash job is in flight (Stacks::trashFrom)
@@ -422,6 +424,8 @@ namespace {
     Time::steady_tp g_trashErrorAt{};
 
     std::optional<SPopup> g_popup;
+
+
 
     // A row is only hit where it is SHOWN: the pane's cells scroll under a
     // viewport, and the part of a cell past it (over the dock, 2026-09-24 bug)
@@ -494,12 +498,35 @@ namespace {
         return FAN_ROW_MS + FAN_STAGGER_MS * sc<float>(std::min(ROWS, STAGGER_ROWS) - 1);
     }
 
-    float timelineNow(const SPopup& p) {
+    // THE CLOCK IS THE FRAMES, not the wall (2026-09-24: "it lags, then loads
+    // too fast"). A frame that stalls -- a folder's icons and thumbnails being
+    // decoded for the first time -- used to be followed by a timeline that had
+    // run on without it and jumped to catch up. Each drawn frame advances it
+    // by at most one 30 fps frame instead, so a stall pauses the animation
+    // rather than eating it. And an opening waits (up to OPEN_WAIT_MS) for the
+    // folder's listing, so the rows fly out with their contents, not over a
+    // "Loading" row.
+    constexpr float MAX_TICK_MS  = 34.F;
+    constexpr float OPEN_WAIT_MS = 400.F;
+
+    void tick(SPopup& p) {
+        const auto NOW = Time::steadyNow();
+        float      DT  = p.ticked ? std::min(std::chrono::duration<float, std::milli>(NOW - p.lastTick).count(), MAX_TICK_MS) : 0.F;
+        p.lastTick     = NOW;
+        p.ticked       = true;
+        // Only a FIRST read holds it: a folder re-reading after a change still
+        // has its previous entries to show, and shows them.
+        if (!p.leaving && p.loading && p.entries.empty() && elapsed(p.since) < OPEN_WAIT_MS)
+            DT = 0.F;
         const float SPAN = timelineSpan(p);
-        const float DT   = elapsed(p.since);
         if (p.leaving)
-            return std::max(0.F, p.tl0 - DT * SPAN / (p.grid ? PANE_CLOSE_MS : FAN_CLOSE_MS));
-        return std::min(SPAN, p.tl0 + DT);
+            p.tl = std::max(0.F, p.tl - DT * SPAN / (p.grid ? PANE_CLOSE_MS : FAN_CLOSE_MS));
+        else
+            p.tl = std::min(SPAN, p.tl + DT);
+    }
+
+    float timelineNow(const SPopup& p) {
+        return std::clamp(p.tl, 0.F, timelineSpan(p));
     }
 
     // 0 closed .. 1 open, on the way in or out alike.
@@ -510,11 +537,7 @@ namespace {
     // Turn round: whatever the popup is doing, it now heads the other way from
     // exactly where it is.
     void setDirection(SPopup& p, bool leaving) {
-        if (p.leaving == leaving)
-            return;
-        p.tl0     = timelineNow(p);
-        p.since   = Time::steadyNow();
-        p.leaving = leaving;
+        p.leaving = leaving; // the clock simply runs the other way from here
     }
 
     // Row i's own eased progress on the fan's timeline: 0 in the cell, 1 in place.
@@ -894,7 +917,7 @@ namespace {
             g_popup->view  = S->view;
             applyListing(*g_popup, sortedListing(g_popup->path, g_popup->sort), popupMonitorPtr());
             g_popup->since = Time::steadyNow();
-            g_popup->tl0   = 0.F; // replay the entrance with the new order
+            g_popup->tl    = 0.F; // replay the entrance with the new order
             damagePopupMonitor();
         }
         return true;
@@ -1349,6 +1372,42 @@ namespace ScrollOverview::Stacks {
         StackReader::trash(std::move(paths));
     }
 
+    // WARM-UP (2026-09-24): while the pointer rests on a stack's cell, build
+    // the textures its fan or pane will need -- themed icons and thumbnails,
+    // a few per frame -- so the click opens onto a folder that is already
+    // loaded instead of stalling its first frames on the decodes.
+    void warm(const std::string& stackPath) {
+        static std::string                     path;
+        static uint64_t                        gen = 0;
+        static std::vector<StackModel::SEntry> todo;
+        const auto                             CANON = canonical(stackPath);
+        if (CANON != path || gen != StackReader::generation()) {
+            path = CANON;
+            gen  = StackReader::generation();
+            const auto* S = find(CANON);
+            if (!S || !S->isDir) {
+                todo.clear();
+                return;
+            }
+            auto L = sortedListing(CANON, S->sort);
+            if (!L.ready) {
+                gen = 0; // not read yet: try again next frame
+                todo.clear();
+                return;
+            }
+            // Only what the popup would show first.
+            if (L.entries.size() > 40)
+                L.entries.resize(40);
+            todo = std::move(L.entries);
+            std::ranges::reverse(todo); // popped from the back, first entries first
+        }
+        for (int n = 0; n < 3 && !todo.empty(); ++n) {
+            iconTexture(todo.back(), 64);
+            OverviewRender::appIcon(todo.back().icon);
+            todo.pop_back();
+        }
+    }
+
     size_t downloadsIn(const std::string& stackPath) {
         const auto IT = g_downloads.find(canonical(stackPath));
         return IT == g_downloads.end() ? 0 : IT->second;
@@ -1679,6 +1738,7 @@ namespace ScrollOverview::Stacks {
             return;
         }
 
+        tick(*g_popup);
         const float PROGRESS = popupProgress(*g_popup);
         if (g_popup->leaving && PROGRESS <= 0.F) {
             g_popup.reset();

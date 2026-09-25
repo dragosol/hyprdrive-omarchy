@@ -159,7 +159,7 @@ static std::unordered_map<std::string, SP<Render::ITexture>> g_overviewAppIcons;
 // so a replaced thumbnail is picked up; bounded, and cleared at unload.
 static std::unordered_map<std::string, SP<Render::ITexture>> g_imageFiles;
 
-SP<Render::ITexture> imageFile(const std::string& path, int px) {
+SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted) {
     if (path.empty() || px < 1)
         return nullptr;
     std::error_code ec;
@@ -169,6 +169,16 @@ SP<Render::ITexture> imageFile(const std::string& path, int px) {
         return IT->second;
     if (g_imageFiles.size() > 256)
         g_imageFiles.clear();
+
+    static auto  windowStart = std::chrono::steady_clock::now();
+    static float spentMs     = 0.F;
+    const auto   T0          = std::chrono::steady_clock::now();
+    if (T0 - windowStart > std::chrono::milliseconds(16)) {
+        windowStart = T0;
+        spentMs     = 0.F;
+    }
+    if (budgeted && spentMs > 6.F)
+        return nullptr;
 
     SP<Render::ITexture> texture;
     Hyprgraphics::CImage image(path, {sc<double>(px), sc<double>(px)});
@@ -185,6 +195,7 @@ SP<Render::ITexture> imageFile(const std::string& path, int px) {
                 texture = makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
         }
     }
+    spentMs += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - T0).count();
     g_imageFiles[KEY] = texture;
     return texture;
 }

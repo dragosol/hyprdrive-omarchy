@@ -6293,6 +6293,8 @@ void render(PHLMONITOR monitor) {
             const auto& PRESSKEY = ITEM.subject;
             const auto  POSE     = DockTilt::pose(monitor->m_id, PRESSKEY, pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, PRESSKEY),
                                                   pressAt(monitor->m_id, PRESSKEY));
+            if (ITEM.stack && ITEM.stackDir && !ITEM.placeholder && pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale))
+                Stacks::warm(ITEM.stackPath);
             if (!(ITEM.stack && Stacks::drawCell(monitor, ITEM, data.box, std::clamp(ITEM.appear, 0.F, 1.F), POSE)))
                 DockTilt::queue(TEX, data.box, std::clamp(ITEM.appear, 0.F, 1.F), POSE);
         }
