@@ -9095,6 +9095,13 @@ void CScrollOverview::onPreRender() {
     if (WindowPill::animating() && isOverviewPointerOnMonitor(pMonitor.lock()))
         gridSetReflowActive(pMonitor.lock());
 
+    // The strip cell's label fades on the same kind of wall clock, and the idle
+    // pulse alone (~15/s) gave its 110 ms exit one frame at most: it stood at
+    // full strength, then vanished (user, 2026-09-24: "same fading out as the
+    // grid"). It joins the pacer too, while it fades.
+    if (stripTipAnimating())
+        gridSetReflowActive(pMonitor.lock());
+
     if (gridTakeReflowActive(pMonitor.lock())) {
         reflowPacer->setValueAndWarp(0.F);
         *reflowPacer = 1.F;
