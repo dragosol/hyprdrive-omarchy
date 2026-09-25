@@ -3,6 +3,7 @@
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
+#include "DockDrop.hpp"
 
 #include "AppSearch.hpp"
 #include "Compat.hpp"
@@ -1129,8 +1130,10 @@ namespace ScrollOverview::Stacks {
                 g_trashError   = R.error + (R.moved ? " (" + std::to_string(R.moved) + " moved)" : "");
                 g_trashErrorAt = Time::steadyNow();
                 armShake(g_trashStack);
-            } else
+            } else {
                 armBounce(g_trashStack);
+                armBounce("trash:///"); // the Trash cell's hop key: it hops when something lands in it (user, 2026-09-24)
+            }
         }
         // DOWNLOADS (2026-09-24, the macOS Downloads stack): a browser's partial
         // file in a stack's folder puts a progress bar on the cell; when the
@@ -1182,6 +1185,29 @@ namespace ScrollOverview::Stacks {
     // Only the popup's own rows can start an item drag, so a popup that goes
     // away with a button still down must take the drag with it -- otherwise the
     // next release anywhere would resolve a drop from a fan nobody can see.
+    // A fan/pane item pulled past the threshold becomes a REAL drag, the same
+    // one a file dragged out of Nautilus is (DockDrop::startFileDrag): any app
+    // can take it, and the dock's own cells take it through the drop takeover.
+    // Here, on motion, and never in the pass. If another drag is somehow
+    // running, the old in-dock drag carries on instead.
+    void onPointerMove() {
+        if (!g_itemDrag || g_itemDrag->live || !g_popup)
+            return;
+        const auto MON = popupMonitorPtr();
+        if (!MON)
+            return;
+        const Vector2D MOUSE = (g_pInputManager->getMouseCoordsInternal() - MON->m_position) * MON->m_scale;
+        if (MOUSE.distance(g_itemDrag->start) <= DRAG_THRESHOLD * std::max(MON->m_scale, 0.01F))
+            return;
+        const auto DRAG = *g_itemDrag;
+        if (DockDrop::startFileDrag({DRAG.srcPath}, DRAG.icon)) {
+            g_itemDrag.reset();
+            close();
+        } else
+            g_itemDrag->live = true;
+        damagePopupMonitor();
+    }
+
     void abandonItemDrag() {
         g_itemDrag.reset();
     }
@@ -1714,8 +1740,6 @@ namespace ScrollOverview::Stacks {
         if (MOUSE.distance(g_popup->lastMouse) > 2.0)
             g_popup->keyboard = false;
         g_popup->lastMouse = MOUSE;
-        if (g_itemDrag && !g_itemDrag->live && MOUSE.distance(g_itemDrag->start) > DRAG_THRESHOLD * SCALE)
-            g_itemDrag->live = true;
 
         const auto drawGhost = [&] {
             if (!g_itemDrag || !g_itemDrag->live)

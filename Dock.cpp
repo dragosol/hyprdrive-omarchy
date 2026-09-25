@@ -6270,6 +6270,10 @@ void render(PHLMONITOR monitor) {
                     g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
             }
 
+            // Dock stacks: the Trash hops when something lands in it.
+            if (!ITEM.stack && ITEM.uri == "trash:///")
+                data.box.y -= Stacks::bounceLift("trash:///", sc<float>(ITEM.iconBox.height));
+
             if (ITEM.stack) {
                 data.box.y -= Stacks::bounceLift(ITEM.stackPath, sc<float>(ITEM.iconBox.height));
                 data.box.x += Stacks::shakeOffset(ITEM.stackPath, sc<float>(ITEM.iconBox.width));

@@ -14,6 +14,7 @@
 #include "globals.hpp"
 
 #include <string>
+#include <vector>
 
 namespace ScrollOverview::DockDrop {
 
@@ -31,6 +32,13 @@ namespace ScrollOverview::DockDrop {
     // What the drag is over, for the dock's hover ring and lift.
     const std::string& hoveredStack(); // "" = none
     bool               hoveringTrash();
+
+    // Start a real Wayland drag of `paths` (a fan item dragged out), as the
+    // plugin's own data source. False if another drag is running.
+    bool startFileDrag(const std::vector<std::string>& paths, const std::string& icon);
+    bool draggingOut();
+    // The drag's icon under the pointer (RENDER_POST_WINDOWS).
+    void renderGhost(PHLMONITOR monitor);
 
     void shutdown();
 }

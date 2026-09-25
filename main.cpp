@@ -1872,6 +1872,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::ScratchpadExit::onPointerMove(HIT ? HIT->first : PHLMONITOR{});
         // Dock stacks B: a drag of files over the dock (prefetch + target).
         ScrollOverview::DockDrop::onPointerMove(HIT ? HIT->first : PHLMONITOR{}, HIT ? HIT->second : Vector2D{});
+        // A fan item pulled out becomes a real drag (DockDrop::startFileDrag).
+        ScrollOverview::Stacks::onPointerMove();
 
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
@@ -2013,6 +2015,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::Dock::setWindowDragActive(false);
 
         ScrollOverview::Dock::render(MONITOR);
+        // A file dragged out of a fan: its icon under the pointer, over the dock.
+        ScrollOverview::DockDrop::renderGhost(MONITOR);
     });
 
     // The scratchpad's drag-out zone draws at the LAST moment, not with the

@@ -113,6 +113,8 @@ namespace ScrollOverview::Stacks {
     // button, a monitor going away). Deliberately not a release: nothing moves.
     void abandonItemDrag();
     bool isOpen();
+    // Pointer motion: a pressed fan item pulled far enough becomes a real drag.
+    void onPointerMove();
     const std::string& openPath();
     // Which output the popup is on, or MONITOR_INVALID. The dock's frame pump
     // needs it to decide how much of a monitor one of its animations has to
