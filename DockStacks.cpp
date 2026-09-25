@@ -3,6 +3,7 @@
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
+#include <sys/stat.h>
 #include "StackBlur.hpp"
 #include "DockDrop.hpp"
 
@@ -460,6 +461,12 @@ namespace {
     Time::steady_tp g_trashErrorAt{};
 
     std::optional<SPopup> g_popup;
+
+    std::string popupState() {
+        if (!g_popup)
+            return "none";
+        return std::string(g_popup->leaving ? "closing" : "opening/open") + " p=" + std::to_string(g_popup->tl);
+    }
 
 
 
@@ -1213,11 +1220,14 @@ namespace ScrollOverview::Stacks {
 
         // A second click on the same cell closes it, which is the reference's
         // toggle and what every dock popup on this desktop does.
+        traceEvent("open() " + CANON + " state=" + popupState());
         if (g_popup && g_popup->path == CANON) {
             if (!g_popup->leaving)
                 close();
-            else
+            else {
+                traceEvent("  -> reverse to OPEN");
                 setDirection(*g_popup, false); // caught on its way out: turn round
+            }
             return;
         }
 
@@ -1251,6 +1261,7 @@ namespace ScrollOverview::Stacks {
         // returns early and the click does nothing at all, which is
         // indistinguishable from a broken dock.
         g_popup = std::move(p);
+        traceEvent("  -> NEW popup (opening)");
         armSushiPlacement();
     }
 
@@ -1316,8 +1327,20 @@ namespace ScrollOverview::Stacks {
         g_itemDrag.reset();
     }
 
+    void traceEvent(const std::string& what) {
+        struct stat st{};
+        if (::stat("/tmp/hyprdrive-stacklog.on", &st) != 0)
+            return;
+        if (FILE* f = std::fopen("/tmp/hyprdrive-stack.log", "a")) {
+            const auto MS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() % 100000000;
+            std::fprintf(f, "%08lld %s\n", sc<long long>(MS), what.c_str());
+            std::fclose(f);
+        }
+    }
+
     void close() {
         g_itemDrag.reset(); // a drag cannot outlive the popup it started in (review 2026-09-24)
+        traceEvent("close() state=" + popupState());
         if (!g_popup || g_popup->leaving)
             return;
         if (g_popup->previewing >= 0) {
@@ -1654,8 +1677,11 @@ namespace ScrollOverview::Stacks {
     }
 
     bool click(PHLMONITOR monitor, const Vector2D& point, bool release) {
-        if (release && std::exchange(g_swallowToggleRelease, false))
+        traceEvent(std::string("Stacks::click ") + (release ? "UP  " : "DOWN") + " state=" + popupState() + (g_swallowToggleRelease ? " swallowPending" : ""));
+        if (release && std::exchange(g_swallowToggleRelease, false)) {
+            traceEvent("  -> release swallowed (toggle)");
             return true;
+        }
         if (!g_popup || g_popup->leaving || !monitor)
             return false;
         if (g_popup->monitor != monitor->m_id) {
@@ -1717,6 +1743,7 @@ namespace ScrollOverview::Stacks {
         // a paper on its way out passes across the cell, and a quick second
         // click must fold the fan, not open that file (2026-09-24).
         if (!release && g_popup->anchor.containsPoint(point)) {
+            traceEvent("  -> own cell press: FOLD");
             close();
             g_swallowToggleRelease = true;
             return true;
@@ -1872,6 +1899,7 @@ namespace ScrollOverview::Stacks {
         tick(*g_popup);
         const float PROGRESS = popupProgress(*g_popup);
         if (g_popup->leaving && PROGRESS <= 0.F) {
+            traceEvent("fully closed (popup gone)");
             g_popup.reset();
             g_itemDrag.reset();
             return;
