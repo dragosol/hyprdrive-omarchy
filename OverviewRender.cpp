@@ -1,6 +1,7 @@
 #include "OverviewRender.hpp"
 #include "OverviewPassElement.hpp"
 #include <chrono>
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <hyprland/src/render/Renderer.hpp>
@@ -151,6 +152,41 @@ static constexpr int OVERVIEW_APP_ICON_PX = 64;
 // Icon name -> texture, built once. NULL entries are cached too: an icon that
 // failed to resolve must not be re-searched on every single frame.
 static std::unordered_map<std::string, SP<Render::ITexture>> g_overviewAppIcons;
+
+// An image FILE -> texture (dock stacks A: the pile's and pane's thumbnails),
+// decoded and uploaded exactly as appIcon does. Keyed on path + size + mtime,
+// so a replaced thumbnail is picked up; bounded, and cleared at unload.
+static std::unordered_map<std::string, SP<Render::ITexture>> g_imageFiles;
+
+SP<Render::ITexture> imageFile(const std::string& path, int px) {
+    if (path.empty() || px < 1)
+        return nullptr;
+    std::error_code ec;
+    const auto      MT  = std::filesystem::last_write_time(path, ec);
+    const auto      KEY = path + "\x01" + std::to_string(px) + "\x01" + std::to_string(ec ? 0 : MT.time_since_epoch().count());
+    if (const auto IT = g_imageFiles.find(KEY); IT != g_imageFiles.end())
+        return IT->second;
+    if (g_imageFiles.size() > 256)
+        g_imageFiles.clear();
+
+    SP<Render::ITexture> texture;
+    Hyprgraphics::CImage image(path, {sc<double>(px), sc<double>(px)});
+    if (image.success()) {
+        if (const auto SURFACE = image.cairoSurface(); SURFACE && SURFACE->cairo()) {
+            auto* const CAIRO = SURFACE->cairo();
+            cairo_surface_flush(CAIRO);
+            auto* const    DATA   = cairo_image_surface_get_data(CAIRO);
+            const int      W      = cairo_image_surface_get_width(CAIRO);
+            const int      H      = cairo_image_surface_get_height(CAIRO);
+            const int      STRIDE = cairo_image_surface_get_stride(CAIRO);
+            const uint32_t FORMAT = cairo_image_surface_get_format(CAIRO) == CAIRO_FORMAT_RGB24 ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_ARGB8888;
+            if (DATA && W > 0 && H > 0)
+                texture = makeShared<Render::GL::CGLTexture>(FORMAT, DATA, sc<uint32_t>(STRIDE), Vector2D{sc<double>(W), sc<double>(H)});
+        }
+    }
+    g_imageFiles[KEY] = texture;
+    return texture;
+}
 
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite) {
     if (iconName.empty())
@@ -448,6 +484,7 @@ void clearTextCache() {
     g_textCache.clear();
     g_textCacheOld.clear();
     g_wrapCache.clear();
+    g_imageFiles.clear();
 }
 
 void flushPass(PHLMONITOR monitor) {

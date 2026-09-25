@@ -35,6 +35,8 @@ void                 clearFrameChromeBlur();
 // draw time and this render path cannot, so an icon meant to sit on a dark
 // surface arrives invisible. Cached separately from the untinted one.
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false);
+// An image FILE at `px` (a thumbnail), cached on path + size + mtime.
+SP<Render::ITexture> imageFile(const std::string& path, int px);
 
 // OVERVIEW_CPP_SPEC 13.12 X57. The label plate, drawn ONCE for both surfaces
 // that need one: hyprgnomedock's icon tooltip and the overview tile's caption.

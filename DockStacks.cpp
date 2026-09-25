@@ -279,7 +279,7 @@ namespace {
     // first read lands; onReaderReady() fills the popup when it does.
     // The reader hands every candidate icon name ('|'-joined, most specific
     // first); the first one the user's theme has wins. Memoized per list.
-    std::string pickIcon(const std::string& names) {
+    std::string pickIconImpl(const std::string& names) {
         static std::unordered_map<std::string, std::string> memo;
         if (const auto IT = memo.find(names); IT != memo.end())
             return IT->second;
@@ -302,7 +302,7 @@ namespace {
     StackReader::SListing sortedListing(const std::string& dir, StackModel::ESort sort) {
         auto L = StackReader::listing(dir);
         for (auto& E : L.entries)
-            E.icon = E.dir ? folderIcon(canonical(E.path)) : pickIcon(E.icon);
+            E.icon = E.dir ? folderIcon(canonical(E.path)) : pickIconImpl(E.icon);
         StackModel::sortEntries(L.entries, sort);
         return L;
     }
@@ -923,6 +923,12 @@ namespace ScrollOverview::Stacks {
         }
 
         std::error_code ec;
+        if (!std::filesystem::exists(CANON, ec)) {
+            // GONE (deleted, renamed, an unmounted drive): refuse visibly. The
+            // cell stays, dimmed, until the user removes it.
+            armShake(CANON);
+            return;
+        }
         if (!std::filesystem::is_directory(CANON, ec) || ec) {
             // A pinned FILE has no contents to fan. Clicking it opens it, which
             // is the only thing it can mean.
@@ -1108,6 +1114,20 @@ namespace ScrollOverview::Stacks {
         g_popup->previewing = g_popup->previewing == I ? -1 : I;
         damagePopupMonitor();
         return true;
+    }
+
+    std::string pickIcon(const std::string& names) {
+        return pickIconImpl(names);
+    }
+
+    bool popupShowsStack(const std::string& stackPath) {
+        return g_popup && g_popup->path == canonical(stackPath) && !g_popup->grid;
+    }
+
+    std::string tooltipSuffix(const std::string& stackPath) {
+        if (const auto L = StackReader::listing(canonical(stackPath)); L.ready && L.missing)
+            return "Folder not found";
+        return {};
     }
 
     bool keyboardActive() {
@@ -1435,12 +1455,13 @@ namespace ScrollOverview::Stacks {
                 solid.color         = Config::dockBackgroundColor().modifyA(0.8F * alpha);
                 solid.round         = sc<int>(std::round(radius * SCALE));
                 solid.roundingPower = 2.F;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(solid));
+                if (drawableBox(solid.box))
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(solid));
             }
         };
 
         const auto drawTex = [&](const SP<Render::ITexture>& tex, const CBox& box, float alpha, float rot = 0.F) {
-            if (!tex)
+            if (!tex || !tex->ok() || !drawableBox(box))
                 return;
             CTexPassElement::SRenderData d;
             d.tex     = tex;
@@ -1511,7 +1532,8 @@ namespace ScrollOverview::Stacks {
             CRectPassElement::SRectData caret;
             caret.box   = CBox{caretX, P.fieldBox.y + P.fieldBox.height * 0.25, std::max(1.0, 1.5 * SCALE), P.fieldBox.height * 0.5}.round();
             caret.color = Dock::accentColor().modifyA(ALPHA);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(caret));
+            if (drawableBox(caret.box))
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(caret));
 
             // THE CELLS, clipped to the grid: icon, two-line name, and the
             // previewed / selected / hovered highlight.
@@ -1534,11 +1556,14 @@ namespace ScrollOverview::Stacks {
                     hl.color   = Dock::accentColor().modifyA(ALPHA * (PREV ? 0.28F : SEL ? 0.2F : 0.12F));
                     hl.round   = sc<int>(std::round(10.F * SCALE));
                     hl.clipBox = CLIP;
+                    if (drawableBox(hl.box))
                     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(hl));
                 }
                 const float ICON = GRID_ICON * SCALE * (PREV ? 1.15F : 1.F);
                 CBox        ib{std::round(cell.x + (cell.width - ICON) / 2.0), std::round(cell.y + 8.F * SCALE), std::round(ICON), std::round(ICON)};
-                if (const auto TEX = OverviewRender::appIcon(R.icon); TEX) {
+                const auto TEX = R.vis >= 0 && R.vis < sc<int>(P.visible.size()) ? iconTexture(P.entries[P.visible[sc<size_t>(R.vis)]], sc<int>(std::round(ICON))) :
+                                                                                  OverviewRender::appIcon(R.icon);
+                if (TEX && TEX->ok() && drawableBox(ib)) {
                     CTexPassElement::SRenderData d;
                     d.tex     = TEX;
                     d.box     = ib;
@@ -1548,7 +1573,7 @@ namespace ScrollOverview::Stacks {
                 }
                 if (const auto T = OverviewRender::textWrapped(R.name, FG, sc<int>(std::round(11.F * SCALE)), sc<int>(cell.width - 8.F * SCALE), sc<int>(std::round(30.F * SCALE)),
                                                                false, "", 500);
-                    T && T->ok()) {
+                    T && T->ok() && drawableBox(cell)) {
                     CTexPassElement::SRenderData l;
                     l.tex     = T;
                     l.box     = CBox{cell.x + (cell.width - T->m_size.x) / 2.0, ib.y + ICON + 6.F * SCALE, T->m_size.x, T->m_size.y}.round();
@@ -1576,9 +1601,19 @@ namespace ScrollOverview::Stacks {
         // a single enclosing plate would be a panel with a fan painted on it,
         // which is a different object. One blur region per row, and only while a
         // fan is actually up.
+        // PILE -> FAN (dock stacks A): the items the cell's pile shows fly from
+        // their pile slot (box and angle) to their row, on that row's own eased
+        // progress -- and back onto the pile on close. The cell draws only its
+        // outline meanwhile (popupShowsStack), so they visibly left it.
+        const auto PILE = pileLayout(g_popup->path, g_popup->anchor);
+
         for (size_t i = 0; i < g_popup->rows.size(); ++i) {
             const auto& R   = g_popup->rows[i];
             const float ROT = FAN_TILT_DEG * sc<float>(i) * 3.14159265F / 180.F;
+            const SPileItem* FROMPILE = nullptr;
+            for (const auto& PI : PILE)
+                if (!R.action && PI.entry.path == R.path)
+                    FROMPILE = &PI;
 
             // Per-row alpha: a row that has not started its stagger is not
             // drawn at all rather than drawn at zero, which keeps its frost off
@@ -1586,7 +1621,8 @@ namespace ScrollOverview::Stacks {
             const float T0 = sc<float>(i) * STAGGER_MS / std::max(1.F, OPEN_MS + STAGGER_MS * sc<float>(std::min(g_popup->visible.size(), STAGGER_ROWS)));
             const float TI = std::clamp((PROGRESS - T0) / std::max(0.001F, 1.F - T0), 0.F, 1.F);
             const float A  = (g_popup->leaving ? 1.F - houseEase(false, PROGRESS) : houseEase(true, TI));
-            if (A <= 0.02F)
+            const float E  = A; // the row's own eased progress: 0 on the pile, 1 in place
+            if (A <= 0.02F && !FROMPILE)
                 continue;
 
             // The frost cannot be rotated -- queueFrost takes a box, and the
@@ -1616,13 +1652,21 @@ namespace ScrollOverview::Stacks {
                 ring.grad1      = ::Config::CGradientValueData(Dock::accentColor().modifyA(A * (PREV ? 1.F : SEL ? 0.6F : 0.35F)));
                 ring.round      = sc<int>(std::round(FAN_RADIUS * SCALE));
                 ring.borderSize = std::max(1, sc<int>(std::round(2.F * SCALE)));
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
+                if (drawableBox(ring.box))
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
             }
 
             const float ICON = FAN_ICON * SCALE * K;
             CBox        ib{std::round(sc<float>(box.x) + sc<float>(box.width) - FAN_PAD_X * SCALE * K - ICON),
                     std::round(sc<float>(box.y) + (sc<float>(box.height) - ICON) / 2.F), std::round(ICON), std::round(ICON)};
-            drawTex(OverviewRender::appIcon(R.icon), ib, A, ROT);
+            if (FROMPILE) {
+                // Lerp box and angle from the pile slot to the row; drawn opaque
+                // throughout, because it never stops being on screen.
+                const CBox& P0 = FROMPILE->box;
+                CBox        fly{P0.x + (ib.x - P0.x) * E, P0.y + (ib.y - P0.y) * E, P0.width + (ib.width - P0.width) * E, P0.height + (ib.height - P0.height) * E};
+                drawTex(iconTexture(FROMPILE->entry, sc<int>(std::round(ib.width))), fly.round(), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
+            } else
+                drawTex(OverviewRender::appIcon(R.icon), ib, A, ROT);
 
             if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * K)), false, "",
                                                       sc<int>(std::round(FAN_LABEL_MAX * SCALE * K)), 500);

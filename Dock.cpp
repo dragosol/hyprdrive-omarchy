@@ -6034,8 +6034,11 @@ void render(PHLMONITOR monitor) {
             // The hover lean, the press, and the light on the icon's face, in
             // perspective -- DockTilt. The squish is keyed on the same subject
             // the tooltip uses, so a scratchpad slot and an app never share one.
+            // Dock stacks A: a stack draws its own cell -- the pile of its newest
+            // items, the folder, or a dimmed missing folder -- without the tilt.
             const auto& PRESSKEY = ITEM.subject;
-            DockTilt::queue(TEX, data.box, std::clamp(ITEM.appear, 0.F, 1.F),
+            if (!(ITEM.stack && Stacks::drawCell(monitor, ITEM, data.box, std::clamp(ITEM.appear, 0.F, 1.F))))
+                DockTilt::queue(TEX, data.box, std::clamp(ITEM.appear, 0.F, 1.F),
                             DockTilt::pose(monitor->m_id, PRESSKEY, pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, PRESSKEY),
                                            pressAt(monitor->m_id, PRESSKEY)));
         }
@@ -6215,7 +6218,13 @@ void render(PHLMONITOR monitor) {
                       peekWindowsOn(monitor, {CELL->second}));
     else if (HASHOVER) {
         const float ABOVE = (panelOn(monitor) && g_hover.drawn.height >= 1) ? sc<float>(g_hover.drawn.y) : 0.F;
-        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, itemName(*HOVEREDITEM), ABOVE, HOVEREDITEM->subject,
+        // Dock stacks A: a stack's tooltip says when its folder is gone (and,
+        // later, a trash error) after its name.
+        std::string tipName = itemName(*HOVEREDITEM);
+        if (HOVEREDITEM->stack)
+            if (const auto SUFFIX = Stacks::tooltipSuffix(HOVEREDITEM->stackPath); !SUFFIX.empty())
+                tipName += "  \u00b7  " + SUFFIX;
+        renderTooltip(monitor, LAYOUT, HOVEREDITEM->iconBox, tipName, ABOVE, HOVEREDITEM->subject,
                       HOVEREDITEM->uri.empty() && !HOVEREDITEM->scratchpad ? peekWindowsOn(monitor, itemWindows(*HOVEREDITEM)) : std::vector<PHLWINDOW>{});
     } else if (HOVERAPPS)
         renderTooltip(monitor, LAYOUT, LAYOUT.showApps, "Show Applications", 0.F, "show-apps");

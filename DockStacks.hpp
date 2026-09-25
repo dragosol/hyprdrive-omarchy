@@ -4,6 +4,9 @@
 #include "Dock.hpp"
 #include "StackModel.hpp"
 
+#include <hyprland/src/render/Texture.hpp>
+
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -51,6 +54,16 @@
 //     drag begins inside the plugin's own input machinery, so it is ours end
 //     to end. Same gio semantics, same bounce, same shake.
 namespace ScrollOverview::Stacks {
+
+    // EVERY box handed to the render pass goes through this (2026-09-24: a
+    // stack cell animating IN from zero size gave the pile outline a negative
+    // box, and Hyprland's renderBorder RASSERTs width/height > 0 -- it aborted
+    // the compositor). Rects and textures share the assert family; none of
+    // them is worth drawing below 2 px anyway.
+    inline bool drawableBox(const CBox& b) {
+        return std::isfinite(b.x) && std::isfinite(b.y) && std::isfinite(b.width) && std::isfinite(b.height) && b.width >= 2.0 && b.height >= 2.0;
+    }
+
 
     struct SStack {
         std::string          path; // absolute, no trailing slash
@@ -178,6 +191,27 @@ namespace ScrollOverview::Stacks {
     float bounceLift(const std::string& path, float iconHeight);
     float shakeOffset(const std::string& path, float iconHeight);
     bool  animating();
+
+    // ---- the dock cell (StackIcon.cpp) --------------------------------------
+    // One item of the pile: what it is, where it sits in the cell, its angle.
+    struct SPileItem {
+        StackModel::SEntry entry;
+        CBox               box; // monitor-local RENDER px
+        float              rot = 0.F;
+    };
+    // The pile's items for a stack cell at `iconBox`, bottom first (empty for
+    // Display as Folder, a file, an empty, missing or unread folder).
+    std::vector<SPileItem> pileLayout(const std::string& stackPath, const CBox& iconBox);
+    // Draw a stack's dock cell. False: the caller draws its plain icon (a pinned FILE).
+    bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha);
+    // A thumbnail (cached, or the image itself) or the themed icon.
+    SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px);
+    // The first of a '|'-joined list of icon names the user's theme has.
+    std::string pickIcon(const std::string& names);
+    // Is this stack's fan/pane open or closing? (its pile items are in flight)
+    bool popupShowsStack(const std::string& stackPath);
+    // Appended to a stack's tooltip: "Folder not found", a recent trash error, or "".
+    std::string tooltipSuffix(const std::string& stackPath);
 
     // ---- the pane's geometry (StackPane.cpp) ---------------------------------
     namespace Pane {
