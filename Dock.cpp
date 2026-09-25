@@ -2811,7 +2811,14 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     // window, wherever that is -- another desktop, the scratchpad, minimized.
     // Only once the app HAS the focus do the rules below (minimize/restore the
     // windows here) apply, so a second click still puts it away.
-    if (const auto ALL = itemWindows(item); !ALL.empty()) {
+    // ...but NOT when every window of the app on this desktop is minimized
+    // (user, 2026-09-25: spam-clicking two tiled Ghostty windows left one
+    // restored full-width and the other stashed). Minimizing them is exactly
+    // what takes the focus off the app, so the next click read as "switch back"
+    // and restored ONE window. With all of them away here, the click is the
+    // toggle below: restore them all.
+    const bool ALLHERESTASHED = !here.empty() && std::ranges::all_of(here, [](const PHLWINDOW& w) { return Minimize::isMinimized(w); });
+    if (const auto ALL = itemWindows(item); !ALL.empty() && !ALLHERESTASHED) {
         const auto FOCUSED = Desktop::focusState()->window();
         if (!FOCUSED || std::ranges::find(ALL, FOCUSED) == ALL.end()) {
             const auto TARGET = recentWindow(ALL);
