@@ -100,8 +100,12 @@ namespace {
                 // "Added" = added to THIS FOLDER (user, 2026-09-24): a file moved
                 // in keeps its birth time from wherever it was made, but the
                 // move changes its ctime -- and a file created here has
-                // ctime == birth. ctime can only be later than birth.
-                e.btime = sx.stx_ctime.tv_sec;
+                // ctime == birth. A FOLDER is different: its ctime moves every
+                // time something inside it is added, removed or renamed, which
+                // floated a busy folder to "newest" (2026-09-25). macOS's Date
+                // Added does not move with contents, so a folder uses its birth.
+                const bool HASBIRTH = (sx.stx_mask & STATX_BTIME) != 0;
+                e.btime             = (e.dir && HASBIRTH) ? sx.stx_btime.tv_sec : sx.stx_ctime.tv_sec;
             }
             e.kind = contentKind(PATH, e.dir);
             e.icon = iconFor(e.kind);
