@@ -312,9 +312,16 @@ inline bool isOverviewSubmapActive() {
 // The overview is not a Wayland client. Clear seat keyboard focus so keys
 // cannot reach the window (or a layer-shell bar) underneath; the raw-key
 // hook builds the search query from the same stream.
+// scrollOverview.cpp. A pointer lock (a game, Moonlight) belongs to the window
+// that took it, and the overview is not that window: released while the
+// overview is up, handed back only if the overview closes onto its owner.
+void releasePointerLocks();
+void handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface);
+
 inline void stealOverviewKeyboard() {
     if (g_pSeatManager)
         g_pSeatManager->setKeyboardFocus(nullptr);
+    releasePointerLocks();
 }
 
 // Give the keyboard back to the window overview stole it from. Seat focus is
@@ -343,6 +350,7 @@ inline void restoreOverviewKeyboard(const PHLWINDOW& window) {
     Desktop::focusState()->fullWindowFocus(target, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD, surf);
     if (g_pSeatManager && surf)
         g_pSeatManager->setKeyboardFocus(surf);
+    handPointerTo(target, surf);
 }
 
 inline bool isTopLayerFocused(PHLMONITOR monitor) {

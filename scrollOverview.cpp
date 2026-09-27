@@ -1,4 +1,8 @@
 #include <hyprland/src/desktop/state/FadingOutState.hpp>
+#include <hyprland/src/protocols/PointerConstraints.hpp>
+#include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/pointer/PointerController.hpp>
 #include "OverviewInternal.hpp"
 #include "DockStacks.hpp"
 #include "SearchLetters.hpp"
@@ -10194,4 +10198,34 @@ void CScrollOverview::onSwipeEnd() {
         *scale = OPEN;
     } else
         close();
+}
+
+void OvInternal::releasePointerLocks() {
+    // Hyprland lifts a lock only when keyboard focus moves off its owner, and
+    // the overview nulls the seat without moving Desktop focus -- so the lock
+    // held the pointer still under the overview (user, 2026-09-27: Moonlight).
+    if (g_pInputManager)
+        g_pInputManager->unconstrainMouse();
+}
+
+void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface) {
+    if (!window)
+        return;
+
+    // Closing back onto the window that holds a lock (Escape out of the
+    // overview over a game) gives it the lock back.
+    if (const auto HLSURF = surface ? Desktop::View::CWLSurface::fromResource(surface) : nullptr; HLSURF && HLSURF->constraint()) {
+        HLSURF->constraint()->activate();
+        return;
+    }
+
+    // Any other window: the cursor goes with the focus. Left where the tile
+    // was clicked it sat over the old window -- a fullscreen game, usually --
+    // and follow_mouse handed focus straight back on the first nudge, where
+    // the lock took the pointer again. Forced: the user's no_warps is about
+    // Hyprland's own warps, and this one is the selection itself.
+    const CBox BOX{window->m_realPosition->goal(), window->m_realSize->goal()};
+    if (BOX.width < 1 || BOX.height < 1 || BOX.containsPoint(g_pInputManager->getMouseCoordsInternal()))
+        return;
+    Pointer::pointerController()->warpTo(BOX.middle(), true);
 }
