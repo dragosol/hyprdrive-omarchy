@@ -778,6 +778,15 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
         if (closing || event.state != WL_KEYBOARD_KEY_STATE_PRESSED || activeScrollOverview().get() != this)
             return;
 
+        // ONE PRESS, ONE OVERVIEW. Every overview listens to the same key event,
+        // and Tab hands the keyboard to the next monitor's overview MID-EVENT --
+        // whose listener then ran next, saw itself active and took the same Tab
+        // again, skipping monitor 2's grid straight back to search (2026-09-27).
+        static std::pair<uint32_t, uint32_t> s_lastPress{UINT32_MAX, UINT32_MAX};
+        if (s_lastPress == std::pair{event.timeMs, event.keycode})
+            return;
+        s_lastPress = {event.timeMs, event.keycode};
+
         if (isTopLayerFocused(pMonitor.lock()))
             return;
 
