@@ -3456,6 +3456,33 @@ bool CScrollOverview::tabAcrossMonitors() {
 
     const bool IN_GRID = g_search.nav.zone == EOverviewNavZone::Tile || g_search.nav.zone == EOverviewNavZone::Desktop;
     ScrollOverview::Stacks::traceEvent(std::format("tab: from monitor {} zone={} self={}", pMonitor->m_name, (int)g_search.nav.zone, self));
+
+    // NO RESULTS UP (user, 2026-09-27): "monitor 1 strip -> grid -> monitor 2
+    // strip -> grid monitor 2" and round again -- search has nothing to offer,
+    // so it is not a stop. Every strip is a stop; a grid with no tiles is not.
+    if (const auto RESULTS = overviewSearchRows(); !((!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) && !RESULTS.empty())) {
+        const size_t STOPS = order.size() * 2;
+        const size_t FROM  = g_search.nav.zone == EOverviewNavZone::Desktop ? self * 2 : g_search.nav.zone == EOverviewNavZone::Tile ? self * 2 + 1 : STOPS - 1;
+        for (size_t step = 1; step <= STOPS; ++step) {
+            const size_t STOP = (FROM + step) % STOPS;
+            auto&        ov   = order[STOP / 2];
+            if (STOP % 2 == 1) {
+                if (ENTERTILES(ov))
+                    break;
+                continue;
+            }
+            g_search.nav.zone              = EOverviewNavZone::Desktop;
+            g_search.nav.selection         = -1;
+            g_search.nav.keyboardTile      = false;
+            g_search.nav.explicitSelection = true;
+            TileChrome::setHovered(PHLWINDOW{}, false);
+            HANDOVER(ov);
+            break;
+        }
+        for (auto& [OV, SP] : order)
+            OV->damage();
+        return true;
+    }
     for (size_t i = IN_GRID ? self + 1 : 0; i < order.size(); ++i)
         if (ENTERTILES(order[i])) {
             for (auto& [OV, SP] : order)
