@@ -316,6 +316,7 @@ inline bool isOverviewSubmapActive() {
 // that took it, and the overview is not that window: released while the
 // overview is up, handed back only if the overview closes onto its owner.
 void releasePointerLocks();
+extern PHLWINDOWREF g_focusAtOpen; // the focused window when the session opened
 void handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface);
 
 inline void stealOverviewKeyboard() {

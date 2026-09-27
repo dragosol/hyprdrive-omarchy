@@ -69,7 +69,11 @@ CScrollOverview::~CScrollOverview() {
     emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(WORKSPACE, Desktop::focusState()->window()), false);
     restoreWorkspaceAnimationOverrides();
     restoreInputConfigOverrides();
-    restoreOverviewKeyboard(getOverviewWindowToShow(closeOnWindow.lock()));
+    // Whatever has focus NOW. Each monitor's overview reaches this when its own
+    // close animation ends, in no set order; its own closeOnWindow is only its
+    // monitor's guess, and re-applying it took focus -- and the cursor -- back
+    // off the window the user picked on the other monitor (2026-09-27).
+    restoreOverviewKeyboard(Desktop::focusState()->window());
     forced.restoreAll();
     if (const auto MONITOR = pMonitor.lock()) {
         for (auto const& WINDOW : Desktop::windowState()->windows()) {
@@ -245,6 +249,10 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
 
     redrawAll();
 
+    // The window the session opened on -- the first overview up records it;
+    // the others open after the keyboard is gone and would read the same one.
+    if (scrollOverviews().size() <= 1)
+        OvInternal::g_focusAtOpen = Desktop::focusState()->window();
     rememberSelection(Desktop::focusState()->window());
     viewportCurrentWorkspace = activeWorkspaceIndex();
     syncSelectionToViewport();
@@ -10234,6 +10242,8 @@ void OvInternal::releasePointerLocks() {
     g_pInputManager->unconstrainMouse();
 }
 
+PHLWINDOWREF OvInternal::g_focusAtOpen;
+
 void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface) {
     if (!window)
         return;
@@ -10245,6 +10255,11 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
         ScrollOverview::Stacks::traceEvent(std::format("locks: handed back to {} active={}", window->m_class, HLSURF->constraint()->isActive() ? 1 : 0));
         return;
     }
+
+    // Closing back onto the window it opened on is not a choice: the cursor
+    // stays wherever the user left it.
+    if (window == g_focusAtOpen.lock())
+        return;
 
     // Any other window: the cursor goes with the focus. Left where the tile
     // was clicked it sat over the old window -- a fullscreen game, usually --
