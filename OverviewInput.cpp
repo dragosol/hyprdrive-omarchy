@@ -869,6 +869,15 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 break;
             case XKB_KEY_Tab:
             case XKB_KEY_ISO_Left_Tab: {
+                // MORE THAN ONE MONITOR (user, 2026-09-27): "search -> window grid
+                // on monitor 1 -> window grid on monitor 2 -> search". Monitors
+                // left to right; the keyboard moves with the grid it is in
+                // (setKeyboardOverview), not with the pointer.
+                if (tabAcrossMonitors()) {
+                    damage();
+                    break;
+                }
+
                 // TAB IS THE WAY BETWEEN THE PANES: results -> windows -> desktops
                 // -> results (user, 2026-09-23). Arrows stay inside whichever pane
                 // Tab left them in, so this cycle is the only way across and every

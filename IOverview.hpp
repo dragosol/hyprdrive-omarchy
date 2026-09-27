@@ -163,6 +163,10 @@ SP<IOverview>                     scrollOverviewForMonitor(PHLMONITOR monitor);
 SP<IOverview>                     openScrollOverviewForMonitor(PHLMONITOR monitor);
 SP<IOverview>                     scrollOverviewAt(const Vector2D& point);
 SP<IOverview>                     activeScrollOverview();
+// The overview Tab handed the KEYBOARD to (multi-monitor Tab cycle, 2026-09-27).
+// Wins over "the overview under the pointer" until the pointer moves; null
+// clears it.
+void                              setKeyboardOverview(const SP<IOverview>& overview);
 void                              registerScrollOverview(const SP<IOverview>& overview);
 void                              unregisterScrollOverview(IOverview* overview);
 void                              clearScrollOverviews();

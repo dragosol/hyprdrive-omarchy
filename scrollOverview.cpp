@@ -1,5 +1,6 @@
 #include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include "OverviewInternal.hpp"
+#include "DockStacks.hpp"
 #include "SearchLetters.hpp"
 
 #include "Compat.hpp"
@@ -3384,6 +3385,86 @@ bool CScrollOverview::stepTileDesktop(int delta) {
     }
 
     damage();
+    return true;
+}
+
+// TAB ACROSS MONITORS (user, 2026-09-27): "search -> window grid on monitor 1 ->
+// window grid on monitor 2 -> search". Only with more than one overview up;
+// false leaves the single-monitor cycle (results -> windows -> desktops) alone.
+// Monitors run left to right (then top to bottom); a monitor with no tiles is
+// passed over, and the search is the first monitor's.
+bool CScrollOverview::tabAcrossMonitors() {
+    std::vector<std::pair<CScrollOverview*, SP<IOverview>>> order;
+    for (const auto& OV : scrollOverviews()) {
+        auto* S = dynamic_cast<CScrollOverview*>(OV.get());
+        if (S && !S->closing && S->pMonitor.lock())
+            order.emplace_back(S, OV);
+    }
+    if (order.size() < 2)
+        return false;
+    std::ranges::sort(order, [](const auto& a, const auto& b) {
+        const auto A = a.first->pMonitor->m_position, B = b.first->pMonitor->m_position;
+        return A.x != B.x ? A.x < B.x : A.y < B.y;
+    });
+    size_t self = 0;
+    for (size_t i = 0; i < order.size(); ++i)
+        if (order[i].first == this)
+            self = i;
+
+    const auto HANDOVER = [](const std::pair<CScrollOverview*, SP<IOverview>>& ov) {
+        // Focus first: a monitor focus change can move the cursor, and the
+        // owner remembers the pointer AFTER it, or that move reads as the user
+        // reaching away and hands the keyboard straight back.
+        if (const auto MON = ov.first->pMonitor.lock(); MON && MON != Desktop::focusState()->monitor())
+            Desktop::focusState()->rawMonitorFocus(MON);
+        setKeyboardOverview(ov.second);
+    };
+    const auto ENTERTILES = [&](const std::pair<CScrollOverview*, SP<IOverview>>& ov) {
+        auto*      OV    = ov.first;
+        const auto FIRST = OV->isNavTile(OV->closeOnWindow.lock()) ? OV->closeOnWindow.lock() : OV->firstNavTile();
+        ScrollOverview::Stacks::traceEvent(std::format("tab: try monitor {} closeOn={} navTile={} first={}", OV->pMonitor->m_name, (uintptr_t)OV->closeOnWindow.lock().get(),
+                                                       OV->isNavTile(OV->closeOnWindow.lock()) ? 1 : 0, (uintptr_t)OV->firstNavTile().get()));
+        if (!FIRST)
+            return false;
+        OV->closeOnWindow              = FIRST;
+        g_search.nav.zone              = EOverviewNavZone::Tile;
+        g_search.nav.selection         = -1;
+        g_search.nav.keyboardTile      = true;
+        g_search.nav.explicitSelection = true;
+        TileChrome::setHovered(FIRST, false);
+        HANDOVER(ov);
+        return true;
+    };
+    const auto ENTERSEARCH = [&]() {
+        auto&      FIRST   = order.front();
+        const auto RESULTS = overviewSearchRows();
+        g_search.nav.keyboardTile = false;
+        TileChrome::setHovered(PHLWINDOW{}, false);
+        if ((!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) && !RESULTS.empty()) {
+            g_search.nav.zone              = EOverviewNavZone::Result;
+            g_search.nav.explicitSelection = true;
+            g_search.nav.intent            = ESearchIntent::Browsing;
+            if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
+                g_search.nav.selection = 0;
+        } else {
+            g_search.nav.zone      = EOverviewNavZone::Search;
+            g_search.nav.selection = -1;
+            g_search.nav.intent    = ESearchIntent::Typing;
+        }
+        HANDOVER(FIRST);
+    };
+
+    const bool IN_GRID = g_search.nav.zone == EOverviewNavZone::Tile || g_search.nav.zone == EOverviewNavZone::Desktop;
+    ScrollOverview::Stacks::traceEvent(std::format("tab: from monitor {} zone={} self={}", pMonitor->m_name, (int)g_search.nav.zone, self));
+    for (size_t i = IN_GRID ? self + 1 : 0; i < order.size(); ++i)
+        if (ENTERTILES(order[i])) {
+            for (auto& [OV, SP] : order)
+                OV->damage();
+            return true;
+        }
+    ENTERSEARCH();
+    for (auto& [OV, SP] : order)
+        OV->damage();
     return true;
 }
 
@@ -7674,7 +7755,9 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
         // outright while a drag is live, so the tile under the cursor is not
         // reported as hovered and the window being carried is not under the
         // cursor anyway once it has left its slot.
-        .selected             = (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile && closeOnWindow == window) ||
+        // The keyboard's ring only on the monitor that HAS the keyboard: every
+        // monitor keeps its own closeOnWindow, and with two they both drew one.
+        .selected             = (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile && closeOnWindow == window && activeScrollOverview().get() == this) ||
             TileChrome::hovered() == window || dragged,
         .dragged              = dragged,
     });
@@ -8843,6 +8926,24 @@ void CScrollOverview::close() {
         return;
     }
     closing = true;
+
+    // ONE STATE ACROSS MONITORS (user, 2026-09-27: "sometimes overview will
+    // close on one monitor but stay open in the other"). Several close paths
+    // reach only their own monitor's overview -- a tile click, the dock's Exit
+    // Overview, a scratchpad click -- so the rule lives here, not at each of
+    // them: this closing closes every other overview too. They go FIRST, so
+    // this one's teardown -- whose focus choice is what the user just asked for
+    // -- runs last and has the final word. The static guard stops each of them
+    // turning round and closing the rest again.
+    static bool s_closingAll = false;
+    if (!s_closingAll) {
+        s_closingAll      = true;
+        const auto OTHERS = scrollOverviews(); // a copy: closing can unregister
+        for (const auto& OV : OTHERS)
+            if (OV && OV.get() != this)
+                OV->close();
+        s_closingAll = false;
+    }
 
     // X28. The pill only exists while the overview does, so its menu must go
     // with it -- otherwise a stale plate is still holding every pointer press

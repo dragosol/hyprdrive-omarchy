@@ -218,6 +218,9 @@ class CScrollOverview : public IOverview {
     // close without a selection
     void         close() override;
     void         selectHoveredWorkspace() override;
+    // Multi-monitor Tab: search -> each monitor's grid (left to right) -> search.
+    // False with a single overview (the one-monitor cycle applies).
+    bool tabAcrossMonitors();
     void         performPrimaryClickAction() override;
     bool         moveSelection(const std::string& direction) override;
     bool         windowDispatcherAction(const std::string& action) override;

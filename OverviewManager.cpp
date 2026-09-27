@@ -68,7 +68,24 @@ SP<IOverview> scrollOverviewAt(const Vector2D& point) {
     return IT == g_scrollOverviews.end() ? SP<IOverview>{} : *IT;
 }
 
+// Tab's keyboard owner, and where the pointer was when Tab chose it: the
+// pointer moving is the user reaching for another monitor, and then the pointer
+// rules again, exactly as before.
+static WP<IOverview> g_keyOwner;
+static Vector2D      g_keyOwnerMouse;
+
+void setKeyboardOverview(const SP<IOverview>& overview) {
+    g_keyOwner      = overview;
+    g_keyOwnerMouse = g_pInputManager ? g_pInputManager->getMouseCoordsInternal() : Vector2D{};
+}
+
 SP<IOverview> activeScrollOverview() {
+    if (const auto OWNER = g_keyOwner.lock()) {
+        if (g_pInputManager && g_pInputManager->getMouseCoordsInternal().distanceSq(g_keyOwnerMouse) < 1.0 &&
+            std::ranges::find(g_scrollOverviews, OWNER) != g_scrollOverviews.end())
+            return OWNER;
+        g_keyOwner.reset();
+    }
     if (g_pInputManager) {
         if (const auto overview = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()))
             return overview;

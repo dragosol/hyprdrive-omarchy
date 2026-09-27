@@ -305,7 +305,22 @@ static std::vector<PHLMONITOR> overviewTargetMonitors(const std::string& target)
     return MONITOR ? std::vector<PHLMONITOR>{MONITOR} : std::vector<PHLMONITOR>{};
 }
 
+static bool openOverviewOne(PHLMONITOR monitor);
+
+// ONE STATE ACROSS MONITORS (user, 2026-09-27), the opening half of the rule
+// CScrollOverview::close() keeps: the monitor asked for opens first, then every
+// other one, so no path -- the dock's Show Overview, a query open -- leaves a
+// monitor on the desktop while another shows the overview.
 static bool openOverview(PHLMONITOR monitor) {
+    if (!openOverviewOne(monitor))
+        return false;
+    for (const auto& M : State::monitorState()->monitors())
+        if (M && M != monitor && M->m_enabled)
+            openOverviewOne(M);
+    return true;
+}
+
+static bool openOverviewOne(PHLMONITOR monitor) {
     if (!monitor)
         return true;
 
@@ -427,6 +442,13 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
     // the CLOSE actions too: a toggle-off with a query typed drops the filter
     // first, so the windows it was hiding are back in the grid for the close
     // animation instead of popping in after it.
+    // Tab is a step INSIDE the session: it must not reset it (it runs first).
+    if (splitOverviewArg(arg).first == "tab") {
+        if (const auto ACTIVE = activeScrollOverview())
+            if (auto* S = dynamic_cast<CScrollOverview*>(ACTIVE.get()))
+                S->tabAcrossMonitors();
+        return {};
+    }
     resetSearchSession();
     const auto [ACTION, TARGET] = splitOverviewArg(arg);
     const auto ACTIVE           = activeScrollOverview();
@@ -437,6 +459,14 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
     if (ACTION == "select") {
         if (ACTIVE)
             ACTIVE->selectHoveredWorkspace();
+        return {};
+    }
+
+    // The overview's Tab step, for a keybind -- and for tests that must not
+    // type into the user's session (2026-09-27).
+    if (ACTION == "tab") {
+        if (auto* S = ACTIVE ? dynamic_cast<CScrollOverview*>(ACTIVE.get()) : nullptr)
+            S->tabAcrossMonitors();
         return {};
     }
 

@@ -88,10 +88,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
     static SDispatcher registrations[] = {
         {
             .name            = "overview",
-            .argPattern      = std::regex{R"(^(select|(toggle|on|open|enable|off|close|disable)([ \t]+(all|[^ \t"\\]+))?)$)"},
+            .argPattern      = std::regex{R"(^(select|tab|(toggle|on|open|enable|off|close|disable)([ \t]+(all|[^ \t"\\]+))?)$)"},
             .defaultArg      = "toggle",
             .typeArgError    = "expected an optional string argument; did you forget quotes around it?",
-            .invalidArgError = "expected select or toggle/open/close [monitor|all] (aliases: on, enable, off, disable)",
+            .invalidArgError = "expected select, tab or toggle/open/close [monitor|all] (aliases: on, enable, off, disable)",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "overview"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.overview");
