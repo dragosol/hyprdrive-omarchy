@@ -281,7 +281,7 @@ exit 3
 )SH";
 
         constexpr const char* DEFINE_JQ =
-            R"JQ(def clean: gsub("<[^>]*>";"") | gsub("&amp;";"&") | gsub("&quot;";"\"") | gsub("&#39;";"'") | gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&nbsp;";" ") | gsub("\\s+";" ") | sub("^ ";"") | sub(" $";"");
+            R"JQ(def clean: gsub("<style[^>]*>[^<]*</style>";"") | gsub("<[^>]*>";"") | gsub("&amp;";"&") | gsub("&quot;";"\"") | gsub("&#39;";"'") | gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&nbsp;";" ") | gsub("\\s+";" ") | sub("^ ";"") | sub(" $";"");
 (.en // [])[] | .partOfSpeech as $p | (.definitions // [])[] | select((.definition|clean) != "") | [$p, (.definition|clean), (((.examples // [])[0] // "")|clean)] | @tsv)JQ";
 
         // -- MyMemory: status, detected language, translation, then up to four

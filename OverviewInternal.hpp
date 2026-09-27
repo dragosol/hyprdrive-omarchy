@@ -788,6 +788,8 @@ inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
 // calculator copy, or file open. Submenu navigation returns false so the overview
 // stays open while drilling down into the hierarchy. For an already-open app,
 // Enter focuses that window unless newInstance is set (double-tap Shift).
+void overviewQueryEdited(); // main.cpp
+
 inline bool activateSearchResult(int index, bool newInstance = false) {
     const auto RESULTS = overviewSearchRows();
     if (index < 0 || index >= sc<int>(RESULTS.size()))
@@ -806,6 +808,9 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
         g_search.nav.selectFirstPending = false;
         g_search.nav.intent             = ESearchIntent::Typing;
         g_search.nav.hoverIndex         = -1;
+        // The rewritten query owes the same trailing work as a typed one --
+        // without it no provider (and no lookup) ever saw `define <word>`.
+        overviewQueryEdited();
         return false;
     }
 

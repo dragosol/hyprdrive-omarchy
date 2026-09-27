@@ -962,6 +962,7 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                     else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search || OmarchySearch::canNavigateMenuBack()))
                         launchIdx = 0;
 
+                    const std::string QUERY_BEFORE = g_search.query.text;
                     if (launchIdx >= 0 && activateSearchResult(launchIdx, SHIFT_PRESSED)) {
                         if (const auto W = g_search.nav.pendingFocus.lock()) {
                             closeOnWindow = W;
@@ -974,7 +975,9 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                         close();
                         break;
                     }
-                    if (g_search.nav.zone == EOverviewNavZone::Result) {
+                    // A tool row (Define / Translate) rewrote the query: the
+                    // panel turns into the dictionary, so the overview stays.
+                    if (g_search.nav.zone == EOverviewNavZone::Result || g_search.query.text != QUERY_BEFORE) {
                         damage();
                         break;
                     }

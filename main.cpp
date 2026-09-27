@@ -398,6 +398,17 @@ bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
     return true;
 }
 
+// Declared in OverviewInternal.hpp, which this file does not include.
+namespace OvInternal {
+    void overviewQueryEdited();
+}
+void OvInternal::overviewQueryEdited() {
+    afterQueryEdit();
+    for (const auto& overview : scrollOverviews())
+        if (overview)
+            overview->damage();
+}
+
 void overviewAdmitWindow(const PHLWINDOW& window) {
     if (!window || (g_search.query.text.empty() && !g_search.query.active))
         return;
