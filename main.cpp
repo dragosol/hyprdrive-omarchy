@@ -401,6 +401,7 @@ bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
 // Declared in OverviewInternal.hpp, which this file does not include.
 namespace OvInternal {
     void overviewQueryEdited();
+    void cancelPointerHandoff(); // scrollOverview.cpp
 }
 void OvInternal::overviewQueryEdited() {
     afterQueryEdit();
@@ -2229,6 +2230,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pTapSuperButtonHook.reset();
     g_pRenderPreHook.reset();
     CursorShape::shutdown();
+    OvInternal::cancelPointerHandoff();
     g_pMembOpenHook.reset();
     g_pMembLateHook.reset();
     g_pMembCloseHook.reset();

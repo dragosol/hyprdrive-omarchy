@@ -3,6 +3,7 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
 #include "DockStacks.hpp"
 #include "SearchLetters.hpp"
@@ -73,7 +74,7 @@ CScrollOverview::~CScrollOverview() {
     // close animation ends, in no set order; its own closeOnWindow is only its
     // monitor's guess, and re-applying it took focus -- and the cursor -- back
     // off the window the user picked on the other monitor (2026-09-27).
-    restoreOverviewKeyboard(Desktop::focusState()->window());
+    restoreOverviewKeyboard(Desktop::focusState()->window(), "teardown");
     forced.restoreAll();
     if (const auto MONITOR = pMonitor.lock()) {
         for (auto const& WINDOW : Desktop::windowState()->windows()) {
@@ -253,6 +254,8 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // the others open after the keyboard is gone and would read the same one.
     if (scrollOverviews().size() <= 1)
         OvInternal::g_focusAtOpen = Desktop::focusState()->window();
+    ScrollOverview::Stacks::traceEvent(std::format("locks: open on {} (overviews={}) focusAtOpen={}", pMonitor ? pMonitor->m_name : "?", scrollOverviews().size(),
+                                                   OvInternal::g_focusAtOpen.lock() ? OvInternal::g_focusAtOpen->m_class : "-"));
     rememberSelection(Desktop::focusState()->window());
     viewportCurrentWorkspace = activeWorkspaceIndex();
     syncSelectionToViewport();
@@ -9134,7 +9137,7 @@ void CScrollOverview::close() {
 
             const auto FINALWINDOW = getOverviewWindowToShow(closeOnWindow.lock());
             finishClose(FINALWORKSPACE, FINALWINDOW);
-            restoreOverviewKeyboard(FINALWINDOW);
+            restoreOverviewKeyboard(FINALWINDOW, "close-synced");
             return;
         }
     }
@@ -9200,7 +9203,7 @@ void CScrollOverview::close() {
     const auto FINALWINDOW    = getOverviewWindowToShow(closeOnWindow.lock());
     const auto FINALWORKSPACE = FINALWINDOW ? FINALWINDOW->m_workspace : SELECTEDWORKSPACE;
     finishClose(FINALWORKSPACE, FINALWINDOW);
-    restoreOverviewKeyboard(FINALWINDOW);
+    restoreOverviewKeyboard(FINALWINDOW, "close");
 }
 
 void CScrollOverview::onPreRender() {
@@ -10243,6 +10246,14 @@ void OvInternal::releasePointerLocks() {
 }
 
 PHLWINDOWREF OvInternal::g_focusAtOpen;
+static uint64_t g_warpSeq = 0;
+
+// Unload: the queued warp would call into this plugin after dlclose.
+void OvInternal::cancelPointerHandoff() {
+    if (g_warpSeq && g_pEventLoopManager)
+        g_pEventLoopManager->removeDoLater(g_warpSeq);
+    g_warpSeq = 0;
+}
 
 void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface) {
     if (!window)
@@ -10256,19 +10267,30 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
         return;
     }
 
-    // Closing back onto the window it opened on is not a choice: the cursor
-    // stays wherever the user left it.
-    if (window == g_focusAtOpen.lock())
+    // The cursor goes with the focus -- ONCE, after the whole close has run.
+    // Every monitor's overview hands back in turn, in no set order, and warping
+    // at each handback let a late one drag the cursor off the pick (2026-09-27).
+    // Left where the tile was clicked it sat over the old window -- a
+    // fullscreen game, usually -- and follow_mouse handed focus straight back
+    // on the first nudge. Forced: no_warps is about Hyprland's own warps, and
+    // this one is the selection itself.
+    if (g_warpSeq || !g_pEventLoopManager)
         return;
+    g_warpSeq = g_pEventLoopManager->doLater([] {
+        g_warpSeq        = 0;
+        const auto FINAL = Desktop::focusState()->window();
+        if (!Desktop::View::validMapped(FINAL) || FINAL == g_focusAtOpen.lock())
+            return;
+        const CBox BOX{FINAL->m_realPosition->goal(), FINAL->m_realSize->goal()};
+        if (BOX.width < 1 || BOX.height < 1 || BOX.containsPoint(g_pInputManager->getMouseCoordsInternal()))
+            return;
+        ScrollOverview::Stacks::traceEvent(std::format("locks: warp into {}", FINAL->m_class));
+        Pointer::pointerController()->warpTo(BOX.middle(), true);
+    });
+}
 
-    // Any other window: the cursor goes with the focus. Left where the tile
-    // was clicked it sat over the old window -- a fullscreen game, usually --
-    // and follow_mouse handed focus straight back on the first nudge, where
-    // the lock took the pointer again. Forced: the user's no_warps is about
-    // Hyprland's own warps, and this one is the selection itself.
-    const CBox BOX{window->m_realPosition->goal(), window->m_realSize->goal()};
-    if (BOX.width < 1 || BOX.height < 1 || BOX.containsPoint(g_pInputManager->getMouseCoordsInternal()))
-        return;
-    ScrollOverview::Stacks::traceEvent(std::format("locks: warp into {}", window->m_class));
-    Pointer::pointerController()->warpTo(BOX.middle(), true);
+void OvInternal::traceHandback(const char* who, const PHLWINDOW& asked, const PHLWINDOW& target, const PHLWINDOW& before) {
+    const auto NAME = [](const PHLWINDOW& w) { return w ? w->m_class : std::string{"-"}; };
+    ScrollOverview::Stacks::traceEvent(std::format("locks: handback {} asked={} target={} before={} after={}", who, NAME(asked), NAME(target), NAME(before),
+                                                   NAME(Desktop::focusState()->window())));
 }

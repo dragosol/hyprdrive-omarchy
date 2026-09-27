@@ -316,6 +316,8 @@ inline bool isOverviewSubmapActive() {
 // that took it, and the overview is not that window: released while the
 // overview is up, handed back only if the overview closes onto its owner.
 void releasePointerLocks();
+void cancelPointerHandoff(); // unload
+void traceHandback(const char* who, const PHLWINDOW& asked, const PHLWINDOW& target, const PHLWINDOW& before);
 extern PHLWINDOWREF g_focusAtOpen; // the focused window when the session opened
 void handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface);
 
@@ -332,7 +334,7 @@ inline void stealOverviewKeyboard() {
 // Hyprland never sent wl_keyboard.enter. Typing stayed dead until a workspace
 // switch forced a real refocus. Passing the surface, then forcing the seat,
 // is the click-path that actually delivers enter.
-inline void restoreOverviewKeyboard(const PHLWINDOW& window) {
+inline void restoreOverviewKeyboard(const PHLWINDOW& window, const char* who = "?") {
     for (const auto& overview : scrollOverviews()) {
         if (overview && !overview->isClosing())
             return;
@@ -348,9 +350,11 @@ inline void restoreOverviewKeyboard(const PHLWINDOW& window) {
     if (target->wlSurface())
         surf = target->wlSurface()->resource();
 
+    const auto BEFORE = Desktop::focusState()->window();
     Desktop::focusState()->fullWindowFocus(target, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD, surf);
     if (g_pSeatManager && surf)
         g_pSeatManager->setKeyboardFocus(surf);
+    traceHandback(who, window, target, BEFORE);
     handPointerTo(target, surf);
 }
 
