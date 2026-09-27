@@ -1087,6 +1087,15 @@ CHyprColor highlightColor() {
     return (!G || G->m_colors.empty()) ? CHyprColor{1.F, 1.F, 1.F, 1.F} : G->m_colors[0];
 }
 
+// The ring a grid tile wears when nothing is on it (the window's own inactive
+// border), for the chrome that should sit as quietly as the tiles until the
+// pointer or the keyboard is on it (user, 2026-09-27).
+CHyprColor restingBorderColor() {
+    static auto& INACTIVE = valueRef<::Config::IComplexConfigValue>("general:col.inactive_border");
+    const auto*  G        = gradientPtr(INACTIVE);
+    return (!G || G->m_colors.empty()) ? highlightColor() : G->m_colors[0];
+}
+
 CHyprColor highlightForeground() {
     const auto BG = highlightColor();
 

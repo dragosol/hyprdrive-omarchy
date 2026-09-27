@@ -5411,7 +5411,7 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
                                                      layout);
         const int  PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PLATE.x))));
         const int  PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
-        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true);
+        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE));
 
         const float MINIRENDERSCALE = renderScale * sc<float>(FIRSTCELL.height) / std::max(1.F, sc<float>(OTHERMON->m_size.y) * monitor->m_scale);
 
@@ -5500,7 +5500,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     if (PLATE.width > 1) {
         const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(CELL.x) - sc<float>(PLATE.x))));
         const int PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
-        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true);
+        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE));
     }
 
     // From here down the cell is built in the SAME order renderStripCell builds
@@ -5588,6 +5588,16 @@ CBox CScrollOverview::stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, floa
 // The strip as one surface: its plate (the cells, the gaps between them and
 // the panel padding -- built exactly as renderStripPanel builds it), the
 // scratchpad cell, and the other monitors' strips.
+// Is the pointer on this chrome box (monitor-local, as lastMousePosLocal)?
+// lastMousePosLocal keeps its last value when the pointer leaves for another
+// monitor, so the pointer has to be on this one first.
+bool CScrollOverview::pointerOnChrome(const CBox& box) const {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || !g_pInputManager || box.width <= 1 || !MONITOR->logicalBox().containsPoint(g_pInputManager->getMouseCoordsInternal()))
+        return false;
+    return box.containsPoint(lastMousePosLocal);
+}
+
 bool CScrollOverview::stripUiContains(const Vector2D& point) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F || images.empty())
@@ -5805,7 +5815,10 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
                 // Same plate as the dock (Omarchy terminal fill, accent border,
                 // frost only if window blur is on). Rounding is the theme's,
                 // not the dock's Dash-to-Dock 24.
-                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true);
+                // Lit only while the pointer is on it or Tab has the keyboard
+                // in it; otherwise the resting tile border (user, 2026-09-27).
+                const bool LIT = (g_search.nav.zone == EOverviewNavZone::Desktop && activeScrollOverview().get() == this) || pointerOnChrome(PANEL);
+                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true, LIT);
             }
         }
     }
@@ -6856,7 +6869,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
 // DRAW. Paints the layout and decides nothing: every box it uses was decided
 // above, so the pixels and the hit boxes cannot drift apart.
-static void drawSearch(const SSearchLayout& L) {
+static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
     if (!L.drawable)
         return;
 
@@ -6874,7 +6887,7 @@ static void drawSearch(const SSearchLayout& L) {
     const int BADGEROUND = roundFor(BADGE);
     const auto ACCENT    = ScrollOverview::Config::highlightColor();
 
-    OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false);
+    OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit);
 
     CRectPassElement::SRectData badgeBg;
     badgeBg.box           = BADGE;
@@ -6905,7 +6918,7 @@ static void drawSearch(const SSearchLayout& L) {
     }
 
     if (L.containerBox.width > 1.F) {
-        OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true);
+        OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true, resultsLit);
 
         for (const auto& divBox : L.dividers) {
             CRectPassElement::SRectData div;
@@ -7484,7 +7497,12 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // ---- DRAW: out of the published object, so the painter, the pointer and
     // the keyboard are provably looking at the same boxes.
     SearchLetters::g_searchLetters.sync(g_search.query.text, Time::steadyNow());
-    drawSearch(searchLayoutHere());
+    {
+        const auto& SL   = searchLayoutHere();
+        const bool  KEYS = activeScrollOverview().get() == this;
+        drawSearch(SL, (KEYS && g_search.nav.zone == EOverviewNavZone::Search) || pointerOnChrome(SL.pill),
+                   (KEYS && g_search.nav.zone == EOverviewNavZone::Result) || pointerOnChrome(SL.containerBox));
+    }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor
     // will not schedule the rest of the pop on its own.
@@ -10204,8 +10222,16 @@ void OvInternal::releasePointerLocks() {
     // Hyprland lifts a lock only when keyboard focus moves off its owner, and
     // the overview nulls the seat without moving Desktop focus -- so the lock
     // held the pointer still under the overview (user, 2026-09-27: Moonlight).
-    if (g_pInputManager)
-        g_pInputManager->unconstrainMouse();
+    if (!g_pInputManager)
+        return;
+    int active = 0;
+    for (const auto& c : g_pInputManager->m_constraints)
+        if (const auto C = c.lock(); C && C->isActive())
+            ++active;
+    if (active)
+        ScrollOverview::Stacks::traceEvent(std::format("locks: release {} (overviews={} closing0={})", active, scrollOverviews().size(),
+                                                       scrollOverviews().empty() || !scrollOverviews().front() ? -1 : (int)scrollOverviews().front()->isClosing()));
+    g_pInputManager->unconstrainMouse();
 }
 
 void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface) {
@@ -10216,6 +10242,7 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
     // overview over a game) gives it the lock back.
     if (const auto HLSURF = surface ? Desktop::View::CWLSurface::fromResource(surface) : nullptr; HLSURF && HLSURF->constraint()) {
         HLSURF->constraint()->activate();
+        ScrollOverview::Stacks::traceEvent(std::format("locks: handed back to {} active={}", window->m_class, HLSURF->constraint()->isActive() ? 1 : 0));
         return;
     }
 
@@ -10227,5 +10254,6 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
     const CBox BOX{window->m_realPosition->goal(), window->m_realSize->goal()};
     if (BOX.width < 1 || BOX.height < 1 || BOX.containsPoint(g_pInputManager->getMouseCoordsInternal()))
         return;
+    ScrollOverview::Stacks::traceEvent(std::format("locks: warp into {}", window->m_class));
     Pointer::pointerController()->warpTo(BOX.middle(), true);
 }

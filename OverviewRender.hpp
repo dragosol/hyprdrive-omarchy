@@ -17,7 +17,8 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
 // wears (Omarchy terminal background, accent border, frost only if window blur
 // is on). Rounding is the caller's -- themeRounding for these surfaces, the
 // Dash-to-Dock 24 stays on the dock itself.
-void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur);
+// lit = the accent ring (hovered / keyboard on it); otherwise the resting tile border.
+void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit = true);
 
 // X92. Stable dual-kawase of the overview main FB for strip/result chrome.
 // blurMainFramebuffer() returns a TEMPORARY texture that window live-blurs

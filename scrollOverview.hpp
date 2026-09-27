@@ -620,6 +620,7 @@ class CScrollOverview : public IOverview {
     std::unordered_map<const Desktop::View::CWindow*, SLastTile> lastTileBoxes;
 
     bool                             stripUiContains(const Vector2D& point) const;
+    bool                             pointerOnChrome(const CBox& box) const;
     // The label above a hovered, non-empty desktop's strip cell.
     void                             renderStripCellLabel(PHLMONITOR monitor, float renderScale, float fade);
     // Which label the hovered cell wants, where, and the pill/grid nudges it

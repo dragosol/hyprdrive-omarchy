@@ -168,6 +168,7 @@ std::string   getGestureDetentSound();
 //
 // Pin a plugin key only to stop inheriting.
 CHyprColor    highlightColor();
+CHyprColor    restingBorderColor(); // general:col.inactive_border -- a tile at rest
 CHyprColor    highlightForeground();
 int           themeRounding();
 float         themeRoundingPower();

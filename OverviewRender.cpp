@@ -659,7 +659,7 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(data));
 }
 
-void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
+void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit) {
     if (box.empty() || alpha <= 0.F)
         return;
 
@@ -675,10 +675,9 @@ void themePlate(const CBox& box, int rounding, float roundingPower, float alpha,
     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
 
     const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
-    const auto ACCENT     = ScrollOverview::Config::highlightColor();
     CBorderPassElement::SBorderData border;
     border.box           = box.copy().round();
-    border.grad1.reset(ACCENT.modifyA(1.F));
+    border.grad1.reset(lit ? ScrollOverview::Config::highlightColor().modifyA(1.F) : ScrollOverview::Config::restingBorderColor());
     border.a             = alpha;
     border.borderSize    = BORDERSIZE;
     border.round         = rounding;
