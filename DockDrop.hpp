@@ -37,6 +37,9 @@ namespace ScrollOverview::DockDrop {
     // plugin's own data source. False if another drag is running.
     bool startFileDrag(const std::vector<std::string>& paths, const std::string& icon);
     bool draggingOut();
+    // Any Wayland drag-and-drop in flight (ours or a client's): pointer motion
+    // must keep reaching Hyprland then, it moves the drag target.
+    bool dndInProgress();
     // The drag's icon under the pointer (RENDER_POST_WINDOWS).
     void renderGhost(PHLMONITOR monitor);
 

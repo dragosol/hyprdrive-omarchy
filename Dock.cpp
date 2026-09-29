@@ -5849,10 +5849,34 @@ void dismissHoverPanelNow() {
     g_tip = {};
 }
 
+// The strip between the pill and an open hover-preview panel. Crossing it from
+// an icon to its previews is one gesture; counted as empty space, the window
+// underneath got an enter/leave on the way (user, 2026-09-29, hover pass-through).
+// Whichever side of the pill the panel is on; the panel's own span across it.
+static bool panelBridgeContains(const PHLMONITOR& monitor, const Vector2D& point) {
+    if (!panelOn(monitor) || g_hover.panel->out || g_hover.drawn.width < 1 || g_hover.drawn.height < 1)
+        return false;
+    const auto PILL = layout(monitor).pill;
+    if (PILL.width < 1 || PILL.height < 1)
+        return false;
+    const auto& P = g_hover.drawn;
+    CBox        bridge;
+    if (P.y + P.height <= PILL.y) // above (bottom dock)
+        bridge = CBox{P.x, P.y + P.height, P.width, PILL.y - (P.y + P.height)};
+    else if (P.y >= PILL.y + PILL.height) // below (top dock)
+        bridge = CBox{P.x, PILL.y + PILL.height, P.width, P.y - (PILL.y + PILL.height)};
+    else if (P.x + P.width <= PILL.x) // left of a right-hand dock
+        bridge = CBox{P.x + P.width, P.y, PILL.x - (P.x + P.width), P.height};
+    else if (P.x >= PILL.x + PILL.width) // right of a left-hand dock
+        bridge = CBox{PILL.x + PILL.width, P.y, P.x - (PILL.x + PILL.width), P.height};
+    return bridge.width >= 1 && bridge.height >= 1 && bridge.containsPoint(point);
+}
+
 bool occupiesPointer(PHLMONITOR monitor, const Vector2D& point) {
     if (!monitor)
         return false;
-    return pillContains(monitor, point) || panelContains(monitor, point) || menuContains(monitor, point) || Stacks::contains(monitor, point);
+    return pillContains(monitor, point) || panelContains(monitor, point) || panelBridgeContains(monitor, point) || menuContains(monitor, point) ||
+        Stacks::contains(monitor, point);
 }
 
 static uint64_t g_dockSeatDoLaterSeq = 0;

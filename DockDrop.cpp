@@ -552,6 +552,10 @@ namespace ScrollOverview::DockDrop {
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
     }
 
+    bool dndInProgress() {
+        return PROTO::data && PROTO::data->dndActive();
+    }
+
     bool draggingOut() {
         return outActive();
     }

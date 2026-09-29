@@ -3,6 +3,7 @@
 #include "OpenProf.hpp"
 #include "FramePacing.hpp"
 #include <unistd.h>
+#include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -161,6 +162,18 @@ void disableScrollOverviewHooks() {
 // edge the cursor is clamped, so the position stops changing while the user is
 // still pushing. Fed AFTER the original, so the position the barrier tests
 // against is the one this motion produced.
+// The arrow over the dock's chrome on the desktop (see g_pDockHoverHook).
+static bool g_dockCursor = false;
+static void setDockCursor(bool on) {
+    if (on == g_dockCursor || !Pointer::Cursor::overrideController)
+        return;
+    g_dockCursor = on;
+    if (on)
+        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+    else
+        Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+}
+
 static void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e) {
     rc<origOnMouseMoved>(g_pScrollMouseMovedHook->m_original)(thisptr, e);
     ScrollOverview::Dock::feedPointerMotion(e.delta);
@@ -1944,7 +1957,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         }
     });
 
-    g_pDockHoverHook = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo&) {
+    g_pDockHoverHook = Event::bus()->m_events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo& info) {
         const auto HIT = monitorUnderCursor();
 
         // The scratchpad's drag-out zone rides the same motion (it is a desktop
@@ -1957,6 +1970,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
+            setDockCursor(false);
             return;
         }
         const auto& [MONITOR, LOCAL] = *HIT;
@@ -1969,6 +1983,23 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
         ScrollOverview::Dock::syncPointerFocus(MONITOR, LOCAL);
         ScrollOverview::Dock::damageIfChanged(MONITOR);
+
+        // HOVER MUST NOT PASS THROUGH (user, 2026-09-29): over the dock's
+        // chrome -- pill, hover previews, menu, a stack's fan/pane -- the window
+        // underneath got the motion anyway (link highlights, hover states),
+        // because this is a listener and Hyprland went on to focus the surface
+        // under the cursor. Cancelling here returns from mouseMoveUnified before
+        // that (the cursor itself has already moved). Not with the overview up
+        // (it owns its own input), and not during a drag-and-drop, whose target
+        // Hyprland must keep tracking.
+        const bool ON_CHROME = !scrollOverviewForMonitor(MONITOR) && !ScrollOverview::DockDrop::dndInProgress() && ScrollOverview::Dock::occupiesPointer(MONITOR, LOCAL);
+        if (ON_CHROME)
+            info.cancelled = true;
+        // The cancel also skips Hyprland's cursor-shape update, so a pointer that
+        // came off a text field kept the I-beam over the dock. The dock owns the
+        // lowest override group (UNKNOWN -- Hyprland itself never sets it), so a
+        // resize edge, a drag or the overview's own override still win.
+        setDockCursor(ON_CHROME);
     });
 
     // X24 dock-side. The overview installs its own button hook; this one is the
@@ -2271,6 +2302,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pScrollCameraMovedHook.reset();
 
     g_unloading = true;
+    setDockCursor(false);
     ScrollOverview::Dock::releasePointerFocus();
     // FIRST: a flight in the air at unload is a window that is hidden, stashed,
     // or mid-geometry with nothing left to finish it -- the plugin's code IS the
