@@ -3,6 +3,7 @@
 #include <hyprland/src/includes.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
@@ -11,6 +12,7 @@
 #include <GLES2/gl2ext.h>
 
 #include <array>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <format>
@@ -44,9 +46,24 @@ namespace OpenProf {
             size_t line  = 0;
             bool   ended = false;
             bool   read  = false; // a later frame has begun: no more marks
+            GLuint64          gpuNowAtBegin = 0; // GPU clock when RENDER_BEGIN was reached on the CPU
+            clock::time_point cpuAtBegin{}, preAt{};
             std::vector<std::pair<const char*, GLuint>> marks;
         };
         std::vector<SPending> g_pending;
+
+        // Presentation: where each frame lands against the refresh.
+        struct SFrameMeta {
+            MONITORID         mon = MONITOR_INVALID;
+            size_t            line = 0;
+            clock::time_point pre{}, lastPresentAtPre{};
+            double            periodMs = 16.667;
+            bool              posted = false, presented = false;
+        };
+        std::vector<SFrameMeta>                          g_frames;
+        std::unordered_map<MONITORID, clock::time_point> g_lastPresent;
+        std::unordered_map<MONITORID, CHyprSignalListener> g_presentListeners;
+        std::unordered_map<MONITORID, double>            g_period;
         std::vector<GLuint>   g_freeQueries;
 
         double msSince(clock::time_point t) {
@@ -100,6 +117,10 @@ namespace OpenProf {
                 GLuint64 a = 0, b = 0;
                 pGetU64(p.begin, GL_QUERY_RESULT, &a);
                 pGetU64(p.end, GL_QUERY_RESULT, &b);
+                // qwait: the GPU reached our first command this long after the CPU
+                // got there -- time spent on other clients' work (or ours from the
+                // previous frame). gpudone: when the GPU finished, from render.pre.
+                const double QWAIT  = p.gpuNowAtBegin && a > p.gpuNowAtBegin ? (a - p.gpuNowAtBegin) / 1e6 : 0.0;
                 std::string split;
                 GLuint64    prev = a;
                 for (const auto& [name, q] : p.marks) {
@@ -113,8 +134,9 @@ namespace OpenProf {
                 const GLuint64 LAST = std::max(b, prev);
                 if (!p.marks.empty() && b > prev)
                     split += std::format(" rest={:.2f}", (b - prev) / 1e6);
+                const double GPUDONE = p.gpuNowAtBegin ? std::chrono::duration<double, std::milli>(p.cpuAtBegin - p.preAt).count() + (sc<double>(LAST) - sc<double>(p.gpuNowAtBegin)) / 1e6 : -1.0;
                 if (p.line < g_lines.size())
-                    g_lines[p.line] += std::format("  gpu {:6.2f} ms [{} ]", (LAST - a) / 1e6, split);
+                    g_lines[p.line] += std::format("  gpu {:6.2f} ms [{} ]  qwait {:5.2f}  gpudone {:6.2f}", (LAST - a) / 1e6, split, QWAIT, GPUDONE);
                 g_freeQueries.push_back(p.begin);
                 g_freeQueries.push_back(p.end);
                 return true;
@@ -130,6 +152,7 @@ namespace OpenProf {
                 std::fclose(f);
             }
             g_lines.clear();
+            g_frames.clear();
             // Unread queries are abandoned with their lines; the ids go back.
             for (const auto& p : g_pending) {
                 g_freeQueries.push_back(p.begin);
@@ -173,7 +196,11 @@ namespace OpenProf {
             g_frameMon               = monitor->m_id;
             g_frameStart             = NOW;
             g_overviewNs             = 0;
-            g_lines.push_back(std::format("  +{:7.1f}  mon {} gap {:6.1f}  gpuclk {:4d}", msSince(g_t0), monitor->m_name, gap, gpuMHz()));
+            const auto   LASTPRES = g_lastPresent.contains(monitor->m_id) ? g_lastPresent[monitor->m_id] : clock::time_point{};
+            const double PHASE    = LASTPRES != clock::time_point{} ? std::chrono::duration<double, std::milli>(NOW - LASTPRES).count() : -1.0;
+            g_lines.push_back(std::format("  +{:7.1f}  mon {} gap {:6.1f}  phase {:6.1f}  gpuclk {:4d}", msSince(g_t0), monitor->m_name, gap, PHASE, gpuMHz()));
+            g_frames.push_back({.mon = monitor->m_id, .line = g_lines.size() - 1, .pre = NOW, .lastPresentAtPre = LASTPRES,
+                                .periodMs = monitor->m_refreshRate > 1.F ? 1000.0 / monitor->m_refreshRate : 16.667});
         });
         g_stage = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
             if (!g_on)
@@ -188,6 +215,11 @@ namespace OpenProf {
                 p.begin = takeQuery();
                 p.line  = g_lines.size() - 1;
                 pQueryCounter(p.begin, GL_TIMESTAMP_EXT);
+                GLint64 gpuNow = 0;
+                glGetInteger64v(GL_TIMESTAMP_EXT, &gpuNow); // the GPU clock right now, no wait
+                p.gpuNowAtBegin = sc<GLuint64>(gpuNow);
+                p.cpuAtBegin    = clock::now();
+                p.preAt         = g_frameStart;
                 g_pending.push_back(p);
             } else if (stage == RENDER_LAST_MOMENT) {
                 if (!g_pending.empty() && !g_pending.back().ended && glReady()) {
@@ -199,6 +231,11 @@ namespace OpenProf {
                 if (g_draining || g_frameMon == MONITOR_INVALID || g_lines.empty())
                     return;
                 g_lines.back() += std::format("  frame {:6.2f} ms  overview {:6.2f} ms", msSince(g_frameStart), g_overviewNs / 1e6);
+                for (auto it = g_frames.rbegin(); it != g_frames.rend(); ++it)
+                    if (it->mon == g_frameMon) {
+                        it->posted = true;
+                        break;
+                    }
                 g_frameMon = MONITOR_INVALID;
             }
         });
@@ -207,6 +244,7 @@ namespace OpenProf {
     void shutdown() {
         g_pre.reset();
         g_stage.reset();
+        g_presentListeners.clear();
         // No GL context here: pending answers are dropped, not read.
         flush();
     }
@@ -225,6 +263,37 @@ namespace OpenProf {
         g_t0       = clock::now();
         g_lastPre.clear();
         g_frameMon = MONITOR_INVALID;
+        // Refresh timestamps, per monitor (hooked per open: monitors come and go).
+        g_presentListeners.clear();
+        for (const auto& M : State::monitorState()->monitors()) {
+            if (!M)
+                continue;
+            const MONITORID ID = M->m_id;
+            g_presentListeners[ID] = M->m_events.presented.listen([ID](const Time::steady_tp& when) {
+                g_lastPresent[ID] = when;
+                if (!g_on)
+                    return;
+                // The oldest posted frame of this monitor not yet shown is the one
+                // this flip carries.
+                for (auto& f : g_frames) {
+                    if (f.mon != ID || !f.posted || f.presented)
+                        continue;
+                    f.presented        = true;
+                    const double LAT   = std::chrono::duration<double, std::milli>(when - f.pre).count();
+                    // The refresh the frame was aiming at: the first one after it began.
+                    double slips = -1;
+                    if (f.lastPresentAtPre != clock::time_point{}) {
+                        const double SINCE  = std::chrono::duration<double, std::milli>(f.pre - f.lastPresentAtPre).count();
+                        const double TARGET = std::ceil(std::max(SINCE, 0.01) / f.periodMs) * f.periodMs; // ms after lastPresentAtPre
+                        const double ACTUAL = std::chrono::duration<double, std::milli>(when - f.lastPresentAtPre).count();
+                        slips               = std::round((ACTUAL - TARGET) / f.periodMs);
+                    }
+                    if (f.line < g_lines.size())
+                        g_lines[f.line] += std::format("  present {:6.1f}  slips {:.0f}", LAT, slips);
+                    break;
+                }
+            });
+        }
         g_lines.push_back(std::format("=== open ({}) gpuclk {}", what, gpuMHz()));
     }
 
