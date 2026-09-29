@@ -17,6 +17,14 @@ is the original plugin; this repo is the Omarchy adaptation.
 - Type-to-search: installed apps, open windows, and GNOME search providers.
 - Workspace strip. Drag a tile onto a strip cell and the window teleports there.
 - Scroll-wheel workspace stepping, trackpad follow, keyboard navigation.
+- Several monitors act as one: the overview opens and closes on all of them,
+  and Tab walks search -> each monitor's grid (or strip -> grid on each
+  monitor when no results are up). Picking a window moves the cursor into it
+  and releases a game's pointer lock.
+- **Smooth frames** (Hyprdrive panel -> Textures, `smooth_frames`): lets
+  Hyprland render ahead when the GPU runs late, so animations drop a refresh
+  instead of halving the frame rate. hyprdrive suggests it once if the overview
+  keeps dropping frames.
 
 **Dock**:
 
@@ -33,7 +41,10 @@ is the original plugin; this repo is the Omarchy adaptation.
   drives, never overwriting) or onto Trash to trash them; drag a folder onto
   the dock and it parts to make room -- let go to pin it there. Trash and
   empty stacks use hyprdrive's own artwork (`dock:builtin_icons = false` for
-  the icon theme's). The
+  the icon theme's). Files drag out of a fan into any app as a real drag;
+  images, videos and PDFs show real previews; a download in progress shows a
+  bar, and a stack bounces when something new arrives (a hidden dock peeks the
+  pile up from the edge). The
   store is `~/.local/state/hyprdrive/stacks`; removing a stack never touches
   the folder.
 
