@@ -9531,12 +9531,14 @@ void CScrollOverview::render() {
         }
     }
 
+    OpenProf::gpuMark("start");
     {
         Prof::Timer PROFBG{Prof::bgNs, Prof::bgCalls};
         for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
             renderWorkspaceBackground(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
         }
     }
+    OpenProf::gpuMark("bg");
 
     if (workspaceInsertTransition.active && !workspaceInsertTransition.transitionFadeIn) {
         const auto GHOSTALPHA   = 1.F - std::clamp(workspaceInsertFadeProgress->value(), 0.F, 1.F);
@@ -9578,6 +9580,7 @@ void CScrollOverview::render() {
     const bool NEEDS_PRECOMPUTED_BLUR = !NOPREBLURREADER && hasVisiblePrecomputedBlurWindow(MONITOR, ACTIVEIDX, PITCH, SCALE);
     if (NEEDS_PRECOMPUTED_BLUR && frost.overviewDirty)
         g_pHyprRenderer->m_renderPass.add(makeUnique<CPreBlurElement>());
+    OpenProf::gpuMark("preblur");
 
     OverviewRender::flushPass(MONITOR);
 
@@ -9652,16 +9655,19 @@ void CScrollOverview::render() {
             renderWorkspaceLive(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
         }
     }
+    OpenProf::gpuMark("tiles");
 
 
     OverviewRender::flushPass(MONITOR);
 
     if (!TOGGLEINFLIGHT)
         renderStripLayer();
+    OpenProf::gpuMark("strip");
     // X87: search (and its frost) under the drag proxy. Previously renderSearch
     // ran after renderDraggedWindow, so the pill painted over the window you
     // were dragging -- empty or with results.
     renderSearch(MONITOR, SCALE);
+    OpenProf::gpuMark("search");
     renderPinnedFloatingWindows(MONITOR, SCALE, NOW);
 
     if (const auto SUSHI = overviewSushiWindowOn(MONITOR)) {
@@ -9700,7 +9706,9 @@ void CScrollOverview::render() {
     // Y7. The pill glows as a dragged window nears it; the dock computes the
     // distance itself, this only says whether a drag is happening at all.
     ScrollOverview::Dock::setWindowDragActive(drag.activeWindow.operator bool());
+    OpenProf::gpuMark("pinned+top");
     ScrollOverview::Dock::render(MONITOR);
+    OpenProf::gpuMark("dock");
     // Hover titles hang off the bottom of a tile, so they collide with the
     // dock on the active card. Flush them after the pill so the label is the
     // thing you read, not the thing the dock covers.

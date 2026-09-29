@@ -22,4 +22,7 @@ namespace OpenProf {
     // CScrollOverview::render()'s own time, added to the current frame.
     void addOverviewRender(uint64_t ns);
     bool active();
+    // Queue a GPU timestamp at this point of the render pass: the log then
+    // splits the frame's GPU time between consecutive marks.
+    void gpuMark(const char* name);
 }
