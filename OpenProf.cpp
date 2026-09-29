@@ -1,4 +1,5 @@
 #include "OpenProf.hpp"
+#include "Config.hpp"
 
 #include <hyprland/src/includes.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -58,12 +59,25 @@ namespace OpenProf {
             size_t            line = 0;
             clock::time_point pre{}, lastPresentAtPre{};
             double            periodMs = 16.667;
-            bool              posted = false, presented = false;
+            bool              posted = false, presented = false, committed = false;
         };
         std::vector<SFrameMeta>                          g_frames;
         std::unordered_map<MONITORID, clock::time_point> g_lastPresent;
         std::unordered_map<MONITORID, CHyprSignalListener> g_presentListeners;
+        std::unordered_map<MONITORID, CHyprSignalListener> g_commitListeners;
         std::unordered_map<MONITORID, double>            g_period;
+
+        // A/B (touch /tmp/hyprdrive-openprof.ab): alternate Hyprland's frame
+        // scheduler per open, and put the user's own value back after each
+        // window. Runtime only -- nothing is written to their config.
+        int  g_abOpen  = 0;
+        int  g_abSaved = -1; // -1 = nothing to restore
+        void abRestore() {
+            if (g_abSaved < 0)
+                return;
+            ScrollOverview::Config::setValue("render:new_render_scheduling", g_abSaved);
+            g_abSaved = -1;
+        }
         std::vector<GLuint>   g_freeQueries;
 
         double msSince(clock::time_point t) {
@@ -179,6 +193,7 @@ namespace OpenProf {
                 return false;
             g_on       = false;
             g_draining = false;
+            abRestore();
             flush();
             return false;
         }
@@ -245,6 +260,8 @@ namespace OpenProf {
         g_pre.reset();
         g_stage.reset();
         g_presentListeners.clear();
+        g_commitListeners.clear();
+        abRestore();
         // No GL context here: pending answers are dropped, not read.
         flush();
     }
@@ -265,10 +282,26 @@ namespace OpenProf {
         g_frameMon = MONITOR_INVALID;
         // Refresh timestamps, per monitor (hooked per open: monitors come and go).
         g_presentListeners.clear();
+        g_commitListeners.clear();
         for (const auto& M : State::monitorState()->monitors()) {
             if (!M)
                 continue;
             const MONITORID ID = M->m_id;
+            // The output commit: GPU work handed to the display. post -> commit is
+            // Hyprland's end of frame (endRender, the sync fence); commit -> present
+            // is the flip itself.
+            g_commitListeners[ID] = M->m_events.commit.listen([ID]() {
+                if (!g_on)
+                    return;
+                for (auto& f : g_frames) {
+                    if (f.mon != ID || !f.posted || f.committed)
+                        continue;
+                    f.committed = true;
+                    if (f.line < g_lines.size())
+                        g_lines[f.line] += std::format("  commit {:6.1f}", msSince(f.pre));
+                    break;
+                }
+            });
             g_presentListeners[ID] = M->m_events.presented.listen([ID](const Time::steady_tp& when) {
                 g_lastPresent[ID] = when;
                 if (!g_on)
@@ -294,7 +327,15 @@ namespace OpenProf {
                 }
             });
         }
-        g_lines.push_back(std::format("=== open ({}) gpuclk {}", what, gpuMHz()));
+        std::string ab;
+        if (::access("/tmp/hyprdrive-openprof.ab", F_OK) == 0) {
+            abRestore();
+            g_abSaved       = ScrollOverview::Config::getValue<int>("render:new_render_scheduling");
+            const int SCHED = (g_abOpen++ % 2 == 0) ? 1 : 0;
+            ScrollOverview::Config::setValue("render:new_render_scheduling", SCHED);
+            ab = SCHED ? " sched=new" : " sched=old";
+        }
+        g_lines.push_back(std::format("=== open ({}) gpuclk {}{}", what, gpuMHz(), ab));
     }
 
     void mark(const char* what) {
