@@ -1110,6 +1110,24 @@ void renderOverviewWindow(const SRenderParams& params) {
         modif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, Vector2D{OFFX, OFFY});
 
         auto queuePreview = [&]() {
+            // BLUR BEHIND THE PREVIEW (user, 2026-09-29, nested test: grid tiles
+            // blurred, hover previews showed the dock sharp through a see-through
+            // window). renderWindow(standalone) switches blur off outright
+            // (Renderer.cpp:600), and switching it back on per surface is wrong:
+            // Hyprland's live blur reads the framebuffer at the surface's box
+            // BEFORE the scale/translate modifier, i.e. the monitor's top-left
+            // corner, and that is what showed through. So the preview frosts its
+            // own cell -- what is really under it -- ahead of the modifier, and
+            // the window's own alpha goes on top, exactly as on the desktop.
+            if (g_pHyprRenderer->shouldBlur(WINDOW)) {
+                COverviewBlurPassElement::SData frost;
+                // The window's own letterboxed rect in the cell, not the cell.
+                frost.box           = CBox{sc<double>(OFFX + sc<float>(REALPX.x) * S), sc<double>(OFFY + sc<float>(REALPX.y) * S), sc<double>(SCALEDW), sc<double>(SCALEDH)}.round();
+                frost.rounding      = sc<int>(std::round(WINDOW->rounding() * MONITOR->m_scale * S));
+                frost.roundingPower = WINDOW->roundingPower();
+                frost.alpha         = 1.F;
+                g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(frost));
+            }
             g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
 
             // Z1 (a window whose workspace is parked off-screen by a switch
