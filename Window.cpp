@@ -1,4 +1,5 @@
 #include "Window.hpp"
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <dlfcn.h>
@@ -160,6 +161,7 @@ struct SU2PrefilterEntry {
     NColorManagement::PImageDescription imageDescription;
     bool                                dirty          = true;
     uint64_t                            lastUse        = 0;
+    std::chrono::steady_clock::time_point lastCopy{};
 
     bool                                alive() const {
         return keyedOnSurface ? !surface.expired() : !srcTex.expired();
@@ -242,8 +244,25 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         // The source texture object identity is not enough on its own: a client
         // cycling a small dmabuf swapchain hands back the SAME texture with new
         // content. The commit flag is what makes this sound.
-        const bool NEEDSCOPY = entry.dirty || !entry.fb->isAllocated() || entry.srcTexID != SRC->m_texID || entry.srcSize != SRC->m_size || entry.format != FBFORMAT ||
+        bool       NEEDSCOPY = entry.dirty || !entry.fb->isAllocated() || entry.srcTexID != SRC->m_texID || entry.srcSize != SRC->m_size || entry.format != FBFORMAT ||
             entry.imageDescription != IMAGEDESC;
+
+        // A NEW FRAME OF CONTENT is not worth a full-resolution copy plus a
+        // mipmap chain every time it lands (measured 2026-09-29, openprof: a
+        // live Moonlight stream on another desktop cost the STRIP 8-10 ms of GPU
+        // a frame -- a 2880x1800 copy + glGenerateMipmap per commit for a cell a
+        // few dozen pixels high -- and the overview fell to 30 fps). Content-only
+        // refreshes are paced by how small the draw is: a strip thumbnail at
+        // ~8 fps, a grid tile at ~30. Size, format or colour changes still copy
+        // at once, and the entry stays dirty so the next draw after the interval
+        // picks the new content up.
+        const bool CONTENTONLY = entry.fb->isAllocated() && entry.fb->m_size == SRC->m_size && entry.fb->m_drmFormat == FBFORMAT && entry.srcSize == SRC->m_size &&
+            entry.format == FBFORMAT && entry.imageDescription == IMAGEDESC && entry.lastCopy != std::chrono::steady_clock::time_point{};
+        if (NEEDSCOPY && CONTENTONLY) {
+            const auto REFRESH = std::chrono::milliseconds(minify < 0.2 ? 125 : 33);
+            if (std::chrono::steady_clock::now() - entry.lastCopy < REFRESH)
+                NEEDSCOPY = false;
+        }
 
         if (!entry.fb->isAllocated() || entry.fb->m_size != SRC->m_size || entry.fb->m_drmFormat != FBFORMAT) {
             entry.fb->release();
@@ -279,6 +298,7 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
             glBindTexture(GL_TEXTURE_2D, 0);
 
             entry.dirty            = false;
+            entry.lastCopy         = std::chrono::steady_clock::now();
             entry.srcTexID         = SRC->m_texID;
             entry.srcSize          = SRC->m_size;
             entry.format           = FBFORMAT;
