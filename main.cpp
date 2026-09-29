@@ -2284,6 +2284,13 @@ APICALL EXPORT void PLUGIN_EXIT() {
     OmarchySearch::shutdown();
     ScrollOverview::LauncherEntry::stop();
     clearScrollOverviews();
+    // AGAIN, after the overviews are gone: their teardown hands focus back and
+    // can queue work (a cursor warp, a flight, a dock-seat refresh) after the
+    // first round of cancels above -- a doLater left in Hyprland's event loop
+    // is a call into unloaded code when that loop is destroyed.
+    OvInternal::cancelPointerHandoff();
+    ScrollOverview::Flight::abortAll("plugin-exit");
+    ScrollOverview::Dock::releasePointerFocus();
     // Outlives every overview on purpose (Window.cpp), so it is freed here.
     if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})
         OPENGL->makeEGLCurrent();

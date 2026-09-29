@@ -10273,10 +10273,16 @@ void OvInternal::releasePointerLocks() {
 }
 
 PHLWINDOWREF OvInternal::g_focusAtOpen;
-static uint64_t g_warpSeq = 0;
+static uint64_t g_warpSeq          = 0;
+static bool     g_handoffShutdown = false;
 
-// Unload: the queued warp would call into this plugin after dlclose.
+// Unload: the queued warp would call into this plugin after dlclose. And no NEW
+// one may be queued after this: PLUGIN_EXIT destroys any open overview AFTER
+// calling this, that teardown hands focus back, and the handback queued a fresh
+// warp -- a doLater into unloaded code that CEventLoopManager's destructor then
+// freed at Hyprland exit (SIGSEGV exiting with the overview open, 2026-09-29).
 void OvInternal::cancelPointerHandoff() {
+    g_handoffShutdown = true;
     if (g_warpSeq && g_pEventLoopManager)
         g_pEventLoopManager->removeDoLater(g_warpSeq);
     g_warpSeq = 0;
@@ -10301,7 +10307,7 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
     // fullscreen game, usually -- and follow_mouse handed focus straight back
     // on the first nudge. Forced: no_warps is about Hyprland's own warps, and
     // this one is the selection itself.
-    if (g_warpSeq || !g_pEventLoopManager)
+    if (g_warpSeq || !g_pEventLoopManager || g_handoffShutdown)
         return;
     g_warpSeq = g_pEventLoopManager->doLater([] {
         g_warpSeq        = 0;
