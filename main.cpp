@@ -1,5 +1,6 @@
 #define WLR_USE_UNSTABLE
 
+#include "OpenProf.hpp"
 #include <unistd.h>
 
 #include <algorithm>
@@ -312,11 +313,14 @@ static bool openOverviewOne(PHLMONITOR monitor);
 // other one, so no path -- the dock's Show Overview, a query open -- leaves a
 // monitor on the desktop while another shows the overview.
 static bool openOverview(PHLMONITOR monitor) {
+    OpenProf::begin(monitor ? monitor->m_name.c_str() : "?");
     if (!openOverviewOne(monitor))
         return false;
+    OpenProf::mark("first monitor open");
     for (const auto& M : State::monitorState()->monitors())
         if (M && M != monitor && M->m_enabled)
             openOverviewOne(M);
+    OpenProf::mark("all monitors open");
     return true;
 }
 
@@ -1830,6 +1834,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pScrollMouseMovedHook->hook();
 
     CursorShape::init();
+    OpenProf::init();
     g_pRenderPreHook = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
         // Throttled inside to a few stat()s every couple of seconds.
         AppSearch::pollForChanges();
@@ -2230,6 +2235,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pTapSuperButtonHook.reset();
     g_pRenderPreHook.reset();
     CursorShape::shutdown();
+    OpenProf::shutdown();
     OvInternal::cancelPointerHandoff();
     g_pMembOpenHook.reset();
     g_pMembLateHook.reset();

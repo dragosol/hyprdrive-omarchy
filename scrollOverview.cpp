@@ -5,6 +5,7 @@
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
+#include "OpenProf.hpp"
 #include "DockStacks.hpp"
 #include "SearchLetters.hpp"
 
@@ -100,11 +101,13 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     sharedStateOwner             = scrollOverviews().empty();
     usesSubmapKeybinds           = hasOverviewSubmap();
 
+    OpenProf::mark("ctor start");
     applyWorkspaceAnimationOverrides();
     if (sharedStateOwner)
         forceWorkspaceAlphaVisible();
     ScrollOverview::Dock::releasePointerFocus();
     applyInputConfigOverrides();
+    OpenProf::mark("ctor overrides applied");
     g_pInputManager->unconstrainMouse();
     realtimePreviewTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, realtimePreviewTimerCallback, this);
     scheduleMinimumPreviewFrame();
@@ -247,8 +250,10 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
         keyboardKeyHook = Event::bus()->m_events.input.keyboard.key.listen([this](IKeyboard::SKeyEvent a0, Event::SCallbackInfo& a1) { onKeyboardKey(a0, a1); });
 
     Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+    OpenProf::mark("ctor hooks + anims");
 
     redrawAll();
+    OpenProf::mark("ctor redrawAll");
 
     // The window the session opened on -- the first overview up records it;
     // the others open after the keyboard is gone and would read the same one.
@@ -260,6 +265,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     viewportCurrentWorkspace = activeWorkspaceIndex();
     syncSelectionToViewport();
     stealOverviewKeyboard();
+    OpenProf::mark("ctor end");
 }
 
 void CScrollOverview::renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha) {
@@ -9441,6 +9447,10 @@ void normalizeAllScrollingCameras() {
 
 void CScrollOverview::render() {
     Prof::Timer PROF{Prof::frameNs, Prof::frameCalls};
+    const auto  OPENPROF_T0 = std::chrono::steady_clock::now();
+    auto        openProfGuard = Hyprutils::Utils::CScopeGuard([OPENPROF_T0] {
+        OpenProf::addOverviewRender(sc<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - OPENPROF_T0).count()));
+    });
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return;
