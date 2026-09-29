@@ -173,6 +173,7 @@ static std::unordered_map<const void*, SU2PrefilterEntry> g_u2PrefilterFBs;
 // of its own. At ~8 tiles a frame this idle window is roughly a second.
 static uint64_t                                           g_u2PrefilterUse  = 0;
 static constexpr uint64_t                                 U2_PREFILTER_IDLE = 512;
+static constexpr int                                      PREFILTER_FRAME_BUDGET = 2;
 
 // Called with the EGL context current (from the render path), so releasing a
 // framebuffer here is safe.
@@ -219,6 +220,12 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
 
         const int  W          = sc<int>(SRC->m_size.x);
         const int  H          = sc<int>(SRC->m_size.y);
+        // Drawn at half size or less, a half-resolution copy loses nothing: an
+        // exact 2:1 bilinear draw averages each 2x2 block, and the mip chain
+        // takes it from there. A quarter of the fill and of the mipmap work.
+        const bool HALF       = minify <= 0.5 && W >= 4 && H >= 4;
+        const int  FBW        = HALF ? W / 2 : W;
+        const int  FBH        = HALF ? H / 2 : H;
         const auto SURFACE    = spe->m_data.surface;
         const auto IMAGEDESC  = g_pHyprRenderer->m_renderData.currentFB ? g_pHyprRenderer->m_renderData.currentFB->imageDescription() : NColorManagement::PImageDescription{};
         // A surface pass element always carries its surface; the texture is the
@@ -256,17 +263,32 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         // ~8 fps, a grid tile at ~30. Size, format or colour changes still copy
         // at once, and the entry stays dirty so the next draw after the interval
         // picks the new content up.
-        const bool CONTENTONLY = entry.fb->isAllocated() && entry.fb->m_size == SRC->m_size && entry.fb->m_drmFormat == FBFORMAT && entry.srcSize == SRC->m_size &&
-            entry.format == FBFORMAT && entry.imageDescription == IMAGEDESC && entry.lastCopy != std::chrono::steady_clock::time_point{};
+        const bool CONTENTONLY = entry.fb->isAllocated() && entry.fb->m_size == Vector2D{sc<double>(FBW), sc<double>(FBH)} && entry.fb->m_drmFormat == FBFORMAT &&
+            entry.srcSize == SRC->m_size && entry.format == FBFORMAT && entry.imageDescription == IMAGEDESC && entry.lastCopy != std::chrono::steady_clock::time_point{};
         if (NEEDSCOPY && CONTENTONLY) {
+            const auto NOW     = std::chrono::steady_clock::now();
             const auto REFRESH = std::chrono::milliseconds(minify < 0.2 ? 125 : 33);
-            if (std::chrono::steady_clock::now() - entry.lastCopy < REFRESH)
+            // And at most PREFILTER_FRAME_BUDGET of them in one frame: the
+            // overview opening onto a dozen windows that all changed while it
+            // was shut used to rebuild every one in its first frame (37 ms of
+            // GPU, measured). The rest keep last content for a frame or two.
+            // A frame's draws land within a few ms; frames are 16+ ms apart.
+            static auto s_budgetAt = std::chrono::steady_clock::time_point{};
+            static int  s_budget   = 0;
+            if (NOW - s_budgetAt > std::chrono::milliseconds(8)) {
+                s_budgetAt = NOW;
+                s_budget   = PREFILTER_FRAME_BUDGET;
+            }
+            if (NOW - entry.lastCopy < REFRESH || s_budget <= 0)
                 NEEDSCOPY = false;
+            else
+                --s_budget;
         }
 
-        if (!entry.fb->isAllocated() || entry.fb->m_size != SRC->m_size || entry.fb->m_drmFormat != FBFORMAT) {
+        if (!entry.fb->isAllocated() || entry.fb->m_size != Vector2D{sc<double>(FBW), sc<double>(FBH)} || entry.fb->m_drmFormat != FBFORMAT) {
             entry.fb->release();
-            if (!entry.fb->alloc(W, H, FBFORMAT))
+            NEEDSCOPY = true; // a new buffer has no content yet
+            if (!entry.fb->alloc(FBW, FBH, FBFORMAT))
                 continue;
         }
         if (g_pHyprRenderer->m_renderData.currentFB)
@@ -277,7 +299,7 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
             continue;
 
         if (NEEDSCOPY) {
-            const CBox    FULLBOX{0, 0, sc<double>(W), sc<double>(H)};
+            const CBox    FULLBOX{0, 0, sc<double>(FBW), sc<double>(FBH)};
             const CRegion FULLDAMAGE{FULLBOX};
 
             {
