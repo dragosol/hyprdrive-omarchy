@@ -101,6 +101,9 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     sharedStateOwner             = scrollOverviews().empty();
     usesSubmapKeybinds           = hasOverviewSubmap();
 
+    // Any door, not just openOverview(): the swipe builds overviews itself.
+    if (!OpenProf::active())
+        OpenProf::begin(swipe_ ? "swipe" : "ctor");
     OpenProf::mark("ctor start");
     applyWorkspaceAnimationOverrides();
     if (sharedStateOwner)
