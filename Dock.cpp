@@ -3835,9 +3835,13 @@ SDropHit dropCellAt(PHLMONITOR monitor, const Vector2D& point, bool folderOffer)
 }
 
 bool uiContains(PHLMONITOR monitor, const Vector2D& point) {
-    // The hover-preview plate is only reached after the pointer is already
-    // on the pill, so the pill is the linger-cancel surface.
-    return pillContains(monitor, point);
+    // EVERY dock surface, not just the pill. "The hover-preview plate is only
+    // reached after the pointer is already on the pill" was true of the path,
+    // not of where the pointer then IS: once it moved up onto the plate the
+    // pill test failed, and the overview lit the tile BEHIND the preview as if
+    // the preview were not there (user, 2026-09-29). Same for the context menu
+    // and a stack's fan/pane.
+    return occupiesPointer(monitor, point);
 }
 
 bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {

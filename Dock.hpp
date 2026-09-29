@@ -125,8 +125,8 @@ struct SDropHit {
     int                  gapIndex = -1;
 };
 SDropHit dropCellAt(PHLMONITOR monitor, const Vector2D& point, bool folderOffer);
-// Pill or the hover-preview plate above it. Overview tile linger asks this so
-// a window title over the dock drops as soon as the pointer is on the dock.
+// Pill, hover-preview plate, context menu or a stack's fan/pane: the overview's
+// tile hover asks this, so nothing lights up BEHIND dock chrome.
 bool    uiContains(PHLMONITOR monitor, const Vector2D& point);
 
 // Pill, hover-preview plate, or context menu: the pointer is on dock chrome,
