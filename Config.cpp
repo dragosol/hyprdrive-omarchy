@@ -711,6 +711,8 @@ static void registerConfigValuesFor() {
                                    SFloatValueOptions{.min = -1.F, .max = 1.F}));
     addKey(makeShared<CBoolValue>(KEY("live_layer_frost"),
                                   "evaluate dock/bar frost against the overview backdrop instead of the stale optimized blur FB", true));
+    addKey(makeShared<CBoolValue>(KEY("smooth_frames"),
+                                  "render ahead when the GPU runs late: holds render:new_render_scheduling on for the session and restores yours when off; a late frame then costs one refresh, not half the frame rate", false));
     addKey(makeShared<CFloatValue>(KEY("prefilter_below"),
                                    "mipmap-prefilter a tile's texture when it is minified below this fraction (0 = never)", 0.55F,
                                    SFloatValueOptions{.min = 0.F, .max = 1.F}));
@@ -749,6 +751,7 @@ static void registerConfigValues() {
 void registerConfig() {
     registerLuaFunctions();
     registerConfigValues();
+    g_pluginKeysRegistered = true;
     HyprlandAPI::reloadConfig();
 }
 

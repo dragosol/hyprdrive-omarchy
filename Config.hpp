@@ -8,6 +8,7 @@
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -81,9 +82,26 @@ CConfigValue<T>& valueRef(const std::string_view name) {
     return *IT->second;
 }
 
+// Set once registerConfigValues() has registered every plugin key. Before
+// that, binding a plugin: key ABORTS Hyprland (CConfigValue::bind) -- and a
+// plugin loaded at startup then aborts every login: 2026-09-29, a read of
+// plugin:hyprdrive:smooth_frames in PLUGIN_INIT crash-looped the session. So an
+// early read gets the type's empty value (and says so) instead of a crash.
+inline bool g_pluginKeysRegistered = false;
+
+inline bool earlyPluginKey(const std::string_view name) {
+    if (g_pluginKeysRegistered || !name.starts_with("plugin:"))
+        return false;
+    std::fprintf(stderr, "[hyprdrive] BUG: config key %.*s read before registration\n", sc<int>(name.size()), name.data());
+    return true;
+}
+
 template <typename T>
 T getValue(const std::string_view name) {
     using TValue = std::decay_t<T>;
+
+    if (earlyPluginKey(name))
+        return TValue{};
 
 	if constexpr (std::is_same_v<TValue, ::Config::CGradientValueData>) {
         auto& ref = valueRef<::Config::IComplexConfigValue>(name);
@@ -130,6 +148,9 @@ T* getValuePtr(const std::string_view name) {
 template <typename T>
 void setValue(const std::string_view name, const T& value) {
     using TValue = std::decay_t<T>;
+
+    if (earlyPluginKey(name))
+        return;
 
     if constexpr (std::is_same_v<TValue, bool>)
         *getValuePtr<Hyprlang::INT>(name) = value ? 1 : 0;

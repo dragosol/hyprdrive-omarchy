@@ -669,6 +669,14 @@ Panel {
               }
               Toggle {
                 width: parent.width
+                label: "Smooth frames"
+                description: "Let Hyprland render ahead when the GPU runs late, so animations drop fewer frames. Can add up to one frame of latency on late frames."
+                checked: Model.asBool(root.k("plugin:hyprdrive:smooth_frames", false))
+                foreground: root.foreground
+                onClicked: root.toggleKey("plugin:hyprdrive:smooth_frames")
+              }
+              Toggle {
+                width: parent.width
                 label: "Overview wallpaper blur"
                 checked: Model.asBool(root.k("plugin:hyprdrive:blur", false))
                 foreground: root.foreground

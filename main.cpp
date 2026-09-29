@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "OpenProf.hpp"
+#include "FramePacing.hpp"
 #include <unistd.h>
 
 #include <algorithm>
@@ -314,6 +315,9 @@ static bool openOverviewOne(PHLMONITOR monitor);
 // monitor on the desktop while another shows the overview.
 static bool openOverview(PHLMONITOR monitor) {
     OpenProf::begin(monitor ? monitor->m_name.c_str() : "?");
+    // Cheap (two config reads) and catches a `hyprctl keyword` toggle that no
+    // reload announced.
+    ScrollOverview::FramePacing::apply();
     if (!openOverviewOne(monitor))
         return false;
     OpenProf::mark("first monitor open");
@@ -1835,6 +1839,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     CursorShape::init();
     OpenProf::init();
+    // NOT FramePacing::apply() here: plugin keys are registered further down
+    // (registerConfig), and reading an unregistered key aborts Hyprland in
+    // CConfigValue::bind -- which is exactly how 2026-09-29's build crash-looped
+    // every login. The config.reloaded hook and every overview open apply it.
     g_pRenderPreHook = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
         // Throttled inside to a few stat()s every couple of seconds.
         AppSearch::pollForChanges();
@@ -1898,6 +1906,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // copied onto its plugin:hyprdrive: twin here and nowhere else, so the
         // rest of the codebase only ever knows the new name. ONE RELEASE.
         ScrollOverview::Compat::adoptLegacyValues();
+        // A reload writes the user's render:new_render_scheduling back.
+        ScrollOverview::FramePacing::apply();
 
         // `omarchy theme set` writes colors.toml and reloads Hyprland, so the
         // reload IS the theme change as far as this plugin is concerned. Drop
@@ -2235,6 +2245,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pTapSuperButtonHook.reset();
     g_pRenderPreHook.reset();
     CursorShape::shutdown();
+    ScrollOverview::FramePacing::shutdown();
     OpenProf::shutdown();
     OvInternal::cancelPointerHandoff();
     g_pMembOpenHook.reset();

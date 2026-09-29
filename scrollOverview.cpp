@@ -6,6 +6,7 @@
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
 #include "OpenProf.hpp"
+#include "FramePacing.hpp"
 #include "DockStacks.hpp"
 #include "SearchLetters.hpp"
 
@@ -9459,6 +9460,11 @@ void CScrollOverview::render() {
         return;
 
     noteFrame(MONITOR->m_id);
+    // Smooth-frames hint: only the open/close animation must hit every refresh.
+    if (scale->isBeingAnimated())
+        ScrollOverview::FramePacing::noteAnimatedFrame(MONITOR);
+    else
+        ScrollOverview::FramePacing::noteIdleFrame(MONITOR);
 
     ++g_overviewFrame;
     ++g_overviewFramesByMonitor[MONITOR->m_id];

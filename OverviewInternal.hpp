@@ -11,6 +11,7 @@
 // unqualified Config:: resolve to ScrollOverview::Config. Split into real .cpp files
 // when compile time starts to hurt.
 
+#include "FramePacing.hpp"
 #include "scrollOverview.hpp"
 
 #include <cctype>
@@ -263,6 +264,7 @@ inline void removeOverview(CScrollOverview* overview) {
     const auto PMONITOR = overview ? overview->pMonitor.lock() : PHLMONITOR{};
     unregisterScrollOverview(overview);
     if (scrollOverviews().empty()) {
+        ScrollOverview::FramePacing::endSession();
         disableScrollOverviewHooks();
         // Click-to-close and swipe-down never went through the dispatcher, so
         // the query lived until the next Super-tap. A fully gone overview
