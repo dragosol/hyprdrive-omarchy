@@ -5285,6 +5285,16 @@ void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand,
     Flight::minimize(monitor, window, bounceOnLand, startBox);
 }
 
+CBox roomPillGlobal(PHLMONITOR monitor) {
+    if (!monitor || Config::getValue<bool>(KEY_AUTOHIDE) || !Config::getValue<bool>("plugin:hyprdrive:dock:windows_make_room"))
+        return {};
+    const auto& L = baseLayout(monitor);
+    if (L.pill.w < 1 || L.pill.h < 1)
+        return {};
+    const double S = std::max(monitor->m_scale, 0.01F);
+    return CBox{L.pill.x / S + monitor->m_position.x, L.pill.y / S + monitor->m_position.y, L.pill.w / S, L.pill.h / S};
+}
+
 bool debugActivate(PHLMONITOR monitor, const std::string& wmClass) {
     if (!monitor)
         return false;

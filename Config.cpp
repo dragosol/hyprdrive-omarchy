@@ -654,6 +654,8 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CIntValue>(KEY("layout_motion_blur"),
                                  "motion blur samples while the layout moves or resizes a window -- a dwindle retile, the scrolling tape, a window opening (0 = off); never an interactive drag", 16,
                                  SIntValueOptions{.min = 0, .max = 32}));
+    addKey(makeShared<CBoolValue>(KEY("dock:windows_make_room"),
+                                  "dock: with autohide off, tiled windows that would sit under the dock are shortened to clear it (only those in the way)", true));
     addKey(makeShared<CIntValue>(KEY("dock:minimize_motion_blur"),
                                  "dock: motion blur samples while a window flies into / out of its icon (0 = off), desktop and overview alike", 16,
                                  SIntValueOptions{.min = 0, .max = 32}));

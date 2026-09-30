@@ -73,6 +73,8 @@ using namespace Hyprutils::String;
 #include "FlightController.hpp"
 #include "FlightBlur.hpp"
 #include "ConfigureHold.hpp"
+#include "DockRoom.hpp"
+#include <hyprland/src/layout/target/Target.hpp>
 #include "DockInput.hpp"
 #include "LauncherEntry.hpp"
 #include "Minimize.hpp"
@@ -183,6 +185,14 @@ static void hkSendWindowSize(void* thisptr, bool force) {
     if (ScrollOverview::ConfigureHold::intercept(sc<Desktop::View::CWindow*>(thisptr), force))
         return;
     rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(thisptr, force);
+}
+
+// DockRoom.hpp: tiled windows make room for a dock that does not hide.
+static CFunctionHook* g_pTargetPlaceHook = nullptr;
+static void hkTargetPlace(void* thisptr, const Layout::STargetBox& box, uint8_t flags) {
+    ScrollOverview::DockRoom::place(thisptr, box, flags, [](void* t, const Layout::STargetBox& b, uint8_t f) {
+        rc<void (*)(void*, const Layout::STargetBox&, uint8_t)>(g_pTargetPlaceHook->m_original)(t, b, f);
+    });
 }
 
 static void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e) {
@@ -1877,6 +1887,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     g_pSendWindowSizeHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("sendWindowSize", {"CWindow::sendWindowSize("}), rc<void*>(hkSendWindowSize));
     g_pSendWindowSizeHook->hook();
+
+    g_pTargetPlaceHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("setPositionGlobal", {"CWindowTarget::setPositionGlobal("}), rc<void*>(hkTargetPlace));
+    g_pTargetPlaceHook->hook();
     ScrollOverview::ConfigureHold::setSender([](Desktop::View::CWindow* window, bool force) {
         if (g_pSendWindowSizeHook)
             rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(window, force);
@@ -1899,6 +1912,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
         // Layout motion blur (FlightBlur.hpp). The overview draws its own
         // windows; there, only the sweep runs.
+        ScrollOverview::DockRoom::watch(monitor);
+
         const auto FLYING = [](const PHLWINDOW& w) { return ScrollOverview::Flight::hasFlight(w); };
         if (!scrollOverviewForMonitor(monitor))
             ScrollOverview::FlightBlur::trackLayoutMotion(monitor, FLYING);
@@ -2367,6 +2382,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     ScrollOverview::FlightBlur::detachAll();
     // Nothing may stay held once the hook goes with the plugin.
     ScrollOverview::ConfigureHold::flush();
+    ScrollOverview::DockRoom::shutdown();
     ScrollOverview::Dock::releasePointerFocus();
     // Outlives every overview on purpose (Window.cpp), so it is freed here.
     if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})
