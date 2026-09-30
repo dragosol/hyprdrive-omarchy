@@ -2334,7 +2334,16 @@ void renderWindowPeek(PHLMONITOR monitor, float alpha) {
 
         const auto  POS = WINDOW->m_realPosition->value() - monitor->m_position;
         const auto  SZ  = WINDOW->m_realSize->value();
-        const CBox  BOX{POS.x * S, POS.y * S, SZ.x * S, SZ.y * S};
+        // Only the part of the window ON this monitor. A scrolling desktop keeps
+        // windows parked beside the screen, and they were labelled too -- at the
+        // edge, or off it entirely (user, 2026-09-29: "not useful"). Mostly out
+        // of view (under half on screen): no label; otherwise it is centred on
+        // what can be seen.
+        const CBox  FULL{POS.x, POS.y, SZ.x, SZ.y};
+        const CBox  SEEN = FULL.intersection(CBox{{}, monitor->m_size});
+        if (FULL.width < 1 || FULL.height < 1 || SEEN.width < 1 || SEEN.height < 1 || SEEN.width * SEEN.height < 0.5 * FULL.width * FULL.height)
+            continue;
+        const CBox  BOX{SEEN.x * S, SEEN.y * S, SEEN.width * S, SEEN.height * S};
         const CBox  PLATE = OverviewRender::labelPillBox(monitor, TEXT, 0.0, 0.0, S);
         if (PLATE.height < 1 || PLATE.width > BOX.width || PLATE.height + PEEK_TOP_GAPL * S > BOX.height)
             continue; // a window too small to hold its own label keeps it off
