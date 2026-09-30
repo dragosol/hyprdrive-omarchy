@@ -92,6 +92,102 @@ struct COverviewAnimatedVariableAccess : Hyprutils::Animation::CBaseAnimatedVari
     }
 };
 
+// THE TILE GEOMETRY, AT DRAW TIME. renderOverviewWindow puts the window at the
+// tile's box for the duration of its call, and a caller that owns the pass
+// flushes before the box is taken back. A caller that does not (the dock's
+// flight at RENDER_POST_WINDOWS, the motion-blurred flight's nested pass) has
+// its surfaces drawn LATER, against the window's real geometry -- and
+// CSurfacePassElement reads that live geometry and the size-animation bit to
+// size, place and crop every surface. Zen's page (a subsurface) came out at its
+// full client size, cropped into the shrunken window, for the first frames of a
+// restore (user, 2026-09-30). So such a caller brackets the window's elements
+// with these two: the first re-applies the tile geometry when the pass reaches
+// it, the second puts the real geometry back.
+struct SDeferredWindowGeometry {
+    PHLWINDOWREF    window;
+    PHLWORKSPACEREF workspace;
+    Vector2D        pos, size;
+    bool            zeroWorkspaceOffset = false;
+
+    // what apply() found, for restore()
+    bool     applied = false;
+    Vector2D prevPos, prevSize, prevOffset;
+    bool     prevAnimatingIn = false, prevPosAnimating = false, prevSizeAnimating = false;
+
+    void apply() {
+        const auto WINDOW = window.lock();
+        if (!WINDOW || applied)
+            return;
+        applied           = true;
+        prevPos           = WINDOW->positionAnimation()->value();
+        prevSize          = WINDOW->sizeAnimation()->value();
+        prevAnimatingIn   = WINDOW->m_animatingIn;
+        prevPosAnimating  = WINDOW->positionAnimation()->isBeingAnimated();
+        prevSizeAnimating = WINDOW->sizeAnimation()->isBeingAnimated();
+        COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->positionAnimation().get(), true);
+        COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->sizeAnimation().get(), true);
+        WINDOW->positionAnimation()->value() = pos;
+        WINDOW->sizeAnimation()->value()     = size;
+        WINDOW->m_animatingIn                = true;
+        if (const auto WS = workspace.lock(); WS && zeroWorkspaceOffset) {
+            prevOffset                = WS->m_renderOffset->value();
+            WS->m_renderOffset->value() = {};
+        }
+    }
+
+    void restore() {
+        const auto WINDOW = window.lock();
+        if (!WINDOW || !applied)
+            return;
+        applied                              = false;
+        WINDOW->positionAnimation()->value() = prevPos;
+        WINDOW->sizeAnimation()->value()     = prevSize;
+        WINDOW->m_animatingIn                = prevAnimatingIn;
+        COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->positionAnimation().get(), prevPosAnimating);
+        COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->sizeAnimation().get(), prevSizeAnimating);
+        if (const auto WS = workspace.lock(); WS && zeroWorkspaceOffset)
+            WS->m_renderOffset->value() = prevOffset;
+    }
+};
+
+class CDeferredWindowGeometryPassElement : public IPassElement {
+  public:
+    CDeferredWindowGeometryPassElement(SP<SDeferredWindowGeometry> state, bool apply) : m_state(std::move(state)), m_apply(apply) {}
+    // A pop that never runs (the pass is dropped) must still give the geometry back.
+    ~CDeferredWindowGeometryPassElement() override {
+        if (!m_apply && m_state)
+            m_state->restore();
+    }
+
+    std::vector<UP<IPassElement>> draw() override {
+        if (m_state)
+            m_apply ? m_state->apply() : m_state->restore();
+        return {};
+    }
+    bool needsLiveBlur() override {
+        return false;
+    }
+    bool needsPrecomputeBlur() override {
+        return false;
+    }
+    const char* passName() override {
+        return m_apply ? "CDeferredWindowGeometryApply" : "CDeferredWindowGeometryRestore";
+    }
+    ePassElementType type() override {
+        return EK_CUSTOM;
+    }
+    bool undiscardable() override {
+        return true;
+    }
+    bool disableSimplification() override {
+        return true;
+    }
+
+  private:
+    SP<SDeferredWindowGeometry> m_state;
+    bool                        m_apply = true;
+};
+
 static PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
     if (!window)
         return nullptr;
@@ -1230,6 +1326,19 @@ void renderOverviewWindow(const SRenderParams& params) {
     if (OVERRIDEWORKSPACEOFFSET)
         WORKSPACE->m_renderOffset->value() = {};
 
+    // Not flushed here: carry the tile geometry to the pass's draw time (above).
+    SP<SDeferredWindowGeometry> deferredGeometry;
+    if (!params.ownsRenderPass) {
+        deferredGeometry = makeShared<SDeferredWindowGeometry>(SDeferredWindowGeometry{
+            .window              = params.window,
+            .workspace           = WORKSPACE,
+            .pos                 = params.window->positionAnimation()->value(),
+            .size                = params.window->sizeAnimation()->value(),
+            .zeroWorkspaceOffset = OVERRIDEWORKSPACEOFFSET,
+        });
+        g_pHyprRenderer->addPassElement(makeUnique<CDeferredWindowGeometryPassElement>(deferredGeometry, true));
+    }
+
     auto restoreWindowGeometry = Hyprutils::Utils::CScopeGuard([&] {
         params.window->positionAnimation()->value() = previousWindowPos;
         params.window->sizeAnimation()->value()     = previousWindowSize;
@@ -1312,6 +1421,8 @@ void renderOverviewWindow(const SRenderParams& params) {
     // with the last one's state. Not worth the risk for a CPU-side saving.
     if (params.ownsRenderPass)
         OverviewRender::flushPass(params.monitor);
+    else if (deferredGeometry)
+        g_pHyprRenderer->addPassElement(makeUnique<CDeferredWindowGeometryPassElement>(deferredGeometry, false));
 }
 
 } // namespace OverviewWindow
