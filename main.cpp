@@ -240,8 +240,6 @@ static void hkDamageSurface(void* thisptr, SP<CWLSurfaceResource> surface, doubl
     // whether a given overview wants the damage reported is a different
     // question from whether the client's pixels changed.
     OverviewWindow::notifySurfaceCommit(surface);
-    if (scrollOverviews().empty())
-        ScrollOverview::noteWallpaperCommit(surface);
 
     const bool HANDLED = scrollOverviews().empty() ||
         std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && overview->blockDamageReporting; }) ||
@@ -1586,6 +1584,7 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
             if (M)
                 report += std::format("  | {} {}x{} full-screen RGBA8 = {:.1f} MiB", M->m_name, (int)M->m_transformedSize.x, (int)M->m_transformedSize.y,
                                       M->m_transformedSize.x * M->m_transformedSize.y * 4.0 / 1048576.0);
+        report += ScrollOverview::wallpaperStashReport();
         return {.success = false, .error = report};
     }
     if (TOPIC == "type") {

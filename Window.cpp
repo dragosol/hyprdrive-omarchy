@@ -457,14 +457,14 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
     }
 }
 
-static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITOR monitor, float renderScale, size_t firstElement) {
+static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITOR monitor, float renderScale, size_t firstElement, int roundingPx = -1) {
     if (!window || !monitor)
         return;
 
-    if (Fullscreen::controller()->isFullscreen(window))
+    if (roundingPx < 0 && Fullscreen::controller()->isFullscreen(window))
         return;
 
-    const int   rounding      = sc<int>(std::round(window->rounding() * monitor->m_scale * renderScale));
+    const int   rounding      = roundingPx >= 0 ? roundingPx : sc<int>(std::round(window->rounding() * monitor->m_scale * renderScale));
     const float roundingPower = window->roundingPower();
 
     if (rounding <= 0)
@@ -1258,7 +1258,7 @@ void renderOverviewWindow(const SRenderParams& params) {
                 COverviewBlurPassElement::SData frost;
                 // The window's own letterboxed rect in the cell, not the cell.
                 frost.box           = CBox{sc<double>(OFFX + sc<float>(REALPX.x) * S), sc<double>(OFFY + sc<float>(REALPX.y) * S), sc<double>(SCALEDW), sc<double>(SCALEDH)}.round();
-                frost.rounding      = sc<int>(std::round(WINDOW->rounding() * MONITOR->m_scale * S));
+                frost.rounding      = params.previewRoundingPx >= 0 ? params.previewRoundingPx : sc<int>(std::round(WINDOW->rounding() * MONITOR->m_scale * S));
                 frost.roundingPower = WINDOW->roundingPower();
                 frost.alpha         = 1.F;
                 g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(frost));
@@ -1278,7 +1278,7 @@ void renderOverviewWindow(const SRenderParams& params) {
                 ScrollOverview::FlightBlur::CSuspend noFlightBlur(WINDOW);
                 g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
             }
-            roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement);
+            roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement, params.previewRoundingPx);
             // The overview's U2 mipmap prefilter, for the dock's thumbnails too
             // (user, 2026-09-24: "dock window previews lack antialiasing"): a
             // window shrunk to a preview is minified well past bilinear's

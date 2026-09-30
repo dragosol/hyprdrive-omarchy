@@ -933,9 +933,8 @@ bool overviewHandleShiftTap();
 bool overviewHandleCtrlTap();
 
 namespace ScrollOverview {
-    // The wallpaper caches kept between opens (scrollOverview.cpp): a
-    // BACKGROUND/BOTTOM layer commit while no overview is up marks them dirty.
-    void noteWallpaperCommit(const SP<CWLSurfaceResource>& surface);
+    // The wallpaper caches kept between opens (scrollOverview.cpp).
     // EGL context current. std::nullopt = every monitor (unload).
     void releaseWallpaperStash(std::optional<MONITORID> monitor);
+    std::string wallpaperStashReport();
 }

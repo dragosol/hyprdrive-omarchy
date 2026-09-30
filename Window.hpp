@@ -59,6 +59,11 @@ struct SRenderParams {
     // flushes and the decorations that depend on them; everything that makes the
     // frost correct (blur scaled to renderScale, live blur forced) still runs.
     bool                  ownsRenderPass         = true;
+    // Dock live previews: the corner radius of the window's image, in the
+    // cell's own pixels. Unset, it is the window's rounding scaled down with
+    // the thumbnail -- ~1 px at dock sizes, a square picture inside a rounded
+    // cell. The dock passes the radius concentric with its plate instead.
+    int                   previewRoundingPx      = -1;
 };
 
 void renderOverviewWindow(const SRenderParams& params);

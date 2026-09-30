@@ -214,7 +214,8 @@ constexpr float  PANEL_GAP      = 8.F;   // above the pill, matching MENU_GAP
 constexpr float  PANEL_PAD      = 10.F;
 constexpr float  PANEL_CELL_H   = 132.F; // logical px, the preview row's height
 constexpr float  PANEL_CELL_GAP = 10.F;
-constexpr float  PANEL_RADIUS   = 12.F;
+constexpr float  PANEL_RADIUS   = 12.F; // the hover plate's floor (CONCENTRIC CORNERS)
+constexpr float  PANEL_RADIUS_MAX = 24.F;
 constexpr float  PANEL_IN_MS    = 170.F;
 constexpr float  PANEL_OUT_MS   = 130.F; // exits ~25% quicker, house rule
 constexpr float  PANEL_SLIDE_MS = 160.F; // travel from one icon to the next
@@ -5453,7 +5454,7 @@ void notePreviewing(const PHLWINDOW& window) {
 }
 
 void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& box, const Time::steady_tp& now, float alpha = 1.F, bool asOverviewTile = false,
-                       bool ownsRenderPass = true) {
+                       bool ownsRenderPass = true, int roundingPx = -1) {
     // BEFORE notePreviewing, which is what refreshes the entry -- asking after
     // it would always answer "healthy". See Membership::previewShadowEnabled.
     if (Membership::previewShadowEnabled()) {
@@ -5514,6 +5515,7 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
         .dockLivePreview         = !asOverviewTile,
         .alpha                   = alpha,
         .ownsRenderPass          = ownsRenderPass,
+        .previewRoundingPx       = roundingPx,
     });
 
     if (ws) {
@@ -5796,7 +5798,17 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     // The plate fades with the growth so the frost does not slam on at full
     // strength over the icon it is still the size of.
     const float ALPHA   = g_hover.panel->out ? 1.F - houseEase(false, T) : houseEase(true, T);
-    const int   ROUNDED = sc<int>(std::round(PANEL_RADIUS * SCALE));
+    // CONCENTRIC CORNERS (user, 2026-09-30: "rounding on the app preview only
+    // goes so far... an upper limit of 24px outer border radius with an inner
+    // border radius to match on the actual window preview"). The plate follows
+    // Hyprland's decoration:rounding out by its padding, 12..24 logical px; the
+    // previews inside it are the plate's radius less that padding -- which is
+    // just decoration:rounding until the plate hits its cap. The window IMAGE
+    // is rounded to that too: it used to get the window's rounding scaled down
+    // with the thumbnail (~1 px), a square picture in a rounded ring.
+    const float OUTERL  = std::clamp(sc<float>(ScrollOverview::Config::themeRounding()) + PANEL_PAD, PANEL_RADIUS, PANEL_RADIUS_MAX);
+    const float INNERL  = std::clamp(std::min(sc<float>(ScrollOverview::Config::themeRounding()), OUTERL - PANEL_PAD), 0.F, OUTERL);
+    const int   ROUNDED = sc<int>(std::round(OUTERL * SCALE));
 
     // X13/X29/X86: panel frost shares overview chrome blur when Super is open.
     frostedPlate(monitor, DRAWN, ROUNDED, ALPHA);
@@ -5839,7 +5851,9 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         const float WIDTH = AVAIL * previewAspect(WINDOW) / std::max(sum, 0.01F);
 
         CBox cell{std::round(x), std::round(sc<float>(DRAWN.y) + PAD), std::round(WIDTH), std::round(CELLH)};
-        renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false);
+        // Never past half the cell (a very short or narrow preview).
+        const int INNER = std::clamp(sc<int>(std::round(INNERL * SCALE)), 0, std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
+        renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false, INNER);
         g_hover.cells.emplace_back(cell, PHLWINDOWREF{WINDOW});
 
         // A window parked on a SCRATCHPAD is not one of the app's ordinary
@@ -5847,8 +5861,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // wonder why clicking it slides a workspace in. Suppressed on the
         // scratchpad's own panel, where every cell would carry the same label.
         if (g_hover.panel->scratchpadName.empty() && Scratchpad::holdsWindow(WINDOW)) {
-            const int DIMROUND = std::clamp(sc<int>(std::round(ScrollOverview::Config::themeRounding() * SCALE)), 0,
-                                            std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
+            const int DIMROUND = INNER;
 
             CRectPassElement::SRectData dim;
             dim.box           = cell.copy().round();
@@ -5877,8 +5890,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // 0), which is why Gemini's ring was queued and still invisible. Same
         // accent the pill uses, thinner when the cell is not hovered.
         const bool IS_HOVERED = !g_hover.panel->out && cell.containsPoint(MOUSE);
-        const int  ROUND      = std::clamp(sc<int>(std::round(ScrollOverview::Config::themeRounding() * SCALE)), 0,
-                                           std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
+        const int  ROUND      = INNER;
         CBorderPassElement::SBorderData border;
         border.box = cell.copy().round();
         border.grad1.reset(ACCENT.modifyA(IS_HOVERED ? ALPHA : ALPHA * 0.55F));

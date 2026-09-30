@@ -53,17 +53,55 @@ float houseEase(bool decel, float t) {
 // the allocations, in the middle of the open animation, which is where the
 // dropped frames at the start of an open came from (openprof). Now a closing
 // overview hands them here and the next one on that monitor takes them back.
-// While no overview is up, the damageSurface hook keeps the dirty flags honest
-// (noteWallpaperCommit); the signature check covers everything else, exactly
-// as it did within one open. ~2 full-screen FBs per monitor stay allocated.
+// While no overview is up, the stash listens to the wallpaper layers' own
+// commits (the damageSurface hook that does this during an open is only
+// installed during one -- relying on it left a changed wallpaper stale); the
+// signature check covers everything else, exactly as it did within one open. ~2 full-screen FBs per monitor stay allocated.
 namespace {
     struct SWallpaperStash {
         SP<Render::IFramebuffer> backdropFB, cardWallpaperFB;
         bool                     backdropDirty = true, cardWallpaperDirty = true;
         uint64_t                 lastBackdropSig = 0, lastCardWallpaperSig = 0;
         int                      lastBackdropWallpaperMode = -1;
+        // The wallpaper layers' own commits, while no overview is up to hear
+        // them (the damageSurface hook is installed only while one is).
+        std::vector<CHyprSignalListener> listeners;
     };
     std::unordered_map<MONITORID, SWallpaperStash> g_wallpaperStash;
+    uint64_t                                       g_wallpaperCommits = 0;
+
+    void markStashDirty(MONITORID id, bool backdropToo) {
+        const auto IT = g_wallpaperStash.find(id);
+        if (IT == g_wallpaperStash.end())
+            return;
+        ++g_wallpaperCommits;
+        // Same split as shouldHandleSurfaceDamage: the card fill composites
+        // BACKGROUND and BOTTOM, the backdrop BACKGROUND only.
+        IT->second.cardWallpaperDirty = true;
+        if (backdropToo)
+            IT->second.backdropDirty = true;
+    }
+
+    void listenToWallpaper(const PHLMONITOR& monitor, SWallpaperStash& st) {
+        const auto ID = monitor->m_id;
+        for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
+            const bool BACKDROP = LAYER == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+            for (const auto& weak : monitor->m_layerSurfaceLayers[LAYER]) {
+                const auto LS   = weak.lock();
+                const auto RES  = LS ? LS->m_layerSurface.lock() : nullptr;
+                const auto SURF = RES ? RES->m_surface.lock() : nullptr;
+                if (SURF)
+                    st.listeners.emplace_back(SURF->m_events.commit.listen([ID, BACKDROP] { markStashDirty(ID, BACKDROP); }));
+            }
+        }
+        // A wallpaper layer that appears while closed (theme switch, swaybg
+        // restart): its first frame counts as a change; the signature check
+        // catches the layer set itself.
+        st.listeners.emplace_back(Event::bus()->m_events.layer.opened.listen([ID](PHLLS ls) {
+            if (ls && ls->m_layer <= ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM && ls->m_monitor && ls->m_monitor->m_id == ID)
+                markStashDirty(ID, true);
+        }));
+    }
 
     void releaseStash(SWallpaperStash& st) {
         if (st.backdropFB)
@@ -75,25 +113,11 @@ namespace {
 }
 
 namespace ScrollOverview {
-    void noteWallpaperCommit(const SP<CWLSurfaceResource>& surface) {
-        if (g_wallpaperStash.empty() || !surface)
-            return;
-        const auto HLSURFACE = Desktop::View::CWLSurface::fromResource(surface);
-        const auto VIEW      = HLSURFACE ? HLSURFACE->view() : nullptr;
-        const auto LS        = VIEW ? Desktop::View::CLayerSurface::fromView(VIEW) : PHLLS{};
-        if (!LS || LS->m_layer > ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM)
-            return;
-        const auto MONITOR = LS->m_monitor.lock();
-        if (!MONITOR)
-            return;
-        const auto IT = g_wallpaperStash.find(MONITOR->m_id);
-        if (IT == g_wallpaperStash.end())
-            return;
-        // Same split as shouldHandleSurfaceDamage: the card fill composites
-        // BACKGROUND and BOTTOM, the backdrop BACKGROUND only.
-        IT->second.cardWallpaperDirty = true;
-        if (LS->m_layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
-            IT->second.backdropDirty = true;
+    std::string wallpaperStashReport() {
+        std::string out = std::format("  | wallpaper stash: commits while closed {}", g_wallpaperCommits);
+        for (const auto& [id, st] : g_wallpaperStash)
+            out += std::format(" [mon {} backdrop {} dirty {} card {} dirty {}]", id, (bool)st.backdropFB, st.backdropDirty, (bool)st.cardWallpaperFB, st.cardWallpaperDirty);
+        return out;
     }
 
     // Needs the EGL context current. std::nullopt = every monitor (unload).
@@ -140,6 +164,7 @@ void CScrollOverview::stashWallpaperCaches() {
     st.lastBackdropSig           = frost.lastBackdropSig;
     st.lastCardWallpaperSig      = frost.lastCardWallpaperSig;
     st.lastBackdropWallpaperMode = frost.lastBackdropWallpaperMode;
+    listenToWallpaper(MONITOR, st);
 }
 
 CScrollOverview::~CScrollOverview() {
