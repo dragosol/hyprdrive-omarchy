@@ -7419,8 +7419,8 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         // THE RESULTS PANE'S ENTRANCE AND EXIT, motion-blurred (user,
         // 2026-09-30: "0.5 motion blur on the search results pane appearing /
         // disappearing"): while its band or width animates, the body is drawn
-        // into a nested pass smeared from last frame's box -- half strength and
-        // the half-duration fade, like the scratchpad. The pill stays sharp.
+        // into a nested pass smeared from last frame's box, with the
+        // half-duration fade. The pill stays sharp.
         const CBox PREVBOX = searchPaneLastBox;
         searchPaneLastBox  = SL.containerBox;
         const bool GROWING = (resultsBand->isBeingAnimated() || resultsWidth->isBeingAnimated()) && PREVBOX.w >= 2 && PREVBOX.h >= 2 && SL.containerBox.w >= 2 &&
@@ -7428,9 +7428,8 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         bool blurred = false;
         if (GROWING) {
             const float PCT  = std::max(resultsBand->isBeingAnimated() ? resultsBand->getPercent() : 0.F, resultsWidth->isBeingAnimated() ? resultsWidth->getPercent() : 0.F);
-            CBox        PREV = ScrollOverview::FlightBlur::fadeMotion(PREVBOX, SL.containerBox, PCT);
-            PREV = CBox{SL.containerBox.x + (PREV.x - SL.containerBox.x) * 0.5, SL.containerBox.y + (PREV.y - SL.containerBox.y) * 0.5,
-                        SL.containerBox.w + (PREV.w - SL.containerBox.w) * 0.5, SL.containerBox.h + (PREV.h - SL.containerBox.h) * 0.5};
+            // Full strength (user, 2026-09-30), still with the half-duration fade.
+            const CBox  PREV = ScrollOverview::FlightBlur::fadeMotion(PREVBOX, SL.containerBox, PCT);
             blurred = ScrollOverview::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
                                                               ScrollOverview::FlightBlur::layoutSamples());
         }
