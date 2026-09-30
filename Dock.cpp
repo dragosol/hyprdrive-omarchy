@@ -198,6 +198,7 @@ constexpr float  MENU_FONT      = 13.F;
 constexpr float  MENU_PAD_X     = 14.F;
 constexpr float  MENU_ROW_PAD_Y = 7.F;
 constexpr float  MENU_RADIUS    = 10.F;
+constexpr float  MENU_EDGE_MARGIN = 8.F; // logical px the menu keeps from every screen edge
 constexpr float  MENU_GAP       = 8.F;
 constexpr float  MENU_SEP_H     = 9.F;
 constexpr float  MENU_MIN_W     = 170.F;
@@ -3559,8 +3560,12 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
 
     const float CX = sc<float>(g_menu->anchor.x) + sc<float>(g_menu->anchor.width) / 2.F;
     CBox        plate{std::round(CX - width / 2.F), std::round(sc<float>(layout.pill.y) - MENU_GAP * SCALE - height), std::round(width), std::round(height)};
-    plate.x = std::clamp(plate.x, 0.0, std::max(0.0, monitor->m_size.x * SCALE - plate.width));
-    plate.y = std::max(0.0, plate.y);
+    // Wholly on screen, border and all, with room to breathe: clamped flush to
+    // 0 the plate's left border sat ON the screen edge and half of it was cut
+    // away (user, 2026-09-29, an app far left on the dock).
+    const double EDGE = std::round(MENU_EDGE_MARGIN * SCALE);
+    plate.x           = std::clamp(plate.x, EDGE, std::max(EDGE, monitor->m_size.x * SCALE - plate.width - EDGE));
+    plate.y           = std::max(EDGE, plate.y);
 
     g_menu->box = plate;
 
