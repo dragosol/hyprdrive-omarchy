@@ -1714,8 +1714,23 @@ namespace ScrollOverview::Stacks {
     // its monitor still there, and drawn within the last half second (a popup
     // whose dock stopped drawing -- hidden, another monitor -- must not keep
     // swallowing the keyboard; review 2026-09-24).
+    //
+    // OR THE POINTER IS ON IT (user, 2026-09-30: "grid mode should be
+    // searchable whenever I am moused over anywhere in the grid box"). A
+    // settled pane is a still image and is not redrawn, so "drawn within the
+    // last half second" went false half a second after the pointer stopped, and
+    // typing only filtered while the mouse was moving. A pointer resting on the
+    // pane says it is in front of the user just as well.
     bool keyboardActive() {
-        return g_popup && !g_popup->leaving && popupMonitorPtr() && elapsed(g_popup->lastDrawn) < 500.F;
+        if (!g_popup || g_popup->leaving)
+            return false;
+        const auto MONITOR = popupMonitorPtr();
+        if (!MONITOR)
+            return false;
+        if (elapsed(g_popup->lastDrawn) < 500.F)
+            return true;
+        const auto POINTER = g_pInputManager->getMouseCoordsInternal();
+        return MONITOR->logicalBox().containsPoint(POINTER) && contains(MONITOR, (POINTER - MONITOR->m_position) * MONITOR->m_scale);
     }
 
     // Arrows move the selection, Enter opens, Esc closes the preview first and

@@ -1,5 +1,6 @@
 #include "OverviewInternal.hpp"
 #include "DockInput.hpp"
+#include "DockStacks.hpp"
 using namespace OvInternal; // opted in here rather than leaked from the header
 
 // For main.cpp's click dispatcher, which does not include OverviewInternal.hpp.
@@ -650,6 +651,13 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
             return;
 
         info.cancelled = true;
+
+        // A dock stack's grid pane scrolls under the wheel here too (user,
+        // 2026-09-30): the desktop's dock scroll hook skips overview monitors,
+        // so the pane never saw a tick while the overview was up.
+        if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL && e.delta != 0.0 &&
+            ScrollOverview::Stacks::scroll(pMonitor.lock(), getOverviewMousePosLocal(pMonitor.lock()), e.delta < 0.0))
+            return;
 
         const auto ACTION = e.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? ScrollOverview::Config::getHorizontalScrollAction(layout) :
                                                                           ScrollOverview::Config::getVerticalScrollAction(layout);
