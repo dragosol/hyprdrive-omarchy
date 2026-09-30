@@ -4624,8 +4624,10 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         bool tileBlurred = false;
         if (SEARCHMOTION) {
             const CBox& P = PREVTILE->second.box;
-            const CBox  HALF{windowBox.x + (P.x - windowBox.x) * 0.5, windowBox.y + (P.y - windowBox.y) * 0.5, windowBox.w + (P.w - windowBox.w) * 0.5,
-                             windowBox.h + (P.h - windowBox.h) * 0.5};
+            // A quarter of the frame's motion (user, 2026-09-30: 0.5 was too much).
+            constexpr double K = 0.25;
+            const CBox  HALF{windowBox.x + (P.x - windowBox.x) * K, windowBox.y + (P.y - windowBox.y) * K, windowBox.w + (P.w - windowBox.w) * K,
+                             windowBox.h + (P.h - windowBox.h) * K};
             // Only a real move: a frame-to-frame jump of a third of the screen
             // is a card swap, not motion.
             const bool JUMP = std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0;
