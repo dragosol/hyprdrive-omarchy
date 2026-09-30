@@ -8,6 +8,7 @@
 #include "BuiltinIcons.hpp"
 #include <sys/stat.h>
 #include "StackBlur.hpp"
+#include "FlightBlur.hpp"
 #include "DockDrop.hpp"
 
 #include "AppSearch.hpp"
@@ -423,6 +424,7 @@ namespace {
         StackModel::ESort   sort = StackModel::ESort::Added;
         StackModel::EView   view = StackModel::EView::Auto;
         bool                grid = false; // decided at open: view==Grid, or the fan does not fit
+        CBox                lastPlate;    // the pane's plate last frame, for its entrance blur
         size_t              fanCap   = 0; // View as Fan: rows the screen holds (0 = no cap)
         size_t              overflow = 0; // entries behind the "N more in Files" row
         MONITORID           monitor = MONITOR_INVALID;
@@ -2131,7 +2133,7 @@ namespace ScrollOverview::Stacks {
             d.box     = box;
             d.box.rot = rot;
             d.a       = alpha;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
         };
 
         // THE DRAG GHOST, and the threshold that promotes a press into a drag.
@@ -2157,6 +2159,19 @@ namespace ScrollOverview::Stacks {
             const auto MUTED = Config::themeMutedText();
             const auto HEAD  = Config::themeHeading();
             drawPlate(P.plate, GRID_RADIUS, ALPHA);
+            // The field's frost with the plate's: a backdrop blur has nothing to
+            // smear, and inside the blurred pass it would frost an empty buffer.
+            Dock::frostedPlate(monitor, P.fieldBox, sc<int>(std::round(8.F * SCALE)), ALPHA * 0.5F);
+
+            // MOTION BLUR ON THE ENTRANCE AND EXIT (user, 2026-09-30): while
+            // the pane grows out of its icon or back into it, everything on the
+            // plate is drawn into a nested pass and smeared from last frame's
+            // plate to this one (FlightBlur.hpp) -- the minimize flight's blur,
+            // at dock:minimize_motion_blur samples. Settled, it draws directly.
+            const CBox PREVPLATE = P.lastPlate;
+            P.lastPlate          = P.plate;
+            const bool MOVING    = (P.leaving || PROGRESS < 1.F) && PREVPLATE.width >= 2 && PREVPLATE.height >= 2;
+            const auto drawBody  = [&] {
             // The dock's own outline (theme accent, Hyprland's border weight),
             // so the pane reads as part of the dock (user, 2026-09-24).
             {
@@ -2167,7 +2182,7 @@ namespace ScrollOverview::Stacks {
                 border.round         = sc<int>(std::round(GRID_RADIUS * SCALE));
                 border.roundingPower = 2.F;
                 if (drawableBox(border.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+                    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
             }
 
             // HEADER: the stack's label, "12 of 340", and the sort on the right
@@ -2191,8 +2206,8 @@ namespace ScrollOverview::Stacks {
                 drawTex(T, P.sortBox, ALPHA);
             }
 
-            // THE FIELD: an inset plate, the query or its placeholder, a caret.
-            Dock::frostedPlate(monitor, P.fieldBox, sc<int>(std::round(8.F * SCALE)), ALPHA * 0.5F);
+            // THE FIELD: an inset plate (frosted above), the query or its
+            // placeholder, a caret.
             const bool        EMPTYQ = P.query.empty();
             const std::string SHOWN  = EMPTYQ ? (sushiAvailable() ? std::string{"Search"} : std::string{"Search · install sushi for previews"}) : P.query;
             float             caretX = sc<float>(P.fieldBox.x) + 10.F * SCALE;
@@ -2206,7 +2221,7 @@ namespace ScrollOverview::Stacks {
             caret.box   = CBox{caretX, P.fieldBox.y + P.fieldBox.height * 0.25, std::max(1.0, 1.5 * SCALE), P.fieldBox.height * 0.5}.round();
             caret.color = Dock::accentColor().modifyA(ALPHA);
             if (drawableBox(caret.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(caret));
+                    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(caret));
 
             // THE CELLS, clipped to the grid: icon, two-line name, and the
             // previewed / selected / hovered highlight.
@@ -2230,7 +2245,7 @@ namespace ScrollOverview::Stacks {
                     hl.round   = sc<int>(std::round(10.F * SCALE));
                     hl.clipBox = CLIP;
                     if (drawableBox(hl.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(hl));
+                    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(hl));
                 }
                 const float ICON = GRID_ICON * SCALE * (PREV ? 1.15F : 1.F);
                 CBox        ib{std::round(cell.x + (cell.width - ICON) / 2.0), std::round(cell.y + 8.F * SCALE), std::round(ICON), std::round(ICON)};
@@ -2242,7 +2257,7 @@ namespace ScrollOverview::Stacks {
                     d.box     = ib;
                     d.a       = ALPHA;
                     d.clipBox = CLIP;
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+                    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
                 }
                 if (const auto T = OverviewRender::textWrapped(R.name, FG, sc<int>(std::round(11.F * SCALE)), sc<int>(cell.width - 8.F * SCALE), sc<int>(std::round(30.F * SCALE)),
                                                                false, "", 500);
@@ -2252,7 +2267,7 @@ namespace ScrollOverview::Stacks {
                     l.box     = CBox{cell.x + (cell.width - T->m_size.x) / 2.0, ib.y + ICON + 6.F * SCALE, T->m_size.x, T->m_size.y}.round();
                     l.a       = ALPHA;
                     l.clipBox = CLIP;
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(l));
+                    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(l));
                 }
             }
 
@@ -2265,6 +2280,9 @@ namespace ScrollOverview::Stacks {
                 if (const auto T = OverviewRender::text("showing first 5 000", MUTED, sc<int>(std::round(10.F * SCALE)), false, "", 0, 500); T && T->ok())
                     drawTex(T, CBox{P.plate.x + (P.plate.width - T->m_size.x) / 2.0, P.plate.y + P.plate.height - T->m_size.y - 4.F * SCALE, T->m_size.x, T->m_size.y}.round(),
                             ALPHA);
+            };
+            if (!MOVING || !FlightBlur::drawBlurred(monitor, nullptr, PREVPLATE, P.plate, drawBody))
+                drawBody();
 
             drawGhost();
             return;

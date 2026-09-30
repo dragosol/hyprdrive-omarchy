@@ -5,6 +5,7 @@
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
+#include "FlightBlur.hpp"
 #include "OpenProf.hpp"
 #include "FramePacing.hpp"
 #include "DockStacks.hpp"
@@ -7526,6 +7527,21 @@ void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, 
     };
     windowBox.round();
 
+    // MOTION BLUR WHILE IT RESIZES (user, 2026-09-30: the proxy shrinking into
+    // a strip cell and growing back out). Only while its SIZE is changing --
+    // a proxy that merely follows the pointer stays sharp -- and then with the
+    // layout blur's samples (FlightBlur.hpp). Drawn into a nested pass, so it
+    // must not flush the real one.
+    const CBox PREV  = dragBlurWindow.lock() == WINDOW ? dragBlurPrev : CBox{};
+    dragBlurPrev     = windowBox;
+    dragBlurWindow   = WINDOW;
+    const bool GROWS = PREV.w >= 1 && (std::abs(PREV.w - windowBox.w) > 0.5 || std::abs(PREV.h - windowBox.h) > 0.5);
+    if (GROWS &&
+        ScrollOverview::FlightBlur::drawBlurred(monitor, WINDOW, PREV, windowBox,
+                                                [&] { renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true, 1.F, false); },
+                                                ScrollOverview::FlightBlur::layoutSamples()))
+        return;
+
     renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true);
 }
 
@@ -7609,7 +7625,7 @@ void CScrollOverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float over
 }
 
 void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox,
-                                       bool dragged, float alphaMul) {
+                                       bool dragged, float alphaMul, bool ownsPass) {
     if (!window)
         return;
 
@@ -7711,6 +7727,7 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
         .selected             = (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile && closeOnWindow == window && activeScrollOverview().get() == this) ||
             TileChrome::hovered() == window || dragged,
         .dragged              = dragged,
+        .ownsRenderPass       = ownsPass,
     });
 
     if (MODULATE && WALPHA)

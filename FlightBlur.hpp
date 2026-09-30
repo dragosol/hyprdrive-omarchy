@@ -42,7 +42,13 @@ namespace ScrollOverview::FlightBlur {
     // motion-blurred element moving prevBox -> box, both monitor-local RENDER
     // px. Returns false, having queued nothing, when blur is off or there is no
     // motion -- the caller then draws the ordinary way.
-    bool drawBlurred(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& prevBox, const CBox& box, const std::function<void()>& draw);
+    // `window` may be null (the dock stack's pane is not a window).
+    // `samplesOverride` >= 0 replaces dock:minimize_motion_blur (the overview's
+    // drag proxy uses the layout blur's samples).
+    bool drawBlurred(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& prevBox, const CBox& box, const std::function<void()>& draw, int samplesOverride = -1);
+
+    // plugin:hyprdrive:layout_motion_blur, clamped.
+    int layoutSamples();
 
     // A driven flight moved the real window prevBox -> box (monitor-local
     // RENDER px) this frame; the NEXT window pass draws it there, blurred.

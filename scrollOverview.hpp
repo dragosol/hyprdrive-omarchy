@@ -267,7 +267,10 @@ class CScrollOverview : public IOverview {
     float  restingNumberFade(size_t workspaceIdx) const;
     bool   hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const;
     void   renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox = nullptr,
-                             bool dragged = false, float alphaMul = 1.F);
+                             bool dragged = false, float alphaMul = 1.F, bool ownsPass = true);
+    // The dragged proxy's box last frame (render px), for its resize blur.
+    CBox         dragBlurPrev;
+    PHLWINDOWREF dragBlurWindow;
     void   renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now);
     void   renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewScale, const Time::steady_tp& now);
     float        workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const;

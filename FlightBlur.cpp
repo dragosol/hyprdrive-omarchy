@@ -100,9 +100,9 @@ namespace ScrollOverview::FlightBlur {
         return std::clamp(Config::getValue<int>("plugin:hyprdrive:dock:minimize_motion_blur"), 0, 32);
     }
 
-    bool drawBlurred(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& prevBox, const CBox& box, const std::function<void()>& draw) {
-        const int N = samples();
-        if (N < 2 || !monitor || !window || !valid(prevBox) || !valid(box) || !moved(prevBox, box) || monitor->m_transform != WL_OUTPUT_TRANSFORM_NORMAL)
+    bool drawBlurred(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& prevBox, const CBox& box, const std::function<void()>& draw, int samplesOverride) {
+        const int N = samplesOverride >= 0 ? samplesOverride : samples();
+        if (N < 2 || !monitor || !valid(prevBox) || !valid(box) || !moved(prevBox, box) || monitor->m_transform != WL_OUTPUT_TRANSFORM_NORMAL)
             return false;
 
         auto nested = makeUnique<Render::CRenderPass>();
