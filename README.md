@@ -35,7 +35,7 @@ is the original plugin; this repo is the Omarchy adaptation.
 
 - Dash-to-Dock behaviour counted over the desktop you are on: launch, focus,
   cycle, whole-app minimize/restore, favorites, running dots, badges, autohide.
-- Minimize/restore flies into the icon. Hover an icon for live window previews.
+- Minimize/restore flies into the icon, motion-blurred (`dock:minimize_motion_blur`). Hover an icon for live window previews.
 - Stacks, macOS style: a pinned folder shows its 4 newest files as a pile;
   click it and they fan out, or it opens as a searchable pane when the fan
   would not fit. Space previews the hovered item (GNOME Sushi), arrows and
