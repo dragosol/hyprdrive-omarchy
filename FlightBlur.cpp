@@ -12,6 +12,12 @@
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/render/pass/TransformedWindowPassElement.hpp>
 #include <hyprland/src/render/transformer/Transformer.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/helpers/time/Time.hpp>
+
+#include <chrono>
+#include <ranges>
 
 #include <algorithm>
 #include <cmath>
@@ -58,16 +64,25 @@ namespace ScrollOverview::FlightBlur {
             }
 
             void amendTransformedRenderData(const CBox& currentBox, SMotionBlurData* data) override {
-                const int N = samples();
-                if (!data || !m_armed || N < 2 || !valid(m_prev) || !valid(m_cur))
+                if (!data || !m_armed || m_samples < 2 || !valid(m_prev) || !valid(m_cur))
                     return;
-                *data = motionFor(currentBox, m_prev, m_cur, N);
+                *data = motionFor(currentBox, m_prev, m_cur, m_samples);
             }
 
             // monitor-local LOGICAL, like the currentBox the renderer passes
-            CBox m_prev, m_cur;
-            bool m_armed = false;
+            CBox            m_prev, m_cur;
+            bool            m_armed   = false;
+            int             m_samples = 0;
+            Time::steady_tp m_fedAt   = {};
         };
+
+        // Nobody fed it for this long: the motion is over, take it off (the
+        // window would otherwise keep rendering through an offscreen buffer).
+        constexpr float STALE_MS = 150.F;
+
+        // The layout tracker's memory: where each moving window was drawn at
+        // the last frame of its monitor.
+        std::vector<std::pair<PHLWINDOWREF, CBox>> g_lastLayoutBox;
 
         CFlightBlurTransformer* transformerOf(const PHLWINDOW& window) {
             for (const auto& t : window->m_transformers)
@@ -134,6 +149,8 @@ namespace ScrollOverview::FlightBlur {
         t->m_prev         = logical(prevBox, SCALE);
         t->m_cur          = logical(box, SCALE);
         t->m_armed        = moved(prevBox, box);
+        t->m_samples      = samples();
+        t->m_fedAt        = Time::steadyNow();
 
         // The smear reaches back to where the window was: repaint that too.
         CBox reach = t->m_prev.copy();
@@ -144,10 +161,76 @@ namespace ScrollOverview::FlightBlur {
     }
 
     void sweep(const std::function<bool(const PHLWINDOW&)>& stillFlying) {
+        const auto NOW = Time::steadyNow();
         for (const auto& window : Desktop::windowState()->windows()) {
-            if (window && !window->m_transformers.empty() && transformerOf(window) && !stillFlying(window))
+            if (!window || window->m_transformers.empty())
+                continue;
+            const auto* T = transformerOf(window);
+            if (!T || (stillFlying && stillFlying(window)))
+                continue;
+            if (std::chrono::duration<float, std::milli>(NOW - T->m_fedAt).count() > STALE_MS)
                 detach(window);
         }
+    }
+
+    int layoutSamples() {
+        return std::clamp(Config::getValue<int>("plugin:hyprdrive:layout_motion_blur"), 0, 32);
+    }
+
+    void trackLayoutMotion(PHLMONITOR monitor, const std::function<bool(const PHLWINDOW&)>& skip) {
+        if (!monitor)
+            return;
+        std::erase_if(g_lastLayoutBox, [](const auto& e) { return !e.first.lock(); });
+
+        const int N = layoutSamples();
+        if (N >= 2 && monitor->m_transform == WL_OUTPUT_TRANSFORM_NORMAL) {
+            // An interactive move/resize is the user's hand, not the layout's.
+            const auto DRAGTARGET = g_layoutManager && g_layoutManager->dragController() ? g_layoutManager->dragController()->target() : nullptr;
+
+            for (const auto& window : Desktop::windowState()->windows()) {
+                if (!window || !window->m_isMapped || window->isHidden() || window->m_monitor != monitor || !window->m_workspace || !window->m_workspace->isVisible())
+                    continue;
+                const auto IT = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.first.lock() == window; });
+                const bool ANIMATING = window->positionAnimation()->isBeingAnimated() || window->sizeAnimation()->isBeingAnimated();
+                if (!ANIMATING || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
+                    if (IT != g_lastLayoutBox.end())
+                        g_lastLayoutBox.erase(IT);
+                    continue;
+                }
+
+                // Monitor-local logical, like the renderer's currentBox.
+                const CBox NOWBOX{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - monitor->m_position,
+                                  window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
+                if (IT == g_lastLayoutBox.end()) {
+                    g_lastLayoutBox.emplace_back(window, NOWBOX);
+                    continue;
+                }
+                const CBox PREV = IT->second;
+                IT->second      = NOWBOX;
+                if (!valid(PREV) || !valid(NOWBOX) || !moved(PREV, NOWBOX))
+                    continue;
+
+                auto* t = transformerOf(window);
+                if (!t) {
+                    window->m_transformers.emplace_back(makeUnique<CFlightBlurTransformer>());
+                    t = sc<CFlightBlurTransformer*>(window->m_transformers.back().get());
+                }
+                t->m_prev    = PREV;
+                t->m_cur     = NOWBOX;
+                t->m_armed   = true;
+                t->m_samples = N;
+                t->m_fedAt   = Time::steadyNow();
+
+                CBox reach{std::min(PREV.x, NOWBOX.x), std::min(PREV.y, NOWBOX.y), 0, 0};
+                reach.w = std::max(PREV.x + PREV.w, NOWBOX.x + NOWBOX.w) - reach.x;
+                reach.h = std::max(PREV.y + PREV.h, NOWBOX.y + NOWBOX.h) - reach.y;
+                g_pHyprRenderer->damageBox(reach.expand(MARGIN).translate(monitor->m_position));
+            }
+        } else
+            g_lastLayoutBox.clear();
+
+        // Anything nobody fed this frame and the last few comes off.
+        sweep(skip);
     }
 
     CSuspend::CSuspend(const PHLWINDOW& window) : m_window(window) {

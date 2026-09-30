@@ -56,6 +56,15 @@ namespace ScrollOverview::FlightBlur {
     // PLUGIN_EXIT: no window may keep an object whose code is being unloaded.
     void detachAll();
 
+    // LAYOUT MOTION (user, 2026-09-30: "add motion blur to windows resizing in
+    // dwindle/scrolling workspace mode"). Each frame of `monitor`, before its
+    // windows are drawn: every window whose position or size is ANIMATING (a
+    // retile, a scrolling tape move, an open) gets the same transformer, fed
+    // where it was drawn last frame and where it is now. Not an interactive
+    // move/resize, and not whatever `skip` says (a flying window feeds itself).
+    // plugin:hyprdrive:layout_motion_blur samples, 0 = off. Also sweeps.
+    void trackLayoutMotion(PHLMONITOR monitor, const std::function<bool(const PHLWINDOW&)>& skip);
+
     // The transformer is for Hyprland's OWN window pass only. hyprdrive's own
     // draws of the same window (a dock hover preview, an overview tile) hold one
     // of these around renderWindow: with the transformer on, renderWindow routes

@@ -1896,6 +1896,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             overview->onPreRender();
 
         ScrollOverview::Dock::damageIfChanged(monitor);
+
+        // Layout motion blur (FlightBlur.hpp). The overview draws its own
+        // windows; there, only the sweep runs.
+        const auto FLYING = [](const PHLWINDOW& w) { return ScrollOverview::Flight::hasFlight(w); };
+        if (!scrollOverviewForMonitor(monitor))
+            ScrollOverview::FlightBlur::trackLayoutMotion(monitor, FLYING);
+        else
+            ScrollOverview::FlightBlur::sweep(FLYING);
     });
 
     // X27. NOT the renderWorkspace hook: that one is installed on demand by
