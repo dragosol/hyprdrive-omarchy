@@ -337,7 +337,16 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         // A surface pass element always carries its surface; the texture is the
         // fallback key so a hypothetical one without it still gets a mipmap
         // (rebuilt every draw, exactly as the whole cache used to be).
-        const void* const KEY = SURFACE ? sc<const void*>(SURFACE.get()) : sc<const void*>(SRC.get());
+        //
+        // AND BY SIZE STEP (2026-09-30). One surface is drawn at two very
+        // different sizes in the same frame -- its grid tile and its strip mini
+        // -- and a single entry per surface was reallocated between the two on
+        // EVERY draw: ~250 full buffer allocations a second with the overview
+        // open, which is what drove Hyprland's GPU memory into the gigabytes
+        // (the driver keeps freed buffers for reuse) and cost the open its
+        // smoothness. Each size step keeps its own copy now.
+        const void* const KEY = reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(SURFACE ? sc<const void*>(SURFACE.get()) : sc<const void*>(SRC.get())) +
+                                                              sc<uintptr_t>(SHIFT));
 
         ++g_u2PrefilterUse;
         if ((g_u2PrefilterUse & 0x3FULL) == 0)
@@ -1119,8 +1128,10 @@ void notifySurfaceCommit(const SP<CWLSurfaceResource>& surface) {
     if (!surface || g_u2PrefilterFBs.empty())
         return;
 
-    if (const auto IT = g_u2PrefilterFBs.find(sc<const void*>(surface.get())); IT != g_u2PrefilterFBs.end())
-        IT->second.dirty = true;
+    // Every size step of it (the key is the surface plus its step, 0..4).
+    for (uintptr_t step = 0; step <= 4; ++step)
+        if (const auto IT = g_u2PrefilterFBs.find(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(surface.get()) + step)); IT != g_u2PrefilterFBs.end())
+            IT->second.dirty = true;
 }
 
 
