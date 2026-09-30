@@ -409,7 +409,7 @@ void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& 
     g_pHyprRenderer->m_renderPass.add(makeUnique<CDockTiltPassElement>(CDockTiltPassElement::SData{.tex = tex, .box = box, .alpha = alpha, .pose = pose}));
 }
 
-bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alpha, bool sum) {
+bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alpha, bool sum, const CBox* scissorBox) {
     if (!tex || !tex->ok() || boxIn.width < 1 || boxIn.height < 1 || alpha <= 0.F || !g_pHyprRenderer->m_renderData.pMonitor)
         return false;
     const auto PROGRAM = tex->m_type == Render::TEXTURE_RGBA && tex->m_transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(tex) ? shader() : nullptr;
@@ -441,7 +441,10 @@ bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alph
     glUniform1f(g_locSigma, GLARE_SIGMA);
 
     glBindVertexArray(S->getUniformLocation(SHADER_SHADER_VAO));
-    Render::GL::g_pHyprOpenGL->scissor(nullptr);
+    if (scissorBox)
+        Render::GL::g_pHyprOpenGL->scissor(*scissorBox);
+    else
+        Render::GL::g_pHyprOpenGL->scissor(nullptr);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     tex->unbind();

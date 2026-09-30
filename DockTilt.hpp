@@ -86,7 +86,7 @@ void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& 
 // pass element's draw(). False when this texture cannot go through the shader.
 // `sum`: GL_ONE,GL_ONE (pure addition); false: premultiplied OVER, for layers
 // that must cover what is under them (dark text on a light pill).
-bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& box, float alpha, bool sum = true);
+bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& box, float alpha, bool sum = true, const CBox* scissorBox = nullptr);
 
 // PLUGIN_EXIT: the shader program belongs to this object's GL state.
 void shutdown();

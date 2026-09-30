@@ -14,6 +14,7 @@
 namespace ScrollOverview::StackBlur {
     namespace {
         SP<Render::GL::CGLFramebuffer> g_fb;
+        SP<Render::GL::CGLFramebuffer> g_tmp; // one instant, composited, before it is summed
 
         // HYPRDRIVE_STACKBLUR_LOG=<file>: per-frame cost of the blur pass, GPU
         // included (it waits for the GPU with glFinish, so only while measuring).
@@ -37,8 +38,11 @@ namespace ScrollOverview::StackBlur {
         if (g_fb && Render::GL::g_pHyprOpenGL) {
             Render::GL::g_pHyprOpenGL->makeEGLCurrent();
             g_fb->release();
+            if (g_tmp)
+                g_tmp->release();
         }
         g_fb.reset();
+        g_tmp.reset();
     }
 
     CStackBlurPassElement::CStackBlurPassElement(std::vector<SSample> samples, const CBox& bounds) : m_samples(std::move(samples)), m_bounds(bounds) {}
@@ -76,15 +80,38 @@ namespace ScrollOverview::StackBlur {
         Render::GL::g_pHyprOpenGL->scissor(nullptr);
         glClearColor(0.F, 0.F, 0.F, 0.F);
         glClear(GL_COLOR_BUFFER_BIT);
-        // A RUNNING AVERAGE, not a sum (user, 2026-09-29: the fan's text went
-        // white in flight on a light theme). Additive blending can only brighten,
-        // so dark label ink ADDED onto a light pill vanished into it. Each sample
-        // is laid OVER the result at weight 1/(k+1) (k = its place in time) --
-        // the incremental mean: a paper under a pixel in every sample stays
-        // opaque (the old reason for summing), and within a sample the text
-        // covers its pill as it does at rest. The weights come with the samples.
+        // Per instant: composite its pieces (text OVER its pill -- summing them
+        // made dark ink vanish on a light pill), then add that instant into the
+        // accumulator at 1/N: the mean of N composited frames, the same blur as
+        // before on a dark theme. Both passes clipped to the fan's bounds.
+        if (!g_tmp || g_tmp->m_size != SIZE) {
+            if (g_tmp)
+                g_tmp->release();
+            g_tmp = makeShared<Render::GL::CGLFramebuffer>("hyprdrive-stack-blur-sample");
+            if (!g_tmp->alloc(sc<int>(SIZE.x), sc<int>(SIZE.y))) {
+                g_tmp.reset();
+                PREV->bind();
+                return {};
+            }
+        }
+        int groups = 0;
         for (const auto& S : m_samples)
-            DockTilt::drawAdditive(S.tex, S.box, S.alpha, false);
+            groups = std::max(groups, S.group + 1);
+        const float WEIGHT = 1.F / sc<float>(std::max(groups, 1));
+        const CBox  CLIP   = m_bounds.copy().round();
+        for (int g = 0; g < groups; ++g) {
+            g_tmp->bind();
+            Render::GL::g_pHyprOpenGL->scissor(CLIP);
+            glClearColor(0.F, 0.F, 0.F, 0.F);
+            glClear(GL_COLOR_BUFFER_BIT);
+            for (const auto& S : m_samples)
+                if (S.group == g)
+                    DockTilt::drawAdditive(S.tex, S.box, S.alpha, false, &CLIP);
+            g_fb->bind();
+            if (const auto TEX = g_tmp->getTexture(); TEX && TEX->ok())
+                DockTilt::drawAdditive(TEX, CBox{0, 0, SIZE.x, SIZE.y}, WEIGHT, true, &CLIP);
+        }
+        Render::GL::g_pHyprOpenGL->scissor(nullptr);
 
         // ...then lay the average over the scene, where the fan is.
         PREV->bind();

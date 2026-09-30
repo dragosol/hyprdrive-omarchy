@@ -606,6 +606,12 @@ namespace {
     void tick(SPopup& p) {
         const auto NOW = Time::steadyNow();
         float      DT  = p.ticked ? std::min(std::chrono::duration<float, std::milli>(NOW - p.lastTick).count(), MAX_TICK_MS) : 0.F;
+        // anim_scale, like every other hyprdrive animation: 10 = ten times
+        // slower, 0 = snap.
+        if (const float AS = ScrollOverview::Config::animScale(); AS <= 0.F)
+            DT = DT > 0.F ? 1e6F : 0.F;
+        else
+            DT /= AS;
         p.lastTick     = NOW;
         p.ticked       = true;
         // Only a FIRST read holds it: a folder re-reading after a change still
@@ -2083,7 +2089,7 @@ namespace ScrollOverview::Stacks {
         // Motion blur (StackBlur): while the fan's rows are sampled, what they
         // draw is collected rather than queued.
         std::vector<StackBlur::SSample>* sink    = nullptr;
-        float                            sinkMul = 1.F;
+        int                              sinkGroup = 0;
         CBox                             sinkBounds;
         const auto drawTex = [&](const SP<Render::ITexture>& tex, const CBox& box, float alpha, float rot = 0.F) {
             if (!tex || !tex->ok() || !drawableBox(box))
@@ -2091,7 +2097,7 @@ namespace ScrollOverview::Stacks {
             if (sink) {
                 CBox b = box;
                 b.rot  = rot;
-                sink->push_back(StackBlur::SSample{.tex = tex, .box = b, .alpha = alpha * sinkMul});
+                sink->push_back(StackBlur::SSample{.tex = tex, .box = b, .alpha = alpha, .group = sinkGroup});
                 // Bounds that hold the box however it is turned.
                 const double R  = std::hypot(box.width, box.height) / 2.0 + 2.0;
                 const double CX = box.x + box.width / 2.0, CY = box.y + box.height / 2.0;
@@ -2374,10 +2380,10 @@ namespace ScrollOverview::Stacks {
         if (SAMPLES > 1 && MOVING && StackBlur::usable(monitor)) {
             std::vector<StackBlur::SSample> samples;
             sink = &samples;
-            // Oldest first; the j-th sample (0-based) lands at weight 1/(j+1),
-            // which StackBlur's premultiplied-over blend turns into the mean.
+            // One group per instant: StackBlur composites each on its own, then
+            // averages them.
             for (int k = SAMPLES - 1, j = 0; k >= 0; --k, ++j) {
-                sinkMul = 1.F / sc<float>(j + 1);
+                sinkGroup = j;
                 const float PK = std::clamp(PROGRESS - (PROGRESS - g_popup->lastProgress) * sc<float>(k) / sc<float>(SAMPLES), 0.F, 1.F);
                 layoutFan(*g_popup, monitor, layout.pill, PK);
                 drawFanRows(g_popup->rows);
