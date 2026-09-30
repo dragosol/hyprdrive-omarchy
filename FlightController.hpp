@@ -69,6 +69,10 @@ const char* kindName(EFlightKind kind);
 // the dock leaves from where it was let go, not from its old grid slot.
 void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false, std::optional<CBox> startBox = std::nullopt);
 void restore(PHLMONITOR monitor, PHLWINDOW window);
+// Re-aim every desktop restore flight at its window's CURRENT layout box: after
+// Minimize::CRestoreSlots swaps windows into their own slots, the boxes the
+// flights froze at click time are each other's.
+void retargetRestores();
 
 
 // Is the dock in the middle of anything? Autohide holds the pill out for a

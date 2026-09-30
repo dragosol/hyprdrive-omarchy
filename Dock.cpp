@@ -2924,8 +2924,12 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
 
         if (visible.empty()) {
             Stacks::traceEvent("  -> restore " + std::to_string(here.size()));
-            for (const auto& WINDOW : here)
-                Flight::restore(monitor, WINDOW);
+            {
+                Minimize::CRestoreSlots ownSlots(here);
+                for (const auto& WINDOW : here)
+                    Flight::restore(monitor, WINDOW);
+            }
+            Flight::retargetRestores();
             return;
         }
 
@@ -3484,9 +3488,13 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         case ERow::RestoreAll: {
             ConfigureHold::CHold oneResize;
-            for (const auto& WINDOW : itemWindows(item))
-                if (Minimize::isMinimized(WINDOW))
-                    Flight::restore(monitor, WINDOW);
+            {
+                Minimize::CRestoreSlots ownSlots(itemWindows(item));
+                for (const auto& WINDOW : itemWindows(item))
+                    if (Minimize::isMinimized(WINDOW))
+                        Flight::restore(monitor, WINDOW);
+            }
+            Flight::retargetRestores();
             return;
         }
 

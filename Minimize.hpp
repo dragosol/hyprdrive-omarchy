@@ -56,6 +56,23 @@ std::vector<PHLWINDOW> minimized();
 // way an off-screen desktop lies. WORKSPACE_INVALID when not minimized.
 WORKSPACEID            originalWorkspace(PHLWINDOW window);
 
+// A WHOLE-APP RESTORE PUTS EACH WINDOW BACK IN ITS OWN SLOT (user, 2026-09-30:
+// "it remembers the tiling layout but not which window goes where"). Dwindle
+// re-inserts restored windows by its own rules, so the shape comes back with
+// the windows shuffled. Held around the restore loop: it records where each
+// tiled window was before the first comes back, and when it ends it swaps any
+// window sitting in another's slot into its own.
+class CRestoreSlots {
+  public:
+    explicit CRestoreSlots(const std::vector<PHLWINDOW>& windows);
+    ~CRestoreSlots();
+    CRestoreSlots(const CRestoreSlots&)            = delete;
+    CRestoreSlots& operator=(const CRestoreSlots&) = delete;
+
+  private:
+    std::vector<std::pair<PHLWINDOWREF, CBox>> m_slots;
+};
+
 // Z6. Recreate-if-reaped and SWITCH to the desktop a stashed window came from,
 // so a cross-workspace restore flight lands where the user is looking instead
 // of flying off the edge and snapping desktops at touchdown.

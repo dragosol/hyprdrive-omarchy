@@ -1029,6 +1029,21 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
     });
 }
 
+void retargetRestores() {
+    for (auto& f : g_flights) {
+        if (!f.isDriven())
+            continue;
+        const auto W   = f.window.lock();
+        const auto MON = W ? W->m_monitor.lock() : PHLMONITOR{};
+        if (!W || !MON)
+            continue;
+        const float    SCALE = std::max(MON->m_scale, 0.01F);
+        const Vector2D POS   = W->m_realPosition->goal();
+        const Vector2D SZ    = W->m_realSize->goal();
+        f.from               = CBox{(POS.x - MON->m_position.x) * SCALE, (POS.y - MON->m_position.y) * SCALE, SZ.x * SCALE, SZ.y * SCALE};
+    }
+}
+
 void abortAll(const std::string& reason) {
     if (g_pEventLoopManager) {
         for (auto seq : g_flightDoLaterSeqs) {

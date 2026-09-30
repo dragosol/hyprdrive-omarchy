@@ -142,6 +142,57 @@ namespace {
     }
 }
 
+CRestoreSlots::CRestoreSlots(const std::vector<PHLWINDOW>& windows) {
+    for (const auto& window : windows) {
+        const auto IT = entryFor(window);
+        if (IT != g_entries.end() && !IT->floating && !IT->box.empty())
+            m_slots.emplace_back(window, IT->box);
+    }
+}
+
+CRestoreSlots::~CRestoreSlots() {
+    if (m_slots.size() < 2 || !g_layoutManager)
+        return;
+
+    const auto goalBox = [](const PHLWINDOW& w) {
+        return CBox{w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL)};
+    };
+
+    // Greedy, and bounded: each pass puts at least one window where it was.
+    for (size_t pass = 0; pass < m_slots.size(); ++pass) {
+        bool swapped = false;
+        for (const auto& [ref, slot] : m_slots) {
+            const auto W = ref.lock();
+            if (!W || isMinimized(W) || !W->layoutTarget() || W->m_isFloating)
+                continue;
+            const auto WANT = slot.middle();
+            if (goalBox(W).middle().distance(WANT) < 24.0)
+                continue;
+
+            // Whichever of the restored windows now sits nearest this slot.
+            PHLWINDOW holder;
+            double    best = 1e18;
+            for (const auto& [otherRef, otherSlot] : m_slots) {
+                (void)otherSlot;
+                const auto X = otherRef.lock();
+                if (!X || X == W || isMinimized(X) || !X->layoutTarget() || X->m_isFloating || X->m_workspace != W->m_workspace)
+                    continue;
+                const double D = goalBox(X).middle().distance(WANT);
+                if (D < best) {
+                    best   = D;
+                    holder = X;
+                }
+            }
+            if (!holder || best > goalBox(W).middle().distance(WANT))
+                continue;
+            g_layoutManager->switchTargets(W->layoutTarget(), holder->layoutTarget(), true);
+            swapped = true;
+        }
+        if (!swapped)
+            break;
+    }
+}
+
 CGestureBoxes::CGestureBoxes(const std::vector<PHLWINDOW>& windows) {
     ++g_gestureDepth;
     for (const auto& window : windows) {

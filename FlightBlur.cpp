@@ -118,7 +118,7 @@ namespace ScrollOverview::FlightBlur {
 
         // A scrolling desktop's tape is blurred only above this speed: a
         // flick, not a drift. Logical px per second.
-        constexpr double FLICK_PX_PER_S = 5000.0; // user, 2026-09-30: 2500 blurred too much
+        constexpr double FLICK_PX_PER_S = 12000.0; // user, 2026-09-30: 2500 then 5000 still blurred too early -- an ordinary snap of the tape peaks near 9000
 
         // How much of a scroll or swipe's frame-to-frame motion is smeared:
         // half (user, 2026-09-30: "halve the blur for the tape and desktop swipes").
