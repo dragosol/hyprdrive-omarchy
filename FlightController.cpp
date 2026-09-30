@@ -425,6 +425,9 @@ void landingSanity(SFlight& flight, PHLMONITOR monitor, const char* reason) {
 
     // The lease is the unhide, and it is also Z20's draw-list refresh.
     flight.hidden.release();
+    // A driven flight drew the window "animating in" (renderFlights).
+    if (flight.isDriven())
+        WINDOW->m_animatingIn = false;
 
     if (!flight.isRestore()) {
         // A MINIMIZE landed. The window kept focus for the whole flight so the
@@ -624,6 +627,8 @@ EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
             window->m_realSize->m_Value     = Vector2D{std::max(4.0, old.from.width / SCALE), std::max(4.0, old.from.height / SCALE)};
         }
         window->alpha()[Desktop::View::WINDOW_ALPHA_FADE]->setValueAndWarp(1.F);
+        if (old.isDriven())
+            window->m_animatingIn = false;
         old.hidden.release();
         Minimize::minimize(window, false); // keep focus: the flight hands off at landing
     }
@@ -930,6 +935,18 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
 
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
             WINDOW->m_realSize->m_Value     = Vector2D{std::max(4.0, box.width / SCALE), std::max(4.0, box.height / SCALE)};
+            // AS ANIMATING, or Hyprland will not scale the window's SUB-surfaces
+            // with it (CSurfacePassElement squishes a subsurface only while the
+            // size animates): Zen's page stayed full size inside a shrinking
+            // frame, and the two flew apart (user, 2026-09-30, spam-minimizing).
+            // Landing warps both vars, which clears the flag again.
+            WINDOW->m_realPosition->m_bIsBeingAnimated = true;
+            WINDOW->m_realSize->m_bIsBeingAnimated     = true;
+            // And "animating in": without it Hyprland CROPS a surface drawn
+            // smaller than the client's size (calculateUVForSurface) instead of
+            // scaling it -- the same bit the overview's tiles set. Cleared at
+            // landing (landingSanity) and on a reversal.
+            WINDOW->m_animatingIn = true;
             WINDOW->alpha()[Desktop::View::WINDOW_ALPHA_FADE]->setValueAndWarp(alpha);
             // Motion blur rides the real window's next draw (FlightBlur.hpp).
             FlightBlur::recordDriven(monitor, WINDOW, PREVBOX, box);
