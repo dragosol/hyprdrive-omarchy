@@ -21,6 +21,9 @@ is the original plugin; this repo is the Omarchy adaptation.
   and Tab walks search -> each monitor's grid (or strip -> grid on each
   monitor when no results are up). Picking a window moves the cursor into it
   and releases a game's pointer lock.
+- On a scrolling-layout desktop, the 3-finger swipe scrolls its windows first
+  and carries on into the next/previous desktop past either end (4 fingers
+  still jump desktops directly).
 - **Smooth frames** (Hyprdrive panel -> Textures, `smooth_frames`): lets
   Hyprland render ahead when the GPU runs late, so animations drop a refresh
   instead of halving the frame rate. hyprdrive suggests it once if the overview
