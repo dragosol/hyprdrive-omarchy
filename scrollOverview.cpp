@@ -3741,7 +3741,11 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
         }
     }
 
-    if ((g_search.nav.zone == EOverviewNavZone::Search || g_search.nav.zone != EOverviewNavZone::Result) && DOWN) {
+    // Down drops into the results from the SEARCH FIELD only. `|| zone !=
+    // Result` also matched the window grid and the strip, so with a query up
+    // every Down in the grid jumped back to the results instead of walking to
+    // the next row of tiles (user, 2026-09-29).
+    if (g_search.nav.zone == EOverviewNavZone::Search && DOWN) {
         if (!searchLayoutHere().hits.empty()) {
             g_search.nav.zone              = EOverviewNavZone::Result;
             g_search.nav.selection         = searchLayoutHere().hits[0].index;
