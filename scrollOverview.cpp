@@ -4649,16 +4649,18 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         workspace->m_forceRendering = WASFORCERENDERING;
     });
 
-    // X7/X8 chrome is drawn in a SECOND pass. The app icon straddles the tile's
-    // bottom edge and a hovered tile grows into its neighbours, so chrome drawn
-    // with its own tile gets painted over by the next one.
-    // A member buffer, not a local: this runs once per WORKSPACE per frame on
-    // every output, and a fresh vector of PHLWINDOW+CBox pairs per pass is a
-    // heap allocation per card per frame for a list that is thrown away at the
-    // end of it. Nothing here re-enters renderWorkspaceLive, so one buffer is
-    // enough; it is cleared rather than reallocated.
-    auto& tileChrome = tileChromeBuf;
-    tileChrome.clear();
+    // JUXTAPOSITION (user, 2026-09-29, a recording of the open animation): with
+    // the chrome in a second pass, every app icon sat on top of EVERY tile -- a
+    // tile flying over another wore the other's icon on its face. Chrome is now
+    // drawn with its own tile, so it stacks exactly as the tiles do, and the
+    // case the second pass was for -- a hovered tile growing into its
+    // neighbours -- is met by drawing the hovered tile LAST: grown body and
+    // chrome over the neighbours, as the one being pointed at should be. The
+    // icon's overhang below a tile stays inside the grid gap.
+    // The same progress the pill, the strip and the result cards fade on, so the
+    // whole overview arrives and leaves as one thing.
+    const float CHROMEFADE = overviewGridProgress(renderScale);
+    const auto  HOVEREDTILE = TileChrome::hovered();
 
     const auto renderOverviewWindow = [&](const PHLWINDOW& window) {
         // F3-b outbound: a releasing tile no longer matches, so the search half
@@ -4698,17 +4700,10 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         }
 
         renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX);
-        tileChrome.emplace_back(window, windowBox);
+        TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
         lastTileBoxes[window.get()] = {windowBox, workspaceIdx};
     };
 
-    const auto renderTileChrome = [&] {
-        // The same progress the pill, the strip and the result cards fade on,
-        // so the whole overview arrives and leaves as one thing.
-        const float CHROMEFADE = overviewGridProgress(renderScale);
-        for (const auto& [window, box] : tileChrome)
-            TileChrome::render(monitor, window, box, monitor->m_scale, CHROMEFADE);
-    };
 
     const auto fullscreenWindow  = overviewFullscreenPathWindow(workspace);
     const bool scrollingLayout   = isWorkspaceScrolling(workspace);
@@ -4755,17 +4750,21 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
 
             renderOverviewWindow(window);
         }
-        renderTileChrome();
         if (WORKSPACEVISIBLE)
             renderDropIndicator();
         return;
     }
 
+    bool       hoveredHere          = false;
     const auto renderWindowsByState = [&](bool floating) {
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
             if (!window || window->m_isFloating != floating)
                 continue;
+            if (window == HOVEREDTILE) {
+                hoveredHere = true; // drawn last, over its neighbours
+                continue;
+            }
 
             renderOverviewWindow(window);
         }
@@ -4773,8 +4772,9 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
 
     renderWindowsByState(false);
     renderWindowsByState(true);
+    if (hoveredHere)
+        renderOverviewWindow(HOVEREDTILE);
     renderClosingTiles(monitor, workspaceIdx, now);
-    renderTileChrome();
     if (WORKSPACEVISIBLE)
         renderDropIndicator();
 }

@@ -547,7 +547,6 @@ class CScrollOverview : public IOverview {
     // The X7/X8 chrome queue renderWorkspaceLive fills and flushes within one
     // workspace pass. Held here so the pass does not allocate one per card per
     // frame; see the comment at its only use.
-    std::vector<std::pair<PHLWINDOW, CBox>> tileChromeBuf;
 
     // matchingWindowCount's answer, keyed on the query and the membership
     // generation. See the function for why those two are the whole key.
