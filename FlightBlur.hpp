@@ -27,6 +27,11 @@
 #include "globals.hpp"
 
 #include <functional>
+#include <vector>
+
+namespace Render {
+    class IWindowTransformer;
+}
 
 namespace ScrollOverview::FlightBlur {
 
@@ -50,4 +55,22 @@ namespace ScrollOverview::FlightBlur {
 
     // PLUGIN_EXIT: no window may keep an object whose code is being unloaded.
     void detachAll();
+
+    // The transformer is for Hyprland's OWN window pass only. hyprdrive's own
+    // draws of the same window (a dock hover preview, an overview tile) hold one
+    // of these around renderWindow: with the transformer on, renderWindow routes
+    // the window through an offscreen buffer that ignores the preview's scale
+    // and clip, and the preview went dark for the whole restore (user,
+    // 2026-09-30).
+    class CSuspend {
+      public:
+        explicit CSuspend(const PHLWINDOW& window);
+        ~CSuspend();
+        CSuspend(const CSuspend&)            = delete;
+        CSuspend& operator=(const CSuspend&) = delete;
+
+      private:
+        PHLWINDOWREF                                m_window;
+        std::vector<UP<Render::IWindowTransformer>> m_held;
+    };
 }

@@ -1,4 +1,5 @@
 #include "Window.hpp"
+#include "FlightBlur.hpp"
 #include <chrono>
 #include <algorithm>
 #include <cmath>
@@ -1139,7 +1140,10 @@ void renderOverviewWindow(const SRenderParams& params) {
             const size_t     firstElement = passElements.size();
             // standalone: no decorate path side effects; content only. Rounding is
             // forced below so the cell still reads as a rounded thumbnail.
-            g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
+            {
+                ScrollOverview::FlightBlur::CSuspend noFlightBlur(WINDOW);
+                g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
+            }
             roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement);
             // The overview's U2 mipmap prefilter, for the dock's thumbnails too
             // (user, 2026-09-24: "dock window previews lack antialiasing"): a
@@ -1265,7 +1269,10 @@ void renderOverviewWindow(const SRenderParams& params) {
     const size_t firstWindowPassElement = g_pHyprRenderer->currentPass().m_passElements.size();
     // Never rebuild m_blurFB under a temporary blur size.
     const bool   usePrecomputedBlur     = !scaleBlur && shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
-    g_pHyprRenderer->renderWindow(params.window, params.monitor, params.now, false, Render::RENDER_PASS_ALL, false, false);
+    {
+        ScrollOverview::FlightBlur::CSuspend noFlightBlur(params.window);
+        g_pHyprRenderer->renderWindow(params.window, params.monitor, params.now, false, Render::RENDER_PASS_ALL, false, false);
+    }
     scaleOverviewSubsurfaceOffsets(params.window, params.window->sizeAnimation()->value(), firstWindowPassElement);
     prefilterOverviewWindowTextures(params.window, params.monitor,
                                     previousWindowSize.x * params.monitor->m_scale > 0.0 ? params.windowBox.width / (previousWindowSize.x * params.monitor->m_scale) : 0.0,

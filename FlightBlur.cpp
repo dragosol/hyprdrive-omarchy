@@ -150,6 +150,27 @@ namespace ScrollOverview::FlightBlur {
         }
     }
 
+    CSuspend::CSuspend(const PHLWINDOW& window) : m_window(window) {
+        if (!window)
+            return;
+        auto& list = window->m_transformers;
+        for (auto it = list.begin(); it != list.end();) {
+            if (dynamic_cast<CFlightBlurTransformer*>(it->get())) {
+                m_held.emplace_back(std::move(*it));
+                it = list.erase(it);
+            } else
+                ++it;
+        }
+    }
+
+    CSuspend::~CSuspend() {
+        if (m_held.empty())
+            return;
+        if (const auto WINDOW = m_window.lock())
+            for (auto& t : m_held)
+                WINDOW->m_transformers.emplace_back(std::move(t));
+    }
+
     void detachAll() {
         for (const auto& window : Desktop::windowState()->windows())
             if (window && !window->m_transformers.empty())
