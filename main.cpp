@@ -1941,8 +1941,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         const auto FLYING = [](const PHLWINDOW& w) { return ScrollOverview::Flight::hasFlight(w); };
         if (!scrollOverviewForMonitor(monitor))
             ScrollOverview::FlightBlur::trackLayoutMotion(monitor, FLYING);
-        else
-            ScrollOverview::FlightBlur::sweep(FLYING);
+        else {
+            // The overview draws its own tiles; only a special workspace (the
+            // scratchpad opening or closing over it) is drawn natively, through
+            // the renderer the blur rides (user, 2026-09-30).
+            ScrollOverview::FlightBlur::trackLayoutMotion(monitor, [&FLYING](const PHLWINDOW& w) {
+                return FLYING(w) || !w->m_workspace || !w->m_workspace->m_isSpecialWorkspace;
+            });
+        }
     });
 
     // X27. NOT the renderWorkspace hook: that one is installed on demand by
