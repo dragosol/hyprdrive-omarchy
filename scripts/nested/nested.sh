@@ -10,7 +10,7 @@ find_sig() {
   local pid; pid=$(find_pid); [ -z "$pid" ] && return 1
   hyprctl instances | awk -v p="$pid" '/^instance /{s=$2; sub(":","",s)} /pid:/{ if ($2==p) print s }'
 }
-sock() { hyprctl instances | awk -v s="$(find_sig)" '$0 ~ s {f=1} f && /wl socket/ {print $3; exit}'; }
+sock() { local s; s="$(find_sig)"; [ -z "$s" ] && return 1; hyprctl instances | awk -v s="$s" '$0 ~ s {f=1} f && /wl socket/ {print $3; exit}'; }
 case "$1" in
   start)
     [ -n "$(find_pid)" ] && { echo "already running"; exit 0; }
@@ -32,9 +32,14 @@ case "$1" in
       echo "WARNING: no empty desktop found (or no window) -- nested left where it opened"
     fi
     # Wallpaper (user, 2026-09-29): a 4K tropical photo, not a test grid.
-    if [ -x "$N/bg" ] && [ -f "$N/tropical.jpg" ]; then
-      WAYLAND_DISPLAY="$(sock)" GDK_BACKEND=wayland setsid "$N/bg" "$N/tropical.jpg" </dev/null >/dev/null 2>&1 &
+    # NEVER without the nested socket: an empty WAYLAND_DISPLAY falls back to
+    # the user's LIVE session (2026-09-30: a failed start put two wallpapers
+    # and test windows on the user's desktop).
+    NSOCK="$(sock)"
+    if [ -n "$NSOCK" ] && [ -x "$N/bg" ] && [ -f "$N/tropical.jpg" ]; then
+      WAYLAND_DISPLAY="$NSOCK" GDK_BACKEND=wayland setsid "$N/bg" "$N/tropical.jpg" </dev/null >/dev/null 2>&1 &
     fi
+    [ -z "$(find_sig)" ] && { echo "nested FAILED to start (see $RUN/log.txt)" >&2; exit 1; }
     echo "pid $pid sig $(find_sig) log $RUN/log.txt" ;;
   stop)
     pid=$(find_pid); [ -z "$pid" ] && { echo "not running"; exit 0; }
@@ -42,6 +47,10 @@ case "$1" in
   sig) find_sig ;;
   sock) sock ;;
   log) echo "$RUN/log.txt" ;;
-  h) shift; hyprctl --instance "$(find_sig)" "$@" ;;
-  shot) WAYLAND_DISPLAY="$(sock)" grim "${2:-$RUN/shot.png}" && echo "${2:-$RUN/shot.png}" ;;
+  # Refuse without a nested instance: `hyprctl --instance ""` and an empty
+  # WAYLAND_DISPLAY both reach the user's LIVE session instead.
+  h) shift; SIG="$(find_sig)"; [ -z "$SIG" ] && { echo "nested not running -- refusing (would hit the live session)" >&2; exit 1; }
+     hyprctl --instance "$SIG" "$@" ;;
+  shot) NSOCK="$(sock)"; [ -z "$NSOCK" ] && { echo "nested not running" >&2; exit 1; }
+        WAYLAND_DISPLAY="$NSOCK" grim "${2:-$RUN/shot.png}" && echo "${2:-$RUN/shot.png}" ;;
 esac
