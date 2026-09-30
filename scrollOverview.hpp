@@ -897,6 +897,15 @@ class CScrollOverview : public IOverview {
     // this with the search field's per-letter entrance, so landing on a new
     // desktop re-pops the number instead of cross-fading it.
     Time::steady_tp                  trackpadDetentBornAt;
+    // THE SAME BADGE FROM THE KEYBOARD (user, 2026-09-30): arrowing to another
+    // desktop -- along the strip, or off the end of the grid -- pops its number
+    // on the strip as a trackpad swipe does, for a moment.
+    size_t                           keyBadgeWorkspace = 0;
+    Time::steady_tp                  keyBadgeBornAt;
+    bool                             keyBadgeLive      = false;
+    void                             popKeyboardBadge(size_t workspaceIdx);
+    size_t                           badgeWorkspace() const;
+    Time::steady_tp                  badgeBornAt() const;
     // Cross-fade state for the resting strip numbers. Only two cells are ever
     // in motion: the one the badge just landed on (fading OUT) and the one it
     // just left (fading back IN). Everything else is simply lit.

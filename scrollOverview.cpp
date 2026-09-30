@@ -3298,6 +3298,7 @@ bool CScrollOverview::stepTileDesktop(int delta) {
     const auto TILES = navTilesOf(IMAGE->pWorkspace);
 
     focusOverviewWorkspace(IMAGE->pWorkspace, sc<size_t>(NEXT));
+    popKeyboardBadge(sc<size_t>(NEXT));
 
     // Right lands on that desktop's first tile, left on its last, so the walk
     // reads as one continuous line across the desktops rather than jumping to
@@ -3736,8 +3737,10 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             g_search.nav.selection = -1;
             g_search.nav.keyboardTile = false;
             TileChrome::setHovered(PHLWINDOW{}, false);
-            if (const auto WORKSPACE = images[sc<size_t>(best->index)]->pWorkspace; WORKSPACE)
+            if (const auto WORKSPACE = images[sc<size_t>(best->index)]->pWorkspace; WORKSPACE) {
                 focusOverviewWorkspace(WORKSPACE, sc<size_t>(best->index));
+                popKeyboardBadge(sc<size_t>(best->index));
+            }
             break;
         case EOverviewNavZone::Result:
             g_search.nav.zone              = EOverviewNavZone::Result;
@@ -5941,14 +5944,44 @@ namespace {
     constexpr float RESTING_NUMBER_FADE_MS = 160.F;
 }
 
+// How long a keyboard-popped number stays up after the last step.
+static constexpr float KEY_BADGE_MS = 900.F;
+
+void CScrollOverview::popKeyboardBadge(size_t workspaceIdx) {
+    if (keyBadgeLive && keyBadgeWorkspace == workspaceIdx)
+        return;
+    keyBadgeWorkspace = workspaceIdx;
+    keyBadgeBornAt    = Time::steadyNow();
+    keyBadgeLive      = true;
+    damage();
+    requestInputFrame();
+}
+
+size_t CScrollOverview::badgeWorkspace() const {
+    return trackpadDetentActive ? trackpadDetentWorkspace : keyBadgeWorkspace;
+}
+
+Time::steady_tp CScrollOverview::badgeBornAt() const {
+    return trackpadDetentActive ? trackpadDetentBornAt : keyBadgeBornAt;
+}
+
 bool CScrollOverview::detentBadgeVisible() const {
-    return trackpadDetentActive && ScrollOverview::Config::getGestureDetentLabel() && trackpadDetentWorkspace < images.size() &&
-        images[trackpadDetentWorkspace] && images[trackpadDetentWorkspace]->pWorkspace;
+    const bool   KEYS = keyBadgeLive && SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) < KEY_BADGE_MS;
+    const size_t IDX  = badgeWorkspace();
+    return (trackpadDetentActive || KEYS) && ScrollOverview::Config::getGestureDetentLabel() && IDX < images.size() && images[IDX] && images[IDX]->pWorkspace;
 }
 
 void CScrollOverview::updateRestingFade() {
     const size_t NONE   = std::numeric_limits<size_t>::max();
-    const size_t TARGET = detentBadgeVisible() ? trackpadDetentWorkspace : NONE;
+    const size_t TARGET = detentBadgeVisible() ? badgeWorkspace() : NONE;
+    // A keyboard badge times out without any input to ask for the frame that
+    // takes it down.
+    if (keyBadgeLive) {
+        if (SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) >= KEY_BADGE_MS)
+            keyBadgeLive = false;
+        else
+            requestInputFrame();
+    }
 
     if (TARGET != restingFadeCell) {
         // The cell being vacated takes over the fade-IN slot, so the number the
@@ -5992,9 +6025,9 @@ void CScrollOverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
     if (FADE < 0.01F)
         return;
 
-    const auto& wimg = images[trackpadDetentWorkspace];
+    const auto& wimg = images[badgeWorkspace()];
 
-    const auto CELL = stripCellBox(trackpadDetentWorkspace, monitor, renderScale);
+    const auto CELL = stripCellBox(badgeWorkspace(), monitor, renderScale);
     if (CELL.width < 1.0 || CELL.height < 1.0)
         return;
 
@@ -6004,7 +6037,7 @@ void CScrollOverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
     if (!TEX || !TEX->ok())
         return;
 
-    const float MS   = SearchLetters::msSince(Time::steadyNow(), trackpadDetentBornAt);
+    const float MS   = SearchLetters::msSince(Time::steadyNow(), badgeBornAt());
     const auto  POSE = SearchLetters::entrancePose(MS);
 
     // Scale about the glyph's own centre; POSE.y is logical px, +down, so it
