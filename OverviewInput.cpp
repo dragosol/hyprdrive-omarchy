@@ -643,6 +643,12 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
         if (closing || scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()).get() != this)
             return;
 
+        // Over a TOP/OVERLAY layer the scroll is that layer's, exactly as a
+        // click is: a two-finger swipe on a notification toast dismisses it (and
+        // the finger-lift stop event must reach it too, or its drag never ends).
+        if (isPointerOnTopLayer(pMonitor.lock()))
+            return;
+
         info.cancelled = true;
 
         const auto ACTION = e.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? ScrollOverview::Config::getHorizontalScrollAction(layout) :
