@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dragos.hyprdrive",
   "name": "Hyprdrive",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "author": "dragos",
   "license": "MIT",
   "description": "Hyprdrive control panel: overview and dock toggles, a full trackpad gesture editor, texture quality, and AC/battery profiles.",

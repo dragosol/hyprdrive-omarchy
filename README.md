@@ -24,6 +24,8 @@ is the original plugin; this repo is the Omarchy adaptation.
 - On a scrolling-layout desktop, the 3-finger swipe scrolls its windows first
   and carries on into the next/previous desktop past either end (4 fingers
   still jump desktops directly).
+- Super/Alt/Ctrl+click a dock app that is not running (or "Open in Empty
+  Workspace" in its menu) opens it on an empty desktop.
 - **Smooth frames** (Hyprdrive panel -> Textures, `smooth_frames`): lets
   Hyprland render ahead when the GPU runs late, so animations drop a refresh
   instead of halving the frame rate. hyprdrive suggests it once if the overview
