@@ -30,13 +30,25 @@ namespace ScrollOverview::Motion {
         // rice's appleDecel / appleAccel) -- the numbers the constructor has
         // always registered. Its POP is only read when another preset is on:
         // with the house preset every hand-rolled site keeps its own ease.
-        constexpr std::array<SPreset, 6> PRESETS{{
+        // Serpantinum (ilyamiro/serpantinum) is a FAMILY, not one curve
+        // (user, 2026-09-30: "you picked the wrong curve, it has several"):
+        // its Hyprland config runs windows, layers and workspaces on myBezier;
+        // its Quickshell eases panels with OutCubic, long travel with OutQuint,
+        // intros with OutExpo, pops with OutBack (overshoot ~1.2), and exits
+        // with InCubic. Each is a preset here, paired with Serpantinum's exit
+        // and pop. The Qt easings are fitted as cubic-beziers (least squares
+        // over 51 points; worst residual ~3e-5).
+        constexpr SCurve SERP_EXIT{0.33F, 0.F, 0.67F, 0.F};      // InCubic
+        constexpr SCurve SERP_POP{0.33F, 1.39F, 0.66F, 1.F};     // OutBack, overshoot 1.2
+        constexpr std::array<SPreset, 9> PRESETS{{
             {"hyprdrive", {0.16F, 1.F, 0.3F, 1.F}, {0.7F, 0.F, 0.84F, 0.F}, {0.34F, 1.56F, 0.64F, 1.F}},
-            // ilyamiro/serpantinum: OutQuint travel, InQuint exit, OutBack pop
-            // (the dock stacks already run on these numbers).
-            {"serpantinum", {0.22F, 1.F, 0.36F, 1.F}, {0.64F, 0.F, 0.78F, 0.F}, {0.34F, 1.40F, 0.64F, 1.F}},
-            // Softer: OutCubic / InCubic, a gentle pop.
-            {"smooth", {0.33F, 1.F, 0.68F, 1.F}, {0.32F, 0.F, 0.67F, 0.F}, {0.33F, 1.25F, 0.68F, 1.F}},
+            // myBezier, compositors/hyprland/config/settings.lua -- used in
+            // and out alike, so the exit is the same curve.
+            {"serpantinum", {0.05F, 0.9F, 0.1F, 1.05F}, {0.05F, 0.9F, 0.1F, 1.05F}, SERP_POP},
+            {"serpantinum_glide", {0.22F, 1.09F, 0.46F, 1.F}, SERP_EXIT, SERP_POP},  // OutQuint
+            {"serpantinum_soft", {0.33F, 1.F, 0.66F, 1.F}, SERP_EXIT, SERP_POP},     // OutCubic
+            {"serpantinum_intro", {0.15F, 1.04F, 0.35F, 0.99F}, SERP_EXIT, SERP_POP}, // OutExpo
+            {"serpantinum_pop", SERP_POP, SERP_EXIT, SERP_POP},                        // OutBack 1.2
             // Quick off the mark: OutCirc / InCirc.
             {"swift", {0.F, 0.55F, 0.45F, 1.F}, {0.55F, 0.F, 1.F, 0.45F}, {0.F, 0.55F, 0.45F, 1.F}},
             // Everything lands with a little overshoot.

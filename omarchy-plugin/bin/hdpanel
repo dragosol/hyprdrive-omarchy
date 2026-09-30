@@ -25,8 +25,11 @@ PLUGIN = "plugin:hyprdrive:"
 
 CURVES = [
     {"value": "hyprdrive", "label": "Hyprdrive"},
-    {"value": "serpantinum", "label": "Serpantinum"},
-    {"value": "smooth", "label": "Smooth"},
+    {"value": "serpantinum", "label": "Serpantinum \u00b7 Windows"},
+    {"value": "serpantinum_glide", "label": "Serpantinum \u00b7 Glide"},
+    {"value": "serpantinum_soft", "label": "Serpantinum \u00b7 Soft"},
+    {"value": "serpantinum_intro", "label": "Serpantinum \u00b7 Intro"},
+    {"value": "serpantinum_pop", "label": "Serpantinum \u00b7 Pop"},
     {"value": "swift", "label": "Swift"},
     {"value": "springy", "label": "Springy"},
     {"value": "linear", "label": "Linear"},

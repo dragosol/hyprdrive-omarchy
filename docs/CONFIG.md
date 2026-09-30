@@ -153,7 +153,7 @@ Prefix: `plugin:hyprdrive:animation:`
 
 | key | type | default | range | description |
 | --- | --- | --- | --- | --- |
-| `curve` | string | `"hyprdrive"` |  | the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum, smooth, swift, springy, linear |
+| `curve` | string | `"hyprdrive"` |  | the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum (its window curve), serpantinum_glide, serpantinum_soft, serpantinum_intro, serpantinum_pop, swift, springy, linear |
 
 ## `motion_blur`
 

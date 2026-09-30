@@ -668,7 +668,7 @@ static void registerConfigValuesFor() {
                                  SIntValueOptions{.min = 0, .max = 32}));
     // Motion.hpp. The dock stacks keep dock:stack_motion.
     addKey(makeShared<CStringValue>(KEY("animation:curve"),
-                                    "the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum, smooth, swift, springy, linear",
+                                    "the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum (its window curve), serpantinum_glide, serpantinum_soft, serpantinum_intro, serpantinum_pop, swift, springy, linear",
                                     Hyprlang::STRING{"hyprdrive"}));
     // MOTION BLUR, PER ANIMATION (user, 2026-09-30). Each site smears a share
     // of its frame-to-frame motion (strength, 0..1; 0 = that site off) shaped

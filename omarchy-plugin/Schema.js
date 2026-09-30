@@ -196,8 +196,12 @@ var links = [
 // most of hyprdrive's motion travels on.
 var curves = [
   { value: "hyprdrive", label: "Hyprdrive", note: "The house curves", decel: [0.16, 1, 0.3, 1] },
-  { value: "serpantinum", label: "Serpantinum", note: "OutQuint travel, OutBack pop", decel: [0.22, 1, 0.36, 1] },
-  { value: "smooth", label: "Smooth", note: "Gentle cubic", decel: [0.33, 1, 0.68, 1] },
+  // Serpantinum's family (ilyamiro/serpantinum): each with its InCubic exit and OutBack pop.
+  { value: "serpantinum", label: "Serpantinum \u00b7 Windows", note: "myBezier \u2014 its Hyprland windows", decel: [0.05, 0.9, 0.1, 1.05] },
+  { value: "serpantinum_glide", label: "Serpantinum \u00b7 Glide", note: "OutQuint \u2014 long travel", decel: [0.22, 1.09, 0.46, 1] },
+  { value: "serpantinum_soft", label: "Serpantinum \u00b7 Soft", note: "OutCubic \u2014 panels and widgets", decel: [0.33, 1, 0.66, 1] },
+  { value: "serpantinum_intro", label: "Serpantinum \u00b7 Intro", note: "OutExpo \u2014 popups arriving", decel: [0.15, 1.04, 0.35, 0.99] },
+  { value: "serpantinum_pop", label: "Serpantinum \u00b7 Pop", note: "OutBack 1.2 \u2014 things popping in", decel: [0.33, 1.39, 0.66, 1] },
   { value: "swift", label: "Swift", note: "Quick off the mark", decel: [0, 0.55, 0.45, 1] },
   { value: "springy", label: "Springy", note: "A little overshoot", decel: [0.34, 1.3, 0.64, 1] },
   { value: "linear", label: "Linear", note: "Constant speed", decel: [0, 0, 1, 1] }
