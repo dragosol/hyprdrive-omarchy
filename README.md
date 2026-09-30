@@ -37,6 +37,7 @@ is the original plugin; this repo is the Omarchy adaptation.
   cycle, whole-app minimize/restore, favorites, running dots, badges, autohide.
 - Minimize/restore flies into the icon, motion-blurred (`dock:minimize_motion_blur`). Hover an icon for live window previews.
 - Windows the layout moves or resizes (retiles, the scrolling tape, opening, the scratchpad) are motion-blurred too (`layout_motion_blur`).
+- With autohide off, tiled windows under the dock shorten to clear it (`dock:windows_make_room`).
 - Stacks, macOS style: a pinned folder shows its 4 newest files as a pile;
   click it and they fan out, or it opens as a searchable pane when the fan
   would not fit. Space previews the hovered item (GNOME Sushi), arrows and
