@@ -68,6 +68,11 @@ namespace ScrollOverview::FlightBlur {
     // PLUGIN_EXIT: no window may keep an object whose code is being unloaded.
     void detachAll();
 
+    // Take `window`'s smear off NOW: a flight reversed or restarted. The last
+    // flight's boxes must never be applied to the next one (user, 2026-09-30:
+    // spam-minimizing, every other flight smeared off toward the top left).
+    void reset(const PHLWINDOW& window);
+
     // LAYOUT MOTION (user, 2026-09-30: "add motion blur to windows resizing in
     // dwindle/scrolling workspace mode"). Each frame of `monitor`, before its
     // windows are drawn: every window whose position or size is ANIMATING (a

@@ -205,12 +205,22 @@ namespace ScrollOverview::FlightBlur {
         for (const auto& window : Desktop::windowState()->windows()) {
             if (!window || window->m_transformers.empty())
                 continue;
-            const auto* T = transformerOf(window);
+            auto* T = transformerOf(window);
             if (!T || (stillFlying && stillFlying(window)))
                 continue;
-            if (std::chrono::duration<float, std::milli>(NOW - T->m_fedAt).count() > STALE_MS)
+            const float AGE = std::chrono::duration<float, std::milli>(NOW - T->m_fedAt).count();
+            // Not fed this frame: no smear from here on, whatever it held.
+            if (AGE > 20.F)
+                T->m_armed = false;
+            if (AGE > STALE_MS)
                 detach(window);
         }
+    }
+
+    void reset(const PHLWINDOW& window) {
+        if (window)
+            if (auto* T = transformerOf(window))
+                T->m_armed = false;
     }
 
     CBox fadeMotion(const CBox& prev, const CBox& cur, float progress) {

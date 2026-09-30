@@ -585,6 +585,8 @@ enum class EReverse {
 // restored to stale geometry. A flight that is landing is now LANDED, properly,
 // before the fresh one is armed.
 EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
+    // Whatever happens next, the old flight's smear is over.
+    FlightBlur::reset(window);
     const auto IT = find(window);
     if (IT == g_flights.end()) {
         zdbg("reverse(%d) found=0\n", (int)restoring);
@@ -631,6 +633,14 @@ EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
             window->m_animatingIn = false;
         old.hidden.release();
         Minimize::minimize(window, false); // keep focus: the flight hands off at landing
+        // Z14, for the reversal too (user, 2026-09-30: spam-minimizing left the
+        // window drawn at full size behind every other flight). The stash move
+        // arms Hyprland's own fades and geometry animations on the REAL window,
+        // which then played in place while the proxy flew; the fresh minimize
+        // path warps them, this one never did.
+        warpRestoredWindowAnims(window);
+        window->m_realPosition->m_bIsBeingAnimated = false;
+        window->m_realSize->m_bIsBeingAnimated     = false;
     }
 
     // A reversed flight is always a proxy (never driven): the desktop-driven
