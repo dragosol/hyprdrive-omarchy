@@ -1138,6 +1138,17 @@ void trimTexturePrefilterCache() {
 
 // Everything, for plugin unload: the framebuffers are this object's to free
 // while its code and the EGL context are still there.
+std::pair<size_t, size_t> texturePrefilterCacheBytes() {
+    size_t n = 0, bytes = 0;
+    for (const auto& [key, entry] : g_u2PrefilterFBs) {
+        if (!entry.fb || !entry.fb->isAllocated())
+            continue;
+        ++n;
+        bytes += sc<size_t>(entry.fb->m_size.x * entry.fb->m_size.y * 4.0 * 4.0 / 3.0);
+    }
+    return {n, bytes};
+}
+
 void releaseTexturePrefilterCache() {
     for (auto& [key, entry] : g_u2PrefilterFBs) {
         if (entry.fb)

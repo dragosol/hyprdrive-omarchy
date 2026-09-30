@@ -1576,6 +1576,16 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
     }
     // `type <text>` / `type`: set the open overview's search query as if typed
     // (empty clears it) -- the rig has no keyboard that reaches the overview.
+    // `mem`: what hyprdrive holds on the GPU, as far as it can count it.
+    if (TOPIC == "mem") {
+        const auto [N, BYTES] = OverviewWindow::texturePrefilterCacheBytes();
+        std::string report    = std::format("hyprdrive mem: prefilter {} entries {:.1f} MiB", N, BYTES / 1048576.0);
+        for (const auto& M : State::monitorState()->monitors())
+            if (M)
+                report += std::format("  | {} {}x{} full-screen RGBA8 = {:.1f} MiB", M->m_name, (int)M->m_transformedSize.x, (int)M->m_transformedSize.y,
+                                      M->m_transformedSize.x * M->m_transformedSize.y * 4.0 / 1048576.0);
+        return {.success = false, .error = report};
+    }
     if (TOPIC == "type") {
         const std::string Q = data.size() > 1 ? std::string{data[1]} : std::string{};
         g_search.query.text   = Q;
@@ -1589,7 +1599,7 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
         return {};
     }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|activate <class>|scratchpad|type [text]"};
+        return {.success = false, .error = "hyprdrive:debug frames|mem|activate <class>|scratchpad|type [text]"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

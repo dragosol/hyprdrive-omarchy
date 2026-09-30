@@ -15,6 +15,9 @@ bool shouldUseBlurFramebuffer(const PHLWINDOW& window, PHLMONITOR monitor = null
 // client textures), and ~CScrollOverview used to clear it for ALL of them
 // whenever one closed. Must be called with the EGL context current.
 void releaseTexturePrefilterCache();
+// hyprdrive.debug("mem"): entries in the prefilter cache and their bytes
+// (RGBA8 plus the mip chain), for measuring.
+std::pair<size_t, size_t> texturePrefilterCacheBytes();
 // Drops only the entries of windows that are gone; see Window.cpp.
 void trimTexturePrefilterCache();
 // "This surface committed": marks its cached prefilter copy stale. Called from
