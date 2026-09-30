@@ -1574,8 +1574,22 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
             OV->close();
         return {};
     }
+    // `type <text>` / `type`: set the open overview's search query as if typed
+    // (empty clears it) -- the rig has no keyboard that reaches the overview.
+    if (TOPIC == "type") {
+        const std::string Q = data.size() > 1 ? std::string{data[1]} : std::string{};
+        g_search.query.text   = Q;
+        g_search.query.active = !Q.empty();
+        g_search.nav.zone     = EOverviewNavZone::Search;
+        g_search.nav.intent   = ESearchIntent::Typing;
+        afterQueryEdit();
+        for (const auto& overview : scrollOverviews())
+            if (overview)
+                overview->damage();
+        return {};
+    }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|activate <class>|scratchpad"};
+        return {.success = false, .error = "hyprdrive:debug frames|activate <class>|scratchpad|type [text]"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

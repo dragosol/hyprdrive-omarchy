@@ -6772,9 +6772,13 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 
 // DRAW. Paints the layout and decides nothing: every box it uses was decided
 // above, so the pixels and the hit boxes cannot drift apart.
-static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
+// `part`: 0 everything, 1 the pill only, 2 the results body only (the pane's
+// entrance/exit is motion-blurred on its own, the pill stays sharp).
+static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part = 0) {
     if (!L.drawable)
         return;
+    const bool DRAWPILL = part != 2;
+    const bool DRAWBODY = part != 1;
 
     const float FADE  = L.fade;
     const float SCALE = L.scale;
@@ -6790,14 +6794,16 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
     const int BADGEROUND = roundFor(BADGE);
     const auto ACCENT    = ScrollOverview::Config::highlightColor();
 
-    OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit);
+    if (DRAWPILL)
+        OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit);
 
     CRectPassElement::SRectData badgeBg;
     badgeBg.box           = BADGE;
     badgeBg.color         = ACCENT.modifyA(0.30F * FADE);
     badgeBg.round         = BADGEROUND;
     badgeBg.roundingPower = POWER;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(badgeBg));
+    if (DRAWPILL)
+        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(badgeBg));
 
     float      texFade = FADE;
     const auto ADDTEX  = [&](const auto& tex, const CBox& box) {
@@ -6805,12 +6811,12 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
         data.tex = tex;
         data.box = box;
         data.a   = texFade;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
     };
 
     const auto GLYPHTEX = OverviewRender::text("\uF002", ScrollOverview::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
                                                       "JetBrainsMono Nerd Font", 0);
-    if (GLYPHTEX && GLYPHTEX->ok()) {
+    if (DRAWPILL && GLYPHTEX && GLYPHTEX->ok()) {
         CBox glyphBox = {
             BADGE.x + std::round((BADGE.width - sc<float>(GLYPHTEX->m_size.x)) / 2.F),
             BADGE.y + std::round((BADGE.height - sc<float>(GLYPHTEX->m_size.y)) / 2.F),
@@ -6820,6 +6826,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
         ADDTEX(GLYPHTEX, glyphBox.round());
     }
 
+    if (DRAWBODY) {
     if (L.containerBox.width > 1.F) {
         OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true, resultsLit);
 
@@ -6827,7 +6834,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
             CRectPassElement::SRectData div;
             div.box   = divBox;
             div.color = ScrollOverview::Config::themeForeground().modifyA(0.12F * FADE);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(div));
+            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(div));
         }
     }
 
@@ -6884,7 +6891,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
                 sel.color         = ACCENT.modifyA(0.22F * FADE);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
+                g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(sel));
             }
 
             if (E.status) {
@@ -6963,7 +6970,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
                 sel.color          = SELFILL.modifyA(SELFILL.a * FADE * CARD.alpha);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sel));
+                g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(sel));
             }
 
             const float ROWPAD     = std::round(6.F * SCALE);
@@ -7036,7 +7043,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
             data.box     = box;
             data.a       = texFade;
             data.clipBox = IBOX;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
         };
 
         const auto ICONTEX = OverviewRender::appIcon(L.inspector.icon);
@@ -7129,6 +7136,10 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
         paintWrap(L.inspector.shortcutHint, HINTCOL, HINTPX, 500, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE), std::round(4.F * SCALE));
         paintWrap(L.inspector.shortcutHint2, HINTCOL, HINTPX, 500, IBOX.x + PADL, FULLW, sc<int>(36.F * SCALE), 0.F);
     }
+    } // DRAWBODY
+
+    if (!DRAWPILL)
+        return;
 
     texFade = FADE;
     const CHyprColor FG = !L.queried ? ScrollOverview::Config::themeMutedText() : (L.emptyResult ? ScrollOverview::Config::themeUrgent() : ScrollOverview::Config::themeForeground());
@@ -7148,7 +7159,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit) {
         data.box     = box;
         data.a       = texFade * a;
         data.clipBox = FIELD;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
     };
 
     // Nothing measured is nothing to fit: the placeholder keeps the rest width.
@@ -7403,8 +7414,27 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     {
         const auto& SL   = searchLayoutHere();
         const bool  KEYS = activeScrollOverview().get() == this;
-        drawSearch(SL, (KEYS && g_search.nav.zone == EOverviewNavZone::Search) || pointerOnChrome(SL.pill),
-                   (KEYS && g_search.nav.zone == EOverviewNavZone::Result) || pointerOnChrome(SL.containerBox));
+        const bool PILLLIT = (KEYS && g_search.nav.zone == EOverviewNavZone::Search) || pointerOnChrome(SL.pill);
+        const bool BODYLIT = (KEYS && g_search.nav.zone == EOverviewNavZone::Result) || pointerOnChrome(SL.containerBox);
+        // THE RESULTS PANE'S ENTRANCE AND EXIT, motion-blurred (user,
+        // 2026-09-30: "0.5 motion blur on the search results pane appearing /
+        // disappearing"): while its band or width animates, the body is drawn
+        // into a nested pass smeared from last frame's box -- half strength and
+        // the half-duration fade, like the scratchpad. The pill stays sharp.
+        const CBox PREVBOX = searchPaneLastBox;
+        searchPaneLastBox  = SL.containerBox;
+        const bool GROWING = (resultsBand->isBeingAnimated() || resultsWidth->isBeingAnimated()) && PREVBOX.w >= 2 && PREVBOX.h >= 2 && SL.containerBox.w >= 2 &&
+            SL.containerBox.h >= 2;
+        bool blurred = false;
+        if (GROWING) {
+            const float PCT  = std::max(resultsBand->isBeingAnimated() ? resultsBand->getPercent() : 0.F, resultsWidth->isBeingAnimated() ? resultsWidth->getPercent() : 0.F);
+            CBox        PREV = ScrollOverview::FlightBlur::fadeMotion(PREVBOX, SL.containerBox, PCT);
+            PREV = CBox{SL.containerBox.x + (PREV.x - SL.containerBox.x) * 0.5, SL.containerBox.y + (PREV.y - SL.containerBox.y) * 0.5,
+                        SL.containerBox.w + (PREV.w - SL.containerBox.w) * 0.5, SL.containerBox.h + (PREV.h - SL.containerBox.h) * 0.5};
+            blurred = ScrollOverview::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
+                                                              ScrollOverview::FlightBlur::layoutSamples());
+        }
+        drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
     }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor

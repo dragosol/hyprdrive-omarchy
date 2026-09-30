@@ -269,6 +269,7 @@ class CScrollOverview : public IOverview {
     void   renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox = nullptr,
                              bool dragged = false, float alphaMul = 1.F, bool ownsPass = true);
     // The dragged proxy's box last frame (render px), for its resize blur.
+    CBox         searchPaneLastBox; // the results pane last frame, for its blur
     CBox         dragBlurPrev;
     PHLWINDOWREF dragBlurWindow;
     void   renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now);
