@@ -263,7 +263,10 @@ namespace ScrollOverview::FlightBlur {
                 if (!window || !window->m_isMapped || window->isHidden() || window->m_monitor != monitor || !window->m_workspace)
                     continue;
                 const auto& WS        = window->m_workspace;
-                const bool  SHOWN     = WS->isVisible() || WS->m_forceRendering;
+                // A special workspace hiding is still drawn while it fades or
+                // slides out (the scratchpad closing).
+                const bool  SHOWN     = WS->isVisible() || WS->m_forceRendering ||
+                    (WS->m_isSpecialWorkspace && WS->m_alpha->value() > 0.01F && (WS->m_alpha->isBeingAnimated() || WS->m_renderOffset->isBeingAnimated()));
                 const auto  IT        = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.window.lock() == window; });
                 const auto& WSOFFSET  = WS->m_renderOffset;
                 // A SPECIAL workspace sliding in (the scratchpad) moves its
@@ -334,7 +337,9 @@ namespace ScrollOverview::FlightBlur {
                                             std::max({MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F,
                                                       SLIDING ? WSOFFSET->getPercent() : 0.F});
                 CBox        PREV = fadeMotion(RAWPREV, NOWBOX, PCT);
-                if (SWIPED || (SCROLLING && MOVING && !RESIZING && !OFFSETS))
+                // The scratchpad sliding gets the same gentler smear (user,
+                // 2026-09-30: "the blur workspace switching has").
+                if (SWIPED || SLIDING || (SCROLLING && MOVING && !RESIZING && !OFFSETS))
                     PREV = CBox{NOWBOX.x + (PREV.x - NOWBOX.x) * SCROLL_SMEAR, NOWBOX.y + (PREV.y - NOWBOX.y) * SCROLL_SMEAR, NOWBOX.w + (PREV.w - NOWBOX.w) * SCROLL_SMEAR,
                                 NOWBOX.h + (PREV.h - NOWBOX.h) * SCROLL_SMEAR};
                 if (!moved(PREV, NOWBOX)) {

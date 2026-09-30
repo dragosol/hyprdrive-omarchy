@@ -8364,13 +8364,31 @@ bool CScrollOverview::shouldSuppressRenderDamage() const {
 // special workspace shown on this monitor is drawn natively on top of the
 // overview -- its own slide, fade and dim -- the way the desktop draws it over
 // the windows. The minimize stash is special too, and is never shown.
+//
+// AND WHILE IT GOES (user, 2026-09-30: "toggling the overview while the
+// scratchpad is open should show it closing"). Hyprland clears
+// m_activeSpecialWorkspace the moment a special starts hiding and animates it
+// out afterwards, so the last one shown on each monitor is remembered and drawn
+// for as long as its fade or slide is still running.
 static PHLWORKSPACE overviewShownSpecialOn(const PHLMONITOR& monitor) {
+    static std::unordered_map<MONITORID, PHLWORKSPACEREF> s_last;
     if (!monitor)
         return nullptr;
     const auto SPECIAL = monitor->m_activeSpecialWorkspace;
-    if (!SPECIAL || SPECIAL->m_name == "special:minimized")
+    if (SPECIAL && SPECIAL->m_name != "special:minimized") {
+        s_last[monitor->m_id] = SPECIAL;
+        return SPECIAL;
+    }
+    const auto IT = s_last.find(monitor->m_id);
+    if (IT == s_last.end())
         return nullptr;
-    return SPECIAL;
+    const auto LEAVING = IT->second.lock();
+    if (!LEAVING || LEAVING->m_monitor != monitor || LEAVING->m_alpha->value() < 0.01F ||
+        !(LEAVING->m_alpha->isBeingAnimated() || LEAVING->m_renderOffset->isBeingAnimated())) {
+        s_last.erase(IT);
+        return nullptr;
+    }
+    return LEAVING;
 }
 
 static bool onShownSpecial(const PHLWINDOW& window, const PHLMONITOR& monitor) {
