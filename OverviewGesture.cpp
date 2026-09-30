@@ -6,6 +6,8 @@
 #include "OmarchySearch.hpp"
 #include "SearchProviders.hpp"
 #include "Scratchpad.hpp"
+#include "DockStacks.hpp"
+#include <format>
 
 #include <algorithm>
 #include <cctype>
@@ -156,11 +158,23 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
     m_mode = EMode::Native;
     m_tapeWorkspace.reset();
     if (!m_allWorkspaces && MONITOR && !MONITOR->m_activeSpecialWorkspace) {
-        if (const auto WS = MONITOR->m_activeWorkspace; WS && ScrollOverview::DesktopTape::probe(WS).usable) {
-            m_mode          = EMode::Tape;
-            m_tapeWorkspace = WS;
-            m_tape.begin(e);
-            return;
+        if (const auto WS = MONITOR->m_activeWorkspace; WS) {
+            if (const auto TAPE = ScrollOverview::DesktopTape::probe(WS); TAPE.usable) {
+                m_mode          = EMode::Tape;
+                m_tapeWorkspace = WS;
+                m_tapeOffset    = std::clamp(TAPE.offset, 0.0, TAPE.maxOffset);
+                m_tapeMax       = TAPE.maxOffset;
+                // Focus must not follow the pointer while the windows slide under
+                // it: each new window under the cursor took focus, and the layout
+                // refit its camera to that window -- a jump past the end.
+                if (!m_forcedFollow) {
+                    m_prevFollow   = ScrollOverview::Config::getValue<int>("input:follow_mouse");
+                    m_forcedFollow = true;
+                    ScrollOverview::Config::setValue("input:follow_mouse", 0);
+                }
+                m_tape.begin(e);
+                return;
+            }
         }
     }
 
@@ -184,21 +198,23 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
     }
 
     if (m_mode == EMode::Tape) {
-        m_tape.update(e);
+        m_tape.update(e); // its velocity is what the release snaps with
         const auto WS = m_tapeWorkspace.lock();
         if (!WS)
             return;
-        const auto TAPE = ScrollOverview::DesktopTape::probe(WS);
-        double     over = 0.0;
-        if (TAPE.offset > TAPE.maxOffset)
-            over = TAPE.offset - TAPE.maxOffset;
-        else if (TAPE.offset < 0.0)
-            over = TAPE.offset; // negative: past the start
+        // Fingers left (distance < 0) move the tape forward, 1:1 in px.
+        const double WANT = m_tapeOffset - distance(e);
+        double       over = 0.0;
+        if (WANT > m_tapeMax)
+            over = WANT - m_tapeMax;
+        else if (WANT < 0.0)
+            over = WANT; // negative: past the start
+        m_tapeOffset = std::clamp(WANT, 0.0, m_tapeMax);
+        ScrollOverview::DesktopTape::setOffset(WS, m_tapeOffset);
         if (over == 0.0)
             return;
-        // Pin the tape at the end it reached; the rest of the travel switches.
+        // Pinned at the end it reached; the rest of the travel switches.
         const bool FAREND = over > 0.0;
-        ScrollOverview::DesktopTape::setOffset(WS, FAREND ? TAPE.maxOffset : 0.0);
         if (!g_pUnifiedWorkspaceSwipe || g_pUnifiedWorkspaceSwipe->isGestureInProgress())
             return;
         g_pUnifiedWorkspaceSwipe->begin();
@@ -232,8 +248,8 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
         g_pUnifiedWorkspaceSwipe->end();
         m_mode = EMode::Tape;
         if (const auto WS = m_tapeWorkspace.lock()) {
-            const auto TAPE = ScrollOverview::DesktopTape::probe(WS);
-            ScrollOverview::DesktopTape::setOffset(WS, m_tapeAtEnd ? TAPE.maxOffset - std::abs(D) : std::abs(D));
+            m_tapeOffset = std::clamp(m_tapeAtEnd ? m_tapeMax - std::abs(D) : std::abs(D), 0.0, m_tapeMax);
+            ScrollOverview::DesktopTape::setOffset(WS, m_tapeOffset);
         }
         return;
     }
@@ -250,20 +266,41 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
         return;
     }
 
-    if (m_mode == EMode::Tape) {
+    // follow_mouse back before anything settles focus.
+    const auto RESTOREFOLLOW = [this] {
+        if (m_forcedFollow) {
+            ScrollOverview::Config::setValue("input:follow_mouse", m_prevFollow);
+            m_forcedFollow = false;
+        }
+    };
+
+    // The release snap (Hyprland's, with momentum) may CENTRE a first or last
+    // column -- a quick flick left half a window and empty space beside it
+    // (user, 2026-09-29: "never see empty space on the scrolling desktop").
+    // Whatever it picked is pulled back inside the tape.
+    const auto SNAPINSIDE = [this, &e] {
         m_tape.end(e); // snap to a column (with momentum) and focus it
+        if (const auto WS = m_tapeWorkspace.lock()) {
+            ScrollOverview::DesktopTape::setOffset(WS, ScrollOverview::DesktopTape::probe(WS).offset); // setOffset clamps
+        }
+    };
+
+    if (m_mode == EMode::Tape) {
+        RESTOREFOLLOW();
+        SNAPINSIDE();
         m_mode = EMode::Native;
         m_tapeWorkspace.reset();
         return;
     }
 
     if (m_mode == EMode::TapeSwitch) {
+        RESTOREFOLLOW();
         g_pUnifiedWorkspaceSwipe->end();
         // Cancelled (not far or fast enough): still on the tape's desktop, so the
         // windows settle as a tape swipe would -- snapped, a column focused.
         const auto WS = m_tapeWorkspace.lock();
         if (const auto MONITOR = WS ? WS->m_monitor.lock() : PHLMONITOR{}; MONITOR && MONITOR->m_activeWorkspace == WS)
-            m_tape.end(e);
+            SNAPINSIDE();
         m_mode = EMode::Native;
         m_tapeWorkspace.reset();
         return;

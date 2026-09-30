@@ -72,6 +72,13 @@ class COverviewWorkspaceGesture : public ITrackpadGesture {
     double                     m_switchDelta = 0.0; // the workspace swipe's accumulated delta
     int                        m_switchSide  = 0;   // +1 / -1: the sign it started with
     bool                       m_tapeAtEnd   = false; // the tape side it left from: true = far end
+    // OUR position on the tape, from the fingers -- not read back: Hyprland
+    // clamps the start to 0 (so "past the start" never showed) and refits the
+    // camera when focus moves (a +1180 px jump mid-swipe, measured).
+    double                     m_tapeOffset  = 0.0;
+    double                     m_tapeMax     = 0.0;
+    bool                       m_forcedFollow = false; // follow_mouse held at 0 for the swipe
+    int                        m_prevFollow   = 1;
 
     bool                   m_allWorkspaces = false;
     bool                   m_forcedUseR    = false; // this swipe set use_r, and end() owes it back
