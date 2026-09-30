@@ -74,6 +74,17 @@ void restore(PHLMONITOR monitor, PHLWINDOW window);
 // flights froze at click time are each other's.
 void retargetRestores();
 
+// Where a window's flight was last DRAWN -- monitor-local render px -- with its
+// alpha and the flight's progress 0..1. The dock's window-title label rides on
+// it (user, 2026-09-30: the label stayed behind, or floated mid-screen, while
+// the window flew).
+struct SDrawnFlight {
+    CBox  box;
+    float alpha    = 1.F;
+    float progress = 0.F;
+};
+std::optional<SDrawnFlight> drawnFor(const PHLWINDOW& window);
+
 
 // Is the dock in the middle of anything? Autohide holds the pill out for a
 // flight, and the render loop asks before deciding whether to keep asking for

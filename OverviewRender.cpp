@@ -751,7 +751,7 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
             ring.color         = ACTIVE->m_colors[0].modifyA(alpha);
             ring.round         = ROUND + sc<int>(std::round(sc<float>(BORDER) * SCALE));
             ring.roundingPower = 2.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(ring));
+            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(ring));
         }
     }
 
@@ -760,13 +760,13 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
     bg.color         = CHyprColor{0.F, 0.F, 0.F, PILL_BG_A * alpha};
     bg.round         = ROUND;
     bg.roundingPower = 2.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(bg));
 
     CTexPassElement::SRenderData label;
     label.tex = TEX;
     label.box = CBox{std::round(plate.x + PADX), std::round(plate.y + PADY), sc<float>(TEX->m_size.x), sc<float>(TEX->m_size.y)};
     label.a   = alpha;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(label));
+    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(label));
 
     return plate;
 }

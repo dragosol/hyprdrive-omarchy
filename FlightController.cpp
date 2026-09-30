@@ -1029,6 +1029,13 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
     });
 }
 
+std::optional<SDrawnFlight> drawnFor(const PHLWINDOW& window) {
+    const auto IT = find(window);
+    if (IT == g_flights.end() || !IT->drawn)
+        return std::nullopt;
+    return SDrawnFlight{.box = IT->drawn->box, .alpha = IT->drawn->alpha, .progress = flightProgress(*IT)};
+}
+
 void retargetRestores() {
     for (auto& f : g_flights) {
         if (!f.isDriven())

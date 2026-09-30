@@ -106,6 +106,7 @@
 // Included AFTER the private-access blocks, like OverviewChrome, because the
 // flight code needs the same m_Value / m_realPosition access this TU has.
 #include "FlightController.hpp"
+#include "FlightBlur.hpp"
 #include "Scratchpad.hpp"
 #include "AppInfo.hpp"
 #include <cstring>
@@ -2304,7 +2305,14 @@ std::vector<PHLWINDOW> peekWindowsOn(PHLMONITOR monitor, const std::vector<PHLWI
     if (!monitor)
         return out;
     for (const auto& WINDOW : windows) {
-        if (!WINDOW || !WINDOW->m_isMapped || WINDOW->m_monitor != monitor || !WINDOW->m_workspace || Minimize::isMinimized(WINDOW))
+        if (!WINDOW || !WINDOW->m_isMapped || WINDOW->m_monitor != monitor || !WINDOW->m_workspace)
+            continue;
+        // A window in flight keeps its label: it rides the flight.
+        if (Flight::hasFlight(WINDOW)) {
+            out.emplace_back(WINDOW);
+            continue;
+        }
+        if (Minimize::isMinimized(WINDOW))
             continue;
         if (WINDOW->m_workspace == monitor->m_activeWorkspace || WINDOW->m_workspace == monitor->m_activeSpecialWorkspace)
             out.emplace_back(WINDOW);
@@ -2317,10 +2325,19 @@ void renderWindowPeek(PHLMONITOR monitor, float alpha) {
         return;
 
     const float S = std::max(monitor->m_scale, 0.01F);
+    // Each flying window's label box last frame, for its motion blur.
+    static std::unordered_map<const Desktop::View::CWindow*, CBox> s_lastFlyingPlate;
     for (const auto& REF : g_tip.peek) {
         const auto WINDOW = REF.lock();
-        if (!WINDOW || !WINDOW->m_isMapped || Minimize::isMinimized(WINDOW) || WINDOW->m_monitor != monitor)
+        const auto FLIGHT = WINDOW ? Flight::drawnFor(WINDOW) : std::nullopt;
+        // A flight armed but not drawn yet has no box to ride; its window's real
+        // box is where it is NOT (a restore parks it at alpha 0).
+        const bool ARMED  = WINDOW && !FLIGHT && Flight::hasFlight(WINDOW);
+        if (!WINDOW || !WINDOW->m_isMapped || ARMED || (!FLIGHT && Minimize::isMinimized(WINDOW)) || WINDOW->m_monitor != monitor) {
+            if (WINDOW)
+                s_lastFlyingPlate.erase(WINDOW.get());
             continue;
+        }
 
         std::string app = AppSearch::appNameForClass(AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title));
         if (app.empty())
@@ -2333,6 +2350,28 @@ void renderWindowPeek(PHLMONITOR monitor, float alpha) {
             title = title.substr(0, cut) + "…";
         }
         const std::string TEXT = title.empty() || title == app ? app : app + "  \u00b7  " + title;
+
+        // IN FLIGHT: on the box the flight drew, faded with it, and smeared along
+        // the same path as the window (FlightBlur, the minimize blur's samples
+        // and half-duration fade). No size gate -- it follows the window all the
+        // way into the icon and fades out with it.
+        if (FLIGHT) {
+            const CBox& B     = FLIGHT->box;
+            const CBox  PLATE = OverviewRender::labelPillBox(monitor, TEXT, 0.0, 0.0, S);
+            if (PLATE.height < 1 || B.width < 1 || B.height < 1 || FLIGHT->alpha <= 0.01F)
+                continue;
+            const double CX  = B.x + B.width / 2.0;
+            const double BY  = B.y + std::min<double>(PEEK_TOP_GAPL * S + PLATE.height, B.height);
+            const CBox   NOW{CX - PLATE.width / 2.0, BY - PLATE.height, PLATE.width, PLATE.height};
+            const auto   IT   = s_lastFlyingPlate.find(WINDOW.get());
+            const CBox   PREV = IT != s_lastFlyingPlate.end() ? FlightBlur::fadeMotion(IT->second, NOW, FLIGHT->progress) : NOW;
+            s_lastFlyingPlate[WINDOW.get()] = NOW;
+            const auto DRAW = [&] { OverviewRender::labelPill(monitor, TEXT, CX, BY, alpha * FLIGHT->alpha, S); };
+            if (!FlightBlur::drawBlurred(monitor, nullptr, PREV, NOW, DRAW))
+                DRAW();
+            continue;
+        }
+        s_lastFlyingPlate.erase(WINDOW.get());
 
         const auto  POS = WINDOW->m_realPosition->value() - monitor->m_position;
         const auto  SZ  = WINDOW->m_realSize->value();
