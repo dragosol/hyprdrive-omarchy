@@ -422,6 +422,16 @@ inline bool isPointerOnTopLayer(PHLMONITOR monitor) {
     Vector2D   surfaceCoords;
     PHLLS      layerSurface;
 
+    // A layer's POPUPS first, as Hyprland's own focus walk does: Quickshell
+    // notification toasts (Omapager, Omarchy's notifications) are popups of a
+    // layer whose own input region does not cover them, so the plain surface
+    // test missed them and the overview ate every hover, click and swipe.
+    const auto& HIT = Desktop::viewState()->hitTest();
+    for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP}) {
+        if (HIT.layerPopupSurfaceAt(MOUSECOORDS, &monitor->m_layerSurfaceLayers[LAYER], &surfaceCoords, &layerSurface))
+            return true;
+    }
+
     if (Desktop::viewState()->hitTest().layerSurfaceAt(MOUSECOORDS, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &surfaceCoords, &layerSurface))
         return true;
 

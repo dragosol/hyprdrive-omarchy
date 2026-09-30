@@ -423,6 +423,7 @@ bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
 namespace OvInternal {
     void overviewQueryEdited();
     void cancelPointerHandoff(); // scrollOverview.cpp
+    bool pointerOnTopLayer(PHLMONITOR monitor); // OverviewInput.cpp
 }
 void OvInternal::overviewQueryEdited() {
     afterQueryEdit();
@@ -1256,6 +1257,11 @@ static SDispatchResult onWindowDispatcher(std::string arg) {
         return {};
 
     if (arg == "click") {
+        // Only reached when onMouseButton let the press through, i.e. over a
+        // TOP/OVERLAY layer: the press is that layer's (the bind is
+        // non-consuming), so the overview must not act on it too.
+        if (OvInternal::pointerOnTopLayer(Desktop::focusState()->monitor()))
+            return {};
         OVERVIEW->performPrimaryClickAction();
         return {};
     }

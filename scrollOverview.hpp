@@ -731,6 +731,10 @@ class CScrollOverview : public IOverview {
     SPan                             pan;
 
     bool                             submapMouseClickPending = false;
+    // A press that went through to a TOP/OVERLAY layer (a toast being swiped):
+    // its motion and release stay that layer's until the button comes up, even
+    // once the pointer leaves the surface -- the implicit grab a client expects.
+    bool                             layerPointerGrab = false;
     bool                             emittingFullscreenVisibilityState = false;
     bool                             inputConfigOverridden = false;
     bool                             realtimePreviewTimerArmed = false;

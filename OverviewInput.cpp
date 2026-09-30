@@ -2,6 +2,13 @@
 #include "DockInput.hpp"
 using namespace OvInternal; // opted in here rather than leaked from the header
 
+// For main.cpp's click dispatcher, which does not include OverviewInternal.hpp.
+namespace OvInternal {
+    bool pointerOnTopLayer(PHLMONITOR monitor) {
+        return isPointerOnTopLayer(monitor);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Event handlers. These were inline [this] lambdas inside the constructor,
 // which is why it was 958 lines. Moved verbatim -- the [this]-only capture
@@ -113,7 +120,8 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // Without it here, any pointer transit over a top layer (the bar -- and
         // ydotool absolute moves slam through the corner every step) silently
         // cleared the pending press and no submap drag could ever start.
-        if (!drag.pendingPrimary && !submapMouseClickPending && !resize.pointerDown && !pan.pointerDown && !drag.activeWindow && !resize.activeWindow && isPointerOnTopLayer(pMonitor.lock())) {
+        if (layerPointerGrab || (!drag.pendingPrimary && !submapMouseClickPending && !resize.pointerDown && !pan.pointerDown && !drag.activeWindow && !resize.activeWindow &&
+                                 isPointerOnTopLayer(pMonitor.lock()))) {
             submapMouseClickPending = false;
             submapMouseClickButton  = 0;
             // Hyprland restores keyboard focus to a window whenever it is
@@ -230,9 +238,10 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                 g_pointerGrabOverview = nullptr;
         });
 
-        if (!drag.pendingPrimary && !resize.pointerDown && !pan.pointerDown && !drag.activeWindow && !resize.activeWindow && isPointerOnTopLayer(pMonitor.lock())) {
+        if (layerPointerGrab || (!drag.pendingPrimary && !resize.pointerDown && !pan.pointerDown && !drag.activeWindow && !resize.activeWindow && isPointerOnTopLayer(pMonitor.lock()))) {
             submapMouseClickPending = false;
             submapMouseClickButton  = 0;
+            layerPointerGrab        = event.state == WL_POINTER_BUTTON_STATE_PRESSED;
             return;
         }
 
