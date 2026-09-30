@@ -9556,6 +9556,7 @@ void CScrollOverview::render() {
     if (!MONITOR)
         return;
 
+    OpenProf::gpuMark("begin");
     noteFrame(MONITOR->m_id);
     // Smooth-frames hint: only the open/close animation must hit every refresh.
     if (scale->isBeingAnimated())
@@ -9596,12 +9597,26 @@ void CScrollOverview::render() {
     // format that does, an alpha a hair under 1 lets this wallpaper show
     // through the 20% the dim scrim does not cover. Unprovable by reading, so
     // it stays.
-    if (WALLPAPERMODE == 0 || WALLPAPERMODE == 2)
+    //
+    // Fully open, though, the blurred backdrop is drawn at alpha 1 over ALL of
+    // it, and both wallpaper caches render the wallpaper into their own FBs --
+    // so the screen's wallpaper pass (renderBackground plus the BACKGROUND
+    // layers, two full-screen passes at 2880x1800) is ~4-5 ms of GPU a frame
+    // (measured 2026-09-30, openprof) that nobody sees. A clear costs nothing
+    // and, if the backdrop's alpha were ever a hair under 1, what shows
+    // through the 80% scrim is black instead of wallpaper: invisible.
+    // That frame budget is what decides whether a typed letter's animation
+    // holds 60 fps or drops a refresh.
+    const float OPENSCALE    = ScrollOverview::Config::getScale();
+    const float OPENPROGRESS = std::clamp(std::abs(SCALE - 1.F) / std::max(0.01F, std::abs(1.F - OPENSCALE)), 0.F, 1.F);
+    const bool  BACKDROPCOVERS = OPENPROGRESS >= 0.999F && WALLPAPERMODE != 1 && frost.backdropFB && frost.backdropFB->isAllocated() && frost.backdropFB->getTexture();
+    if ((WALLPAPERMODE == 0 || WALLPAPERMODE == 2) && !BACKDROPCOVERS)
         renderGlobalWallpaper(MONITOR, NOW);
     else
         g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, {});
 
     Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
+    OpenProf::gpuMark("wallpaper");
 
     // Commit the queued backdrop to the screen BEFORE the temp-FB work below:
     // flushing inside the bind would swallow those elements into the FB (that
@@ -9609,7 +9624,9 @@ void CScrollOverview::render() {
     // happen HERE, not at the top of render() -- layer surfaces demonstrably
     // render at this stage and not earlier (empty-FB bug, take two).
     OverviewRender::flushPass(MONITOR);
+    OpenProf::gpuMark("wpflush");
     updateCardWallpaperFB(MONITOR, NOW);
+    OpenProf::gpuMark("cardwp");
 
     // The wallpaper canvas is still the monitor fill; the cards float on top
     // of it. Blur it the way the Omarchy lockscreen blurs its wallpaper, then
@@ -9623,6 +9640,7 @@ void CScrollOverview::render() {
         const float DIM      = 0.80F * PROGRESS;
         if (PROGRESS > 0.001F && WALLPAPERMODE != 1) {
             updateBackdropBlurCache(MONITOR, WALLPAPERMODE, NOW);
+            OpenProf::gpuMark("blurcache");
             renderBackdropBlurCache(MONITOR, PROGRESS);
         }
         if (DIM > 0.001F) {

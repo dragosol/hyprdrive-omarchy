@@ -35,6 +35,9 @@ namespace OpenProf {
         MONITORID                g_frameMon = MONITOR_INVALID;
         clock::time_point        g_frameStart{};
         uint64_t                 g_overviewNs = 0;
+        // CPU time at each gpuMark, recorded as the overview BUILDS the pass:
+        // where the overview's own CPU time goes, section by section.
+        std::vector<std::pair<const char*, clock::time_point>> g_cpuMarks;
         std::unordered_map<MONITORID, clock::time_point> g_lastPre;
 
         // GPU time per frame: a timestamp at RENDER_BEGIN and one at
@@ -246,6 +249,16 @@ namespace OpenProf {
                 if (g_draining || g_frameMon == MONITOR_INVALID || g_lines.empty())
                     return;
                 g_lines.back() += std::format("  frame {:6.2f} ms  overview {:6.2f} ms", msSince(g_frameStart), g_overviewNs / 1e6);
+                if (!g_cpuMarks.empty()) {
+                    g_lines.back() += "  cpu[";
+                    auto prev = g_cpuMarks.front().second;
+                    for (size_t i = 1; i < g_cpuMarks.size(); ++i) {
+                        g_lines.back() += std::format(" {}={:.2f}", g_cpuMarks[i].first, std::chrono::duration<double, std::milli>(g_cpuMarks[i].second - prev).count());
+                        prev = g_cpuMarks[i].second;
+                    }
+                    g_lines.back() += " ]";
+                    g_cpuMarks.clear();
+                }
                 for (auto it = g_frames.rbegin(); it != g_frames.rend(); ++it)
                     if (it->mon == g_frameMon) {
                         it->posted = true;
@@ -382,7 +395,13 @@ namespace OpenProf {
         };
     }
 
+    void cpuMark(const char* name) {
+        if (active())
+            g_cpuMarks.emplace_back(name, clock::now());
+    }
+
     void gpuMark(const char* name) {
+        cpuMark(name);
         if (active() && g_pHyprRenderer)
             g_pHyprRenderer->m_renderPass.add(makeUnique<CGpuMarkElement>(name));
     }

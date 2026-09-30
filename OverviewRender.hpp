@@ -39,6 +39,16 @@ void                 clearFrameChromeBlur();
 // drawn ROTATED, whose hard quad edge would otherwise stair-step (2026-09-24);
 // draw it into padBox(box, tex) so the artwork keeps its size.
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false, bool padded = false);
+
+// THE ICON WARMER (user, 2026-09-30: the first open and the first keystrokes
+// lagged, then got snappy). Decoding an icon costs ~1-3 ms, and the first
+// open/search decoded a dozen or more inside one frame -- late frames that also
+// knocked Hyprland's scheduling into half rate for the rest of the animation.
+// While no overview is open, a timer decodes ONE icon per tick into the same
+// cache: the open windows' badges first, then every installed app (the search
+// grid). ~16 KiB each. Started at load, re-armed when the app set changes.
+void startIconWarmer();
+void stopIconWarmer();
 inline constexpr int TEX_PAD = 2;
 CBox                 padBox(const CBox& box, const SP<Render::ITexture>& tex);
 // An image FILE at `px` (a thumbnail), cached on path + size + mtime.

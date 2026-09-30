@@ -21,6 +21,16 @@
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
 #include "globals.hpp"
+#include "IOverview.hpp"
+#include "SearchSession.hpp"
+#include "OmarchySearch.hpp"
+#include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/output/Monitor.hpp>
+#include <unordered_set>
+#include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/render/OpenGL.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -154,7 +164,43 @@ static constexpr int OVERVIEW_APP_ICON_PX = 64;
 
 // Icon name -> texture, built once. NULL entries are cached too: an icon that
 // failed to resolve must not be re-searched on every single frame.
-static std::unordered_map<std::string, SP<Render::ITexture>> g_overviewAppIcons;
+//
+// Each entry remembers the FILE it was decoded from and the icon-index
+// generation it was checked against. A rebuilt index used to drop every
+// texture, and the index is rebuilt more often than it looks: the dock stacks'
+// other-theme index finishing in the background bumps it too. So the first
+// overview after one re-decoded ~15 icons (~30 ms) right on the opening frames.
+// Now a stale entry re-resolves its name -- a map lookup -- and only an icon
+// whose file actually changed is decoded again.
+struct SAppIcon {
+    SP<Render::ITexture> texture;
+    std::string          path;
+    uint64_t             gen = 0;
+};
+static std::unordered_map<std::string, SAppIcon> g_overviewAppIcons;
+
+static std::string resolveAppIconPath(const std::string& iconName) {
+    if (iconName.starts_with('@')) {
+        if (const auto COLON = iconName.find(':'); COLON != std::string::npos)
+            return AppSearch::resolveIconPathInTheme(iconName.substr(COLON + 1), iconName.substr(1, COLON - 1));
+        return "";
+    }
+    return AppSearch::resolveIconPath(iconName);
+}
+
+// True when `iconName` (untinted, unpadded) is decoded and still current.
+static bool appIconWarm(const std::string& iconName) {
+    const auto IT = g_overviewAppIcons.find(iconName);
+    if (IT == g_overviewAppIcons.end())
+        return false;
+    const auto GEN = AppSearch::iconIndexGeneration();
+    if (IT->second.gen == GEN)
+        return true;
+    if (resolveAppIconPath(iconName) != IT->second.path)
+        return false;
+    IT->second.gen = GEN;
+    return true;
+}
 
 // An image FILE -> texture (dock stacks A: the pile's and pane's thumbnails),
 // decoded and uploaded exactly as appIcon does. Keyed on path + size + mtime,
@@ -309,6 +355,172 @@ SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& col
     return texture;
 }
 
+namespace {
+    wl_event_source*         g_warmTimer = nullptr;
+    std::vector<std::string> g_warmQueue;
+    uint64_t                 g_warmInvGen = 0;
+    constexpr int            WARM_TICK_MS = 25;
+
+    // The rows a first letter can bring up besides apps: the Omarchy menu's
+    // matches for each letter, and the "Ask <agent>" rows. Gathered once per
+    // refill (the menu search is an in-memory scan).
+    // Cached per inventory generation: the 3 s recheck would otherwise run the
+    // 26 menu searches every time (~2.5 ms).
+    const std::vector<OmarchySearch::SSearchItem>& warmSearchItems() {
+        static std::vector<OmarchySearch::SSearchItem> items;
+        static uint64_t                                 builtFor = 0;
+        if (const auto GEN = AppSearch::inventoryGeneration(); GEN != builtFor || items.empty()) {
+            builtFor = GEN;
+            items    = OmarchySearch::promptAllAgents("x");
+            for (char c = 'a'; c <= 'z'; ++c) {
+                auto menu = OmarchySearch::searchMenu(std::string(1, c));
+                items.insert(items.end(), std::make_move_iterator(menu.begin()), std::make_move_iterator(menu.end()));
+            }
+        }
+        return items;
+    }
+
+    void refillWarmQueue() {
+        g_warmQueue.clear();
+        std::unordered_set<std::string> seen;
+        const auto push = [&](const std::string& name) {
+            if (!name.empty() && seen.insert(name).second)
+                g_warmQueue.push_back(name);
+        };
+        // Popped from the back: push in REVERSE priority.
+        for (const auto& E : AppSearch::inventory())
+            push(E.icon);
+        for (const auto& I : warmSearchItems())
+            if (!OmarchySearch::isGlyphIcon(I.icon))
+                push(I.icon);
+        for (const char* SECTION : {"utilities-terminal", "folder", "system-run"}) // overviewSearchSections
+            push(SECTION);
+        for (const char* TOOL : {"preferences-desktop-locale", "accessories-dictionary"}) // the Define / Translate rows
+            push(TOOL);
+        push("window-close-symbolic");
+        for (const auto& W : Desktop::windowState()->windows())
+            if (W && W->m_isMapped)
+                push(AppSearch::iconForClass(AppSearch::identityClass(W->m_class, W->m_title)));
+    }
+
+    // THE FIRST KEYSTROKE'S LABELS. Once the icons are in, the same timer
+    // rasterises what the first letter typed will show: each app's row name,
+    // the typed letter itself, and the placeholder -- in the sizes the search
+    // draws them at on each monitor at rest (search scale = monitor scale x
+    // plugin:hyprdrive:scale). A few per tick; a miss here only means that
+    // label is drawn cold as before.
+    struct SWarmText {
+        std::string str;
+        CHyprColor  color;
+        int         px     = 0;
+        int         weight = 0;
+    };
+    std::vector<SWarmText> g_warmTexts;
+    std::string            g_warmTextsFor; // what g_warmTexts was built for
+    constexpr int          WARM_TEXTS_PER_TICK = 6;
+
+    std::string warmTextsKey() {
+        std::string key = std::format("{}|{}|{:x}|{:x}|{}", AppSearch::inventoryGeneration(), ScrollOverview::Config::themeFontFamily(),
+                                      ScrollOverview::Config::themeForeground().getAsHex(), ScrollOverview::Config::themeMutedText().getAsHex(), ScrollOverview::Config::getScale());
+        for (const auto& M : State::monitorState()->monitors())
+            if (M)
+                key += std::format("|{}", M->m_scale);
+        return key;
+    }
+
+    void refillWarmTexts() {
+        g_warmTexts.clear();
+        std::unordered_set<float> scales;
+        for (const auto& M : State::monitorState()->monitors())
+            if (M)
+                scales.insert(sc<float>(M->m_scale) * ScrollOverview::Config::getScale());
+        const auto FG    = ScrollOverview::Config::themeForeground();
+        const auto MUTED = ScrollOverview::Config::themeMutedText();
+        const auto px    = [](float base, float scale) { return std::max(1, sc<int>(std::round(base * scale))); };
+        // Popped from the back: push in REVERSE priority.
+        const auto HEADING = ScrollOverview::Config::themeHeading();
+        const auto& ITEMS  = warmSearchItems();
+        for (const float S : scales) {
+            for (const auto& E : AppSearch::inventory())
+                g_warmTexts.push_back({E.name, FG, px(13.F, S), 500}); // drawSearch's card rows
+            for (const auto& I : ITEMS)
+                g_warmTexts.push_back({I.name, FG, px(13.F, S), 500});
+            for (const char* TOOL : {"Translate", "Define"})
+                g_warmTexts.push_back({TOOL, FG, px(13.F, S), 500});
+            for (int n = 30; n >= 1; --n)
+                g_warmTexts.push_back({"+" + std::to_string(n), MUTED, px(11.F, S), 500}); // a card's "+N more"
+            for (const char* TITLE : {"Files & Folders", "AI & Tools", "Omarchy Menu"})
+                g_warmTexts.push_back({TITLE, HEADING, px(12.F, S), 600}); // the card headings
+        }
+        for (const float S : scales) {
+            for (char c = '9'; c >= '0'; --c)
+                g_warmTexts.push_back({std::string(1, c), FG, px(OVERVIEW_PILL_TEXTPX, S), 600});
+            for (char c = 'z'; c >= 'a'; --c)
+                g_warmTexts.push_back({std::string(1, c), FG, px(OVERVIEW_PILL_TEXTPX, S), 600}); // the typed query
+            g_warmTexts.push_back({"Search, calculate or run", MUTED, px(OVERVIEW_PILL_TEXTPX, S), 0});
+        }
+    }
+
+    int warmTick(void*) {
+        // Never while an overview is up: that is the moment being protected.
+        if (!scrollOverviews().empty()) {
+            wl_event_source_timer_update(g_warmTimer, 500);
+            return 0;
+        }
+        if (const auto GEN = AppSearch::inventoryGeneration(); GEN != g_warmInvGen) {
+            g_warmInvGen = GEN;
+            refillWarmQueue();
+        }
+        while (!g_warmQueue.empty() && appIconWarm(g_warmQueue.back()))
+            g_warmQueue.pop_back();
+        if (g_warmQueue.empty()) {
+            if (const auto KEY = warmTextsKey(); KEY != g_warmTextsFor) {
+                g_warmTextsFor = KEY;
+                refillWarmTexts();
+            }
+            if (!g_warmTexts.empty()) {
+                if (Render::GL::g_pHyprOpenGL)
+                    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+                for (int i = 0; i < WARM_TEXTS_PER_TICK && !g_warmTexts.empty(); ++i) {
+                    const auto& T = g_warmTexts.back();
+                    text(T.str, T.color, T.px, false, "", 0, T.weight);
+                    g_warmTexts.pop_back();
+                }
+                wl_event_source_timer_update(g_warmTimer, WARM_TICK_MS);
+                return 0;
+            }
+            // Everything warm: look again now and then (new windows, a theme
+            // change that cleared the cache).
+            wl_event_source_timer_update(g_warmTimer, 3000);
+            g_warmInvGen = 0;
+            return 0;
+        }
+        if (Render::GL::g_pHyprOpenGL)
+            Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+        appIcon(g_warmQueue.back());
+        g_warmQueue.pop_back();
+        wl_event_source_timer_update(g_warmTimer, WARM_TICK_MS);
+        return 0;
+    }
+}
+
+void startIconWarmer() {
+    if (g_warmTimer || !g_pCompositor)
+        return;
+    g_warmTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, warmTick, nullptr);
+    if (g_warmTimer)
+        wl_event_source_timer_update(g_warmTimer, 1500); // let the load settle first
+}
+
+void stopIconWarmer() {
+    if (g_warmTimer)
+        wl_event_source_remove(g_warmTimer);
+    g_warmTimer = nullptr;
+    g_warmQueue.clear();
+    g_warmTexts.clear();
+    g_warmTextsFor.clear();
+}
+
 SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool padded) {
     if (iconName.empty())
         return nullptr;
@@ -319,18 +531,18 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
     // different cache entries. \x01 cannot appear in an icon name.
     const std::string KEY = (tintWhite ? iconName + "\x01white" : iconName) + (padded ? "\x03pad" : "");
 
-    // What a NAME resolves to changes when the icon index is rebuilt -- an icon
-    // installed after the first lookup, which until then cached as nothing (or
-    // as the generic tile) for the life of the plugin. Dropping the textures is
-    // cheap: there are a few dozen and each is decoded again on first use.
-    static uint64_t cachedIconGen = 0;
-    if (const auto GEN = AppSearch::iconIndexGeneration(); GEN != cachedIconGen) {
-        g_overviewAppIcons.clear();
-        cachedIconGen = GEN;
+    // What a NAME resolves to changes when the icon index is rebuilt (an icon
+    // installed after the first lookup). See SAppIcon: re-resolve, and keep
+    // the texture when the file is the same.
+    const auto GEN = AppSearch::iconIndexGeneration();
+    if (const auto IT = g_overviewAppIcons.find(KEY); IT != g_overviewAppIcons.end()) {
+        if (IT->second.gen == GEN)
+            return IT->second.texture;
+        if (resolveAppIconPath(iconName) == IT->second.path) {
+            IT->second.gen = GEN;
+            return IT->second.texture;
+        }
     }
-
-    if (const auto IT = g_overviewAppIcons.find(KEY); IT != g_overviewAppIcons.end())
-        return IT->second;
 
     SP<Render::ITexture> texture;
 
@@ -343,13 +555,8 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
 
     // "@<theme>:<name>": that icon from another theme (dock stacks, 2026-09-24:
     // the stacks and the Trash follow the Omarchy theme's icons, or GTK's).
-    std::string resolved;
-    if (iconName.starts_with('@')) {
-        if (const auto COLON = iconName.find(':'); COLON != std::string::npos)
-            resolved = AppSearch::resolveIconPathInTheme(iconName.substr(COLON + 1), iconName.substr(1, COLON - 1));
-    } else
-        resolved = AppSearch::resolveIconPath(iconName);
-    if (const auto PATH = resolved; !PATH.empty()) {
+    const std::string resolved = resolveAppIconPath(iconName);
+    if (const auto& PATH = resolved; !PATH.empty()) {
         const auto T1 = Prof::clock::now();
         Prof::icoResolveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(T1 - T0).count();
 
@@ -397,7 +604,7 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
 
     Prof::icoUploadNs += std::chrono::duration_cast<std::chrono::nanoseconds>(Prof::clock::now() - UP0).count();
 
-    g_overviewAppIcons[KEY] = texture;
+    g_overviewAppIcons[KEY] = SAppIcon{.texture = texture, .path = resolved, .gen = GEN};
     return texture;
 }
 
@@ -495,6 +702,41 @@ static std::unordered_map<STextKey, SP<Render::ITexture>, STextKeyHash, STextKey
 // generation are dropped.
 static constexpr size_t TEXT_CACHE_MAX = 1024;
 
+// The logical width renderText gives `str` with no limit, measured once (a
+// Pango layout, no raster). Colour and maxWidth are left 0 in the key.
+static std::unordered_map<STextKey, int, STextKeyHash, STextKeyEqual> g_textWidths;
+
+static int naturalTextWidth(const std::string& str, const std::string& family, int fontSize, int weight, bool italic) {
+    const STextKeyView KEY{.str = str, .fontFamily = family, .color = 0, .fontSize = fontSize, .maxWidth = 0, .weight = weight, .italic = italic};
+    if (const auto IT = g_textWidths.find(KEY); IT != g_textWidths.end())
+        return IT->second;
+    if (g_textWidths.size() >= 4 * TEXT_CACHE_MAX)
+        g_textWidths.clear();
+
+    PangoFontMap*         fontMap = pango_cairo_font_map_get_default();
+    PangoContext*         context = pango_font_map_create_context(fontMap);
+    PangoLayout*          layout  = pango_layout_new(context);
+    PangoFontDescription* fd      = pango_font_description_new();
+    pango_font_description_set_family(fd, family.c_str());
+    pango_font_description_set_absolute_size(fd, fontSize * PANGO_SCALE);
+    pango_font_description_set_style(fd, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
+    pango_font_description_set_weight(fd, sc<PangoWeight>(weight));
+    pango_layout_set_font_description(layout, fd);
+    pango_layout_set_text(layout, str.c_str(), -1);
+    PangoRectangle ink = {}, logical = {};
+    pango_layout_get_pixel_extents(layout, &ink, &logical);
+    pango_font_description_free(fd);
+    g_object_unref(layout);
+    g_object_unref(context);
+
+    // +1: Pango compares in its own sub-pixel units, so a label exactly as
+    // wide as the limit keeps its maxWidth key. That is only a missed share,
+    // never wrong pixels.
+    const int W = logical.width + 1;
+    g_textWidths.emplace(STextKey{.str = str, .fontFamily = family, .color = 0, .fontSize = fontSize, .maxWidth = 0, .weight = weight, .italic = italic}, W);
+    return W;
+}
+
 SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int fontSize, bool italic, const std::string& fontFamily, int maxWidth, int weight) {
     if (str.empty())
         return nullptr;
@@ -504,6 +746,16 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
     // that do not pin a family inherit that. Bound by REFERENCE: themeFontFamily
     // hands back its cache, and this runs on every probe.
     const std::string& FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+
+    // A label that FITS is the same pixels at any maxWidth (renderText sizes
+    // the texture to the text, ellipsising only past the limit), so maxWidth
+    // leaves the key unless it actually cuts the label. Callers pass the
+    // width of a pane or card that is still growing -- the results pane opening
+    // on the first keystroke handed every row a new width every frame, and all
+    // ~50 visible labels re-rasterised each frame of the animation (~5-10 ms a
+    // frame), enough to push Hyprland to half rate for the rest of it.
+    if (maxWidth > 0 && naturalTextWidth(str, FAMILY, fontSize, weight, italic) <= maxWidth)
+        maxWidth = 0;
 
     const STextKeyView KEY{.str        = str,
                            .fontFamily = FAMILY,
@@ -614,6 +866,7 @@ SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color
 
 void clearTextCache() {
     g_textCache.clear();
+    g_textWidths.clear();
     g_textCacheOld.clear();
     g_wrapCache.clear();
     g_imageFiles.clear();

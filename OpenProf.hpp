@@ -24,5 +24,6 @@ namespace OpenProf {
     bool active();
     // Queue a GPU timestamp at this point of the render pass: the log then
     // splits the frame's GPU time between consecutive marks.
+    void cpuMark(const char* name);
     void gpuMark(const char* name);
 }

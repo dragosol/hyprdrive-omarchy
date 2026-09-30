@@ -2337,6 +2337,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // time the compositor spends before exec-once and therefore before the
     // wallpaper can even be asked for.
     AppSearch::warmIconIndexAsync();
+    // Decode icons ahead of the first open / first keystroke (OverviewRender.hpp).
+    OverviewRender::startIconWarmer();
 
     return {ScrollOverview::Compat::NAME, "Mission-control overview + dock for Hyprland", "Vaxry, yayuuu, dragos", SCROLLOVERVIEW_VERSION};
 }
@@ -2420,6 +2422,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // A flying window may hold the flight's blur transformer; its destructor is
     // this plugin's code, so it goes before the dlclose (Hyprland's own exit too).
     ScrollOverview::FlightBlur::detachAll();
+    OverviewRender::stopIconWarmer();
     // Nothing may stay held once the hook goes with the plugin.
     ScrollOverview::ConfigureHold::flush();
     ScrollOverview::DockRoom::shutdown();
