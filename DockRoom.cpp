@@ -4,6 +4,8 @@
 #include "ConfigureHold.hpp"
 #include "Dock.hpp"
 
+#include <hyprland/src/config/ConfigValue.hpp>
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
@@ -38,8 +40,14 @@ namespace ScrollOverview::DockRoom {
         if (PILL.w < 1 || PILL.h < 1)
             return;
 
-        // As far above the pill as the pill is above the screen's edge.
-        const double GAP   = std::max(4.0, MONITOR->m_position.y + MONITOR->m_size.y - (PILL.y + PILL.h));
+        // THE TILING GAP (user, 2026-09-30: "the same gap as between windows,
+        // adopt Hyprland's tiling setting"). Two stacked tiles sit the upper's
+        // bottom gaps_in plus the lower's top gaps_in apart, border to border;
+        // the window box excludes its border, so add that once.
+        static auto PGAPSIN = CConfigValue<Config::IComplexConfigValue>("general:gaps_in");
+        static auto PBORDER = CConfigValue<Config::INTEGER>("general:border_size");
+        const auto* GAPSIN  = sc<Config::CCssGapData*>(PGAPSIN.ptr());
+        const double GAP    = std::max<double>(0.0, (GAPSIN ? GAPSIN->m_bottom + GAPSIN->m_top : 0) + std::max<int64_t>(0, *PBORDER));
         const double LIMIT = PILL.y - GAP;
 
         // Twice: trimming the box can change which gaps Hyprland puts at its

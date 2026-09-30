@@ -8359,6 +8359,25 @@ bool CScrollOverview::shouldSuppressRenderDamage() const {
 // a tile, so every tile gate in this file says no to it -- and two of those
 // gates were routes it needed: its frame callbacks and its damage. The places
 // that must treat it as live ask this instead of repeating the lookup.
+// THE SCRATCHPAD OVER THE OVERVIEW (user, 2026-09-30: "when triggering the
+// scratchpad from the overview, show it appearing over the overview"). A
+// special workspace shown on this monitor is drawn natively on top of the
+// overview -- its own slide, fade and dim -- the way the desktop draws it over
+// the windows. The minimize stash is special too, and is never shown.
+static PHLWORKSPACE overviewShownSpecialOn(const PHLMONITOR& monitor) {
+    if (!monitor)
+        return nullptr;
+    const auto SPECIAL = monitor->m_activeSpecialWorkspace;
+    if (!SPECIAL || SPECIAL->m_name == "special:minimized")
+        return nullptr;
+    return SPECIAL;
+}
+
+static bool onShownSpecial(const PHLWINDOW& window, const PHLMONITOR& monitor) {
+    const auto SPECIAL = overviewShownSpecialOn(monitor);
+    return SPECIAL && window && window->m_workspace == SPECIAL && Desktop::View::validMapped(window) && !window->isHidden();
+}
+
 static PHLWINDOW overviewSushiWindowOn(const PHLMONITOR& monitor) {
     if (!monitor || !OmarchySearch::isSushiActive())
         return nullptr;
@@ -8465,6 +8484,11 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
     // border tracking popin frame by frame, surface inset ~70px, then a jump.
     if (const auto SUSHI = overviewSushiWindowOn(MONITOR))
         surfaceTreePresent(SUSHI->wlSurface() ? SUSHI->wlSurface()->resource() : nullptr, MONITOR, now);
+    if (overviewShownSpecialOn(MONITOR)) {
+        for (const auto& W : Desktop::windowState()->windows())
+            if (onShownSpecial(W, MONITOR))
+                surfaceTreePresent(W->wlSurface() ? W->wlSurface()->resource() : nullptr, MONITOR, now);
+    }
 
     for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
         const auto& workspaceImage = images[workspaceIdx];
@@ -8584,6 +8608,12 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
 
     if (!window || window->m_monitor != MONITOR) {
         noteFrameGate(window, "other-monitor/no-window");
+        return true;
+    }
+
+    // Drawn live over the overview: it paces like any window on the desktop.
+    if (onShownSpecial(window, MONITOR)) {
+        noteFrameGate(window, "shown-special");
         return true;
     }
 
@@ -8816,6 +8846,10 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
     // the tile gate below would drop them, and the new buffer would sit unseen
     // until the idle frame. See overviewSushiWindowOn.
     if (window && window == overviewSushiWindowOn(MONITOR)) {
+        selectedWorkspaceFramePending = true;
+        return true;
+    }
+    if (onShownSpecial(window, MONITOR)) {
         selectedWorkspaceFramePending = true;
         return true;
     }
@@ -9138,6 +9172,11 @@ void CScrollOverview::close() {
 void CScrollOverview::onPreRender() {
     if (pMonitor)
         pMonitor->m_solitaryClient.reset();
+
+    // The scratchpad sliding in or out over the overview: its animation is the
+    // workspace's, which asks for nothing the overview listens to.
+    if (const auto SPECIAL = overviewShownSpecialOn(pMonitor.lock()); SPECIAL && (SPECIAL->m_renderOffset->isBeingAnimated() || SPECIAL->m_alpha->isBeingAnimated()))
+        requestInputFrame();
 
     drawnWindows.clear();
     drawnSet.clear();
@@ -9604,6 +9643,28 @@ void CScrollOverview::render() {
         // while the very same window, previewed off the overview,
         // has one. Hyprland's own decorations are the border here.
         g_pHyprRenderer->renderWindow(SUSHI, MONITOR, NOW, true, Render::RENDER_PASS_ALL, false, false);
+    }
+
+    // THE SCRATCHPAD, over the overview (overviewShownSpecialOn): the dim
+    // Hyprland puts behind a special workspace, then its windows, natively --
+    // position, slide (the workspace's render offset) and fade all Hyprland's.
+    // Above the grid, the strip and the search; below the bar and the dock,
+    // as on the desktop.
+    if (const auto SPECIAL = overviewShownSpecialOn(MONITOR)) {
+        const float DIM = ScrollOverview::Config::getValue<float>("decoration:dim_special") * SPECIAL->m_alpha->value();
+        if (DIM > 0.001F) {
+            CRectPassElement::SRectData dim;
+            dim.box   = CBox{{}, MONITOR->m_transformedSize};
+            dim.color = CHyprColor(0, 0, 0, DIM);
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(dim));
+        }
+        for (const auto& W : Desktop::windowState()->windows())
+            if (onShownSpecial(W, MONITOR) && !W->m_isFloating)
+                g_pHyprRenderer->renderWindow(W, MONITOR, NOW, true, Render::RENDER_PASS_ALL, false, false);
+        for (const auto& W : Desktop::windowState()->windows())
+            if (onShownSpecial(W, MONITOR) && W->m_isFloating)
+                g_pHyprRenderer->renderWindow(W, MONITOR, NOW, true, Render::RENDER_PASS_ALL, false, false);
+        OverviewRender::flushPass(MONITOR);
     }
 
     renderDraggedWindow(MONITOR, ACTIVEIDX, PITCH, SCALE, NOW);

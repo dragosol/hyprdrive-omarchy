@@ -74,6 +74,7 @@ using namespace Hyprutils::String;
 #include "FlightBlur.hpp"
 #include "ConfigureHold.hpp"
 #include "DockRoom.hpp"
+#include "Scratchpad.hpp"
 #include <hyprland/src/layout/target/Target.hpp>
 #include "DockInput.hpp"
 #include "LauncherEntry.hpp"
@@ -1564,8 +1565,17 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
             return {.success = false, .error = std::format("hyprdrive:debug activate: no dock item for class {}", CLASS)};
         return {};
     }
+    // `scratchpad`: exactly a click on the overview's Scratchpad cell -- show
+    // the default scratchpad, then close the overview (the test rig's trigger).
+    if (TOPIC == "scratchpad") {
+        const auto MONITOR = Desktop::focusState()->monitor();
+        ScrollOverview::Scratchpad::show(ScrollOverview::Scratchpad::ensureDefault(MONITOR));
+        if (const auto OV = scrollOverviewForMonitor(MONITOR))
+            OV->close();
+        return {};
+    }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|activate <class>"};
+        return {.success = false, .error = "hyprdrive:debug frames|activate <class>|scratchpad"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

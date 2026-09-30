@@ -159,7 +159,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|activate \\S+)$"},
+            .argPattern      = std::regex{"^(frames|scratchpad|activate \\S+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
             .invalidArgError = "expected: frames | activate <class>",

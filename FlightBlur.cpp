@@ -1,4 +1,28 @@
 // See FlightBlur.hpp.
+// FIRST, as in OverviewInternal.hpp: CAlgorithm::m_tiled is private, and the
+// layout blur has to ask whether a desktop scrolls. std headers clean first so
+// the define covers only the header whose guard it claims.
+#include <sstream>
+#include <functional>
+#include <memory>
+#include <chrono>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <cmath>
+#include <any>
+#include <cstdio>
+#include <optional>
+#include <expected>
+#include <unordered_map>
+#include <map>
+#include <set>
+#include <variant>
+#include <span>
+#include <format>
+#define private public
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#undef private
 #include "FlightBlur.hpp"
 
 #include "Config.hpp"
@@ -13,6 +37,9 @@
 #include <hyprland/src/render/pass/TransformedWindowPassElement.hpp>
 #include <hyprland/src/render/transformer/Transformer.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
+#include <hyprland/src/layout/space/Space.hpp>
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 
@@ -82,7 +109,16 @@ namespace ScrollOverview::FlightBlur {
 
         // The layout tracker's memory: where each moving window was drawn at
         // the last frame of its monitor.
-        std::vector<std::pair<PHLWINDOWREF, CBox>> g_lastLayoutBox;
+        struct SLastBox {
+            PHLWINDOWREF    window;
+            CBox            box;
+            Time::steady_tp at;
+        };
+        std::vector<SLastBox> g_lastLayoutBox;
+
+        // A scrolling desktop's tape is blurred only above this speed: a
+        // flick, not a drift. Logical px per second.
+        constexpr double FLICK_PX_PER_S = 2500.0;
 
         CFlightBlurTransformer* transformerOf(const PHLWINDOW& window) {
             for (const auto& t : window->m_transformers)
@@ -188,52 +224,81 @@ namespace ScrollOverview::FlightBlur {
     void trackLayoutMotion(PHLMONITOR monitor, const std::function<bool(const PHLWINDOW&)>& skip) {
         if (!monitor)
             return;
-        std::erase_if(g_lastLayoutBox, [](const auto& e) { return !e.first.lock(); });
+        std::erase_if(g_lastLayoutBox, [](const auto& e) { return !e.window.lock(); });
+
+        // A TRACKPAD WORKSPACE SWIPE (user, 2026-09-30: "add motion blur when
+        // swiping through workspaces with the trackpad"): while the fingers
+        // are down, and while the release animation carries the workspaces home
+        // after them. An ordinary workspace switch stays sharp.
+        static bool            s_wasSwiping = false;
+        static Time::steady_tp s_swipeEndedAt{};
+        const bool             SWIPING = g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress();
+        if (s_wasSwiping && !SWIPING)
+            s_swipeEndedAt = Time::steadyNow();
+        s_wasSwiping         = SWIPING;
+        const bool SWIPEHOME = !SWIPING && s_swipeEndedAt.time_since_epoch().count() != 0 &&
+            std::chrono::duration<float, std::milli>(Time::steadyNow() - s_swipeEndedAt).count() < 1000.F;
 
         const int N = layoutSamples();
         if (N >= 2 && monitor->m_transform == WL_OUTPUT_TRANSFORM_NORMAL) {
             // An interactive move/resize is the user's hand, not the layout's.
             const auto DRAGTARGET = g_layoutManager && g_layoutManager->dragController() ? g_layoutManager->dragController()->target() : nullptr;
+            const auto NOW        = Time::steadyNow();
 
             for (const auto& window : Desktop::windowState()->windows()) {
-                if (!window || !window->m_isMapped || window->isHidden() || window->m_monitor != monitor || !window->m_workspace || !window->m_workspace->isVisible())
+                if (!window || !window->m_isMapped || window->isHidden() || window->m_monitor != monitor || !window->m_workspace)
                     continue;
-                const auto IT = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.first.lock() == window; });
-                // A SPECIAL workspace sliding in (the scratchpad, user
-                // 2026-09-30) moves its windows by the workspace's render offset,
-                // not their own geometry. Only special ones: an ordinary
-                // workspace switch is not a layout motion.
-                const auto& WSOFFSET  = window->m_workspace->m_renderOffset;
-                const bool  SLIDING   = window->m_workspace->m_isSpecialWorkspace && !window->m_pinned && WSOFFSET->isBeingAnimated();
-                const bool ANIMATING = window->positionAnimation()->isBeingAnimated() || window->sizeAnimation()->isBeingAnimated() || SLIDING;
-                if (!ANIMATING || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
+                const auto& WS        = window->m_workspace;
+                const bool  SHOWN     = WS->isVisible() || WS->m_forceRendering;
+                const auto  IT        = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.window.lock() == window; });
+                const auto& WSOFFSET  = WS->m_renderOffset;
+                // A SPECIAL workspace sliding in (the scratchpad) moves its
+                // windows by the workspace's render offset, not their geometry.
+                const bool  SLIDING   = WS->m_isSpecialWorkspace && !window->m_pinned && WSOFFSET->isBeingAnimated();
+                // An ordinary workspace moved by a trackpad swipe, fingers down
+                // or on the release.
+                const bool  SWIPED    = !WS->m_isSpecialWorkspace && !window->m_pinned && (SWIPING || (SWIPEHOME && WSOFFSET->isBeingAnimated()));
+                const bool  OFFSETS   = SLIDING || SWIPED;
+                const auto* SPACE     = WS->m_space.get();
+                const bool  SCROLLING = SPACE && SPACE->algorithm() && dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(SPACE->algorithm()->m_tiled.get());
+                const bool  RESIZING  = window->sizeAnimation()->isBeingAnimated();
+                const bool  MOVING    = window->positionAnimation()->isBeingAnimated();
+                if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
                     if (IT != g_lastLayoutBox.end())
                         g_lastLayoutBox.erase(IT);
                     continue;
                 }
 
                 // Monitor-local logical, like the renderer's currentBox.
-                const CBox NOWBOX{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - monitor->m_position +
-                                      (window->m_workspace->m_isSpecialWorkspace && !window->m_pinned ? WSOFFSET->value() : Vector2D{}),
+                const CBox NOWBOX{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - monitor->m_position + (OFFSETS ? WSOFFSET->value() : Vector2D{}),
                                   window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
                 if (IT == g_lastLayoutBox.end()) {
-                    g_lastLayoutBox.emplace_back(window, NOWBOX);
+                    g_lastLayoutBox.push_back({window, NOWBOX, NOW});
                     continue;
                 }
-                const CBox RAWPREV = IT->second;
-                IT->second         = NOWBOX;
+                const CBox  RAWPREV = IT->box;
+                const float DTMS    = std::chrono::duration<float, std::milli>(NOW - IT->at).count();
+                IT->box             = NOWBOX;
+                IT->at              = NOW;
                 if (!valid(RAWPREV) || !valid(NOWBOX) || !moved(RAWPREV, NOWBOX))
                     continue;
 
-                // HALF AS LONG (user, 2026-09-30: "make that one half as long
-                // lasting, the fade starting a lot earlier"). The smear is full
-                // at the start of the animation, where the window moves fastest,
-                // and shrinks to nothing by its halfway point: the previous box
-                // is pulled toward the current one by the animation's own
-                // progress, smoothstepped so it eases out rather than stopping.
-                const float PCT  = std::max({window->positionAnimation()->isBeingAnimated() ? window->positionAnimation()->getPercent() : 0.F,
-                                             window->sizeAnimation()->isBeingAnimated() ? window->sizeAnimation()->getPercent() : 0.F,
-                                             SLIDING ? WSOFFSET->getPercent() : 0.F});
+                // A SCROLLING desktop's tape carrying a window sideways is the
+                // user scrolling (user, 2026-09-30): blurred only while it goes
+                // FAST -- a flick -- and never while it drifts. A size change
+                // there is a real retile and is blurred as anywhere else.
+                if (SCROLLING && MOVING && !RESIZING && !OFFSETS) {
+                    const double SPEED = RAWPREV.pos().distance(NOWBOX.pos()) / std::max(1.0F, DTMS) * 1000.0; // logical px/s
+                    if (SPEED < FLICK_PX_PER_S)
+                        continue;
+                }
+
+                // HALF AS LONG: full smear at the start of the animation, gone
+                // by its halfway point (fadeMotion). A swipe under the fingers
+                // has no animation clock; its smear is just its speed.
+                const float PCT  = SWIPED ? 0.F :
+                                            std::max({MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F,
+                                                      SLIDING ? WSOFFSET->getPercent() : 0.F});
                 const CBox  PREV = fadeMotion(RAWPREV, NOWBOX, PCT);
                 if (!moved(PREV, NOWBOX))
                     continue;
@@ -247,7 +312,7 @@ namespace ScrollOverview::FlightBlur {
                 t->m_cur     = NOWBOX;
                 t->m_armed   = true;
                 t->m_samples = N;
-                t->m_fedAt   = Time::steadyNow();
+                t->m_fedAt   = NOW;
 
                 CBox reach{std::min(PREV.x, NOWBOX.x), std::min(PREV.y, NOWBOX.y), 0, 0};
                 reach.w = std::max(PREV.x + PREV.w, NOWBOX.x + NOWBOX.w) - reach.x;
