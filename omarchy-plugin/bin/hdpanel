@@ -23,33 +23,107 @@ END = "-- END raw-snippet"
 
 PLUGIN = "plugin:hyprdrive:"
 
+CURVES = [
+    {"value": "hyprdrive", "label": "Hyprdrive"},
+    {"value": "serpantinum", "label": "Serpantinum"},
+    {"value": "smooth", "label": "Smooth"},
+    {"value": "swift", "label": "Swift"},
+    {"value": "springy", "label": "Springy"},
+    {"value": "linear", "label": "Linear"},
+]
+FADES = [
+    {"value": "early", "label": "Early"},
+    {"value": "full", "label": "Full"},
+    {"value": "late", "label": "Late"},
+    {"value": "linear", "label": "Linear"},
+    {"value": "constant", "label": "Constant"},
+]
+STACK_MOTIONS = [
+    {"value": "serpantinum", "label": "Serpantinum"},
+    {"value": "extension", "label": "Dock Stacks extension"},
+]
+
+# The per-animation motion blur sites, mirroring FlightBlur.hpp's SITES table
+# (name, strength, fade): the defaults the engine ships.
+BLUR_SITES = [
+    ("minimize", 1.0, "early"),
+    ("layout", 1.0, "early"),
+    ("flick", 0.5, "early"),
+    ("swipe", 0.5, "constant"),
+    ("scratchpad", 0.5, "early"),
+    ("overview", 0.25, "early"),
+    ("desktop_switch", 0.25, "constant"),
+    ("search_tiles", 0.25, "constant"),
+    ("search_pane", 0.5, "early"),
+    ("drag", 1.0, "constant"),
+    ("stack_pane", 1.0, "early"),
+]
+
+
+def _k(key, kind, group, default, **extra):
+    d = {"key": key, "kind": kind, "group": group, "default": default}
+    d.update(extra)
+    return d
+
+
+# Every key the panel reads or writes: its type, the panel section whose
+# "Restore defaults" owns it, and hyprdrive's shipped default. Labels and
+# layout live in the panel (Schema.js); this is what the back end needs to
+# coerce, persist and reset.
 KEY_META = [
-    # Overview / motion
-    {"key": "animations:enabled", "kind": "bool", "group": "overview", "label": "Compositor animations"},
-    {"key": PLUGIN + "anim_scale", "kind": "float", "group": "overview", "label": "Hyprdrive animation scale", "min": 0, "max": 10, "step": 0.05},
-    {"key": PLUGIN + "open_speed", "kind": "float", "group": "overview", "label": "Overview open speed", "min": 0.1, "max": 20, "step": 0.1},
-    {"key": PLUGIN + "close_speed", "kind": "float", "group": "overview", "label": "Overview close speed", "min": 0.1, "max": 20, "step": 0.1},
-    {"key": PLUGIN + "tap_super", "kind": "bool", "group": "overview", "label": "Tap Super to toggle overview"},
-    {"key": PLUGIN + "scale", "kind": "float", "group": "overview", "label": "Overview scale", "min": 0.1, "max": 0.9, "step": 0.01},
-    {"key": PLUGIN + "mission_control", "kind": "bool", "group": "overview", "label": "Mission Control grid"},
+    # Overview
+    _k(PLUGIN + "tap_super", "bool", "overview", True),
+    _k(PLUGIN + "mission_control", "bool", "overview", True),
+    _k(PLUGIN + "strip", "bool", "overview", True),
+    _k(PLUGIN + "scale", "float", "overview", 0.82, min=0.4, max=0.9),
+    _k(PLUGIN + "mission_control_gap", "int", "overview", 40, min=0, max=160),
+    _k(PLUGIN + "blur", "bool", "overview", False),
+    _k(PLUGIN + "search:dictionary", "bool", "overview", False),
+    _k(PLUGIN + "search:translate", "bool", "overview", False),
     # Dock
-    {"key": PLUGIN + "dock:enabled", "kind": "bool", "group": "dock", "label": "Show dock"},
-    {"key": PLUGIN + "dock:corner_radius", "kind": "int", "group": "dock", "label": "Dock corner radius", "min": 0, "max": 64, "step": 1},
-    {"key": PLUGIN + "dock:autohide", "kind": "bool", "group": "dock", "label": "Autohide dock"},
-    {"key": PLUGIN + "dock:icon_size", "kind": "int", "group": "dock", "label": "Icon size", "min": 8, "max": 128, "step": 1},
-    {"key": PLUGIN + "dock:minimize_ms", "kind": "int", "group": "dock", "label": "Minimize flight (ms)", "min": 0, "max": 2000, "step": 10},
-    {"key": PLUGIN + "dock:autohide_ms", "kind": "int", "group": "dock", "label": "Autohide slide (ms)", "min": 0, "max": 2000, "step": 10},
-    {"key": PLUGIN + "dock:show_apps_button", "kind": "bool", "group": "dock", "label": "Show Applications button"},
-    {"key": PLUGIN + "dock:show_favorites", "kind": "bool", "group": "dock", "label": "Pinned favorites"},
-    {"key": PLUGIN + "dock:hover_tilt", "kind": "bool", "group": "dock", "label": "Hover tilt"},
-    {"key": PLUGIN + "dock:press_tilt", "kind": "bool", "group": "dock", "label": "Press tilt"},
-    # Textures
-    {"key": PLUGIN + "prefilter_below", "kind": "float", "group": "textures", "label": "Mipmap prefilter below", "min": 0, "max": 1, "step": 0.05},
-    {"key": PLUGIN + "live_layer_frost", "kind": "bool", "group": "textures", "label": "Live layer frost"},
-    {"key": PLUGIN + "smooth_frames", "kind": "bool", "group": "textures", "label": "Smooth frames"},
-    {"key": PLUGIN + "blur", "kind": "bool", "group": "textures", "label": "Overview wallpaper blur"},
-    {"key": PLUGIN + "dock:blur_size", "kind": "int", "group": "textures", "label": "Dock blur size (-1 follow)", "min": -1, "max": 64, "step": 1},
-    {"key": PLUGIN + "dock:blur_passes", "kind": "int", "group": "textures", "label": "Dock blur passes (-1 follow)", "min": -1, "max": 10, "step": 1},
+    _k(PLUGIN + "dock:enabled", "bool", "dock", True),
+    _k(PLUGIN + "dock:autohide", "bool", "dock", True),
+    _k(PLUGIN + "dock:windows_make_room", "bool", "dock", True),
+    _k(PLUGIN + "dock:show_favorites", "bool", "dock", True),
+    _k(PLUGIN + "dock:show_apps_button", "bool", "dock", True),
+    _k(PLUGIN + "dock:show_trash", "bool", "dock", True),
+    _k(PLUGIN + "dock:show_mounts", "bool", "dock", False),
+    _k(PLUGIN + "dock:running_indicator", "bool", "dock", True),
+    _k(PLUGIN + "dock:notification_counter", "bool", "dock", True),
+    _k(PLUGIN + "dock:dance_urgent", "bool", "dock", True),
+    _k(PLUGIN + "dock:icon_size", "int", "dock", 54, min=24, max=96),
+    _k(PLUGIN + "dock:corner_radius", "int", "dock", 24, min=0, max=40),
+    _k(PLUGIN + "dock:hover_tilt", "bool", "dock", True),
+    _k(PLUGIN + "dock:press_tilt", "bool", "dock", True),
+    _k(PLUGIN + "dock:blur_size", "int", "dock", -1, min=-1, max=32),
+    _k(PLUGIN + "dock:blur_passes", "int", "dock", -1, min=-1, max=8),
+    _k(PLUGIN + "dock:stack_motion", "enum", "dock", "serpantinum", options=STACK_MOTIONS),
+    # Animation
+    _k("animations:enabled", "bool", "animation", True),
+    _k(PLUGIN + "anim_scale", "float", "animation", 1.0, min=0, max=10),
+    _k(PLUGIN + "animation:curve", "enum", "animation", "hyprdrive", options=CURVES),
+    _k(PLUGIN + "open_speed", "float", "animation", 2.6, min=0.5, max=8),
+    _k(PLUGIN + "close_speed", "float", "animation", 1.9, min=0.5, max=8),
+    _k(PLUGIN + "dock:minimize_ms", "int", "animation", 400, min=0, max=1200),
+    _k(PLUGIN + "dock:autohide_ms", "int", "animation", 200, min=0, max=800),
+    _k(PLUGIN + "mission_control_reflow_ms", "int", "animation", 300, min=0, max=1000),
+    # Motion blur
+    _k(PLUGIN + "motion_blur:enabled", "bool", "blur", True),
+    _k(PLUGIN + "layout_motion_blur", "int", "blur", 16, min=0, max=32),
+    _k(PLUGIN + "dock:minimize_motion_blur", "int", "blur", 16, min=0, max=32),
+    _k(PLUGIN + "dock:stack_motion_blur", "int", "blur", 8, min=0, max=32),
+] + [
+    m
+    for name, strength, fade in BLUR_SITES
+    for m in (
+        _k(PLUGIN + "motion_blur:%s:strength" % name, "float", "blur", strength, min=0, max=1, step=0.125),
+        _k(PLUGIN + "motion_blur:%s:fade" % name, "enum", "blur", fade, options=FADES),
+    )
+] + [
+    # Performance
+    _k(PLUGIN + "smooth_frames", "bool", "performance", False),
+    _k(PLUGIN + "live_layer_frost", "bool", "performance", True),
+    _k(PLUGIN + "prefilter_below", "float", "performance", 0.55, min=0, max=1),
 ]
 
 DEFAULT_GESTURES = [
@@ -452,15 +526,49 @@ def coerce(meta, value):
         return int(float(value))
     if kind == "float":
         return float(value)
+    if kind == "enum":
+        v = str(value)
+        if meta.get("options") and v not in [o["value"] for o in meta["options"]]:
+            raise SystemExit("hdpanel: %s must be one of %s" % (meta["key"], ", ".join(o["value"] for o in meta["options"])))
+        return v
     return str(value)
 
 
 def live_keys():
+    """Every panel key's live value in ONE hyprctl call (--batch), ~4 ms
+    instead of one process per key."""
     out = {}
-    for meta in KEY_META:
-        v = getoption(meta["key"])
-        if v is not None:
-            out[meta["key"]] = v
+    batch = "; ".join("j/getoption %s" % m["key"] for m in KEY_META)
+    text = hyprctl("--batch", batch)
+    if text:
+        dec = json.JSONDecoder()
+        i = 0
+        while i < len(text):
+            while i < len(text) and text[i] in " \t\r\n":
+                i += 1
+            if i >= len(text):
+                break
+            try:
+                d, i = dec.raw_decode(text, i)
+            except ValueError:
+                # "no such option" (a key this Hyprland or plugin build does
+                # not have) is plain text in the stream: skip to the next object.
+                nxt = text.find("{", i + 1)
+                if nxt < 0:
+                    break
+                i = nxt
+                continue
+            if not isinstance(d, dict) or "option" not in d:
+                continue
+            for k in ("bool", "int", "float", "str", "gradient", "vec2", "css", "custom", "data"):
+                if k in d:
+                    out[d["option"]] = d[k]
+                    break
+    if not out:  # a Hyprland without --batch: the slow path
+        for meta in KEY_META:
+            v = getoption(meta["key"])
+            if v is not None:
+                out[meta["key"]] = v
     return out
 
 
@@ -476,7 +584,13 @@ def dump():
         for g in DEFAULT_GESTURES:
             if g["direction"] == "click" and (g["fingers"], "click") not in seen:
                 gestures.append(dict(g))
+    version = ""
+    try:
+        version = json.loads((pathlib.Path(__file__).resolve().parent.parent / "manifest.json").read_text()).get("version", "")
+    except (OSError, ValueError):
+        pass
     return {
+        "version": version,
         "keys": live,
         "owned": store.get("keys", {}),
         "gestures": gestures,
@@ -534,6 +648,47 @@ def cmd_preview(args):
     pairs = list(zip(args[0::2], args[1::2]))
     coerced = set_keys(pairs, preview=True)
     print(json.dumps({"ok": True, "preview": True, "keys": {k: v for k, v in coerced}}))
+    return 0
+
+
+def default_of(meta):
+    return meta.get("default")
+
+
+def cmd_reset(args):
+    """Restore one panel section to hyprdrive's shipped values.
+
+    The section's keys go back to their defaults live AND leave the store, so
+    40-panel.lua stops owning them and a later hyprdrive default change is
+    picked up instead of a frozen copy of today's.
+    """
+    if not args:
+        raise SystemExit("hdpanel: reset GROUP")
+    group = args[0]
+    if group == "gestures":
+        store = load_store()
+        store["gestures"] = None
+        save_store(store)
+        write_gesture_fragment([dict(g) for g in DEFAULT_GESTURES])
+        if hyprctl("reload") is None:
+            raise SystemExit("hdpanel: wrote gestures but hyprctl reload failed")
+        print(json.dumps({"ok": True, "group": group}))
+        return 0
+    metas = [m for m in KEY_META if m.get("group") == group and default_of(m) is not None]
+    if not metas:
+        raise SystemExit("hdpanel: nothing to reset in %s" % group)
+    pairs = [(m["key"], coerce(m, default_of(m))) for m in metas]
+    if not apply_live_many(pairs):
+        raise SystemExit("hdpanel: live reset failed")
+    store = load_store()
+    owned = store.setdefault("keys", {})
+    for key, _ in pairs:
+        owned.pop(key, None)
+    if group == "dock":
+        store["roundedRadius"] = 24
+    save_store(store)
+    write_panel_fragment(store)
+    print(json.dumps({"ok": True, "group": group, "keys": {k: v for k, v in pairs}}))
     return 0
 
 
@@ -603,6 +758,19 @@ def cmd_profile_apply(args):
     return 0
 
 
+def cmd_profile_auto(_args):
+    """The closed panel's power watcher: apply the matching profile, but only
+    in auto mode -- a forced AC/battery choice is left alone."""
+    store = load_store()
+    if store.get("profileMode", "auto") != "auto":
+        print(json.dumps({"ok": True, "skipped": "mode is %s" % store.get("profileMode")}))
+        return 0
+    name = "battery" if on_battery() else "ac"
+    n = apply_profile(name)
+    print(json.dumps({"ok": True, "profile": name, "applied": n}))
+    return 0
+
+
 def cmd_profile_mode(args):
     mode = args[0]
     if mode not in ("auto", "ac", "battery"):
@@ -620,7 +788,7 @@ def cmd_profile_mode(args):
 
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
-        print("hdpanel dump|set|preview|gestures-set|profile-save|profile-apply|profile-mode")
+        print("hdpanel dump|set|preview|reset GROUP|gestures-set|profile-save|profile-apply|profile-mode")
         return 0
     cmd = argv[1]
     args = argv[2:]
@@ -632,6 +800,8 @@ def main(argv):
         "profile-save": cmd_profile_save,
         "profile-apply": cmd_profile_apply,
         "profile-mode": cmd_profile_mode,
+        "reset": cmd_reset,
+        "profile-auto": cmd_profile_auto,
     }.get(cmd)
     if not fn:
         raise SystemExit("hdpanel: unknown command %s" % cmd)

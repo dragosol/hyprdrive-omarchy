@@ -5,7 +5,7 @@
   "version": "1.9.9",
   "author": "dragos",
   "license": "MIT",
-  "description": "Hyprdrive control panel: overview and dock toggles, a full trackpad gesture editor, texture quality, and AC/battery profiles.",
+  "description": "Hyprdrive settings: overview, dock, one animation curve and speed for everything, per-animation motion blur, a trackpad gesture editor, performance and AC/battery profiles.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Hyprdrive",
-    "description": "Overview, dock, gestures, textures, and power profiles.",
+    "description": "Overview, dock, animation, motion blur, gestures and performance.",
     "category": "System",
     "aliases": ["hyprdrive", "overview", "dock", "gestures", "trackpad"],
     "allowMultiple": false,

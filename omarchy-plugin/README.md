@@ -1,11 +1,16 @@
 # Hyprdrive for Omarchy
 
-Bar button and a large control panel for the Hyprdrive compositor plugin.
+The bar button and settings panel for the Hyprdrive compositor plugin.
 
-- Overview: compositor animations, Hyprdrive motion scale, Super-tap
-- Dock: square / rounded pill, autohide, icon size, minimize flight
-- Gestures: a full trackpad map (fingers, direction, action, modifier keys, scale, inhibit) — meant to replace the old trackpad-gestures plugin
-- Textures: mipmap prefilter, live frost, blur follow
-- Power: save and auto-apply separate AC / battery profiles
+- **Overview**: Super tap, Mission Control grid, desktop strip, size, spacing, wallpaper blur, search extras
+- **Dock**: visibility, contents, appearance, frost, and the dock stacks' own motion
+- **Animation**: one curve preset (Hyprdrive, Serpantinum, Smooth, Swift, Springy, Linear) and one speed for everything hyprdrive animates except the dock stacks, plus per-feature timing
+- **Motion blur**: strength (in eighths) and fade shape for every animation hyprdrive smears, and sample counts
+- **Gestures**: the full trackpad map (fingers, direction, action, modifier keys, distance, inhibit)
+- **Performance**: smooth frames, live frost, preview smoothing, and AC / battery profiles
 
-The panel talks to `bin/hdpanel`, which previews with `hyprctl keyword` and persists into `~/.config/hypr/hyprdrive/40-panel.lua` and `35-gestures.lua`.
+Every section has **Restore defaults**. Type anywhere to search settings; Alt+1..6 jumps between sections.
+
+`Panel.qml` is only the bar button: the panel itself (`HyprdrivePanel.qml`, laid out by `Schema.js`) is loaded when it opens and destroyed when it closes, so it holds no memory while closed.
+
+The panel talks to `bin/hdpanel`, which applies values live and persists them into `~/.config/hypr/hyprdrive/40-panel.lua` and `35-gestures.lua`.
