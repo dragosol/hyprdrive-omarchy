@@ -30,6 +30,19 @@ void                   adoptStashedWindows();
 // via handoffMinimizedFocus. A non-flight minimize passes true and hands off
 // immediately (X33: a stashed window must not keep the keyboard).
 bool                   minimize(PHLWINDOW window, bool handoffFocus = true);
+
+// A WHOLE-APP GESTURE (a dock click that minimizes every window of an app).
+// Held around the loop, it records each window's box before the first of them
+// moves; minimize() then pins each one at ITS recorded box instead of the one
+// the layout re-tiled it to after its siblings left -- which is what told the
+// last terminal out that it was full screen (user, 2026-09-30).
+class CGestureBoxes {
+  public:
+    explicit CGestureBoxes(const std::vector<PHLWINDOW>& windows);
+    ~CGestureBoxes();
+    CGestureBoxes(const CGestureBoxes&)            = delete;
+    CGestureBoxes& operator=(const CGestureBoxes&) = delete;
+};
 // X33 focus handoff, deferred: give the keyboard to a window on the workspace
 // the stashed window came from (or reset it). Called when a minimize FLIGHT
 // lands, so the window stays focused/bright for the whole animation.

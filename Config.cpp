@@ -159,10 +159,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames)$"},
+            .argPattern      = std::regex{"^(frames|activate \\S+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames",
+            .invalidArgError = "expected: frames | activate <class>",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");

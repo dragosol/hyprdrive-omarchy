@@ -331,6 +331,8 @@ void feedPointerMotion(const Vector2D& delta);
 // on the pill asks for and a click does not -- the click was its own
 // acknowledgement.
 void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false, std::optional<CBox> startBox = std::nullopt);
+// The test rig's dock click: activate the item whose class is `wmClass`.
+bool debugActivate(PHLMONITOR monitor, const std::string& wmClass);
 void restoreWithFlight(PHLMONITOR monitor, PHLWINDOW window);
 
 // P0's settleFlights lived here. It is Flight::abortAll(reason) now --

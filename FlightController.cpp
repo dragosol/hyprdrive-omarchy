@@ -29,6 +29,7 @@
 #include "Config.hpp"
 #include "Dock.hpp"
 #include "FlightBlur.hpp"
+#include "ConfigureHold.hpp"
 #include "IOverview.hpp"
 #include "Minimize.hpp"
 #include "OverviewPassElement.hpp"
@@ -607,7 +608,17 @@ EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
         // now would record that as the window's geometry and a later restore
         // would bring it back shrunken. Re-goal to the flight's true target
         // (old.from, render px) before the stash captures it.
-        if (const auto MON = window->m_monitor.lock(); MON && old.from.width >= 1 && !window->isHidden()) {
+        //
+        // The layout's goal NOW, not old.from: old.from was frozen when this
+        // window came back, and in a whole-app restore the first window back is
+        // alone in the layout -- its frozen target was the whole monitor. Pinned
+        // there on the stash, its client was told full screen on every fast
+        // re-click (user, 2026-09-30: prompts walking down the terminal). By the
+        // next click all its siblings are back, so the goal is its real tile.
+        if (!window->isHidden() && window->m_realSize->goal().x >= 1) {
+            window->m_realPosition->m_Value = window->m_realPosition->goal();
+            window->m_realSize->m_Value     = window->m_realSize->goal();
+        } else if (const auto MON = window->m_monitor.lock(); MON && old.from.width >= 1 && !window->isHidden()) {
             const float SCALE = std::max(MON->m_scale, 0.01F);
             window->m_realPosition->m_Value = Vector2D{old.from.x / SCALE + MON->m_position.x, old.from.y / SCALE + MON->m_position.y};
             window->m_realSize->m_Value     = Vector2D{std::max(4.0, old.from.width / SCALE), std::max(4.0, old.from.height / SCALE)};
@@ -661,6 +672,7 @@ bool isRestoreFlight(const PHLWINDOW& window) {
 }
 
 void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::optional<CBox> startBox) {
+    ConfigureHold::CHold oneResize;
     // Z5/Z9r5. Mid-restore click: put it back from mid-air. The window is REAL
     // (hidden) during a restore flight now, so the gate is the flight's
     // existence, and reverse() performs the unhide + stash.
@@ -719,6 +731,7 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::opti
 // instantly and the proxy would be a second copy of it. The actual restore
 // happens when the flight lands -- see renderFlights.
 void restore(PHLMONITOR monitor, PHLWINDOW window) {
+    ConfigureHold::CHold oneResize;
     // Z5. Mid-minimize click: bring it straight back from mid-air -- and give it
     // the same click-time restore treatment a fresh flight gets (Z9r5).
     if (window && reverse(monitor, window, true) == EReverse::Swapped) {
@@ -842,6 +855,8 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
 // lived in Dock::render. See the header: the version of this that mutated every
 // flight and then drew every flight is the version that broke z5.
 void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady_tp& now, const bool ownsPass) {
+    // Several windows of one app land in the same frame: retile once for all.
+    ConfigureHold::CHold oneResize;
     for (auto it = g_flights.begin(); it != g_flights.end();) {
         // Another monitor's flight: that monitor advances and draws it. Two
         // ways it could never get there, both settled from here with the same

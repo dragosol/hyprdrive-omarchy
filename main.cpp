@@ -72,6 +72,7 @@ using namespace Hyprutils::String;
 
 #include "FlightController.hpp"
 #include "FlightBlur.hpp"
+#include "ConfigureHold.hpp"
 #include "DockInput.hpp"
 #include "LauncherEntry.hpp"
 #include "Minimize.hpp"
@@ -173,6 +174,15 @@ static void setDockCursor(bool on) {
         Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
     else
         Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+}
+
+// ConfigureHold.hpp: a gesture's in-between sizes never reach the client.
+static CFunctionHook* g_pSendWindowSizeHook = nullptr;
+typedef void (*origSendWindowSize)(void*, bool);
+static void hkSendWindowSize(void* thisptr, bool force) {
+    if (ScrollOverview::ConfigureHold::intercept(sc<Desktop::View::CWindow*>(thisptr), force))
+        return;
+    rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(thisptr, force);
 }
 
 static void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e) {
@@ -1536,8 +1546,16 @@ static Hyprlang::CParseResult overviewGestureKeyword(const char* LHS, const char
 static SDispatchResult onDebugDispatcher(std::string arg) {
     CConstVarList     data(arg, 0, 's', true);
     const std::string TOPIC = std::string{data[0]};
+    // `activate <class>`: exactly a left click on that app's dock icon, for the
+    // nested test rig (whose dock no real pointer can reach).
+    if (TOPIC == "activate") {
+        const std::string CLASS = data.size() > 1 ? std::string{data[1]} : std::string{};
+        if (!ScrollOverview::Dock::debugActivate(Desktop::focusState()->monitor(), CLASS))
+            return {.success = false, .error = std::format("hyprdrive:debug activate: no dock item for class {}", CLASS)};
+        return {};
+    }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames"};
+        return {.success = false, .error = "hyprdrive:debug frames|activate <class>"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {
@@ -1856,6 +1874,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         findFnOrThrow("onMouseMoved", {"CInputManager::onMouseMoved("}),
         rc<void*>(hkOnMouseMoved));
     g_pScrollMouseMovedHook->hook();
+
+    g_pSendWindowSizeHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("sendWindowSize", {"CWindow::sendWindowSize("}), rc<void*>(hkSendWindowSize));
+    g_pSendWindowSizeHook->hook();
+    ScrollOverview::ConfigureHold::setSender([](Desktop::View::CWindow* window, bool force) {
+        if (g_pSendWindowSizeHook)
+            rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(window, force);
+    });
 
     CursorShape::init();
     OpenProf::init();
@@ -2332,6 +2357,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // A flying window may hold the flight's blur transformer; its destructor is
     // this plugin's code, so it goes before the dlclose (Hyprland's own exit too).
     ScrollOverview::FlightBlur::detachAll();
+    // Nothing may stay held once the hook goes with the plugin.
+    ScrollOverview::ConfigureHold::flush();
     ScrollOverview::Dock::releasePointerFocus();
     // Outlives every overview on purpose (Window.cpp), so it is freed here.
     if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})

@@ -24,6 +24,7 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 
 #include "Dock.hpp"
+#include "ConfigureHold.hpp"
 
 #include "Compat.hpp"
 
@@ -2902,6 +2903,10 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     // Visible -> minimize; hidden (or mid-restore flight) -> restore.
     // Scroll, not click, is what cycles when there is more than one.
     if (!here.empty()) {
+        // The whole app goes (or comes back) as one: each window is told its
+        // size once, not once per sibling leaving the layout (ConfigureHold.hpp).
+        ConfigureHold::CHold      oneResize;
+        Minimize::CGestureBoxes   boxesBeforeAnyMoves(here);
         std::vector<PHLWINDOW> visible;
         for (const auto& WINDOW : here) {
             if (!Minimize::isMinimized(WINDOW))
@@ -3468,17 +3473,22 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;
 
-        case ERow::MinimizeAll:
+        case ERow::MinimizeAll: {
+            ConfigureHold::CHold    oneResize;
+            Minimize::CGestureBoxes boxesBeforeAnyMoves(itemWindows(item));
             for (const auto& WINDOW : itemWindows(item))
                 if (!Minimize::isMinimized(WINDOW))
                     Flight::minimize(monitor, WINDOW, false);
             return;
+        }
 
-        case ERow::RestoreAll:
+        case ERow::RestoreAll: {
+            ConfigureHold::CHold oneResize;
             for (const auto& WINDOW : itemWindows(item))
                 if (Minimize::isMinimized(WINDOW))
                     Flight::restore(monitor, WINDOW);
             return;
+        }
 
         case ERow::ForceQuit: {
             // Each process once; never pid 0/1 and never the compositor itself,
@@ -5273,6 +5283,19 @@ void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha
 
 void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::optional<CBox> startBox) {
     Flight::minimize(monitor, window, bounceOnLand, startBox);
+}
+
+bool debugActivate(PHLMONITOR monitor, const std::string& wmClass) {
+    if (!monitor)
+        return false;
+    const auto LAYOUT = layout(monitor);
+    for (const auto& item : LAYOUT.items) {
+        if (item.wmClass == wmClass) {
+            activateItem(monitor, item, false);
+            return true;
+        }
+    }
+    return false;
 }
 
 void restoreWithFlight(PHLMONITOR monitor, PHLWINDOW window) {
