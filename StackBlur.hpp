@@ -4,10 +4,11 @@
 // fan animation and see how hard it impacts performance").
 //
 // Real, not a trail: each frame the fan is laid out at several instants across
-// the time that frame covers (the shutter), every sample is SUMMED into an
-// offscreen framebuffer at 1/N weight (additive blending -- plain alpha
-// layering would leave a slow paper see-through), and the average is
-// composited over the scene once. A paper that moved far smears along its
+// the time that frame covers (the shutter), every sample is laid into an
+// offscreen framebuffer as a RUNNING AVERAGE -- premultiplied over, sample k at
+// weight 1/(k+1), so a paper under a pixel in every sample stays opaque and
+// dark text still covers its light pill (pure addition could not: light
+// theme, 2026-09-29) -- and the average is composited over the scene once. A paper that moved far smears along its
 // path; one that barely moved stays sharp. A fan at rest never comes here.
 
 #include "globals.hpp"
@@ -21,7 +22,7 @@ namespace ScrollOverview::StackBlur {
     struct SSample {
         SP<Render::ITexture> tex;
         CBox                 box; // render px, may carry rot
-        float                alpha = 1.F; // already divided by the sample count
+        float                alpha = 1.F; // already the sample's running-average weight
     };
 
     // Queue one pass element that sums `samples` and composites the result.

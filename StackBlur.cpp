@@ -76,8 +76,15 @@ namespace ScrollOverview::StackBlur {
         Render::GL::g_pHyprOpenGL->scissor(nullptr);
         glClearColor(0.F, 0.F, 0.F, 0.F);
         glClear(GL_COLOR_BUFFER_BIT);
+        // A RUNNING AVERAGE, not a sum (user, 2026-09-29: the fan's text went
+        // white in flight on a light theme). Additive blending can only brighten,
+        // so dark label ink ADDED onto a light pill vanished into it. Each sample
+        // is laid OVER the result at weight 1/(k+1) (k = its place in time) --
+        // the incremental mean: a paper under a pixel in every sample stays
+        // opaque (the old reason for summing), and within a sample the text
+        // covers its pill as it does at rest. The weights come with the samples.
         for (const auto& S : m_samples)
-            DockTilt::drawAdditive(S.tex, S.box, S.alpha);
+            DockTilt::drawAdditive(S.tex, S.box, S.alpha, false);
 
         // ...then lay the average over the scene, where the fan is.
         PREV->bind();

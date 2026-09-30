@@ -84,7 +84,9 @@ void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& 
 // (GL_ONE, GL_ONE) into whatever framebuffer is bound -- the stack fan's motion
 // blur sums its sub-frame samples this way (StackBlur). Only from inside a
 // pass element's draw(). False when this texture cannot go through the shader.
-bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& box, float alpha);
+// `sum`: GL_ONE,GL_ONE (pure addition); false: premultiplied OVER, for layers
+// that must cover what is under them (dark text on a light pill).
+bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& box, float alpha, bool sum = true);
 
 // PLUGIN_EXIT: the shader program belongs to this object's GL state.
 void shutdown();

@@ -409,7 +409,7 @@ void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& 
     g_pHyprRenderer->m_renderPass.add(makeUnique<CDockTiltPassElement>(CDockTiltPassElement::SData{.tex = tex, .box = box, .alpha = alpha, .pose = pose}));
 }
 
-bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alpha) {
+bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alpha, bool sum) {
     if (!tex || !tex->ok() || boxIn.width < 1 || boxIn.height < 1 || alpha <= 0.F || !g_pHyprRenderer->m_renderData.pMonitor)
         return false;
     const auto PROGRAM = tex->m_type == Render::TEXTURE_RGBA && tex->m_transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(tex) ? shader() : nullptr;
@@ -421,7 +421,10 @@ bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alph
     const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(box, tex->m_transform);
 
     Render::GL::g_pHyprOpenGL->blend(true);
-    glBlendFunc(GL_ONE, GL_ONE); // summed, not layered: the samples average out
+    if (sum)
+        glBlendFunc(GL_ONE, GL_ONE); // summed, not layered
+    else
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied over
 
     glActiveTexture(GL_TEXTURE0);
     tex->bind();

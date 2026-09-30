@@ -2373,9 +2373,11 @@ namespace ScrollOverview::Stacks {
         const bool MOVING  = std::abs(PROGRESS - g_popup->lastProgress) > 1e-4F;
         if (SAMPLES > 1 && MOVING && StackBlur::usable(monitor)) {
             std::vector<StackBlur::SSample> samples;
-            sink    = &samples;
-            sinkMul = 1.F / sc<float>(SAMPLES);
-            for (int k = SAMPLES - 1; k >= 0; --k) {
+            sink = &samples;
+            // Oldest first; the j-th sample (0-based) lands at weight 1/(j+1),
+            // which StackBlur's premultiplied-over blend turns into the mean.
+            for (int k = SAMPLES - 1, j = 0; k >= 0; --k, ++j) {
+                sinkMul = 1.F / sc<float>(j + 1);
                 const float PK = std::clamp(PROGRESS - (PROGRESS - g_popup->lastProgress) * sc<float>(k) / sc<float>(SAMPLES), 0.F, 1.F);
                 layoutFan(*g_popup, monitor, layout.pill, PK);
                 drawFanRows(g_popup->rows);
