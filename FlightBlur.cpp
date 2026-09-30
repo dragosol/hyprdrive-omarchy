@@ -205,9 +205,26 @@ namespace ScrollOverview::FlightBlur {
                     g_lastLayoutBox.emplace_back(window, NOWBOX);
                     continue;
                 }
-                const CBox PREV = IT->second;
-                IT->second      = NOWBOX;
-                if (!valid(PREV) || !valid(NOWBOX) || !moved(PREV, NOWBOX))
+                const CBox RAWPREV = IT->second;
+                IT->second         = NOWBOX;
+                if (!valid(RAWPREV) || !valid(NOWBOX) || !moved(RAWPREV, NOWBOX))
+                    continue;
+
+                // HALF AS LONG (user, 2026-09-30: "make that one half as long
+                // lasting, the fade starting a lot earlier"). The smear is full
+                // at the start of the animation, where the window moves fastest,
+                // and shrinks to nothing by its halfway point: the previous box
+                // is pulled toward the current one by the animation's own
+                // progress, smoothstepped so it eases out rather than stopping.
+                const float PCT  = std::max(window->positionAnimation()->isBeingAnimated() ? window->positionAnimation()->getPercent() : 0.F,
+                                            window->sizeAnimation()->isBeingAnimated() ? window->sizeAnimation()->getPercent() : 0.F);
+                const float T    = std::clamp(PCT / 0.5F, 0.F, 1.F);
+                const float KEEP = 1.F - T * T * (3.F - 2.F * T);
+                if (KEEP < 0.03F)
+                    continue;
+                const CBox PREV{NOWBOX.x + (RAWPREV.x - NOWBOX.x) * KEEP, NOWBOX.y + (RAWPREV.y - NOWBOX.y) * KEEP, NOWBOX.w + (RAWPREV.w - NOWBOX.w) * KEEP,
+                                NOWBOX.h + (RAWPREV.h - NOWBOX.h) * KEEP};
+                if (!moved(PREV, NOWBOX))
                     continue;
 
                 auto* t = transformerOf(window);
