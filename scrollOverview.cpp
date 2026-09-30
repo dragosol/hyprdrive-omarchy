@@ -10327,3 +10327,22 @@ void OvInternal::traceHandback(const char* who, const PHLWINDOW& asked, const PH
     ScrollOverview::Stacks::traceEvent(std::format("locks: handback {} asked={} target={} before={} after={}", who, NAME(asked), NAME(target), NAME(before),
                                                    NAME(Desktop::focusState()->window())));
 }
+
+ScrollOverview::DesktopTape::STape ScrollOverview::DesktopTape::probe(const PHLWORKSPACE& workspace) {
+    STape tape;
+    const auto ALGO = overviewScrollingAlgorithmForWorkspace(workspace);
+    if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller || !ALGO->m_scrollingData->controller->isPrimaryHorizontal())
+        return tape;
+    tape.offset    = ALGO->m_scrollingData->controller->getOffset();
+    tape.maxOffset = std::max(0.0, ALGO->m_scrollingData->maxWidth() - ALGO->primaryViewportSize());
+    tape.usable    = tape.maxOffset > 1.0;
+    return tape;
+}
+
+void ScrollOverview::DesktopTape::setOffset(const PHLWORKSPACE& workspace, double offset) {
+    const auto ALGO = overviewScrollingAlgorithmForWorkspace(workspace);
+    if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller)
+        return;
+    ALGO->m_scrollingData->controller->setOffset(clampOverviewScrollingOffset(ALGO, offset));
+    ALGO->m_scrollingData->recalculate();
+}

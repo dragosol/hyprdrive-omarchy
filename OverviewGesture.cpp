@@ -26,6 +26,7 @@
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -152,6 +153,17 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
         return;
     }
 
+    m_mode = EMode::Native;
+    m_tapeWorkspace.reset();
+    if (!m_allWorkspaces && MONITOR && !MONITOR->m_activeSpecialWorkspace) {
+        if (const auto WS = MONITOR->m_activeWorkspace; WS && ScrollOverview::DesktopTape::probe(WS).usable) {
+            m_mode          = EMode::Tape;
+            m_tapeWorkspace = WS;
+            m_tape.begin(e);
+            return;
+        }
+    }
+
     if (m_allWorkspaces && !m_forcedUseR) {
         m_prevUseR   = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_use_r");
         m_forcedUseR = true;
@@ -171,6 +183,61 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
         return;
     }
 
+    if (m_mode == EMode::Tape) {
+        m_tape.update(e);
+        const auto WS = m_tapeWorkspace.lock();
+        if (!WS)
+            return;
+        const auto TAPE = ScrollOverview::DesktopTape::probe(WS);
+        double     over = 0.0;
+        if (TAPE.offset > TAPE.maxOffset)
+            over = TAPE.offset - TAPE.maxOffset;
+        else if (TAPE.offset < 0.0)
+            over = TAPE.offset; // negative: past the start
+        if (over == 0.0)
+            return;
+        // Pin the tape at the end it reached; the rest of the travel switches.
+        const bool FAREND = over > 0.0;
+        ScrollOverview::DesktopTape::setOffset(WS, FAREND ? TAPE.maxOffset : 0.0);
+        if (!g_pUnifiedWorkspaceSwipe || g_pUnifiedWorkspaceSwipe->isGestureInProgress())
+            return;
+        g_pUnifiedWorkspaceSwipe->begin();
+        if (!g_pUnifiedWorkspaceSwipe->isGestureInProgress())
+            return; // e.g. a locked session: stay on the tape, pinned
+        // Same sign the native swipe would have accumulated for this motion:
+        // D += invert ? -distance : distance, and the tape moved forward (far
+        // end) exactly when distance was negative.
+        const bool INVERT = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_invert") != 0;
+        const double MAG  = std::abs(over);
+        m_switchDelta     = (FAREND == INVERT) ? MAG : -MAG;
+        m_switchSide      = m_switchDelta > 0.0 ? 1 : -1;
+        m_tapeAtEnd       = FAREND;
+        m_mode            = EMode::TapeSwitch;
+        g_pUnifiedWorkspaceSwipe->update(m_switchDelta);
+        return;
+    }
+
+    if (m_mode == EMode::TapeSwitch) {
+        const bool   INVERT = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_invert") != 0;
+        const double DELTA  = distance(e);
+        const double D      = m_switchDelta + (INVERT ? -DELTA : DELTA);
+        if (D * m_switchSide > 0.0) {
+            m_switchDelta = D;
+            g_pUnifiedWorkspaceSwipe->update(D);
+            return;
+        }
+        // Back past where the tape ended: that switch never happened (a delta
+        // under 2 always reverts), and the remainder scrolls the windows again.
+        g_pUnifiedWorkspaceSwipe->update(0.0);
+        g_pUnifiedWorkspaceSwipe->end();
+        m_mode = EMode::Tape;
+        if (const auto WS = m_tapeWorkspace.lock()) {
+            const auto TAPE = ScrollOverview::DesktopTape::probe(WS);
+            ScrollOverview::DesktopTape::setOffset(WS, m_tapeAtEnd ? TAPE.maxOffset - std::abs(D) : std::abs(D));
+        }
+        return;
+    }
+
     m_native.update(e);
 }
 
@@ -180,6 +247,25 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
             OVERVIEW->onWorkspaceSwipeEnd();
         m_overview.reset();
         m_inOverview = false;
+        return;
+    }
+
+    if (m_mode == EMode::Tape) {
+        m_tape.end(e); // snap to a column (with momentum) and focus it
+        m_mode = EMode::Native;
+        m_tapeWorkspace.reset();
+        return;
+    }
+
+    if (m_mode == EMode::TapeSwitch) {
+        g_pUnifiedWorkspaceSwipe->end();
+        // Cancelled (not far or fast enough): still on the tape's desktop, so the
+        // windows settle as a tape swipe would -- snapped, a column focused.
+        const auto WS = m_tapeWorkspace.lock();
+        if (const auto MONITOR = WS ? WS->m_monitor.lock() : PHLMONITOR{}; MONITOR && MONITOR->m_activeWorkspace == WS)
+            m_tape.end(e);
+        m_mode = EMode::Native;
+        m_tapeWorkspace.reset();
         return;
     }
 

@@ -56,6 +56,23 @@ class COverviewWorkspaceGesture : public ITrackpadGesture {
     bool                   m_inOverview = false;
     WP<IOverview>          m_overview;
 
+    // THE DESKTOP TAPE (user, 2026-09-29). On a scrolling-layout desktop whose
+    // windows do not fit, the swipe scrolls them first (Hyprland's own
+    // scroll-move gesture: momentum, snap, focus), and the travel left over past
+    // either end hands to Hyprland's workspace swipe mid-gesture -- back past
+    // that point returns to the windows. Not for the all-workspaces variant.
+    enum class EMode : uint8_t {
+        Native,     // a plain desktop swipe
+        Tape,       // scrolling the desktop's windows
+        TapeSwitch, // past an end of them: switching desktops
+    };
+    EMode                      m_mode = EMode::Native;
+    CScrollMoveTrackpadGesture m_tape;
+    PHLWORKSPACEREF            m_tapeWorkspace;
+    double                     m_switchDelta = 0.0; // the workspace swipe's accumulated delta
+    int                        m_switchSide  = 0;   // +1 / -1: the sign it started with
+    bool                       m_tapeAtEnd   = false; // the tape side it left from: true = far end
+
     bool                   m_allWorkspaces = false;
     bool                   m_forcedUseR    = false; // this swipe set use_r, and end() owes it back
     int                    m_prevUseR      = 0;

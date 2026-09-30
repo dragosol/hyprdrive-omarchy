@@ -164,6 +164,21 @@ struct SSearchLayout;
 void normalizeScrollingCamera(PHLWORKSPACE workspace);
 void normalizeAllScrollingCameras();
 
+// THE DESKTOP TAPE (user, 2026-09-29): the 3-finger desktop swipe scrolls a
+// scrolling-layout desktop's windows first, and only past either end of them
+// hands over to switching desktops. OverviewGesture drives it; this is the
+// window onto the layout's private tape (OverviewInternal.hpp has the access).
+namespace ScrollOverview::DesktopTape {
+    struct STape {
+        bool   usable    = false; // scrolling, horizontal tape, wider than the screen
+        double offset    = 0.0;   // px along the tape; 0 = first column at the start
+        double maxOffset = 0.0;   // last column's end at the viewport's end
+    };
+    STape probe(const PHLWORKSPACE& workspace);
+    // Put the tape at `offset` (clamped to [0, maxOffset]).
+    void setOffset(const PHLWORKSPACE& workspace, double offset);
+}
+
 class CScrollOverview : public IOverview {
   public:
     // The recorded frame cadence for an output, kept across closes, for
