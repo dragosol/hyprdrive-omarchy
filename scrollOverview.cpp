@@ -4627,15 +4627,26 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         // and stays sharp.
         const bool KEYPAN  = viewOffset->isBeingAnimated() && keyBadgeBornAt.time_since_epoch().count() != 0 &&
             SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) < 1000.F;
-        const bool SEARCHMOTION = ((!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
-            !scale->isBeingAnimated() && PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2;
+        // And the open/close zoom when it PLAYS (a keypress) rather than
+        // following the fingers (user, 2026-09-30: "works on the trackpad
+        // toggle but not on keypress"), with the half-duration fade.
+        const bool ZOOMING = scale->isBeingAnimated() && !m_isSwiping;
+        const bool SEARCHMOTION = ((((!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
+                                    !scale->isBeingAnimated()) ||
+                                   ZOOMING) &&
+            PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2;
         bool tileBlurred = false;
         if (SEARCHMOTION) {
             const CBox& P = PREVTILE->second.box;
             // A quarter of the frame's motion (user, 2026-09-30: 0.5 was too much).
             constexpr double K = 0.25;
-            const CBox  HALF{windowBox.x + (P.x - windowBox.x) * K, windowBox.y + (P.y - windowBox.y) * K, windowBox.w + (P.w - windowBox.w) * K,
-                             windowBox.h + (P.h - windowBox.h) * K};
+            CBox HALF{windowBox.x + (P.x - windowBox.x) * K, windowBox.y + (P.y - windowBox.y) * K, windowBox.w + (P.w - windowBox.w) * K,
+                      windowBox.h + (P.h - windowBox.h) * K};
+            // The open decelerates, so its speed is up front; the close
+            // accelerates, so its speed is at the end -- the fade is mirrored
+            // for it, or it would be over before the tiles got going.
+            if (ZOOMING)
+                HALF = ScrollOverview::FlightBlur::fadeMotion(HALF, windowBox, closing ? 1.F - scale->getPercent() : scale->getPercent());
             // Only a real move: a frame-to-frame jump of a third of the screen
             // is a card swap, not motion.
             const bool JUMP = std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0;
