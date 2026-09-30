@@ -240,6 +240,8 @@ static void hkDamageSurface(void* thisptr, SP<CWLSurfaceResource> surface, doubl
     // whether a given overview wants the damage reported is a different
     // question from whether the client's pixels changed.
     OverviewWindow::notifySurfaceCommit(surface);
+    if (scrollOverviews().empty())
+        ScrollOverview::noteWallpaperCommit(surface);
 
     const bool HANDLED = scrollOverviews().empty() ||
         std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && overview->blockDamageReporting; }) ||
@@ -2263,8 +2265,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pMonitorGoneHook = Event::bus()->m_events.monitor.removed.listen([](PHLMONITOR monitor) {
         ScrollOverview::Flight::abortAll("monitor-removed");
         dropScrollOverviewsForMonitor(monitor);
-        if (monitor)
+        if (monitor) {
             ScrollOverview::Dock::forgetMonitor(monitor->m_id);
+            if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})
+                OPENGL->makeEGLCurrent();
+            ScrollOverview::releaseWallpaperStash(monitor->m_id);
+        }
         // A stack popup on the monitor that went away must not keep the keyboard.
         if (monitor && ScrollOverview::Stacks::popupMonitor() == monitor->m_id)
             ScrollOverview::Stacks::close();
@@ -2431,6 +2437,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})
         OPENGL->makeEGLCurrent();
     OverviewWindow::releaseTexturePrefilterCache();
+    ScrollOverview::releaseWallpaperStash(std::nullopt);
     // The text textures outlive a close now (X51), so unload is where they go --
     // same moment the last overview's destructor used to drop them, and hyprpm
     // reloads this plugin in-process.

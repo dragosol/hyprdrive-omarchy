@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #define WLR_USE_UNSTABLE
 
 #include "StripLayout.hpp"
@@ -252,7 +254,9 @@ class CScrollOverview : public IOverview {
     void   renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha = 1.F);
     void   updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now);
     void   updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp& now);
-    void   renderBackdropBlurCache(PHLMONITOR monitor, float alpha = 1.F);
+    bool   renderBackdropBlurCache(PHLMONITOR monitor, float alpha = 1.F);
+    void   adoptWallpaperStash();
+    void   stashWallpaperCaches();
     void   renderWorkspaceBackground(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
     void   renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
     void   renderDetentBadge(PHLMONITOR monitor, float renderScale);
@@ -927,3 +931,11 @@ bool overviewHandleSearchSpace();
 // is already open. True if the tap was consumed as that launch.
 bool overviewHandleShiftTap();
 bool overviewHandleCtrlTap();
+
+namespace ScrollOverview {
+    // The wallpaper caches kept between opens (scrollOverview.cpp): a
+    // BACKGROUND/BOTTOM layer commit while no overview is up marks them dirty.
+    void noteWallpaperCommit(const SP<CWLSurfaceResource>& surface);
+    // EGL context current. std::nullopt = every monitor (unload).
+    void releaseWallpaperStash(std::optional<MONITORID> monitor);
+}

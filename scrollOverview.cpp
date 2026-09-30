@@ -46,6 +46,102 @@ float houseEase(bool decel, float t) {
     return decel ? 1.F - INV * INV * INV : T * T * T;
 }
 
+// THE WALLPAPER CACHES OUTLIVE THE OVERVIEW (2026-09-30). The blurred
+// backdrop and the card wallpaper FB used to die with each overview, so every
+// open re-rendered the wallpaper and re-ran the 4-pass full-resolution kawase
+// on its third frame -- ~12 ms of GPU plus ~16 ms more for the card fill and
+// the allocations, in the middle of the open animation, which is where the
+// dropped frames at the start of an open came from (openprof). Now a closing
+// overview hands them here and the next one on that monitor takes them back.
+// While no overview is up, the damageSurface hook keeps the dirty flags honest
+// (noteWallpaperCommit); the signature check covers everything else, exactly
+// as it did within one open. ~2 full-screen FBs per monitor stay allocated.
+namespace {
+    struct SWallpaperStash {
+        SP<Render::IFramebuffer> backdropFB, cardWallpaperFB;
+        bool                     backdropDirty = true, cardWallpaperDirty = true;
+        uint64_t                 lastBackdropSig = 0, lastCardWallpaperSig = 0;
+        int                      lastBackdropWallpaperMode = -1;
+    };
+    std::unordered_map<MONITORID, SWallpaperStash> g_wallpaperStash;
+
+    void releaseStash(SWallpaperStash& st) {
+        if (st.backdropFB)
+            st.backdropFB->release();
+        if (st.cardWallpaperFB)
+            st.cardWallpaperFB->release();
+        st = {};
+    }
+}
+
+namespace ScrollOverview {
+    void noteWallpaperCommit(const SP<CWLSurfaceResource>& surface) {
+        if (g_wallpaperStash.empty() || !surface)
+            return;
+        const auto HLSURFACE = Desktop::View::CWLSurface::fromResource(surface);
+        const auto VIEW      = HLSURFACE ? HLSURFACE->view() : nullptr;
+        const auto LS        = VIEW ? Desktop::View::CLayerSurface::fromView(VIEW) : PHLLS{};
+        if (!LS || LS->m_layer > ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM)
+            return;
+        const auto MONITOR = LS->m_monitor.lock();
+        if (!MONITOR)
+            return;
+        const auto IT = g_wallpaperStash.find(MONITOR->m_id);
+        if (IT == g_wallpaperStash.end())
+            return;
+        // Same split as shouldHandleSurfaceDamage: the card fill composites
+        // BACKGROUND and BOTTOM, the backdrop BACKGROUND only.
+        IT->second.cardWallpaperDirty = true;
+        if (LS->m_layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
+            IT->second.backdropDirty = true;
+    }
+
+    // Needs the EGL context current. std::nullopt = every monitor (unload).
+    void releaseWallpaperStash(std::optional<MONITORID> monitor) {
+        for (auto it = g_wallpaperStash.begin(); it != g_wallpaperStash.end();) {
+            if (!monitor || it->first == *monitor) {
+                releaseStash(it->second);
+                it = g_wallpaperStash.erase(it);
+            } else
+                ++it;
+        }
+    }
+}
+
+void CScrollOverview::adoptWallpaperStash() {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR)
+        return;
+    const auto IT = g_wallpaperStash.find(MONITOR->m_id);
+    if (IT == g_wallpaperStash.end())
+        return;
+    auto& st                        = IT->second;
+    frost.backdropFB                = std::move(st.backdropFB);
+    frost.cardWallpaperFB           = std::move(st.cardWallpaperFB);
+    frost.backdropDirty             = st.backdropDirty;
+    frost.cardWallpaperDirty        = st.cardWallpaperDirty;
+    frost.lastBackdropSig           = st.lastBackdropSig;
+    frost.lastCardWallpaperSig      = st.lastCardWallpaperSig;
+    frost.lastBackdropWallpaperMode = st.lastBackdropWallpaperMode;
+    g_wallpaperStash.erase(IT);
+}
+
+void CScrollOverview::stashWallpaperCaches() {
+    const auto MONITOR = pMonitor.lock();
+    // A monitor that is gone (or going) takes its caches with it: releaseGL.
+    if (!MONITOR || !MONITOR->m_enabled || (!frost.backdropFB && !frost.cardWallpaperFB))
+        return;
+    auto& st = g_wallpaperStash[MONITOR->m_id];
+    releaseStash(st); // a second overview on the same monitor closing: newest wins
+    st.backdropFB                = std::move(frost.backdropFB);
+    st.cardWallpaperFB           = std::move(frost.cardWallpaperFB);
+    st.backdropDirty             = frost.backdropDirty;
+    st.cardWallpaperDirty        = frost.cardWallpaperDirty;
+    st.lastBackdropSig           = frost.lastBackdropSig;
+    st.lastCardWallpaperSig      = frost.lastCardWallpaperSig;
+    st.lastBackdropWallpaperMode = frost.lastBackdropWallpaperMode;
+}
+
 CScrollOverview::~CScrollOverview() {
     TileChrome::forget();
     // X51: the cache used to be dropped here, which meant every open re-rendered
@@ -66,6 +162,7 @@ CScrollOverview::~CScrollOverview() {
         wl_event_source_remove(realtimePreviewTimer);
         realtimePreviewTimer = nullptr;
     }
+    stashWallpaperCaches();
     frost.releaseGL();
     OverviewWindow::trimTexturePrefilterCache();
     const auto MONITOR = pMonitor.lock();
@@ -99,6 +196,7 @@ CScrollOverview::~CScrollOverview() {
 CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
     pMonitor                     = PMONITOR;
+    adoptWallpaperStash();
     layout                       = ScrollOverview::Config::getLayout();
     sharedStateOwner             = scrollOverviews().empty();
     usesSubmapKeybinds           = hasOverviewSubmap();
@@ -476,6 +574,8 @@ void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::stea
 // Dual-kawase size * 2^passes ≈ 128px; contrast 0.92 ≈ 1 - 0.08; no grain.
 // Independent of decoration:blur:enabled — the lockscreen blurs even when
 // Omarchy windows do not.
+// The overview's 80% black over the blurred backdrop (baked into the cache).
+constexpr float BACKDROP_DIM             = 0.80F;
 constexpr int   LOCKSCREEN_BLUR_SIZE     = 8;
 constexpr int   LOCKSCREEN_BLUR_PASSES   = 4;
 constexpr float LOCKSCREEN_BLUR_CONTRAST = 0.92F;
@@ -579,14 +679,17 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
                 .damage = fullDamage,
             },
             fullDamage);
+
+        // The overview's dim, baked in (see render()).
+        g_pHyprRenderer->draw(CRectPassElement::SRectData{.box = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}, .color = CHyprColor{0.F, 0.F, 0.F, BACKDROP_DIM}}, fullDamage);
     }
 
     frost.backdropDirty = false;
 }
 
-void CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
+bool CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
     if (!monitor || alpha <= 0.F || !frost.backdropFB || !frost.backdropFB->isAllocated() || !frost.backdropFB->getTexture())
-        return;
+        return false;
 
     const auto TEX = frost.backdropFB->getTexture();
     const CRegion fullDamage{CBox{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y}};
@@ -600,6 +703,7 @@ void CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
             .flipEndFrame = true,
         },
         fullDamage);
+    return true;
 }
 
 size_t CScrollOverview::activeWorkspaceIndex() const {
@@ -9637,11 +9741,20 @@ void CScrollOverview::render() {
         const float OPEN     = ScrollOverview::Config::getScale();
         const float RANGE    = std::max(0.01F, std::abs(1.F - OPEN));
         const float PROGRESS = std::clamp(std::abs(SCALE - 1.F) / RANGE, 0.F, 1.F);
-        const float DIM      = 0.80F * PROGRESS;
+        float       DIM      = BACKDROP_DIM * PROGRESS;
         if (PROGRESS > 0.001F && WALLPAPERMODE != 1) {
             updateBackdropBlurCache(MONITOR, WALLPAPERMODE, NOW);
             OpenProf::gpuMark("blurcache");
-            renderBackdropBlurCache(MONITOR, PROGRESS);
+            // THE DIM IS BAKED INTO THE CACHE (2026-09-30): the backdrop holds
+            // blur x (1 - BACKDROP_DIM), so fully open it is ONE opaque blit and
+            // no full-screen scrim pass (~1.5 ms GPU at 2880x1800). Mid-open the
+            // same pixels as before -- mix(wall, blur, P) dimmed by DIM*P -- come
+            // from the pre-dimmed blur at alpha A and a smaller scrim D:
+            //   wall(1-A)(1-D) + blur(1-DIM)A(1-D) = (wall(1-P) + blur P)(1-DIM P)
+            //   => A = P / (1 - DIM + DIM P),  1-D = (1 - DIM P) / (1 - DIM A)
+            const float A = PROGRESS / (1.F - BACKDROP_DIM + BACKDROP_DIM * PROGRESS);
+            if (renderBackdropBlurCache(MONITOR, A))
+                DIM = 1.F - (1.F - BACKDROP_DIM * PROGRESS) / std::max(0.01F, 1.F - BACKDROP_DIM * A);
         }
         if (DIM > 0.001F) {
             CRectPassElement::SRectData scrim;
