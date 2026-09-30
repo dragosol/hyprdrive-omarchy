@@ -4653,14 +4653,20 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
             if (!JUMP)
                 tileBlurred = ScrollOverview::FlightBlur::drawBlurred(
                     monitor, window, HALF, windowBox,
-                    [&] { renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, 1.F, false); },
+                    [&] {
+                        renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, 1.F, false);
+                        // Its badge (the app icon) moves with it and smears
+                        // with it (user, 2026-09-30).
+                        TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
+                    },
                     ScrollOverview::FlightBlur::layoutSamples());
             if (tileBlurred)
                 OverviewRender::flushPass(monitor);
         }
-        if (!tileBlurred)
+        if (!tileBlurred) {
             renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX);
-        TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
+            TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
+        }
         lastTileBoxes[window.get()] = {windowBox, workspaceIdx};
     };
 

@@ -475,7 +475,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
             icon.tex = TEX;
             icon.box = iconBox;
             icon.a   = FADE;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(icon));
+            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(icon));
         }
     }
 
@@ -526,7 +526,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
         ring.color         = ScrollOverview::Config::highlightColor().modifyA(ALPHA);
         ring.round         = ROUND + sc<int>(std::round(sc<float>(BORDER) * SCALE));
         ring.roundingPower = 2.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(ring));
+        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(ring));
     }
 
     // The DISC stays light, and that is a legibility constraint rather than a
@@ -539,7 +539,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
     disc.color         = CHyprColor{0.93F, 0.93F, 0.93F, 0.95F * ALPHA};
     disc.round         = ROUND;
     disc.roundingPower = 2.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(disc));
+    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(disc));
 
     if (const auto GLYPH = OverviewRender::appIcon(CLOSE_ICON)) {
         const float SIDE = sc<float>(BUTTON.w) * CLOSE_GLYPH;
@@ -549,7 +549,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
         x.box = CBox{sc<float>(BUTTON.x + BUTTON.w / 2.0) - SIDE / 2.F, sc<float>(BUTTON.y + BUTTON.h / 2.0) - SIDE / 2.F, SIDE, SIDE};
         x.box.round();
         x.a = ALPHA;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(x));
+        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(x));
     }
 }
 
