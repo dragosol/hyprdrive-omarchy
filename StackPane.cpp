@@ -1,6 +1,7 @@
 // The stack PANE's geometry (dock stacks A): where the plate, header, search
 // field and grid sit for a given item count. Pure layout -- DockStacks.cpp fills
 // the cells and draws.
+#include "Motion.hpp"
 #include "DockStacks.hpp"
 
 #include <hyprland/src/output/Monitor.hpp>
@@ -33,7 +34,8 @@ namespace ScrollOverview::Stacks::Pane {
         // One curve both ways: `progress` runs back down when it closes, so a
         // reversal mid-flight has nothing to jump between (user, 2026-09-24).
         (void)leaving;
-        const float E     = houseEase(true, progress);
+        // The stacks keep their own motion: not the animation:curve preset.
+        const float E     = Motion::houseFixed(true, progress);
         const float CX    = sc<float>(anchor.x) + sc<float>(anchor.width) / 2.F;
         const float RESTY = sc<float>(pill.y) - GAP * S - H;
         CBox        plate{sc<float>(anchor.x) + (CX - W / 2.F - sc<float>(anchor.x)) * E, sc<float>(anchor.y) + (RESTY - sc<float>(anchor.y)) * E,

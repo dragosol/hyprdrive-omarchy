@@ -10,6 +10,7 @@
 #include "FramePacing.hpp"
 #include "DockStacks.hpp"
 #include "SearchLetters.hpp"
+#include "Motion.hpp"
 
 #include "Compat.hpp"
 #include "Scratchpad.hpp"
@@ -28,22 +29,21 @@
 static void forgetPhantomsOf(const CScrollOverview* overview);
 using namespace OvInternal; // opted in here rather than leaked from the header
 
+// The search pane, pill and reveals: ~180 ms (Hyprland speed units, tenths of
+// a second); windowsMove is ~400 ms and feels stuck. Times anim_scale.
+constexpr float SEARCH_ANIM_SPEED = 1.8F;
+
 // The definition behind the global declaration in OverviewInternal.hpp. One real
 // symbol in one TU -- TileChrome.cpp binds to it through the PLT, so it cannot be
 // inline-in-a-header (emission would then depend on some includer happening to
 // ODR-use it) and cannot be namespaced (that renames the symbol; the compositor
 // died at the first mid-close tile ease when the split did exactly that).
+// The active animation:curve preset's entrance / exit (Motion.hpp) -- the
+// house curves by default. It used to read Hyprland's named beziers, which do
+// not exist until an overview has been opened once (and a reload can drop
+// them), so until then every houseEase site fell back to a plain cubic.
 float houseEase(bool decel, float t) {
-    const float T = std::clamp(t, 0.F, 1.F);
-
-    if (Animation::mgr()) {
-        if (const auto CURVE = Animation::mgr()->getBezier(decel ? HOUSE_DECEL_BEZIER : HOUSE_ACCEL_BEZIER))
-            return CURVE->getYForPoint(T);
-    }
-
-    // Not registered yet: ease-out cubic, or its mirror for an exit.
-    const float INV = 1.F - T;
-    return decel ? 1.F - INV * INV * INV : T * T * T;
+    return ScrollOverview::Motion::ease(decel ? ScrollOverview::Motion::ERole::DECEL : ScrollOverview::Motion::ERole::ACCEL, t);
 }
 
 // THE WALLPAPER CACHES OUTLIVE THE OVERVIEW (2026-09-30). The blurred
@@ -257,14 +257,11 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
         Animation::mgr()->addBezierWithName(OVERVIEW_INSERT_FADE_BEZIER, Vector2D{0.5, 0.0}, Vector2D{0.5, 0.0});
     if (!Animation::mgr()->bezierExists(OVERVIEW_REMOVE_FADE_BEZIER))
         Animation::mgr()->addBezierWithName(OVERVIEW_REMOVE_FADE_BEZIER, Vector2D{0.5, 1.0}, Vector2D{0.5, 1.0});
-    // Decelerate in: most of the distance is covered early, so the overview is
-    // legible well before it stops moving.
-    if (!Animation::mgr()->bezierExists(OVERVIEW_OPEN_BEZIER))
-        Animation::mgr()->addBezierWithName(OVERVIEW_OPEN_BEZIER, Vector2D{0.16, 1.0}, Vector2D{0.3, 1.0});
-    // Accelerate out: it leaves slowly enough to read as motion, then gets out
-    // of the way. This is the half the user is waiting on.
-    if (!Animation::mgr()->bezierExists(OVERVIEW_CLOSE_BEZIER))
-        Animation::mgr()->addBezierWithName(OVERVIEW_CLOSE_BEZIER, Vector2D{0.7, 0.0}, Vector2D{0.84, 0.0});
+    // Decelerate in (most of the distance early, so the overview is legible
+    // well before it stops moving), accelerate out (leave slowly enough to read
+    // as motion, then get out of the way): the animation:curve preset's pair,
+    // registered under the house names. Motion::sync owns the numbers.
+    ScrollOverview::Motion::sync();
 
     workspaceInsertFadeConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     workspaceInsertFadeConfig->overridden      = true;
@@ -315,7 +312,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     searchAnimConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     searchAnimConfig->overridden      = true;
     searchAnimConfig->internalBezier  = OVERVIEW_OPEN_BEZIER;
-    searchAnimConfig->internalSpeed   = 1.8F; // ~180ms; windowsMove is ~400ms and feels stuck
+    searchAnimConfig->internalSpeed   = SEARCH_ANIM_SPEED;
     searchAnimConfig->internalEnabled = WINDOWSMOVEVALUES ? WINDOWSMOVEVALUES->internalEnabled : 1;
     searchAnimConfig->internalStyle   = "";
     searchAnimConfig->pValues         = searchAnimConfig;
@@ -4775,15 +4772,18 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         bool tileBlurred = false;
         if (SEARCHMOTION) {
             const CBox& P = PREVTILE->second.box;
-            // A quarter of the frame's motion (user, 2026-09-30: 0.5 was too much).
-            constexpr double K = 0.25;
-            CBox HALF{windowBox.x + (P.x - windowBox.x) * K, windowBox.y + (P.y - windowBox.y) * K, windowBox.w + (P.w - windowBox.w) * K,
-                      windowBox.h + (P.h - windowBox.h) * K};
+            // Three of the user's blur settings (all a quarter of the frame's
+            // motion by default -- user, 2026-09-30: 0.5 was too much): the
+            // zoom playing from a keypress, the keyboard desktop pan, and tiles
+            // moving under a search. Only the zoom has a clock to fade over.
             // The open decelerates, so its speed is up front; the close
-            // accelerates, so its speed is at the end -- the fade is mirrored
-            // for it, or it would be over before the tiles got going.
-            if (ZOOMING)
-                HALF = ScrollOverview::FlightBlur::fadeMotion(HALF, windowBox, closing ? 1.F - scale->getPercent() : scale->getPercent());
+            // accelerates, so its speed is at the end -- its progress is
+            // mirrored, or the fade would be over before the tiles got going.
+            const auto  SITE = ZOOMING ? ScrollOverview::FlightBlur::ESite::OVERVIEW :
+                    KEYPAN            ? ScrollOverview::FlightBlur::ESite::DESKTOP_SWITCH :
+                                        ScrollOverview::FlightBlur::ESite::SEARCH_TILES;
+            const float PROG = ZOOMING ? (closing ? 1.F - scale->getPercent() : scale->getPercent()) : 0.F;
+            const CBox  HALF = ScrollOverview::FlightBlur::shape(SITE, P, windowBox, PROG);
             // Only a real move: a frame-to-frame jump of a third of the screen
             // is a card swap, not motion.
             const bool JUMP = std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0;
@@ -7648,9 +7648,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         bool blurred = false;
         if (GROWING) {
             const float PCT  = std::max(resultsBand->isBeingAnimated() ? resultsBand->getPercent() : 0.F, resultsWidth->isBeingAnimated() ? resultsWidth->getPercent() : 0.F);
-            CBox        PREV = ScrollOverview::FlightBlur::fadeMotion(PREVBOX, SL.containerBox, PCT);
-            PREV = CBox{SL.containerBox.x + (PREV.x - SL.containerBox.x) * 0.5, SL.containerBox.y + (PREV.y - SL.containerBox.y) * 0.5,
-                        SL.containerBox.w + (PREV.w - SL.containerBox.w) * 0.5, SL.containerBox.h + (PREV.h - SL.containerBox.h) * 0.5};
+            const CBox  PREV = ScrollOverview::FlightBlur::shape(ScrollOverview::FlightBlur::ESite::SEARCH_PANE, PREVBOX, SL.containerBox, PCT);
             blurred = ScrollOverview::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
                                                               ScrollOverview::FlightBlur::layoutSamples());
         }
@@ -7787,7 +7785,7 @@ void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, 
     dragBlurWindow   = WINDOW;
     const bool GROWS = PREV.w >= 1 && (std::abs(PREV.w - windowBox.w) > 0.5 || std::abs(PREV.h - windowBox.h) > 0.5);
     if (GROWS &&
-        ScrollOverview::FlightBlur::drawBlurred(monitor, WINDOW, PREV, windowBox,
+        ScrollOverview::FlightBlur::drawBlurred(monitor, WINDOW, ScrollOverview::FlightBlur::shape(ScrollOverview::FlightBlur::ESite::DRAG, PREV, windowBox, 0.F), windowBox,
                                                 [&] { renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true, 1.F, false); },
                                                 ScrollOverview::FlightBlur::layoutSamples()))
         return;
@@ -10106,6 +10104,20 @@ void CScrollOverview::syncPluginAnimEnabled() {
     set(searchAnimConfig);
     set(workspaceInsertFadeConfig);
     set(workspaceRemoveFadeConfig);
+
+    // THE SPEED (user, 2026-09-30: "animation speed ... globally"). anim_scale
+    // stretched only what runs on animElapsedMs; these Hyprland-animated
+    // variables took it as on/off. Hyprland speeds are durations (tenths of a
+    // second), so the scale multiplies them. Refreshed here every frame, so a
+    // live change reaches the next animation of an open overview. (A reversal
+    // sets its own speed from the same product, in useAnimDirection.)
+    const float S = std::max(0.01F, ScrollOverview::Config::animScale());
+    if (openAnimConfig)
+        openAnimConfig->internalSpeed = ScrollOverview::Config::getOpenSpeed() * S;
+    if (closeAnimConfig)
+        closeAnimConfig->internalSpeed = ScrollOverview::Config::getCloseSpeed() * S;
+    if (searchAnimConfig)
+        searchAnimConfig->internalSpeed = SEARCH_ANIM_SPEED * S;
 }
 
 void CScrollOverview::useAnimDirection(bool opening) {
@@ -10133,7 +10145,7 @@ void CScrollOverview::useAnimDirection(bool opening) {
 
         // Floor it: a hair of travel still deserves a frame or two of motion
         // rather than a teleport.
-        reverseAnimConfig->internalSpeed = std::max(0.3F, BASE * LEFT);
+        reverseAnimConfig->internalSpeed = std::max(0.3F, BASE * std::max(0.01F, ScrollOverview::Config::animScale()) * LEFT);
 
         scale->setConfig(reverseAnimConfig);
         viewOffset->setConfig(reverseAnimConfig);

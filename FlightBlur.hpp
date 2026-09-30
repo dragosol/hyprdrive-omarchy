@@ -26,6 +26,7 @@
 
 #include "globals.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -34,6 +35,53 @@ namespace Render {
 }
 
 namespace ScrollOverview::FlightBlur {
+
+    // THE BLUR SITES (user, 2026-09-30: "an entire motion blur section with
+    // per-animation curve and strengths with our defaults configured"). Every
+    // place hyprdrive smears motion, with the strength and fade it shipped
+    // with. Config.cpp registers motion_blur:<name>:strength / :fade from this
+    // table; shape() reads them.
+    enum class ESite : uint8_t {
+        MINIMIZE,       // the minimize / restore flight and the labels riding it
+        LAYOUT,         // a retile, a window opening (dwindle, scrolling)
+        FLICK,          // the scrolling tape, above the flick speed
+        SWIPE,          // a trackpad desktop swipe
+        SCRATCHPAD,     // the scratchpad sliding in and out
+        OVERVIEW,       // the overview opening / closing from a keypress
+        DESKTOP_SWITCH, // switching desktops in the overview by keyboard
+        SEARCH_TILES,   // tiles moving as a search filters them
+        SEARCH_PANE,    // the search results pane growing / shrinking
+        DRAG,           // the overview's drag proxy resizing
+        STACK_PANE,     // a dock stack's grid pane opening / closing
+    };
+    struct SSite {
+        const char* name;
+        const char* label;
+        float       strength;
+        const char* fade;
+    };
+    inline constexpr SSite SITES[] = {
+        {"minimize", "minimize / restore flight", 1.F, "early"},
+        {"layout", "window retile and open", 1.F, "early"},
+        {"flick", "scrolling layout flick", 0.5F, "early"},
+        {"swipe", "trackpad desktop swipe", 0.5F, "constant"},
+        {"scratchpad", "scratchpad slide", 0.5F, "early"},
+        {"overview", "overview open / close", 0.25F, "early"},
+        {"desktop_switch", "overview keyboard desktop switch", 0.25F, "constant"},
+        {"search_tiles", "search tile motion", 0.25F, "constant"},
+        {"search_pane", "search results pane", 0.5F, "early"},
+        {"drag", "overview drag resize", 1.F, "constant"},
+        {"stack_pane", "dock stack grid pane", 1.F, "early"},
+    };
+
+    // `site`'s share of the motion prev -> cur at `progress` (0..1 through the
+    // animation; pass 0 where there is none): strength x fade(progress), 0
+    // when motion_blur:enabled is off.
+    float amount(ESite site, float progress);
+
+    // prev pulled toward cur so the blur covers amount(site, progress) of the
+    // motion; returns cur (no smear) when that is ~0.
+    CBox shape(ESite site, const CBox& prev, const CBox& cur, float progress);
 
     // dock:minimize_motion_blur, clamped; below 2 means off.
     int samples();

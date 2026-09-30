@@ -24,6 +24,7 @@
 #undef private
 
 #include "FlightController.hpp"
+#include "Motion.hpp"
 
 #include "AppSearch.hpp"
 #include "Config.hpp"
@@ -313,6 +314,9 @@ void warpRestoredWindowAnims(const PHLWINDOW& window) {
 // is 1 - 2^(-10t) snapped to exactly 1 at the end. Extracted from the host's
 // windowManager.js, not recalled -- see spec 13.14's reference-discipline note.
 float easeOutExpo(float t) {
+    // Any animation:curve preset but the house one travels on its DECEL.
+    if (!Motion::housePreset())
+        return Motion::ease(Motion::ERole::DECEL, t);
     return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t);
 }
 
@@ -939,8 +943,8 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             const CBox  START = it->start.value_or(ITEM->iconBox);
             box               = lerpBox(START, it->from, E);
             alpha             = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
-            // Half as long (FlightBlur::fadeMotion), by the flight's own clock.
-            const CBox PREVBOX = FlightBlur::fadeMotion(lerpBox(START, it->from, it->lastE.value_or(E)), box, T);
+            // The minimize blur setting (strength and fade, FlightBlur::shape), by the flight's own clock.
+            const CBox PREVBOX = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, lerpBox(START, it->from, it->lastE.value_or(E)), box, T);
             it->lastE          = E;
 
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
@@ -984,7 +988,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             PREVBOX          = lerpBox(START, ITEM->iconBox, it->lastE.value_or(E));
         }
         it->lastE = E;
-        PREVBOX   = FlightBlur::fadeMotion(PREVBOX, box, T); // half as long, by the flight's own clock
+        PREVBOX   = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, PREVBOX, box, T); // the flight's own clock
 
         if (it->phase == EFlightPhase::Armed)
             transition(*it, EFlightPhase::Flying, "first-frame");

@@ -24,6 +24,8 @@
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #undef private
 #include "FlightBlur.hpp"
+#include <string_view>
+#include <array>
 
 #include "Config.hpp"
 
@@ -120,9 +122,9 @@ namespace ScrollOverview::FlightBlur {
         // flick, not a drift. Logical px per second.
         constexpr double FLICK_PX_PER_S = 12000.0; // user, 2026-09-30: 2500 then 5000 still blurred too early -- an ordinary snap of the tape peaks near 9000
 
-        // How much of a scroll or swipe's frame-to-frame motion is smeared:
-        // half (user, 2026-09-30: "halve the blur for the tape and desktop swipes").
-        constexpr double SCROLL_SMEAR = 0.5;
+        // (How much of a scroll or swipe is smeared -- half, user 2026-09-30:
+        // "halve the blur for the tape and desktop swipes" -- is now the
+        // flick / swipe / scratchpad defaults in FlightBlur.hpp's SITES.)
 
         CFlightBlurTransformer* transformerOf(const PHLWINDOW& window) {
             for (const auto& t : window->m_transformers)
@@ -221,6 +223,60 @@ namespace ScrollOverview::FlightBlur {
         if (window)
             if (auto* T = transformerOf(window))
                 T->m_armed = false;
+    }
+
+    namespace {
+        float smoothstep01(float t) {
+            const float T = std::clamp(t, 0.F, 1.F);
+            return T * T * (3.F - 2.F * T);
+        }
+
+        // How much of the smear is left at `p` for each fade shape. "early" is
+        // the house fade (HALF AS LONG, user 2026-09-30); unknown names read as
+        // it too, so a typo in a config never switches a blur off.
+        float envelope(std::string_view fade, float p) {
+            if (fade == "constant")
+                return 1.F;
+            if (fade == "full")
+                return 1.F - smoothstep01(p);
+            if (fade == "late")
+                return p < 0.5F ? 1.F : 1.F - smoothstep01((p - 0.5F) / 0.5F);
+            if (fade == "linear")
+                return 1.F - std::clamp(p, 0.F, 1.F);
+            return 1.F - smoothstep01(p / 0.5F);
+        }
+
+        constexpr size_t SITE_COUNT = std::size(SITES);
+    }
+
+    float amount(ESite site, float progress) {
+        const auto I = sc<size_t>(site);
+        if (I >= SITE_COUNT)
+            return 0.F;
+        if (!Config::g_pluginKeysRegistered)
+            return SITES[I].strength * envelope(SITES[I].fade, progress);
+
+        static auto& ON = Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:motion_blur:enabled");
+        if (!*ON)
+            return 0.F;
+
+        // One cached handle per key: this runs per window per frame.
+        static std::array<CConfigValue<Hyprlang::FLOAT>*, SITE_COUNT>  STRENGTH{};
+        static std::array<CConfigValue<Hyprlang::STRING>*, SITE_COUNT> FADE{};
+        if (!STRENGTH[I]) {
+            STRENGTH[I] = &Config::valueRef<Hyprlang::FLOAT>(std::format("plugin:hyprdrive:motion_blur:{}:strength", SITES[I].name));
+            FADE[I]     = &Config::valueRef<Hyprlang::STRING>(std::format("plugin:hyprdrive:motion_blur:{}:fade", SITES[I].name));
+        }
+        const float STRENGTHV = std::clamp(sc<float>(**STRENGTH[I]), 0.F, 1.F);
+        const char* FADEV     = **FADE[I];
+        return STRENGTHV * envelope(FADEV ? std::string_view{FADEV} : std::string_view{SITES[I].fade}, progress);
+    }
+
+    CBox shape(ESite site, const CBox& prev, const CBox& cur, float progress) {
+        const float KEEP = amount(site, progress);
+        if (KEEP < 0.03F)
+            return cur;
+        return CBox{cur.x + (prev.x - cur.x) * KEEP, cur.y + (prev.y - cur.y) * KEEP, cur.w + (prev.w - cur.w) * KEEP, cur.h + (prev.h - cur.h) * KEEP};
     }
 
     CBox fadeMotion(const CBox& prev, const CBox& cur, float progress) {
@@ -330,18 +386,18 @@ namespace ScrollOverview::FlightBlur {
                     }
                 }
 
-                // HALF AS LONG: full smear at the start of the animation, gone
-                // by its halfway point (fadeMotion). A swipe under the fingers
-                // has no animation clock; its smear is just its speed.
+                // Which of the user's blur settings this motion is: a swipe
+                // under the fingers, the scratchpad sliding, the scrolling
+                // tape flicked, or an ordinary retile / open. A swipe has no
+                // animation clock (progress 0: its smear is just its speed).
                 const float PCT  = SWIPED ? 0.F :
                                             std::max({MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F,
                                                       SLIDING ? WSOFFSET->getPercent() : 0.F});
-                CBox        PREV = fadeMotion(RAWPREV, NOWBOX, PCT);
-                // The scratchpad sliding gets the same gentler smear (user,
-                // 2026-09-30: "the blur workspace switching has").
-                if (SWIPED || SLIDING || (SCROLLING && MOVING && !RESIZING && !OFFSETS))
-                    PREV = CBox{NOWBOX.x + (PREV.x - NOWBOX.x) * SCROLL_SMEAR, NOWBOX.y + (PREV.y - NOWBOX.y) * SCROLL_SMEAR, NOWBOX.w + (PREV.w - NOWBOX.w) * SCROLL_SMEAR,
-                                NOWBOX.h + (PREV.h - NOWBOX.h) * SCROLL_SMEAR};
+                const ESite SITE = SWIPED                                          ? ESite::SWIPE :
+                    SLIDING                                                        ? ESite::SCRATCHPAD :
+                    (SCROLLING && MOVING && !RESIZING && !OFFSETS)                 ? ESite::FLICK :
+                                                                                     ESite::LAYOUT;
+                const CBox PREV = shape(SITE, RAWPREV, NOWBOX, PCT);
                 if (!moved(PREV, NOWBOX)) {
                     DISARM();
                     continue;

@@ -72,6 +72,7 @@ using namespace Hyprutils::String;
 
 #include "FlightController.hpp"
 #include "FlightBlur.hpp"
+#include "Motion.hpp"
 #include "ConfigureHold.hpp"
 #include "DockRoom.hpp"
 #include "Scratchpad.hpp"
@@ -2017,6 +2018,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::Compat::adoptLegacyValues();
         // A reload writes the user's render:new_render_scheduling back.
         ScrollOverview::FramePacing::apply();
+        // A reload can drop plugin-registered beziers, and may have changed the
+        // animation:curve preset: point the house names at it again.
+        ScrollOverview::Motion::sync();
 
         // `omarchy theme set` writes colors.toml and reloads Hyprland, so the
         // reload IS the theme change as far as this plugin is concerned. Drop
@@ -2285,6 +2289,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Config::registerDispatcher("debug", ::onDebugDispatcher);
     ScrollOverview::Config::registerGesture(::onRegisterOverviewGesture, ::overviewGestureKeyword);
     ScrollOverview::Config::registerConfig();
+    // The animation:curve preset onto Hyprland's named house beziers -- only
+    // now that the key exists (Config.hpp: an earlier read aborts Hyprland).
+    ScrollOverview::Motion::sync();
     // After a reload, windows are still parked on the stash with no ledger entry
     // behind them; without this they can never be restored.
     ScrollOverview::Minimize::adoptStashedWindows();

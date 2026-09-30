@@ -1,4 +1,5 @@
 #include "TileChrome.hpp"
+#include "Motion.hpp"
 
 #include "Config.hpp"
 #include "globals.hpp"
@@ -194,10 +195,12 @@ float eased(const SEase& ease) {
 // in both directions -- because that is what a CSS transition does, and the
 // symmetry is most of why GNOME's hover feels smoother than an accelerated exit.
 float easedHover(const SEase& ease) {
-    const float T   = std::clamp(std::chrono::duration<float, std::milli>(Time::steadyNow() - ease.start).count() / ease.ms, 0.F, 1.F);
+    // The animation clock: the panel's speed stretches the hover too.
+    const float T   = std::clamp(ScrollOverview::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
     const float INV = 1.F - T;
+    const float E   = Motion::housePreset() ? 1.F - INV * INV : Motion::ease(Motion::ERole::DECEL, T);
 
-    return ease.from + (ease.to - ease.from) * (1.F - INV * INV);
+    return ease.from + (ease.to - ease.from) * E;
 }
 
 float shortSide(const CBox& box) {

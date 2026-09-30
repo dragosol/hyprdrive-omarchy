@@ -50,10 +50,11 @@ print("there is copied onto the new name at config reload (the new name wins if"
 print("both are set). The old spelling prints one deprecation warning per session")
 print("and is removed one release after the rename.")
 print()
-for section in ("", "input", "dock", "shadow"):
-    if section not in sections:
-        continue
-    head = TITLES[section]
+# The four historical sections first, then any others in registration order
+# (animation, motion_blur:<site>).
+order = [s for s in ("", "input", "dock", "shadow") if s in sections] + [s for s in sections if s not in ("", "input", "dock", "shadow")]
+for section in order:
+    head = TITLES.get(section, section)
     print(f"## {head}" if not section else f"## `{section}`")
     print()
     print(f"Prefix: `{PREFIX}{section + ':' if section else ''}`")

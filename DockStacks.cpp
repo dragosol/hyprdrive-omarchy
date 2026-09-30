@@ -1,5 +1,6 @@
 // First: it widens private members of the Hyprland headers it includes, and
 // that only works if nothing has included them before it.
+#include "Motion.hpp"
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
@@ -2070,7 +2071,7 @@ namespace ScrollOverview::Stacks {
 
         g_popup->lastDrawn = Time::steadyNow();
         const float SCALE = std::max(monitor->m_scale, 0.01F);
-        const float ALPHA = houseEase(true, PROGRESS); // the same curve both ways, so a reversal is seamless
+        const float ALPHA = Motion::houseFixed(true, PROGRESS); // the same curve both ways, so a reversal is seamless
 
         if (g_popup->grid)
             layoutPane(*g_popup, monitor, layout.pill, PROGRESS);
@@ -2168,9 +2169,9 @@ namespace ScrollOverview::Stacks {
             // plate is drawn into a nested pass and smeared from last frame's
             // plate to this one (FlightBlur.hpp) -- the minimize flight's blur,
             // at dock:minimize_motion_blur samples. Settled, it draws directly.
-            // Half as long (FlightBlur::fadeMotion): an exit runs its progress
+            // The stack pane blur setting (FlightBlur::shape): an exit runs its progress
             // 1 -> 0, so its own clock is the complement.
-            const CBox PREVPLATE = FlightBlur::fadeMotion(P.lastPlate, P.plate, P.leaving ? 1.F - PROGRESS : PROGRESS);
+            const CBox PREVPLATE = FlightBlur::shape(FlightBlur::ESite::STACK_PANE, P.lastPlate, P.plate, P.leaving ? 1.F - PROGRESS : PROGRESS);
             P.lastPlate          = P.plate;
             const bool MOVING    = (P.leaving || PROGRESS < 1.F) && PREVPLATE.width >= 2 && PREVPLATE.height >= 2;
             const auto drawBody  = [&] {

@@ -1,4 +1,5 @@
 #include "Config.hpp"
+#include "FlightBlur.hpp"
 
 #include "Compat.hpp"
 
@@ -51,6 +52,12 @@ std::vector<SP<::Config::Values::IValue>> g_modernValues, g_legacyValues;
 const char* KEY(const std::string_view tail) {
     const auto* PREFIX = g_legacyPass ? ScrollOverview::Compat::LEGACY_KEY_PREFIX : ScrollOverview::Compat::KEY_PREFIX;
     return g_keyNames.emplace_back(std::string{PREFIX} + std::string{tail}).c_str();
+}
+
+// A formatted description, kept alive the way KEY keeps names: values keep
+// the const char* they are given.
+const char* stableText(std::string text) {
+    return g_keyNames.emplace_back(std::move(text)).c_str();
 }
 
 void addKey(SP<::Config::Values::IValue> value) {
@@ -659,6 +666,26 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CIntValue>(KEY("dock:minimize_motion_blur"),
                                  "dock: motion blur samples while a window flies into / out of its icon (0 = off), desktop and overview alike", 16,
                                  SIntValueOptions{.min = 0, .max = 32}));
+    // Motion.hpp. The dock stacks keep dock:stack_motion.
+    addKey(makeShared<CStringValue>(KEY("animation:curve"),
+                                    "the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum, smooth, swift, springy, linear",
+                                    Hyprlang::STRING{"hyprdrive"}));
+    // MOTION BLUR, PER ANIMATION (user, 2026-09-30). Each site smears a share
+    // of its frame-to-frame motion (strength, 0..1; 0 = that site off) shaped
+    // over the animation by `fade`: early (full at the start, gone by the
+    // halfway point -- the house default), full (fades over the whole
+    // animation), late (holds, then fades over the second half), linear, or
+    // constant (no fade; the continuous motions -- swipes, keyboard pans --
+    // have no progress to fade over). The defaults are the values these sites
+    // shipped with. Sample counts stay in layout_motion_blur,
+    // dock:minimize_motion_blur and dock:stack_motion_blur.
+    addKey(makeShared<CBoolValue>(KEY("motion_blur:enabled"), "motion blur on hyprdrive's animations (false = every site off; samples keys untouched)", true));
+    for (const auto& SITE : FlightBlur::SITES) {
+        addKey(makeShared<CFloatValue>(KEY(std::format("motion_blur:{}:strength", SITE.name)), stableText(std::format("motion blur: {} -- share of the motion smeared (0 = off)", SITE.label)),
+                                       SITE.strength, SFloatValueOptions{.min = 0.F, .max = 1.F}));
+        addKey(makeShared<CStringValue>(KEY(std::format("motion_blur:{}:fade", SITE.name)), stableText(std::format("motion blur: {} -- early, full, late, linear or constant", SITE.label)),
+                                        Hyprlang::STRING{SITE.fade}));
+    }
     addKey(makeShared<CStringValue>(KEY("dock:stack_motion"),
                                     "dock stacks: the fan's motion -- serpantinum (OutQuint travel, OutBack pop, 40 ms stagger) or extension (dock-stacks' 140 ms ease-out-quad)",
                                     Hyprlang::STRING{"serpantinum"}));

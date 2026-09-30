@@ -24,6 +24,7 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 
 #include "Dock.hpp"
+#include "Motion.hpp"
 #include "ConfigureHold.hpp"
 
 #include "Compat.hpp"
@@ -1444,6 +1445,9 @@ void armHopTimer(float ms) {
 //
 // Direction is no longer a parameter, because the curve no longer depends on it.
 float revealEase(float t) {
+    // Any animation:curve preset but the house one: its DECEL, both ways.
+    if (!Motion::housePreset())
+        return Motion::ease(Motion::ERole::DECEL, t);
     const float INV = 1.F - std::clamp(t, 0.F, 1.F);
     return 1.F - (INV * INV);
 }
@@ -1574,12 +1578,16 @@ struct SArrange {
 std::unordered_map<MONITORID, SArrange> g_arrange;
 
 float arrangeEase(float t) { // ease-out cubic: fast away, soft landing
+    if (!Motion::housePreset())
+        return Motion::ease(Motion::ERole::DECEL, t);
     t = std::clamp(t, 0.F, 1.F);
     const float U = 1.F - t;
     return 1.F - U * U * U;
 }
 
 float spawnEase(float t) { // ease-out back, a touch of overshoot so it lands
+    if (!Motion::housePreset())
+        return Motion::ease(Motion::ERole::POP, t);
     t              = std::clamp(t, 0.F, 1.F);
     constexpr float C1 = 1.75F; // 1.25 + two 0.25 steps: peak overshoot ~6% -> ~10%
     constexpr float C3 = C1 + 1.F;
@@ -1600,7 +1608,9 @@ SLayout arranged(MONITORID id, const SLayout& resting) {
         return resting;
 
     auto&       A = IT->second;
-    const float T = ScrollOverview::Config::realElapsedMs(A.since) / ARRANGE_MS;
+    // On the animation clock, so plugin:hyprdrive:anim_scale (the panel's
+    // speed) stretches it too; 0 finishes it at once.
+    const float T = ScrollOverview::Config::animElapsedMs(A.since) / ARRANGE_MS;
     if (T >= 1.F) {
         A.active = false;
         A.fromBoxes.clear();
@@ -1671,8 +1681,8 @@ bool arrangeAnimating(MONITORID id) {
     if (IT == g_arrange.end())
         return false;
     auto& A = IT->second;
-    std::erase_if(A.exits, [](const SArrangeExit& X) { return ScrollOverview::Config::realElapsedMs(X.since) >= EXIT_MS; });
-    return (A.active && ScrollOverview::Config::realElapsedMs(A.since) < ARRANGE_MS) || !A.exits.empty();
+    std::erase_if(A.exits, [](const SArrangeExit& X) { return ScrollOverview::Config::animElapsedMs(X.since) >= EXIT_MS; });
+    return (A.active && ScrollOverview::Config::animElapsedMs(A.since) < ARRANGE_MS) || !A.exits.empty();
 }
 
 SLayout buildBaseLayout(PHLMONITOR monitor) {
@@ -2365,7 +2375,7 @@ void renderWindowPeek(PHLMONITOR monitor, float alpha) {
             const double BY  = B.y + std::min<double>(PEEK_TOP_GAPL * S + PLATE.height, B.height);
             const CBox   NOW{CX - PLATE.width / 2.0, BY - PLATE.height, PLATE.width, PLATE.height};
             const auto   IT   = s_lastFlyingPlate.find(WINDOW.get());
-            const CBox   PREV = IT != s_lastFlyingPlate.end() ? FlightBlur::fadeMotion(IT->second, NOW, FLIGHT->progress) : NOW;
+            const CBox   PREV = IT != s_lastFlyingPlate.end() ? FlightBlur::shape(FlightBlur::ESite::MINIMIZE, IT->second, NOW, FLIGHT->progress) : NOW;
             s_lastFlyingPlate[WINDOW.get()] = NOW;
             const auto DRAW = [&] { OverviewRender::labelPill(monitor, TEXT, CX, BY, alpha * FLIGHT->alpha, S); };
             if (!FlightBlur::drawBlurred(monitor, nullptr, PREV, NOW, DRAW))
@@ -6631,7 +6641,7 @@ void render(PHLMONITOR monitor) {
     if (const auto ARR = g_arrange.find(monitor->m_id); ARR != g_arrange.end() && !ARR->second.exits.empty()) {
         const double DY = LAYOUT.pill.y - arranged(monitor->m_id, baseLayout(monitor)).pill.y;
         for (const auto& EXIT : ARR->second.exits) {
-            const float T = std::clamp(ScrollOverview::Config::realElapsedMs(EXIT.since) / EXIT_MS, 0.F, 1.F);
+            const float T = std::clamp(ScrollOverview::Config::animElapsedMs(EXIT.since) / EXIT_MS, 0.F, 1.F);
             if (T >= 1.F)
                 continue;
             const auto TEX = OverviewRender::appIcon(EXIT.item.icon, EXIT.item.scratchpad);
@@ -6703,7 +6713,8 @@ void render(PHLMONITOR monitor) {
         if (!TEX)
             continue;
 
-        const float E     = easeOutQuad(std::clamp(elapsedMs(ZOOM.startedAt) / LAUNCH_ZOOM_MS, 0.F, 1.F));
+        const float LT    = std::clamp(elapsedMs(ZOOM.startedAt) / LAUNCH_ZOOM_MS, 0.F, 1.F);
+        const float E     = Motion::housePreset() ? easeOutQuad(LT) : Motion::ease(Motion::ERole::DECEL, LT);
         const float GROWN = 1.F + (LAUNCH_ZOOM_SCALE - 1.F) * E;
         const float W     = sc<float>(ZOOM.from.width) * GROWN;
         const float H     = sc<float>(ZOOM.from.height) * GROWN;

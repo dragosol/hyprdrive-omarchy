@@ -107,4 +107,25 @@ def parse(path):
                        min=num(lo.group(1)) if lo else None,
                        max=num(hi.group(1)) if hi else None,
                        description=_clean_desc(desc)))
+
+    # The per-animation motion blur keys are registered in a loop over
+    # FlightBlur.hpp's SITES table (one row per blur site), so the regex above
+    # never sees them: expand the table the way the loop does, at the loop.
+    if "FlightBlur::SITES" in body:
+        import os
+        hdr = open(os.path.join(os.path.dirname(os.path.abspath(path)), "FlightBlur.hpp")).read()
+        table = hdr.split("inline constexpr SSite SITES[] = {", 1)[1].split("};", 1)[0]
+        sites = re.findall(r'\{"(\w+)",\s*"([^"]*)",\s*([0-9.]+)F,\s*"(\w+)"\}', table)
+        # Insert where the loop sits: after the key registered just before it.
+        before = re.search(r'KEY\("([^"]+)"\)[^;]*;\s*for \(const auto& SITE : FlightBlur::SITES\)', flat)
+        at = next((i + 1 for i, k in enumerate(out) if before and k.path == before.group(1)), len(out))
+        extra = []
+        for name, label, strength, fade in sites:
+            extra.append(Key(section=f"motion_blur:{name}", name="strength", type="float", default=num(strength + "F"),
+                             raw_default=strength + "F", range="0 .. 1", min="0", max="1",
+                             description=f"motion blur: {label} -- share of the motion smeared (0 = off)"))
+            extra.append(Key(section=f"motion_blur:{name}", name="fade", type="string", default=f'"{fade}"',
+                             raw_default=f'Hyprlang::STRING{{"{fade}"}}', range="",
+                             description=f"motion blur: {label} -- early, full, late, linear or constant"))
+        out[at:at] = extra
     return out
