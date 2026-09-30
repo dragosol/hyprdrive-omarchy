@@ -173,6 +173,14 @@ namespace ScrollOverview::FlightBlur {
         }
     }
 
+    CBox fadeMotion(const CBox& prev, const CBox& cur, float progress) {
+        const float T    = std::clamp(progress / 0.5F, 0.F, 1.F);
+        const float KEEP = 1.F - T * T * (3.F - 2.F * T);
+        if (KEEP < 0.03F)
+            return cur;
+        return CBox{cur.x + (prev.x - cur.x) * KEEP, cur.y + (prev.y - cur.y) * KEEP, cur.w + (prev.w - cur.w) * KEEP, cur.h + (prev.h - cur.h) * KEEP};
+    }
+
     int layoutSamples() {
         return std::clamp(Config::getValue<int>("plugin:hyprdrive:layout_motion_blur"), 0, 32);
     }
@@ -191,7 +199,13 @@ namespace ScrollOverview::FlightBlur {
                 if (!window || !window->m_isMapped || window->isHidden() || window->m_monitor != monitor || !window->m_workspace || !window->m_workspace->isVisible())
                     continue;
                 const auto IT = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.first.lock() == window; });
-                const bool ANIMATING = window->positionAnimation()->isBeingAnimated() || window->sizeAnimation()->isBeingAnimated();
+                // A SPECIAL workspace sliding in (the scratchpad, user
+                // 2026-09-30) moves its windows by the workspace's render offset,
+                // not their own geometry. Only special ones: an ordinary
+                // workspace switch is not a layout motion.
+                const auto& WSOFFSET  = window->m_workspace->m_renderOffset;
+                const bool  SLIDING   = window->m_workspace->m_isSpecialWorkspace && !window->m_pinned && WSOFFSET->isBeingAnimated();
+                const bool ANIMATING = window->positionAnimation()->isBeingAnimated() || window->sizeAnimation()->isBeingAnimated() || SLIDING;
                 if (!ANIMATING || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
                     if (IT != g_lastLayoutBox.end())
                         g_lastLayoutBox.erase(IT);
@@ -199,7 +213,8 @@ namespace ScrollOverview::FlightBlur {
                 }
 
                 // Monitor-local logical, like the renderer's currentBox.
-                const CBox NOWBOX{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - monitor->m_position,
+                const CBox NOWBOX{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - monitor->m_position +
+                                      (window->m_workspace->m_isSpecialWorkspace && !window->m_pinned ? WSOFFSET->value() : Vector2D{}),
                                   window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
                 if (IT == g_lastLayoutBox.end()) {
                     g_lastLayoutBox.emplace_back(window, NOWBOX);
@@ -216,14 +231,10 @@ namespace ScrollOverview::FlightBlur {
                 // and shrinks to nothing by its halfway point: the previous box
                 // is pulled toward the current one by the animation's own
                 // progress, smoothstepped so it eases out rather than stopping.
-                const float PCT  = std::max(window->positionAnimation()->isBeingAnimated() ? window->positionAnimation()->getPercent() : 0.F,
-                                            window->sizeAnimation()->isBeingAnimated() ? window->sizeAnimation()->getPercent() : 0.F);
-                const float T    = std::clamp(PCT / 0.5F, 0.F, 1.F);
-                const float KEEP = 1.F - T * T * (3.F - 2.F * T);
-                if (KEEP < 0.03F)
-                    continue;
-                const CBox PREV{NOWBOX.x + (RAWPREV.x - NOWBOX.x) * KEEP, NOWBOX.y + (RAWPREV.y - NOWBOX.y) * KEEP, NOWBOX.w + (RAWPREV.w - NOWBOX.w) * KEEP,
-                                NOWBOX.h + (RAWPREV.h - NOWBOX.h) * KEEP};
+                const float PCT  = std::max({window->positionAnimation()->isBeingAnimated() ? window->positionAnimation()->getPercent() : 0.F,
+                                             window->sizeAnimation()->isBeingAnimated() ? window->sizeAnimation()->getPercent() : 0.F,
+                                             SLIDING ? WSOFFSET->getPercent() : 0.F});
+                const CBox  PREV = fadeMotion(RAWPREV, NOWBOX, PCT);
                 if (!moved(PREV, NOWBOX))
                     continue;
 

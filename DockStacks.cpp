@@ -2168,7 +2168,9 @@ namespace ScrollOverview::Stacks {
             // plate is drawn into a nested pass and smeared from last frame's
             // plate to this one (FlightBlur.hpp) -- the minimize flight's blur,
             // at dock:minimize_motion_blur samples. Settled, it draws directly.
-            const CBox PREVPLATE = P.lastPlate;
+            // Half as long (FlightBlur::fadeMotion): an exit runs its progress
+            // 1 -> 0, so its own clock is the complement.
+            const CBox PREVPLATE = FlightBlur::fadeMotion(P.lastPlate, P.plate, P.leaving ? 1.F - PROGRESS : PROGRESS);
             P.lastPlate          = P.plate;
             const bool MOVING    = (P.leaving || PROGRESS < 1.F) && PREVPLATE.width >= 2 && PREVPLATE.height >= 2;
             const auto drawBody  = [&] {

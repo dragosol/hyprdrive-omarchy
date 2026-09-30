@@ -50,6 +50,12 @@ namespace ScrollOverview::FlightBlur {
     // plugin:hyprdrive:layout_motion_blur, clamped.
     int layoutSamples();
 
+    // HALF AS LONG (user, 2026-09-30): the smear is full at the start of an
+    // animation and eased to nothing by its halfway point. `progress` is how far
+    // the animation is, 0..1; the returned box is `prev` pulled toward `cur` so
+    // that motion blur covers only what is left of the smear.
+    CBox fadeMotion(const CBox& prev, const CBox& cur, float progress);
+
     // A driven flight moved the real window prevBox -> box (monitor-local
     // RENDER px) this frame; the NEXT window pass draws it there, blurred.
     void recordDriven(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& prevBox, const CBox& box);

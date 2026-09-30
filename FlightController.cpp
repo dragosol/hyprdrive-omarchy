@@ -924,7 +924,8 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             const CBox  START = it->start.value_or(ITEM->iconBox);
             box               = lerpBox(START, it->from, E);
             alpha             = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
-            const CBox PREVBOX = lerpBox(START, it->from, it->lastE.value_or(E));
+            // Half as long (FlightBlur::fadeMotion), by the flight's own clock.
+            const CBox PREVBOX = FlightBlur::fadeMotion(lerpBox(START, it->from, it->lastE.value_or(E)), box, T);
             it->lastE          = E;
 
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
@@ -956,6 +957,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             PREVBOX          = lerpBox(START, ITEM->iconBox, it->lastE.value_or(E));
         }
         it->lastE = E;
+        PREVBOX   = FlightBlur::fadeMotion(PREVBOX, box, T); // half as long, by the flight's own clock
 
         if (it->phase == EFlightPhase::Armed)
             transition(*it, EFlightPhase::Flying, "first-frame");
