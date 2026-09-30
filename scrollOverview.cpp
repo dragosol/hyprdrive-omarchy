@@ -4612,7 +4612,33 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
                                              window->m_title + std::format("  box={},{} {}x{}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width, (int)windowBox.height));
         }
 
-        renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX);
+        // TILES MOVED BY THE SEARCH (user, 2026-09-30: "0.5 motion blur on
+        // windows coming in from other desktops / in motion while I type"):
+        // promoted in from another card, sliding to their new slot as the
+        // filter narrows, or easing home after it clears. Smeared from last
+        // frame's box at half strength; the overview's own open/close zoom and
+        // panning between desktops stay sharp.
+        const auto PREVTILE = lastTileBoxes.find(window.get());
+        const bool SEARCHMOTION = (!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !scale->isBeingAnimated() && !viewOffset->isBeingAnimated() &&
+            PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2;
+        bool tileBlurred = false;
+        if (SEARCHMOTION) {
+            const CBox& P = PREVTILE->second.box;
+            const CBox  HALF{windowBox.x + (P.x - windowBox.x) * 0.5, windowBox.y + (P.y - windowBox.y) * 0.5, windowBox.w + (P.w - windowBox.w) * 0.5,
+                             windowBox.h + (P.h - windowBox.h) * 0.5};
+            // Only a real move: a frame-to-frame jump of a third of the screen
+            // is a card swap, not motion.
+            const bool JUMP = std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0;
+            if (!JUMP)
+                tileBlurred = ScrollOverview::FlightBlur::drawBlurred(
+                    monitor, window, HALF, windowBox,
+                    [&] { renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, 1.F, false); },
+                    ScrollOverview::FlightBlur::layoutSamples());
+            if (tileBlurred)
+                OverviewRender::flushPass(monitor);
+        }
+        if (!tileBlurred)
+            renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX);
         TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
         lastTileBoxes[window.get()] = {windowBox, workspaceIdx};
     };
