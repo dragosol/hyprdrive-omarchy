@@ -3128,6 +3128,14 @@ void CScrollOverview::syncFocusedSelection() {
     if (Desktop::focusState()->window() == window && window->m_workspace == pMonitor->m_activeWorkspace)
         return;
 
+    // Browsing must not OPEN anything: focusing a window on a special
+    // workspace makes Hyprland show that workspace, so a search whose first
+    // match lived in the scratchpad pulled the scratchpad open on the first
+    // keystroke (user, 2026-09-30: "empty desktop, type 'm', it opens the
+    // scratchpad"). It stays the selection; picking it (close()) focuses it.
+    if (window->m_workspace && window->m_workspace->m_isSpecialWorkspace)
+        return;
+
     const auto PREVIOUSWORKSPACE = pMonitor ? pMonitor->m_activeWorkspace : PHLWORKSPACE{};
 
     Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_KEYBIND);
