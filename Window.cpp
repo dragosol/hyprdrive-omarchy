@@ -326,9 +326,16 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         // the smallest 1/2^k of the source that still covers the drawn size:
         // no finer detail can reach the screen, and the mip chain does the rest.
         // Powers of two, so a zoom does not reallocate every frame.
+        //
+        // AT MOST HALF (2026-09-30, reverted from 1/16): one bilinear draw
+        // straight down to 1/4..1/16 samples a handful of source texels per
+        // output pixel, so the copy came out ALIASED and the mip chain built on
+        // it could not undo that -- the previews lost their antialiasing for a
+        // saving of a few MiB. An exact 2:1 copy averages every 2x2 block, and
+        // the mip chain does the rest properly.
         int SHIFT = 0;
-        while (SHIFT < 4 && minify <= 1.0 / double(2 << SHIFT) && (W >> (SHIFT + 1)) >= 4 && (H >> (SHIFT + 1)) >= 4)
-            ++SHIFT;
+        if (minify <= 0.5 && W >= 4 && H >= 4)
+            SHIFT = 1;
         const bool HALF       = SHIFT > 0;
         const int  FBW        = W >> SHIFT;
         const int  FBH        = H >> SHIFT;
@@ -1128,8 +1135,8 @@ void notifySurfaceCommit(const SP<CWLSurfaceResource>& surface) {
     if (!surface || g_u2PrefilterFBs.empty())
         return;
 
-    // Every size step of it (the key is the surface plus its step, 0..4).
-    for (uintptr_t step = 0; step <= 4; ++step)
+    // Every size step of it (the key is the surface plus its step, 0..1).
+    for (uintptr_t step = 0; step <= 1; ++step)
         if (const auto IT = g_u2PrefilterFBs.find(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(surface.get()) + step)); IT != g_u2PrefilterFBs.end())
             IT->second.dirty = true;
 }
