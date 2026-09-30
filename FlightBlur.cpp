@@ -118,7 +118,11 @@ namespace ScrollOverview::FlightBlur {
 
         // A scrolling desktop's tape is blurred only above this speed: a
         // flick, not a drift. Logical px per second.
-        constexpr double FLICK_PX_PER_S = 2500.0;
+        constexpr double FLICK_PX_PER_S = 5000.0; // user, 2026-09-30: 2500 blurred too much
+
+        // How much of a scroll or swipe's frame-to-frame motion is smeared:
+        // half (user, 2026-09-30: "halve the blur for the tape and desktop swipes").
+        constexpr double SCROLL_SMEAR = 0.5;
 
         CFlightBlurTransformer* transformerOf(const PHLWINDOW& window) {
             for (const auto& t : window->m_transformers)
@@ -280,8 +284,26 @@ namespace ScrollOverview::FlightBlur {
                 const float DTMS    = std::chrono::duration<float, std::milli>(NOW - IT->at).count();
                 IT->box             = NOWBOX;
                 IT->at              = NOW;
-                if (!valid(RAWPREV) || !valid(NOWBOX) || !moved(RAWPREV, NOWBOX))
+                // Whatever this frame decides, a window that is not smeared
+                // below must not keep LAST frame's smear: the transformer would
+                // hold it until it went stale (user, 2026-09-30: the terminal
+                // stayed streaked across the screen after it had stopped).
+                const auto DISARM = [&] {
+                    if (auto* t = transformerOf(window))
+                        t->m_armed = false;
+                };
+                if (!valid(RAWPREV) || !valid(NOWBOX) || !moved(RAWPREV, NOWBOX)) {
+                    DISARM();
                     continue;
+                }
+                // A JUMP is not motion: when a swipe ends Hyprland re-bases the
+                // workspaces' offsets, and a window's box leaps a whole screen
+                // in one frame. More than a third of the monitor per frame is
+                // never a hand or an animation.
+                if (std::abs(NOWBOX.x - RAWPREV.x) > monitor->m_size.x / 3.0 || std::abs(NOWBOX.y - RAWPREV.y) > monitor->m_size.y / 3.0) {
+                    DISARM();
+                    continue;
+                }
 
                 // A SCROLLING desktop's tape carrying a window sideways is the
                 // user scrolling (user, 2026-09-30): blurred only while it goes
@@ -289,8 +311,10 @@ namespace ScrollOverview::FlightBlur {
                 // there is a real retile and is blurred as anywhere else.
                 if (SCROLLING && MOVING && !RESIZING && !OFFSETS) {
                     const double SPEED = RAWPREV.pos().distance(NOWBOX.pos()) / std::max(1.0F, DTMS) * 1000.0; // logical px/s
-                    if (SPEED < FLICK_PX_PER_S)
+                    if (SPEED < FLICK_PX_PER_S) {
+                        DISARM();
                         continue;
+                    }
                 }
 
                 // HALF AS LONG: full smear at the start of the animation, gone
@@ -299,9 +323,14 @@ namespace ScrollOverview::FlightBlur {
                 const float PCT  = SWIPED ? 0.F :
                                             std::max({MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F,
                                                       SLIDING ? WSOFFSET->getPercent() : 0.F});
-                const CBox  PREV = fadeMotion(RAWPREV, NOWBOX, PCT);
-                if (!moved(PREV, NOWBOX))
+                CBox        PREV = fadeMotion(RAWPREV, NOWBOX, PCT);
+                if (SWIPED || (SCROLLING && MOVING && !RESIZING && !OFFSETS))
+                    PREV = CBox{NOWBOX.x + (PREV.x - NOWBOX.x) * SCROLL_SMEAR, NOWBOX.y + (PREV.y - NOWBOX.y) * SCROLL_SMEAR, NOWBOX.w + (PREV.w - NOWBOX.w) * SCROLL_SMEAR,
+                                NOWBOX.h + (PREV.h - NOWBOX.h) * SCROLL_SMEAR};
+                if (!moved(PREV, NOWBOX)) {
+                    DISARM();
                     continue;
+                }
 
                 auto* t = transformerOf(window);
                 if (!t) {
@@ -311,7 +340,9 @@ namespace ScrollOverview::FlightBlur {
                 t->m_prev    = PREV;
                 t->m_cur     = NOWBOX;
                 t->m_armed   = true;
-                t->m_samples = N;
+                // A swipe moves every window of two desktops at once, each
+                // drawn offscreen: fewer samples keep it at frame rate.
+                t->m_samples = SWIPED ? std::min(N, 8) : N;
                 t->m_fedAt   = NOW;
 
                 CBox reach{std::min(PREV.x, NOWBOX.x), std::min(PREV.y, NOWBOX.y), 0, 0};
