@@ -72,6 +72,8 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
+#include <hyprland/src/helpers/MiscFunctions.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
@@ -2692,7 +2694,7 @@ void cycleOrActivate(const SItem& item, bool reversed) {
 //                  kittys. The guard's other half is untouched -- an app with
 //                  windows already never reaches it (FIRSTINSTANCE), so this
 //                  only differs for the app that is still coming up.
-void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace = nullptr, bool deliberate = false) {
+void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace = nullptr, bool deliberate = false, const std::string& execRule = "") {
     // Y6. Armed here rather than in activateItem so every path that actually
     // starts something gets the blow-up -- a click on a closed app, a hotkey,
     // and `middle-click-action=launch` alike. GNOME calls animateLaunch() from
@@ -2738,12 +2740,35 @@ void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace =
     // window when it maps through a token in the child's environment. The NAME
     // rather than the id, because that is what a workspace rule matches on and
     // what a named desktop would need.
-    AppSearch::launchWithRule(*ENTRY, Config::getTerminal(), SILENT ? "workspace " + onWorkspace->m_name + " silent" : "");
+    AppSearch::launchWithRule(*ENTRY, Config::getTerminal(), !execRule.empty() ? execRule : SILENT ? "workspace " + onWorkspace->m_name + " silent" : "");
 
     closeOverview();
 }
 
-void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl = false) {
+// OPEN IN EMPTY WORKSPACE (user, 2026-09-29): SUPER/ALT/CTRL+click on an app
+// that is not running, and the context menu's "Open in Empty Workspace". The
+// lowest-numbered desktop with no windows on this monitor (Hyprland's own
+// `emptym` -- which is this one, when this one is empty): switch to it (created
+// if need be, with the usual animation), and launch pinned to it, so an app
+// that maps slowly still lands there if the user has moved on.
+void launchInEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
+    if (!monitor || item.stack || item.scratchpad || !item.uri.empty())
+        return;
+    const auto TARGET = getWorkspaceIDNameFromString("emptym");
+    if (TARGET.id == WORKSPACE_INVALID) {
+        launchApp(monitor, item, nullptr, true);
+        return;
+    }
+    // The overview first: a desktop switch under an open overview is a switch
+    // the user cannot see.
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+        OVERVIEW->close();
+    if (!monitor->m_activeWorkspace || monitor->m_activeWorkspace->m_id != TARGET.id)
+        (void)::Config::Actions::changeWorkspace(std::to_string(TARGET.id));
+    launchApp(monitor, item, nullptr, true, "workspace " + std::to_string(TARGET.id));
+}
+
+void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl = false, bool emptyWorkspace = false) {
     // X35. A location has no windows to minimize: it is opened. Nautilus raises
     // the window it already has for a location rather than opening a second
     // one, so this is the reference's "focus it" too.
@@ -2791,6 +2816,13 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
 
     if (!item.uri.empty()) {
         launchApp(monitor, item);
+        return;
+    }
+
+    // A modifier click on an app that is not running opens it on an empty
+    // desktop. Running, the modifier changes nothing (CTRL still cycles below).
+    if (emptyWorkspace && itemWindows(item).empty()) {
+        launchInEmptyWorkspace(monitor, item);
         return;
     }
 
@@ -2966,6 +2998,7 @@ enum class ERow : uint8_t {
     StackUnpin,
     // user, 2026-09-22: "add a force quit option ... add quality of life features".
     NewWindow,
+    OpenEmptyWorkspace,
     MinimizeAll,
     RestoreAll,
     ForceQuit,
@@ -3174,6 +3207,9 @@ std::vector<SRow> buildRows(const SItem& item) {
     // running app's icon cannot do on a click, which focuses instead.
     if (!ID.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::NewWindow, .label = "New Window", .glyph = MenuGlyph::NEW});
+    // Running or not: a new window of it, alone on a desktop of its own.
+    if (!ID.empty())
+        rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
 
     for (const auto& ACTION : AppSearch::actionsForId(ID))
         rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec, .glyph = MenuGlyph::ACTION});
@@ -3419,6 +3455,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             return;
 
         case ERow::NewWindow: launchApp(monitor, item, nullptr, true); return;
+
+        case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;
 
         case ERow::MinimizeAll:
             for (const auto& WINDOW : itemWindows(item))
@@ -4016,7 +4054,12 @@ bool click(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle, b
     if (ITEM == LAYOUT.items.end())
         return false;
 
-    activateItem(monitor, *ITEM, shift, ctrl);
+    // SUPER / ALT / CTRL held: "open it in an empty workspace" when it is not
+    // running. Read HERE, not in activateItem -- SUPER+number hotkeys go
+    // through activateItem too, with SUPER held by definition.
+    const uint32_t MODS  = g_pInputManager ? g_pInputManager->getModsFromAllKBs() : 0;
+    const bool     EMPTY = ctrl || (MODS & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL)) != 0;
+    activateItem(monitor, *ITEM, shift, ctrl, EMPTY);
     return true;
 }
 
