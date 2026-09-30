@@ -4622,8 +4622,13 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         // frame's box at half strength; the overview's own open/close zoom and
         // panning between desktops stay sharp.
         const auto PREVTILE = lastTileBoxes.find(window.get());
-        const bool SEARCHMOTION = (!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !scale->isBeingAnimated() && !viewOffset->isBeingAnimated() &&
-            PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2;
+        // And the grid panning to another desktop from the KEYBOARD (user,
+        // 2026-09-30), at the same 0.25 -- a trackpad pan follows the fingers
+        // and stays sharp.
+        const bool KEYPAN  = viewOffset->isBeingAnimated() && keyBadgeBornAt.time_since_epoch().count() != 0 &&
+            SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) < 1000.F;
+        const bool SEARCHMOTION = ((!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
+            !scale->isBeingAnimated() && PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2;
         bool tileBlurred = false;
         if (SEARCHMOTION) {
             const CBox& P = PREVTILE->second.box;
