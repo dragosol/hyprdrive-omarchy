@@ -101,6 +101,17 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     layout                       = ScrollOverview::Config::getLayout();
     sharedStateOwner             = scrollOverviews().empty();
     usesSubmapKeybinds           = hasOverviewSubmap();
+    // The overview's own mouse binds must let a press through when the
+    // overview itself lets it through -- over a TOP/OVERLAY layer (the bar,
+    // notification toasts). A consuming bind ate that press even so (the
+    // dispatcher closed the overview, the toast never saw it). Normal clicks
+    // never reach the bind: onMouseButton cancels them and dispatches itself.
+    if (g_pKeybindManager) {
+        for (const auto& keybind : g_pKeybindManager->m_keybinds) {
+            if (keybind && isOverviewSubmapName(keybind->submap.name) && (keybind->mouse || keybind->key.starts_with("mouse")))
+                keybind->nonConsuming = true;
+        }
+    }
 
     // Any door, not just openOverview(): the swipe builds overviews itself.
     if (!OpenProf::active())
@@ -2507,9 +2518,6 @@ struct SOverviewDropSite {
     PHLMONITOR                  monitor;
     PHLWORKSPACE                activeWorkspaceBeforeDrop;
     PHLWORKSPACE                dropActiveWorkspaceBeforeDrop;
-    int                         dropSide = 0;
-    CDropIndicator::SDropAnchor dropAnchor;
-    std::string                 dropDirection;
 };
 
 // Stage 1. The window that was dragged, its layout handles, and the overview
@@ -2554,7 +2562,7 @@ void CScrollOverview::gatherDropWorkspace(SOverviewDropSite& site) {
     site.facts.haveOriginalBox   = !drag.originalBox.empty();
 }
 
-// Stage 3. The anchor window under the cursor, and everything the commit has to
+// Stage 3. Where on the destination card, and everything the commit has to
 // have read BEFORE it starts moving things: the source workspace's fullscreen
 // window and both monitors' active workspaces.
 void CScrollOverview::gatherDropAnchor(SOverviewDropSite& site) {
@@ -2563,8 +2571,6 @@ void CScrollOverview::gatherDropAnchor(SOverviewDropSite& site) {
     site.facts.restoreSourceFullscreenFocus = site.window && site.window->m_isFloating && site.facts.moveWorkspace &&
         shouldShowOverviewWindow(site.sourceFullscreenWindow) && site.sourceFullscreenWindow != site.window &&
         site.sourceFullscreenWindow->m_workspace == site.originalWorkspace && Fullscreen::controller()->isFullscreen(site.sourceFullscreenWindow);
-
-    const bool DROPSIDEHORIZONTAL = site.dropOverview->layout != ScrollOverview::Config::ELayout::HORIZONTAL || site.dropScrollingPrimaryHorizontal;
 
     site.monitor                       = pMonitor.lock();
     site.activeWorkspaceBeforeDrop     = site.monitor ? site.monitor->m_activeWorkspace : PHLWORKSPACE{};
@@ -2600,39 +2606,7 @@ void CScrollOverview::gatherDropAnchor(SOverviewDropSite& site) {
             site.dropOverview->layout);
         site.facts.dropPointMapsIntoCard =
             overviewBoxFullyVisibleOnMonitor(WORKSPACEBOX, site.dropMonitor) && !site.dropOverview->workspaceAtStripPoint(site.dropPointLocal);
-
-        if (DROPSIDEHORIZONTAL) {
-            if (site.dropPointLocal.x < WORKSPACEBOX.x)
-                site.dropSide = -1;
-            else if (site.dropPointLocal.x > WORKSPACEBOX.x + WORKSPACEBOX.width)
-                site.dropSide = 1;
-        } else {
-            if (site.dropPointLocal.y < WORKSPACEBOX.y)
-                site.dropSide = -1;
-            else if (site.dropPointLocal.y > WORKSPACEBOX.y + WORKSPACEBOX.height)
-                site.dropSide = 1;
-        }
     }
-
-    // The one write in the gathering half, and it is an argument hand-off:
-    // dropAnchorAtOverviewCursorOnWorkspace reads the destination overview's
-    // cursor rather than taking a point.
-    site.dropOverview->lastMousePosLocal = site.dropPointLocal;
-    site.dropAnchor                      = site.dropOverview->dropAnchorAtOverviewCursorOnWorkspace(site.dropWorkspaceIdx, site.window, this);
-    site.dropDirection                   = site.dropAnchor.direction;
-
-    site.facts.haveAnchor           = static_cast<bool>(site.dropAnchor.window);
-    site.facts.haveDirection        = !site.dropDirection.empty();
-    site.facts.onScrollingCrossAxis = site.dropScrollingPrimaryHorizontal ? site.dropDirection == "u" || site.dropDirection == "d" :
-                                                                           site.dropDirection == "l" || site.dropDirection == "r";
-    // The two queries below are asked under exactly the guards the branches
-    // that used to ask them asked under. They are reads, but a refactor that
-    // quietly starts calling layoutTarget() or isFullscreen() on windows the
-    // old code never asked about is not a refactor.
-    site.facts.anchorHasLayoutTarget =
-        site.facts.haveAnchor && site.facts.haveDirection && !site.facts.scrollingLayout && static_cast<bool>(site.dropAnchor.window->layoutTarget());
-    site.facts.anchorFullscreen = site.facts.scrollingLayout && site.facts.haveAnchor && site.facts.onScrollingCrossAxis &&
-        Fullscreen::controller()->isFullscreen(site.dropAnchor.window);
 }
 
 void CScrollOverview::commitDropMinimize(const SOverviewDropSite& site) {
@@ -2680,7 +2654,6 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
     const auto  DROPWORKSPACE = site.dropWorkspace;
     const auto  DROPMONITOR   = site.dropMonitor;
     const auto  MONITOR       = site.monitor;
-    const auto  DROPANCHOR    = site.dropAnchor.window;
     auto* const dropOverview  = site.dropOverview;
 
     const auto RESTOREACTIVEWORKSPACE = [&]() {
@@ -2701,14 +2674,6 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
         }
     };
 
-    if (DECISION.clearAnchorFullscreen) {
-        Fullscreen::controller()->setFullscreenMode(DROPANCHOR, Fullscreen::FSMODE_NONE);
-        if (const auto ANCHORDATA = site.dropScrollingAlgo->dataFor(DROPANCHOR->layoutTarget()); ANCHORDATA) {
-            if (const auto ANCHORCOL = ANCHORDATA->column.lock())
-                ANCHORCOL->setColumnWidth(1.F);
-        }
-    }
-
     using enum ScrollOverview::Drop::EAction;
     using EPlacement = ScrollOverview::Drop::EPlacement;
 
@@ -2717,17 +2682,13 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
             Desktop::globalWindowController()->moveWindowToWorkspace(WINDOW, DROPWORKSPACE);
             RESTOREACTIVEWORKSPACE();
 
-            switch (DECISION.placement) {
-                case EPlacement::ScrollEdgeFar: moveOverviewScrollingTargetToWorkspaceEdge(TARGET, 1); break;
-                case EPlacement::NextToAnchor: moveOverviewTargetNextToWindow(TARGET, DROPANCHOR, site.dropDirection); break;
-                case EPlacement::ScrollEdgeSide: moveOverviewScrollingTargetToWorkspaceEdge(TARGET, site.dropSide); break;
-                default: break;
-            }
+            if (DECISION.placement == EPlacement::ScrollEdgeFar)
+                moveOverviewScrollingTargetToWorkspaceEdge(TARGET, 1);
 
             // An ARRIVAL is the layout's to place, not the drop point's: the move
             // above filed it wherever dwindle's cursor-reading insert put it, so
             // re-file it the way opening it on that desktop would (Placement.hpp).
-            // Scrolling desktops keep the tape placements chosen just above.
+            // Scrolling desktops take it at the far end of the tape, above.
             if (!site.facts.scrollingLayout)
                 ScrollOverview::Placement::retileAsNew(WINDOW, ScrollOverview::Placement::takeDragAnchor());
 
@@ -2749,39 +2710,6 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
 
             RESTOREACTIVEWORKSPACE();
             RESTOREVIEWPORTWORKSPACE();
-            break;
-        }
-        case RetileLocal: {
-            TARGET->damageEntire();
-
-            // A window torn out of a DOCK PREVIEW is being brought here, not
-            // rearranged, even when it already lived on this desktop -- so it is
-            // the layout's to place too, and the swap / insert-by-direction the
-            // drop point would pick is skipped. Dragging a tile you can already
-            // see keeps them: that gesture IS asking to put it there.
-            const bool LAYOUTDECIDES = drag.fromDockPreview && !site.facts.scrollingLayout;
-            if (LAYOUTDECIDES)
-                ScrollOverview::Placement::retileAsNew(WINDOW, ScrollOverview::Placement::takeDragAnchor());
-
-            switch (LAYOUTDECIDES ? EPlacement::None : DECISION.placement) {
-                case EPlacement::SwitchTargets:
-                    DROPANCHOR->layoutTarget()->damageEntire();
-                    g_layoutManager->switchTargets(TARGET, DROPANCHOR->layoutTarget(), true);
-                    DROPANCHOR->layoutTarget()->damageEntire();
-                    break;
-                case EPlacement::NextToAnchor: moveOverviewTargetNextToWindow(TARGET, DROPANCHOR, site.dropDirection); break;
-                case EPlacement::ScrollEdgeSide: moveOverviewScrollingTargetToWorkspaceEdge(TARGET, site.dropSide); break;
-                default: break;
-            }
-
-            TARGET->rememberFloatingSize(drag.originalFloatSize);
-            TARGET->warpPositionSize();
-            TARGET->damageEntire();
-
-            Desktop::focusState()->fullWindowFocus(WINDOW, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
-
-            if (const auto WORKSPACE = SPACE->workspace())
-                WORKSPACE->updateWindows();
             break;
         }
         case FloatMove: {
@@ -2813,28 +2741,6 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
 
             RESTOREACTIVEWORKSPACE();
             RESTOREVIEWPORTWORKSPACE();
-            break;
-        }
-        case FloatLocal: {
-            const auto workspaceIdx = dragWorkspaceIndex(WINDOW);
-
-            const auto FLOATBOX  = draggedWindowBox(workspaceIdx);
-            const auto GLOBALPOS = overviewPointToGlobal(workspaceIdx, FLOATBOX.pos());
-            // X41: same mission-control-slot descaling bug as the branch above. This
-            // is the path a CANCELLED drag takes when the button comes up over the
-            // window's own card, so committing the slot size shrinks it every time.
-            const auto GLOBALSIZE = DECISION.useOriginalBox ?
-                drag.originalBox.size() :
-                FLOATBOX.size() * (1.F / (std::max(scale->value(), 0.01F) * std::max(MONITOR ? MONITOR->m_scale : 1.F, 0.01F)));
-            auto       GLOBALBOX  = CBox{GLOBALPOS, GLOBALSIZE};
-            const auto WORKSPACE  = workspaceIdx < images.size() && images[workspaceIdx] ? images[workspaceIdx]->pWorkspace : WINDOW->m_workspace;
-
-            GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->getRealBorderSize());
-
-            TARGET->damageEntire();
-            TARGET->setPositionGlobal(GLOBALBOX);
-            TARGET->warpPositionSize();
-            TARGET->damageEntire();
             break;
         }
         default: break;
@@ -4708,37 +4614,6 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
     const auto fullscreenWindow  = overviewFullscreenPathWindow(workspace);
     const bool scrollingLayout   = isWorkspaceScrolling(workspace);
     const bool hasFullscreenPath = fullscreenWindow != nullptr;
-    const auto renderDropIndicator = [&] {
-        if (hasRunningWorkspaceAnimation())
-            return;
-
-        auto*      dragContext = g_pointerGrabOverview && g_pointerGrabOverview->drag.activeWindow ? g_pointerGrabOverview : this;
-        const auto DRAGGED     = getOverviewWindowToShow(dragContext->drag.activeWindow.lock());
-        if (!DRAGGED)
-            return;
-
-        if (!isOverviewPointerOnMonitor(monitor))
-            return;
-
-        size_t     dropWorkspaceIdx = 0;
-        const auto DROPWORKSPACE    = workspaceAtOverviewDropPoint(lastMousePosLocal, &dropWorkspaceIdx, DRAGGED);
-        if (DROPWORKSPACE != workspace || dropWorkspaceIdx != workspaceIdx)
-            return;
-
-        const auto ANCHOR      = dropAnchorAtOverviewCursorOnWorkspace(workspaceIdx, DRAGGED, dragContext);
-        const auto WORKSPACEBOX = getOverviewWorkspaceBox(monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
-
-        CDropIndicator::renderDropIndicator({
-            .monitor               = monitor,
-            .workspace             = workspace,
-            .workspaceUsableBox    = getOverviewWorkspaceUsableBox(workspace, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout),
-            .anchor                = ANCHOR,
-            .renderScale           = renderScale,
-            .workspaceFullyVisible = overviewBoxFullyVisibleOnMonitor(WORKSPACEBOX, monitor),
-            .floating              = DRAGGED->m_isFloating,
-            .layout                = layout,
-        });
-    };
 
     if (!scrollingLayout && hasFullscreenPath) {
         renderOverviewWindow(fullscreenWindow);
@@ -4750,8 +4625,6 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
 
             renderOverviewWindow(window);
         }
-        if (WORKSPACEVISIBLE)
-            renderDropIndicator();
         return;
     }
 
@@ -4775,8 +4648,6 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
     if (hoveredHere)
         renderOverviewWindow(HOVEREDTILE);
     renderClosingTiles(monitor, workspaceIdx, now);
-    if (WORKSPACEVISIBLE)
-        renderDropIndicator();
 }
 
 // OMARCHY'S OWN CLOSE, borrowed rather than invented: `windowsOut` on this rice
@@ -8608,14 +8479,24 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
 
     realtimePreviewFrameQueued = false;
 
+    // An OVERLAY client asking for frames is animating over the overview (a
+    // notification toast being swiped away, the OSD): keep the frames coming
+    // while it asks. Nothing else would -- its commits alone do not reliably
+    // come back as a repaint here, so Qt sat waiting on the callback and a
+    // swiped toast froze half off the screen until the pointer moved again.
+    bool overlayWantsFrames = false;
     for (const auto LAYER :
          {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, ZWLR_LAYER_SHELL_V1_LAYER_TOP, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY}) {
         for (const auto& layerRef : MONITOR->m_layerSurfaceLayers[LAYER]) {
             const auto layer = layerRef.lock();
-            if (Desktop::View::validMapped(layer) && surfaceTreeHasFrameCallbacks(layer->wlSurface() ? layer->wlSurface()->resource() : nullptr))
+            if (Desktop::View::validMapped(layer) && surfaceTreeHasFrameCallbacks(layer->wlSurface() ? layer->wlSurface()->resource() : nullptr)) {
                 surfaceTreePresent(layer->wlSurface() ? layer->wlSurface()->resource() : nullptr, MONITOR, now);
+                overlayWantsFrames = overlayWantsFrames || LAYER == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
+            }
         }
     }
+    if (overlayWantsFrames)
+        requestInputFrame();
 }
 
 // The one line that lets a TU without the internals header ask THE gate; see
@@ -8847,6 +8728,17 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
     if (layerOwner) {
         if (layerOwner->m_monitor != MONITOR)
             return true;
+
+        // OVERLAY is transient chrome drawn ABOVE the overview (notification
+        // toasts, the OSD, Omapager) and the user works it with the pointer
+        // here: a toast being hovered or swiped away must repaint as it moves.
+        // Its damage was refused with TOP's, so a swipe froze the toast where it
+        // was. AQ_SCHEDULE_DAMAGE is throttled while the overview is up, hence
+        // the input frame. TOP (the bar, which can animate nonstop) stays out.
+        if (layerOwner->m_layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY) {
+            requestInputFrame();
+            return true;
+        }
 
         if (layerOwner->m_layer > ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM)
             return false;

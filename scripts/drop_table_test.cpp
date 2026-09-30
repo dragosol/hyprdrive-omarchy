@@ -22,54 +22,33 @@
 
 using namespace ScrollOverview::Drop;
 
-// The parent's branch structure, written the way the parent wrote it. Names are
-// the parent's locals: RETILEONEND, MOVEWORKSPACE, DROPSCROLLINGLAYOUT,
-// DROPANCHOR, dropDirection.empty(), dropPointMapsIntoCard, ...
+// The ladder spelled out the long way, so a slip in either copy shows up as a
+// disagreeing row. Since 1.9.2 the overview only MOVES windows between
+// desktops: a drop on the window's own desktop cancels, and an arrival is the
+// destination layout's to place (no swap, no insert beside the tile under the
+// cursor, no anchor facts at all).
 static SDecision reference(const SFacts& f) {
     SDecision d;
 
-    // if (WINDOW && ScrollOverview::Dock::pillContains(...)) { minimizeWithFlight; return; }
     if (f.haveWindow && f.overPill) {
         d.action = EAction::Minimize;
         return d;
     }
 
-    // if (!DROPWORKSPACE) { grid reflow seed; return; }
-    if (!f.haveDropWorkspace) {
+    if (!f.haveDropWorkspace || !f.moveWorkspace) {
         d.action = EAction::CancelToGrid;
         return d;
     }
 
-    // if (DROPSCROLLINGLAYOUT && DROPANCHOR && DROPPINGONSCROLLINGCROSSAXIS && isFullscreen(DROPANCHOR))
-    if (f.scrollingLayout && f.haveAnchor && f.onScrollingCrossAxis && f.anchorFullscreen)
-        d.clearAnchorFullscreen = true;
-
-    d.useOriginalBox               = f.haveOriginalBox;          // HAVEORIGINAL
-    d.mapPointIntoCard             = f.dropPointMapsIntoCard;    // dropPointMapsIntoCard
+    d.useOriginalBox               = f.haveOriginalBox;
+    d.mapPointIntoCard             = f.dropPointMapsIntoCard;
     d.restoreSourceFullscreenFocus = f.restoreSourceFullscreenFocus;
 
-    if (f.retileOnEnd && f.moveWorkspace) {
-        d.action = EAction::RetileMove;
-        if (f.scrollingLayout) {
-            if (!f.dropPointMapsIntoCard)
-                d.placement = EPlacement::ScrollEdgeFar;             // ...WorkspaceEdge(TARGET, 1)
-            else if (f.haveAnchor && f.haveDirection)
-                d.placement = EPlacement::NextToAnchor;              // ...NextToWindow(TARGET, DROPANCHOR, dir)
-            else if (!f.haveAnchor)
-                d.placement = EPlacement::ScrollEdgeSide;            // ...WorkspaceEdge(TARGET, dropSide)
-        }
-    } else if (f.retileOnEnd) {
-        d.action = EAction::RetileLocal;
-        if (f.haveAnchor && f.haveDirection && !f.scrollingLayout && f.anchorHasLayoutTarget)
-            d.placement = EPlacement::SwitchTargets;                 // g_layoutManager->switchTargets(...)
-        else if (f.haveAnchor && f.haveDirection)
-            d.placement = EPlacement::NextToAnchor;
-        else if (f.scrollingLayout && !f.haveAnchor)
-            d.placement = EPlacement::ScrollEdgeSide;
-    } else if (f.haveWindow && f.moveWorkspace) {
+    if (f.retileOnEnd) {
+        d.action    = EAction::RetileMove;
+        d.placement = f.scrollingLayout ? EPlacement::ScrollEdgeFar : EPlacement::None;
+    } else if (f.haveWindow) {
         d.action = EAction::FloatMove;
-    } else if (f.haveTarget && !f.startedTiled) {
-        d.action = EAction::FloatLocal;
     }
 
     return d;
@@ -80,37 +59,32 @@ static const char* actionName(EAction a) {
         case EAction::Minimize: return "Minimize";
         case EAction::CancelToGrid: return "CancelToGrid";
         case EAction::RetileMove: return "RetileMove";
-        case EAction::RetileLocal: return "RetileLocal";
         case EAction::FloatMove: return "FloatMove";
-        case EAction::FloatLocal: return "FloatLocal";
         case EAction::Nothing: return "Nothing";
     }
     return "?";
 }
+static constexpr int NACTIONS = 5;
 
 static const char* placementName(EPlacement p) {
     switch (p) {
         case EPlacement::None: return "None";
         case EPlacement::ScrollEdgeFar: return "ScrollEdgeFar";
-        case EPlacement::ScrollEdgeSide: return "ScrollEdgeSide";
-        case EPlacement::NextToAnchor: return "NextToAnchor";
-        case EPlacement::SwitchTargets: return "SwitchTargets";
     }
     return "?";
 }
 
 static bool same(const SDecision& a, const SDecision& b) {
-    return a.action == b.action && a.placement == b.placement && a.clearAnchorFullscreen == b.clearAnchorFullscreen && a.useOriginalBox == b.useOriginalBox &&
-        a.mapPointIntoCard == b.mapPointIntoCard && a.restoreSourceFullscreenFocus == b.restoreSourceFullscreenFocus;
+    return a.action == b.action && a.placement == b.placement && a.useOriginalBox == b.useOriginalBox && a.mapPointIntoCard == b.mapPointIntoCard &&
+        a.restoreSourceFullscreenFocus == b.restoreSourceFullscreenFocus;
 }
 
-// The 16 facts, in bit order, so a failing row can be read back.
+// The 11 facts, in bit order, so a failing row can be read back.
 static const char* BITNAMES[] = {
-    "haveWindow",   "overPill",        "haveDropWorkspace",    "retileOnEnd",  "moveWorkspace",        "startedTiled",       "haveTarget",     "scrollingLayout",
-    "haveOriginalBox", "haveAnchor",   "haveDirection",        "anchorHasLayoutTarget", "anchorFullscreen", "onScrollingCrossAxis", "dropPointMapsIntoCard",
-    "restoreSourceFullscreenFocus",
+    "haveWindow", "overPill",        "haveDropWorkspace",     "retileOnEnd",                  "moveWorkspace", "startedTiled",
+    "haveTarget", "scrollingLayout", "haveOriginalBox",       "dropPointMapsIntoCard",        "restoreSourceFullscreenFocus",
 };
-static constexpr int NBITS = 16;
+static constexpr int NBITS = 11;
 
 static SFacts factsFromBits(unsigned bits) {
     SFacts f;
@@ -123,13 +97,8 @@ static SFacts factsFromBits(unsigned bits) {
     f.haveTarget                   = bits & (1u << 6);
     f.scrollingLayout              = bits & (1u << 7);
     f.haveOriginalBox              = bits & (1u << 8);
-    f.haveAnchor                   = bits & (1u << 9);
-    f.haveDirection                = bits & (1u << 10);
-    f.anchorHasLayoutTarget        = bits & (1u << 11);
-    f.anchorFullscreen             = bits & (1u << 12);
-    f.onScrollingCrossAxis         = bits & (1u << 13);
-    f.dropPointMapsIntoCard        = bits & (1u << 14);
-    f.restoreSourceFullscreenFocus = bits & (1u << 15);
+    f.dropPointMapsIntoCard        = bits & (1u << 9);
+    f.restoreSourceFullscreenFocus = bits & (1u << 10);
     return f;
 }
 
@@ -285,7 +254,7 @@ static int iconTable() {
 
 int main() {
     int failures = 0;
-    int counts[7] = {};
+    int counts[NACTIONS] = {};
 
     for (unsigned bits = 0; bits < (1u << NBITS); ++bits) {
         const SFacts    F = factsFromBits(bits);
@@ -298,16 +267,16 @@ int main() {
             continue;
 
         if (++failures <= 20)
-            std::printf("MISMATCH bits=0x%04x [%s]\n  resolve   %s/%s cf=%d orig=%d map=%d rsf=%d\n  reference %s/%s cf=%d orig=%d map=%d rsf=%d\n", bits,
-                        describe(bits).c_str(), actionName(A.action), placementName(A.placement), A.clearAnchorFullscreen, A.useOriginalBox, A.mapPointIntoCard,
-                        A.restoreSourceFullscreenFocus, actionName(B.action), placementName(B.placement), B.clearAnchorFullscreen, B.useOriginalBox, B.mapPointIntoCard,
+            std::printf("MISMATCH bits=0x%04x [%s]\n  resolve   %s/%s orig=%d map=%d rsf=%d\n  reference %s/%s orig=%d map=%d rsf=%d\n", bits,
+                        describe(bits).c_str(), actionName(A.action), placementName(A.placement), A.useOriginalBox, A.mapPointIntoCard,
+                        A.restoreSourceFullscreenFocus, actionName(B.action), placementName(B.placement), B.useOriginalBox, B.mapPointIntoCard,
                         B.restoreSourceFullscreenFocus);
     }
 
     // Every action has to be REACHED, or "all 65536 agree" would be a fact
     // about an unreachable ladder rather than about this one.
     std::printf("rows %u\n", 1u << NBITS);
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < NACTIONS; ++i) {
         std::printf("  %-13s %6d\n", actionName(static_cast<EAction>(i)), counts[i]);
         if (counts[i] == 0) {
             std::printf("UNREACHED action %s\n", actionName(static_cast<EAction>(i)));
@@ -329,18 +298,15 @@ int main() {
         {"floating tile to another desktop",
          SFacts{.haveWindow = true, .haveDropWorkspace = true, .moveWorkspace = true, .haveTarget = true, .haveOriginalBox = true, .dropPointMapsIntoCard = true},
          EAction::FloatMove, EPlacement::None},
-        {"floating tile dropped on its own card", SFacts{.haveWindow = true, .haveDropWorkspace = true, .haveTarget = true, .haveOriginalBox = true}, EAction::FloatLocal,
-         EPlacement::None},
-        {"tiled window swapped with the tile under the cursor",
-         SFacts{.haveWindow = true,
-                .haveDropWorkspace = true,
-                .retileOnEnd       = true,
-                .startedTiled      = true,
-                .haveTarget        = true,
-                .haveAnchor        = true,
-                .haveDirection     = true,
-                .anchorHasLayoutTarget = true},
-         EAction::RetileLocal, EPlacement::SwitchTargets},
+        {"floating tile dropped on its own card", SFacts{.haveWindow = true, .haveDropWorkspace = true, .haveTarget = true, .haveOriginalBox = true},
+         EAction::CancelToGrid, EPlacement::None},
+        {"tiled window dropped on another tile of its own desktop (no swap)",
+         SFacts{.haveWindow = true, .haveDropWorkspace = true, .retileOnEnd = true, .startedTiled = true, .haveTarget = true, .dropPointMapsIntoCard = true},
+         EAction::CancelToGrid, EPlacement::None},
+        {"tiled window onto a scrolling desktop's card",
+         SFacts{.haveWindow = true, .haveDropWorkspace = true, .retileOnEnd = true, .moveWorkspace = true, .startedTiled = true, .haveTarget = true,
+                .scrollingLayout = true, .dropPointMapsIntoCard = true},
+         EAction::RetileMove, EPlacement::ScrollEdgeFar},
     };
 
     for (const auto& C : CASES) {

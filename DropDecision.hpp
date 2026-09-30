@@ -11,8 +11,7 @@
 //
 // The caller gathers facts in three stages and asks again after each, because
 // the gathering itself is not free: the pill branch must return before anything
-// queries a drop workspace, and the anchor query writes the destination
-// overview's cursor before it reads it. resolve() is total at every stage --
+// queries a drop workspace. resolve() is total at every stage --
 // the fields a stage has not filled in yet are false, which is why the two
 // early actions are decided by the facts that ARE known first.
 
@@ -30,51 +29,44 @@ namespace ScrollOverview::Drop {
         bool haveTarget        = false;
         bool scrollingLayout   = false;
         bool haveOriginalBox   = false;
-        // stage 3 -- the anchor under the cursor
-        bool haveAnchor             = false;
-        bool haveDirection          = false; // the anchor came back with a side to sit on
-        bool anchorHasLayoutTarget  = false;
-        bool anchorFullscreen       = false;
-        bool onScrollingCrossAxis   = false;
-        bool dropPointMapsIntoCard  = false;
+        // stage 3 -- where on the destination card
+        bool dropPointMapsIntoCard        = false;
         bool restoreSourceFullscreenFocus = false;
     };
 
     enum class EAction {
         Minimize,     // released on the dock pill: the drop is a minimize and nothing else
-        CancelToGrid, // no workspace under the cursor: keep everything, ease the tile home
+        CancelToGrid, // nowhere to go, or its own desktop: keep everything, ease the tile home
         RetileMove,   // a tiled window, onto another workspace
-        RetileLocal,  // a tiled window, within its own
         FloatMove,    // a floating window, onto another workspace
-        FloatLocal,   // a floating window, within its own
         Nothing,      // a drop with nothing to move (no window, or no layout target)
     };
 
     // What to do with the layout target once the window is where it belongs.
     enum class EPlacement {
         None,
-        ScrollEdgeFar,  // push to the far edge of a scrolling workspace (side +1)
-        ScrollEdgeSide, // push to the edge the cursor left from (the caller's dropSide)
-        NextToAnchor,   // insert beside the anchor window, on the anchor's direction
-        SwitchTargets,  // swap slots with the anchor -- plain tiling only
+        ScrollEdgeFar, // push to the far edge of a scrolling workspace
     };
 
     struct SDecision {
         EAction    action    = EAction::Nothing;
         EPlacement placement = EPlacement::None;
-        // The anchor is fullscreen and the drop crosses a scrolling layout's
-        // secondary axis: it has to come out of fullscreen and give its column
-        // width back before anything is inserted next to it.
-        bool clearAnchorFullscreen = false;
         // A move commits the window's ORIGINAL global size, not the size of the
         // mission-control slot it was drawn at (X41/X42).
         bool useOriginalBox   = false;
-        // The cursor can be read as a point inside the destination card, so the
-        // window lands where it was dropped rather than where it already was.
+        // The cursor can be read as a point inside the destination card, so a
+        // floating window lands where it was dropped rather than where it was.
         bool mapPointIntoCard = false;
         bool restoreSourceFullscreenFocus = false;
     };
 
+    // The overview MOVES windows between desktops; it never arranges them. A
+    // drop on the window's own desktop is no drop at all (the tile eases back to
+    // its slot), and a window arriving on another desktop goes where that
+    // desktop's layout puts a new window -- never beside / swapped with the tile
+    // under the cursor. (Until 1.9.2 a same-desktop drop swapped or inserted by
+    // direction and a drop indicator highlighted the target; the user: "that's
+    // not the purpose of the overview at any point ever".)
     constexpr SDecision resolve(const SFacts& f) {
         SDecision d;
 
@@ -83,49 +75,24 @@ namespace ScrollOverview::Drop {
             return d;
         }
 
-        if (!f.haveDropWorkspace) {
+        if (!f.haveDropWorkspace || !f.moveWorkspace) {
             d.action = EAction::CancelToGrid;
             return d;
         }
 
-        d.clearAnchorFullscreen = f.scrollingLayout && f.haveAnchor && f.onScrollingCrossAxis && f.anchorFullscreen;
         d.restoreSourceFullscreenFocus = f.restoreSourceFullscreenFocus;
         d.useOriginalBox               = f.haveOriginalBox;
         d.mapPointIntoCard             = f.dropPointMapsIntoCard;
 
-        if (f.retileOnEnd && f.moveWorkspace) {
-            d.action = EAction::RetileMove;
-            if (f.scrollingLayout) {
-                if (!f.dropPointMapsIntoCard)
-                    d.placement = EPlacement::ScrollEdgeFar;
-                else if (f.haveAnchor && f.haveDirection)
-                    d.placement = EPlacement::NextToAnchor;
-                else if (!f.haveAnchor)
-                    d.placement = EPlacement::ScrollEdgeSide;
-            }
-            return d;
-        }
-
         if (f.retileOnEnd) {
-            d.action = EAction::RetileLocal;
-            if (f.haveAnchor && f.haveDirection && !f.scrollingLayout && f.anchorHasLayoutTarget)
-                d.placement = EPlacement::SwitchTargets;
-            else if (f.haveAnchor && f.haveDirection)
-                d.placement = EPlacement::NextToAnchor;
-            else if (f.scrollingLayout && !f.haveAnchor)
-                d.placement = EPlacement::ScrollEdgeSide;
+            d.action = EAction::RetileMove;
+            if (f.scrollingLayout)
+                d.placement = EPlacement::ScrollEdgeFar;
             return d;
         }
 
-        if (f.haveWindow && f.moveWorkspace) {
+        if (f.haveWindow)
             d.action = EAction::FloatMove;
-            return d;
-        }
-
-        if (f.haveTarget && !f.startedTiled) {
-            d.action = EAction::FloatLocal;
-            return d;
-        }
 
         return d;
     }
