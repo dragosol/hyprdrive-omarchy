@@ -1812,6 +1812,45 @@ struct SGridSlot {
     bool promoted = false;
 };
 
+inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, ScrollOverview::Config::ELayout layout);
+
+// A CARD'S GRID, PUSHED TOWARD THE CENTRE CARD (user, 2026-09-30): only the
+// inner edge of a neighbouring card is on screen, so its grid is aligned to that
+// edge (a gap in) instead of centred, and its windows are in reach. The push is
+// scaled by how far the card is off centre RIGHT NOW -- its offset minus the
+// animated pan, over the card pitch -- so a card sliding in eases from pushed to
+// centred and nothing jumps at a keypress. `slot` is the card's own grid slot.
+inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset,
+                                 ScrollOverview::Config::ELayout layout) {
+    const bool   HORIZ = layout == ScrollOverview::Config::ELayout::HORIZONTAL;
+    const double MS    = std::max(monitor->m_scale, 0.01F);
+    const double PITCH = getWorkspaceRenderedPitch(monitor, scale, layout);
+    const double D     = offset - (HORIZ ? viewOffset.x : viewOffset.y) * scale * MS;
+    const double T     = PITCH > 1.0 ? std::clamp(std::abs(D) / PITCH, 0.0, 1.0) : 0.0;
+    if (T < 0.001)
+        return slot;
+
+    double lo = 1e18, hi = -1e18;
+    for (const auto& W : overviewMainGridWindows(workspace, monitor)) {
+        if (CBox b; overviewGridLayout(workspace, monitor, W, b)) {
+            lo = std::min(lo, HORIZ ? b.x : b.y);
+            hi = std::max(hi, HORIZ ? b.x + b.w : b.y + b.h);
+        }
+    }
+    if (!(lo < hi))
+        return slot;
+
+    constexpr double EDGE  = 24.0; // logical px in from the card's edge
+    const double     START = HORIZ ? monitor->m_position.x : monitor->m_position.y;
+    const double     END   = START + (HORIZ ? monitor->m_size.x : monitor->m_size.y);
+    const double     SHIFT = (D > 0.0 ? (START + EDGE) - lo : (END - EDGE) - hi) * T;
+    if (HORIZ)
+        slot.x += SHIFT;
+    else
+        slot.y += SHIFT;
+    return slot;
+}
+
 inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
                                  bool round = true, const CBox* geometryOverride = nullptr) {
     if (!window)
@@ -1863,12 +1902,31 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
             }
         }
 
-        geometry = overviewGridLerpBox(geometry, gridReflowBox(monitor, window, slot, enterPtr, PROMOTED), overviewGridProgress(scale));
+        // The card that just became active is still sliding in: keep its grid
+        // pushed by how far off centre it still is (overviewCardGridPush), or
+        // its windows would jump to the centre at the keypress.
+        CBox placed = slot;
+        if (!PROMOTED && g_search.query.text.empty() && window->m_workspace)
+            placed = overviewCardGridPush(slot, window->m_workspace, monitor, scale, viewOffset, offset, layout);
+        geometry = overviewGridLerpBox(geometry, gridReflowBox(monitor, window, placed, enterPtr, PROMOTED), overviewGridProgress(scale));
 
         // The active card sits at offset 0. A promoted tile must ignore the
         // caller's per-workspace offset or it lands off-screen beside it.
         if (PROMOTED)
             offset = 0.F;
+    } else if (const auto HOME = window->m_workspace; overviewMissionControlOn() && g_search.query.text.empty() && HOME && !HOME->m_isSpecialWorkspace &&
+               monitor->m_activeWorkspace && HOME != monitor->m_activeWorkspace && HOME->m_monitor == monitor) {
+        // THE NEIGHBOURING CARDS WEAR THE SAME GRID (user, 2026-09-30). Only the
+        // active card's windows were laid out as a grid under the strip; the
+        // cards beside it showed their desktops' raw layout, so stepping to one
+        // with the keyboard reshaped every window as the grid moved onto it --
+        // a shrink the motion blur then smeared across the pan. Each card now
+        // solves its own grid, the same way and under the same chrome, and just
+        // rides its card offset: a desktop switch only slides.
+        if (CBox slot; overviewGridLayout(HOME, monitor, window, slot)) {
+            slot = overviewCardGridPush(slot, HOME, monitor, scale, viewOffset, offset, layout);
+            geometry = overviewGridLerpBox(geometry, slot, overviewGridProgress(scale));
+        }
     }
 
     return getOverviewGlobalBox(geometry, monitor, scale, viewOffset, offset, layout, round);
