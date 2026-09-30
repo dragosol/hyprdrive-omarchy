@@ -84,11 +84,12 @@ namespace ScrollOverview::Motion {
         const SPreset& current() {
             const SPreset* want = &PRESETS[0];
             if (Config::g_pluginKeysRegistered) {
-                static auto& VAL = Config::valueRef<Hyprlang::STRING>("plugin:hyprdrive:animation:curve");
-                if (const char* S = *VAL; S && std::strcmp(S, g_live.preset ? g_live.preset->name.data() : "") == 0)
-                    want = g_live.preset;
-                else if (S)
-                    want = &presetNamed(S);
+                // std::string, as every plugin string key is stored (Config.hpp
+                // getValue): read as a const char* it was garbage, never matched
+                // a preset, and every preset silently fell back to the house one.
+                static auto& VAL = Config::valueRef<std::string>("plugin:hyprdrive:animation:curve");
+                const std::string& S = *VAL;
+                want = g_live.preset && S == g_live.preset->name ? g_live.preset : &presetNamed(S);
             }
             if (want != g_live.preset) {
                 g_live.preset = want;

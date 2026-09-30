@@ -1577,6 +1577,18 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
     }
     // `type <text>` / `type`: set the open overview's search query as if typed
     // (empty clears it) -- the rig has no keyboard that reaches the overview.
+    // `motion`: which animation:curve preset the engine is ACTUALLY using, and
+    // the three curves at t = 0.25 / 0.5 -- a preset that reads as the house
+    // one here is not reaching the animations.
+    if (TOPIC == "motion") {
+        using ScrollOverview::Motion::ERole;
+        const auto E = [](ERole r, float t) { return ScrollOverview::Motion::ease(r, t); };
+        return {.success = false,
+                .error   = std::format("hyprdrive motion: house={} decel(.25)={:.3f} decel(.5)={:.3f} accel(.5)={:.3f} pop(.5)={:.3f} | blur minimize {:.3f}@.25 swipe {:.3f}@.25",
+                                       ScrollOverview::Motion::housePreset(), E(ERole::DECEL, 0.25F), E(ERole::DECEL, 0.5F), E(ERole::ACCEL, 0.5F), E(ERole::POP, 0.5F),
+                                       ScrollOverview::FlightBlur::amount(ScrollOverview::FlightBlur::ESite::MINIMIZE, 0.25F),
+                                       ScrollOverview::FlightBlur::amount(ScrollOverview::FlightBlur::ESite::SWIPE, 0.25F))};
+    }
     // `mem`: what hyprdrive holds on the GPU, as far as it can count it.
     if (TOPIC == "mem") {
         const auto [N, BYTES] = OverviewWindow::texturePrefilterCacheBytes();

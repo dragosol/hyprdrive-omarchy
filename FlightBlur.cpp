@@ -262,14 +262,14 @@ namespace ScrollOverview::FlightBlur {
 
         // One cached handle per key: this runs per window per frame.
         static std::array<CConfigValue<Hyprlang::FLOAT>*, SITE_COUNT>  STRENGTH{};
-        static std::array<CConfigValue<Hyprlang::STRING>*, SITE_COUNT> FADE{};
+        static std::array<CConfigValue<std::string>*, SITE_COUNT>      FADE{}; // std::string: see Motion.cpp
         if (!STRENGTH[I]) {
             STRENGTH[I] = &Config::valueRef<Hyprlang::FLOAT>(std::format("plugin:hyprdrive:motion_blur:{}:strength", SITES[I].name));
-            FADE[I]     = &Config::valueRef<Hyprlang::STRING>(std::format("plugin:hyprdrive:motion_blur:{}:fade", SITES[I].name));
+            FADE[I]     = &Config::valueRef<std::string>(std::format("plugin:hyprdrive:motion_blur:{}:fade", SITES[I].name));
         }
         const float STRENGTHV = std::clamp(sc<float>(**STRENGTH[I]), 0.F, 1.F);
-        const char* FADEV     = **FADE[I];
-        return STRENGTHV * envelope(FADEV ? std::string_view{FADEV} : std::string_view{SITES[I].fade}, progress);
+        const std::string& FADEV = **FADE[I];
+        return STRENGTHV * envelope(FADEV.empty() ? std::string_view{SITES[I].fade} : std::string_view{FADEV}, progress);
     }
 
     CBox shape(ESite site, const CBox& prev, const CBox& cur, float progress) {
