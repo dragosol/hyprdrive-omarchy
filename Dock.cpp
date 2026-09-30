@@ -3512,9 +3512,14 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
 
     // The warning colour for Force Quit: a desaturated red that still reads as
     // part of a dark Omarchy plate rather than as an alert box.
-    const CHyprColor LABEL_COLOR{1.F, 1.F, 1.F, 0.95F};
-    const CHyprColor DANGER_COLOR{1.F, 0.50F, 0.47F, 0.97F};
-    const CHyprColor DIM_COLOR{1.F, 1.F, 1.F, 0.45F};
+    // The THEME's text colour, not white: on a light Omarchy theme the plate is
+    // light and white labels vanished (user, 2026-09-29). Dim = the same ink,
+    // thinner; the danger red darkens on a light plate to stay readable.
+    const bool       LIGHT = ScrollOverview::Config::isLightTheme();
+    const auto       INK   = ScrollOverview::Config::themeForeground();
+    const CHyprColor LABEL_COLOR{INK.r, INK.g, INK.b, 0.95F};
+    const CHyprColor DANGER_COLOR = LIGHT ? CHyprColor{0.78F, 0.16F, 0.14F, 1.F} : CHyprColor{1.F, 0.50F, 0.47F, 0.97F};
+    const CHyprColor DIM_COLOR{INK.r, INK.g, INK.b, LIGHT ? 0.60F : 0.45F};
 
     struct SRowTex {
         SP<Render::ITexture> label, glyph, hint;
@@ -3585,7 +3590,7 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             CRectPassElement::SRectData sep;
             sep.box   = CBox{std::round(plate.x + MENU_PAD_X * SCALE), std::round(y + MENU_SEP_H * SCALE / 2.F),
                              std::round(plate.width - 2.F * MENU_PAD_X * SCALE), sc<double>(std::max(1.F, std::round(SCALE)))};
-            sep.color = CHyprColor{1.F, 1.F, 1.F, 0.15F};
+            sep.color = CHyprColor{INK.r, INK.g, INK.b, 0.15F};
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sep));
 
             y += MENU_SEP_H * SCALE;
@@ -6556,7 +6561,10 @@ void render(PHLMONITOR monitor) {
         // dark". view-app-grid-symbolic is near-black artwork sitting on a dark
         // frosted pill; every other icon in the dock is a full-colour app icon,
         // so this is the only one that needed it.
-        if (const auto TEX = OverviewRender::appIcon(Config::getValue<std::string>(KEY_SHOW_APPS_ICON), true); TEX) {
+        // ...white on a DARK dock only: on a light theme the white dots vanished
+        // into the plate (user, 2026-09-29), and the artwork's own near-black
+        // is the readable one there.
+        if (const auto TEX = OverviewRender::appIcon(Config::getValue<std::string>(KEY_SHOW_APPS_ICON), !Config::isLightTheme()); TEX) {
             DockTilt::queue(TEX, LAYOUT.showApps, 1.F,
                             DockTilt::pose(monitor->m_id, "show-apps", pointerIn(LAYOUT.showApps, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, "show-apps"),
                                            pressAt(monitor->m_id, "show-apps")));

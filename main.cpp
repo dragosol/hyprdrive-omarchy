@@ -2343,7 +2343,12 @@ APICALL EXPORT void PLUGIN_EXIT() {
     disableScrollOverviewHooks();
 
     if (g_pTrackpadGestures)
+    {
+        // The swipe in progress first: clearGestures() does not touch it, and it
+        // may be one of ours (session abort mid-swipe, 2026-09-29).
+        ScrollOverview::endActiveTrackpadGesture();
         g_pTrackpadGestures->clearGestures();
+    }
 
     // LAST, and it is the difference between unloading and killing the session.
     //

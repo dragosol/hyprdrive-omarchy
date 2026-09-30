@@ -213,3 +213,9 @@ class CFullscreenOrCloseGesture : public CHyprdriveForwardGesture {
     CFullscreenTrackpadGesture m_fullscreen{"fullscreen"};
     CGuardedCloseGesture       m_close;
 };
+
+namespace ScrollOverview {
+    // Unload: end (cancelled) and drop the trackpad gesture being performed, whose
+    // code may be this plugin's (GestureCleanup.cpp).
+    void endActiveTrackpadGesture();
+}
