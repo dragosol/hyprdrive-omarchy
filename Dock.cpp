@@ -3596,10 +3596,28 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             // the pointer landing on it is noticed.
             const auto ROWACCENT = row.danger ? DANGER_COLOR : ScrollOverview::Config::highlightColor();
 
+            // The first and last rows sit in the plate's rounded corners, and a
+            // square highlight poked out of them (user, 2026-09-29, Force Quit).
+            // A rect rounds all four corners or none, so the fill is drawn
+            // rounded, stretched past the row on its INNER side and clipped
+            // back to it: rounded where it meets the plate's edge, square
+            // where it meets the next row.
+            const int  RADIUS = sc<int>(std::round(MENU_RADIUS * SCALE));
+            const bool FIRST  = i == 0;
+            const bool LAST   = i + 1 == g_menu->rows.size();
+            CBox       shape  = row.box;
+            if (FIRST && !LAST)
+                shape.height += RADIUS; // stretch down: only the top is rounded
+            else if (LAST && !FIRST) {
+                shape.y -= RADIUS; // stretch up: only the bottom is rounded
+                shape.height += RADIUS;
+            }
+
             CRectPassElement::SRectData fill;
-            fill.box           = row.box;
+            fill.box           = shape;
+            fill.clipBox       = row.box;
             fill.color         = ROWACCENT.modifyA(row.danger ? 0.18F : 0.26F);
-            fill.round         = 0;
+            fill.round         = FIRST || LAST ? RADIUS : 0;
             fill.roundingPower = 2.F;
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
         }
@@ -3634,6 +3652,22 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
         }
 
         y += ROWH;
+    }
+
+    // The pill's outline on the menu too (user, 2026-09-29): theme accent at
+    // Hyprland's border weight, floored at 1. Drawn after the rows so a
+    // full-width highlight never paints over it.
+    {
+        const int                       BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+        CBorderPassElement::SBorderData border;
+        border.box = plate.copy().round();
+        border.grad1.reset(ScrollOverview::Config::highlightColor().modifyA(1.F));
+        border.a             = 1.F;
+        border.borderSize    = BORDERSIZE;
+        border.round         = sc<int>(std::round(MENU_RADIUS * SCALE));
+        border.roundingPower = 2.F;
+        if (Stacks::drawableBox(border.box))
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
     }
 }
 
