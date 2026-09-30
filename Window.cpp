@@ -317,12 +317,21 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
 
         const int  W          = sc<int>(SRC->m_size.x);
         const int  H          = sc<int>(SRC->m_size.y);
-        // Drawn at half size or less, a half-resolution copy loses nothing: an
-        // exact 2:1 bilinear draw averages each 2x2 block, and the mip chain
-        // takes it from there. A quarter of the fill and of the mipmap work.
-        const bool HALF       = minify <= 0.5 && W >= 4 && H >= 4;
-        const int  FBW        = HALF ? W / 2 : W;
-        const int  FBH        = HALF ? H / 2 : H;
+        // COPIED AT THE SIZE IT IS DRAWN, in powers of two (2026-09-30). The
+        // copy used to be full or half resolution whatever the tile's size, so a
+        // 2880-px window drawn as a 500-px tile was copied and mipmapped at 1440
+        // px -- and while the overview was open those copies were re-made many
+        // times a second, which is what drove Hyprland's GPU memory up by
+        // gigabytes (the driver keeps freed buffers for reuse). The copy is now
+        // the smallest 1/2^k of the source that still covers the drawn size:
+        // no finer detail can reach the screen, and the mip chain does the rest.
+        // Powers of two, so a zoom does not reallocate every frame.
+        int SHIFT = 0;
+        while (SHIFT < 4 && minify <= 1.0 / double(2 << SHIFT) && (W >> (SHIFT + 1)) >= 4 && (H >> (SHIFT + 1)) >= 4)
+            ++SHIFT;
+        const bool HALF       = SHIFT > 0;
+        const int  FBW        = W >> SHIFT;
+        const int  FBH        = H >> SHIFT;
         const auto SURFACE    = spe->m_data.surface;
         const auto IMAGEDESC  = g_pHyprRenderer->m_renderData.currentFB ? g_pHyprRenderer->m_renderData.currentFB->imageDescription() : NColorManagement::PImageDescription{};
         // A surface pass element always carries its surface; the texture is the
