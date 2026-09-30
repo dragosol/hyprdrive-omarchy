@@ -241,6 +241,12 @@ struct SFlight {
     std::optional<CBox>  start;
     std::optional<float> alphaFrom;
     std::optional<SDrawn> drawn;
+    // The eased progress the previous frame drew at. Motion blur smears along
+    // THIS flight's path from there to now -- never from `drawn`, which can be a
+    // box off another path (a drop seeds `start` at the drop point, so the last
+    // drawn box was the window's own; blurring that jump smeared the whole
+    // window down into the icon: user, 2026-09-30).
+    std::optional<float> lastE;
 
     EFlightPhase phase          = EFlightPhase::Armed;
     int          landHeldFrames = 0;
@@ -654,7 +660,7 @@ bool isRestoreFlight(const PHLWINDOW& window) {
     return IT != g_flights.end() && IT->isRestore();
 }
 
-void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand) {
+void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::optional<CBox> startBox) {
     // Z5/Z9r5. Mid-restore click: put it back from mid-air. The window is REAL
     // (hidden) during a restore flight now, so the gate is the flight's
     // existence, and reverse() performs the unhide + stash.
@@ -701,6 +707,8 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand) {
             ScrollOverview::Dock::armBounce(AppSearch::identityClass(window->m_class, window->m_title));
         std::erase_if(g_flights, [&window](const SFlight& f) { return f.window.lock() == window; });
         SFlight next{.id = g_nextId++, .window = window, .monitor = monitor->m_id, .from = from, .kind = EFlightKind::MinimizeProxy, .startedAt = Time::steadyNow()};
+        if (startBox && startBox->width >= 1 && startBox->height >= 1)
+            next.start = *startBox;
         zdbg("phase id=%llu kind=%s ->Armed reason=minimize\n", (unsigned long long)next.id, kindName(next.kind));
         g_flights.emplace_back(std::move(next));
     }
@@ -901,12 +909,14 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             const CBox  START = it->start.value_or(ITEM->iconBox);
             box               = lerpBox(START, it->from, E);
             alpha             = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
+            const CBox PREVBOX = lerpBox(START, it->from, it->lastE.value_or(E));
+            it->lastE          = E;
 
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
             WINDOW->m_realSize->m_Value     = Vector2D{std::max(4.0, box.width / SCALE), std::max(4.0, box.height / SCALE)};
             WINDOW->alpha()[Desktop::View::WINDOW_ALPHA_FADE]->setValueAndWarp(alpha);
             // Motion blur rides the real window's next draw (FlightBlur.hpp).
-            FlightBlur::recordDriven(monitor, WINDOW, it->drawn ? it->drawn->box : box, box);
+            FlightBlur::recordDriven(monitor, WINDOW, PREVBOX, box);
 
             if (it->phase == EFlightPhase::Armed)
                 transition(*it, EFlightPhase::Flying, "first-frame");
@@ -916,22 +926,25 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             continue;
         }
 
+        CBox PREVBOX;
         if (it->isRestore()) {
             // Overview path: proxy machinery (Y5 divergence: GNOME does NOT fade
             // a window back in; the user asked for "fade out/in").
             const CBox START = it->start.value_or(ITEM->iconBox);
             box              = lerpBox(START, it->from, E);
             alpha            = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
+            PREVBOX          = lerpBox(START, it->from, it->lastE.value_or(E));
         } else {
             const CBox START = it->start.value_or(it->from);
             box              = lerpBox(START, ITEM->iconBox, E);
             alpha            = it->alphaFrom.value_or(1.F) * (1.F - E);
+            PREVBOX          = lerpBox(START, ITEM->iconBox, it->lastE.value_or(E));
         }
+        it->lastE = E;
 
         if (it->phase == EFlightPhase::Armed)
             transition(*it, EFlightPhase::Flying, "first-frame");
-        const CBox PREVBOX = it->drawn ? it->drawn->box : box;
-        it->drawn          = SDrawn{.box = box, .alpha = alpha};
+        it->drawn = SDrawn{.box = box, .alpha = alpha};
         {
             const auto& GC = WINDOW->m_realBorderColor.m_colors;
             zdbg("draw r=%d box=%f,%f %fx%f a=%f bc=%02x%02x%02x\n", (int)it->isRestore(), box.x, box.y, box.width, box.height, alpha, GC.empty() ? 0 : sc<int>(GC[0].r * 255.F),

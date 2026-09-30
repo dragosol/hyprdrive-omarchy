@@ -5271,8 +5271,8 @@ void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha
     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
 }
 
-void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand) {
-    Flight::minimize(monitor, window, bounceOnLand);
+void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::optional<CBox> startBox) {
+    Flight::minimize(monitor, window, bounceOnLand, startBox);
 }
 
 void restoreWithFlight(PHLMONITOR monitor, PHLWINDOW window) {

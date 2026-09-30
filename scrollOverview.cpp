@@ -2615,7 +2615,13 @@ void CScrollOverview::commitDropMinimize(const SOverviewDropSite& site) {
     // window dropped on the dock TELEPORTED while a clicked one flew. Now it
     // flies like every other minimize, and `true` asks the icon it lands in
     // to bounce once.
-    ScrollOverview::Dock::minimizeWithFlight(site.dropMonitor, site.window, true);
+    // From where it was let go: the dragged proxy, not the grid slot it left
+    // (user, 2026-09-30: the flight started back at the tile, and with motion
+    // blur that read as the whole window smearing down into the icon).
+    std::optional<CBox> startBox;
+    if (site.window && (!site.dropOverview || site.dropOverview == this))
+        startBox = draggedWindowBox(dragWorkspaceIndex(site.window));
+    ScrollOverview::Dock::minimizeWithFlight(site.dropMonitor, site.window, true, startBox);
     clearDragPending();
     damage();
     if (site.dropOverview && site.dropOverview != this)

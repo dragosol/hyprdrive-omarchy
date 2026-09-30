@@ -64,7 +64,10 @@ const char* kindName(EFlightKind kind);
 // Minimize:: once and a keybind minimize never animated at all. `bounceOnLand`
 // hops the icon (Z10: at the DROP, which is why a drag asks for it and a click
 // does not).
-void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false);
+// `startBox` (monitor-local render px): where the window is SEEN when the
+// minimize starts, if that is not its tile or real box -- a window dropped on
+// the dock leaves from where it was let go, not from its old grid slot.
+void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false, std::optional<CBox> startBox = std::nullopt);
 void restore(PHLMONITOR monitor, PHLWINDOW window);
 
 

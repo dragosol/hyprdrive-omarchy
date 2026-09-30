@@ -330,7 +330,7 @@ void feedPointerMotion(const Vector2D& delta);
 // Y8. `bounceOnLand` hops the icon when the window arrives in it, which a DROP
 // on the pill asks for and a click does not -- the click was its own
 // acknowledgement.
-void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false);
+void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false, std::optional<CBox> startBox = std::nullopt);
 void restoreWithFlight(PHLMONITOR monitor, PHLWINDOW window);
 
 // P0's settleFlights lived here. It is Flight::abortAll(reason) now --
