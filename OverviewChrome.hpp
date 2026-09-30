@@ -120,7 +120,7 @@ inline void renderOverviewWorkspaceShadow(PHLMONITOR monitor, const CBox& worksp
 
     const auto CARDROUND = getOverviewCardRounding(monitor, overviewScale);
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
+    g_pHyprRenderer->addPassElement(makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
         .monitor       = monitor,
         .fullBox       = baseBox.copy().expand(RANGE).round(),
         .cutoutBox     = baseBox,

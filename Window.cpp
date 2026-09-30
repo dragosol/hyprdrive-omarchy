@@ -437,7 +437,7 @@ static void blockOverviewWindowBlurOptimization(const PHLWINDOW& window, size_t 
     if (!window)
         return;
 
-    auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
+    auto& passElements = g_pHyprRenderer->currentPass().m_passElements;
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         const auto& passElement = passElements[i];
         if (!passElement.element)
@@ -460,7 +460,7 @@ static void scaleOverviewSubsurfaceOffsets(const PHLWINDOW& window, const Vector
         return;
 
     const Vector2D SUBSURFACESCALE = targetSize / REPORTEDSIZE;
-    auto&          passElements    = g_pHyprRenderer->m_renderPass.m_passElements;
+    auto&          passElements    = g_pHyprRenderer->currentPass().m_passElements;
 
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         const auto& passElement = passElements[i];
@@ -679,7 +679,7 @@ static void renderOverviewWindowShadow(PHLMONITOR monitor, const PHLWINDOW& wind
     if (std::ranges::none_of(shadowColor.m_colors, [](const CHyprColor& color) { return color.a > 0.F; }))
         return;
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
+    g_pHyprRenderer->addPassElement(makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
         .monitor       = monitor,
         .fullBox       = shadowBox,
         .cutoutBox     = cutoutBox.round(),
@@ -742,7 +742,7 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
         data.a            = 1.F;
         data.borderSize   = std::max(1.F, metrics.borderSize);
         data.hasGrad2     = false;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
+        g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
         return;
     }
 
@@ -753,7 +753,7 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
         data.lerp     = window->m_borderFadeAnimationProgress->value();
     } else
         data.grad1 = grad;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
+    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
 }
 
 static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, float alpha) {
@@ -825,7 +825,7 @@ static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW
         data.color         = color;
         data.round         = rounding;
         data.roundingPower = PROUNDINGPOWER;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(data));
     }
 }
 
@@ -928,7 +928,7 @@ static void renderOverviewGroupTabTitles(PHLMONITOR monitor, const PHLWINDOW& wi
         data.tex = titleTex;
         data.box = textBox;
         data.a   = 1.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
     }
 }
 
@@ -956,7 +956,7 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
         }
 
         if (!drewAny) {
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
+            g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
             drewAny = true;
         }
 
@@ -966,7 +966,7 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
     }
 
     if (drewAny)
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+        g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
 
     return state;
 }
@@ -1262,7 +1262,7 @@ void renderOverviewWindow(const SRenderParams& params) {
             params.monitor->m_blurFBDirty = true;
     });
 
-    const size_t firstWindowPassElement = g_pHyprRenderer->m_renderPass.m_passElements.size();
+    const size_t firstWindowPassElement = g_pHyprRenderer->currentPass().m_passElements.size();
     // Never rebuild m_blurFB under a temporary blur size.
     const bool   usePrecomputedBlur     = !scaleBlur && shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
     g_pHyprRenderer->renderWindow(params.window, params.monitor, params.now, false, Render::RENDER_PASS_ALL, false, false);
@@ -1277,7 +1277,7 @@ void renderOverviewWindow(const SRenderParams& params) {
     // a window's own fade in/out by, so this rides the existing plumbing rather
     // than adding a second notion of opacity.
     if (params.alpha < 1.F) {
-        auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
+        auto& passElements = g_pHyprRenderer->currentPass().m_passElements;
         for (size_t i = firstWindowPassElement; i < passElements.size(); ++i) {
             auto* surface = dc<CSurfacePassElement*>(passElements[i].element.get());
             if (surface && surface->m_data.pWindow == params.window)

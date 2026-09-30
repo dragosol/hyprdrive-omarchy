@@ -28,6 +28,7 @@
 #include "AppSearch.hpp"
 #include "Config.hpp"
 #include "Dock.hpp"
+#include "FlightBlur.hpp"
 #include "IOverview.hpp"
 #include "Minimize.hpp"
 #include "OverviewPassElement.hpp"
@@ -904,6 +905,8 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
             WINDOW->m_realSize->m_Value     = Vector2D{std::max(4.0, box.width / SCALE), std::max(4.0, box.height / SCALE)};
             WINDOW->alpha()[Desktop::View::WINDOW_ALPHA_FADE]->setValueAndWarp(alpha);
+            // Motion blur rides the real window's next draw (FlightBlur.hpp).
+            FlightBlur::recordDriven(monitor, WINDOW, it->drawn ? it->drawn->box : box, box);
 
             if (it->phase == EFlightPhase::Armed)
                 transition(*it, EFlightPhase::Flying, "first-frame");
@@ -927,7 +930,8 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
 
         if (it->phase == EFlightPhase::Armed)
             transition(*it, EFlightPhase::Flying, "first-frame");
-        it->drawn = SDrawn{.box = box, .alpha = alpha};
+        const CBox PREVBOX = it->drawn ? it->drawn->box : box;
+        it->drawn          = SDrawn{.box = box, .alpha = alpha};
         {
             const auto& GC = WINDOW->m_realBorderColor.m_colors;
             zdbg("draw r=%d box=%f,%f %fx%f a=%f bc=%02x%02x%02x\n", (int)it->isRestore(), box.x, box.y, box.width, box.height, alpha, GC.empty() ? 0 : sc<int>(GC[0].r * 255.F),
@@ -938,9 +942,9 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
         // carries Hyprland's shadow and border. Same shadow pass the overview
         // cards use, and the window's own border gradient (focused by Z9, so the
         // active colours), both riding the flight's box and alpha.
-        OvInternal::renderOverviewWorkspaceShadow(monitor, box, 1.F, false, alpha);
-        ScrollOverview::Dock::drawFlightSurface(monitor, WINDOW, box, alpha, now, ownsPass);
-        {
+        const auto drawProxy = [&](bool passIsOurs) {
+            OvInternal::renderOverviewWorkspaceShadow(monitor, box, 1.F, false, alpha);
+            ScrollOverview::Dock::drawFlightSurface(monitor, WINDOW, box, alpha, now, passIsOurs);
             const int BORDERSIZE = std::max(0, ScrollOverview::Config::getValue<int>("general:border_size"));
             if (BORDERSIZE > 0 && alpha > 0.01F) {
                 CBorderPassElement::SBorderData border;
@@ -949,11 +953,23 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
                 border.a          = alpha;
                 border.borderSize = BORDERSIZE;
                 border.round      = sc<int>(sc<float>(ScrollOverview::Config::themeRounding()) * monitor->m_scale);
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+                g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
             }
-        }
+        };
+        // Motion blur (FlightBlur.hpp): the whole proxy -- shadow, window,
+        // border -- smears as one. Drawn into a nested pass, so it must not
+        // flush the real one (passIsOurs = false).
+        if (!FlightBlur::drawBlurred(monitor, WINDOW, PREVBOX, box, [&] { drawProxy(false); }))
+            drawProxy(ownsPass);
         ++it;
     }
+
+    // A landed / aborted / reversed-into-proxy flight must not leave its window
+    // rendering through the blur transformer.
+    FlightBlur::sweep([](const PHLWINDOW& w) {
+        const auto IT = find(w);
+        return IT != g_flights.end() && IT->isDriven();
+    });
 }
 
 void abortAll(const std::string& reason) {

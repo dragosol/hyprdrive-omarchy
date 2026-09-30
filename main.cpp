@@ -71,6 +71,7 @@ using namespace Hyprutils::String;
 #include <hyprland/src/layout/LayoutManager.hpp>
 
 #include "FlightController.hpp"
+#include "FlightBlur.hpp"
 #include "DockInput.hpp"
 #include "LauncherEntry.hpp"
 #include "Minimize.hpp"
@@ -2328,6 +2329,9 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // is a call into unloaded code when that loop is destroyed.
     OvInternal::cancelPointerHandoff();
     ScrollOverview::Flight::abortAll("plugin-exit");
+    // A flying window may hold the flight's blur transformer; its destructor is
+    // this plugin's code, so it goes before the dlclose (Hyprland's own exit too).
+    ScrollOverview::FlightBlur::detachAll();
     ScrollOverview::Dock::releasePointerFocus();
     // Outlives every overview on purpose (Window.cpp), so it is freed here.
     if (const auto OPENGL = g_pHyprRenderer ? g_pHyprRenderer->glBackend() : WP<Render::GL::CHyprOpenGLImpl>{})

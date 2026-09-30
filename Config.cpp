@@ -651,6 +651,9 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CIntValue>(KEY("dock:stack_motion_blur"),
                                  "dock stacks: motion blur samples while the fan moves (0 = off); each frame averages this many instants", 8,
                                  SIntValueOptions{.min = 0, .max = 32}));
+    addKey(makeShared<CIntValue>(KEY("dock:minimize_motion_blur"),
+                                 "dock: motion blur samples while a window flies into / out of its icon (0 = off), desktop and overview alike", 16,
+                                 SIntValueOptions{.min = 0, .max = 32}));
     addKey(makeShared<CStringValue>(KEY("dock:stack_motion"),
                                     "dock stacks: the fan's motion -- serpantinum (OutQuint travel, OutBack pop, 40 ms stagger) or extension (dock-stacks' 140 ms ease-out-quad)",
                                     Hyprlang::STRING{"serpantinum"}));
