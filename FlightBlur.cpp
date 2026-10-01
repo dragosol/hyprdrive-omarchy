@@ -305,6 +305,16 @@ namespace ScrollOverview::FlightBlur {
         const bool             SWIPING = g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress();
         if (s_wasSwiping && !SWIPING)
             s_swipeEndedAt = Time::steadyNow();
+        // The frame a swipe starts or ends can re-base the workspaces' offsets
+        // in one step: nothing moved, and it must not be smeared as if it had.
+        // Start every window's history over and take any smear off.
+        if (s_wasSwiping != SWIPING) {
+            for (const auto& e : g_lastLayoutBox)
+                if (const auto W = e.window.lock())
+                    if (auto* t = transformerOf(W))
+                        t->m_armed = false;
+            g_lastLayoutBox.clear();
+        }
         s_wasSwiping         = SWIPING;
         const bool SWIPEHOME = !SWIPING && s_swipeEndedAt.time_since_epoch().count() != 0 &&
             std::chrono::duration<float, std::milli>(Time::steadyNow() - s_swipeEndedAt).count() < 1000.F;
@@ -337,8 +347,18 @@ namespace ScrollOverview::FlightBlur {
                 const bool  RESIZING  = window->sizeAnimation()->isBeingAnimated();
                 const bool  MOVING    = window->positionAnimation()->isBeingAnimated();
                 if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
-                    if (IT != g_lastLayoutBox.end())
+                    if (IT != g_lastLayoutBox.end()) {
                         g_lastLayoutBox.erase(IT);
+                        // It WAS smeared last frame: take that smear off now,
+                        // not when sweep() notices 20 ms later (user,
+                        // 2026-09-30, recording 21-58-49: a desktop swipe let
+                        // go mid-motion snaps back in one frame, and that frame
+                        // was drawn with the swipe's last smear on it). A flying
+                        // window (skip) feeds its own transformer: leave it.
+                        if (!(skip && skip(window)))
+                            if (auto* t = transformerOf(window))
+                                t->m_armed = false;
+                    }
                     continue;
                 }
 
