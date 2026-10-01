@@ -1573,11 +1573,15 @@ Item {
                   Column {
                     anchors.left: linkGlyph.right
                     anchors.leftMargin: Style.space(10)
+                    anchors.right: linkArrow.left
+                    anchors.rightMargin: Style.space(6)
                     anchors.verticalCenter: parent.verticalCenter
-                    Text { text: linkRow.modelData.label; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                    Text { text: linkRow.modelData.detail; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    // Bounded and elided: a long handle must never run out of the card.
+                    Text { width: parent.width; elide: Text.ElideRight; text: linkRow.modelData.label; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                    Text { width: parent.width; elide: Text.ElideRight; text: linkRow.modelData.detail; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                   }
                   Text {
+                    id: linkArrow
                     anchors.right: parent.right
                     anchors.rightMargin: Style.space(10)
                     anchors.verticalCenter: parent.verticalCenter

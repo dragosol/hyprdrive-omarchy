@@ -183,7 +183,7 @@ var sections = [
 var links = [
   { label: "GitHub", detail: "github.com/dragosol", icon: "", url: "https://github.com/dragosol" },
   { label: "Website", detail: "dragos.shastasia.com", icon: "", url: "https://dragos.shastasia.com" },
-  { label: "YouTube", detail: "youtube.com/@dragos-the-dragon", icon: "", url: "https://www.youtube.com/@dragos-the-dragon" },
+  { label: "YouTube", detail: "@dragos-the-dragon", icon: "", url: "https://www.youtube.com/@dragos-the-dragon" },
   { label: "LinkedIn", detail: "linkedin.com/in/dragos-robu", icon: "", url: "https://www.linkedin.com/in/dragos-robu/" }
 ]
 
