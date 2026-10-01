@@ -10007,6 +10007,19 @@ void CScrollOverview::render() {
         g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW);
     }
 
+    // And the layers' POPUPS after all of them, as Hyprland's own pass does
+    // (Renderer.cpp, after OVERLAY). Without this every popup of a top or
+    // overlay layer -- the bar's panels, the computer-use cursor -- vanished
+    // while the overview was up (2026-10-01).
+    for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_TOP, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY}) {
+        for (auto const& ls : MONITOR->m_layerSurfaceLayers[LAYER]) {
+            if (!Desktop::View::validMapped(ls.lock()))
+                continue;
+
+            g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW, true);
+        }
+    }
+
     blockOverviewLayerBlurOptimization(FIRSTOVERLAYELEMENT);
 
     // X52. One line per frame after a keystroke: the frame that PAINTS the new
