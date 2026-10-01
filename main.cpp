@@ -2033,6 +2033,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // A reload can drop plugin-registered beziers, and may have changed the
         // animation:curve preset: point the house names at it again.
         ScrollOverview::Motion::sync();
+        healStuckOverviewSubmap();
 
         // `omarchy theme set` writes colors.toml and reloads Hyprland, so the
         // reload IS the theme change as far as this plugin is concerned. Drop
@@ -2304,6 +2305,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // The animation:curve preset onto Hyprland's named house beziers -- only
     // now that the key exists (Config.hpp: an earlier read aborts Hyprland).
     ScrollOverview::Motion::sync();
+    // A previous instance unloaded mid-overview can leave Hyprland in its submap.
+    healStuckOverviewSubmap();
     // After a reload, windows are still parked on the stash with no ledger entry
     // behind them; without this they can never be restored.
     ScrollOverview::Minimize::adoptStashedWindows();

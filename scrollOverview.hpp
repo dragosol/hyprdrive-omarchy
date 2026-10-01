@@ -938,3 +938,6 @@ namespace ScrollOverview {
     void releaseWallpaperStash(std::optional<MONITORID> monitor);
     std::string wallpaperStashReport();
 }
+
+// Leave the overview's submap if no overview holds it (scrollOverview.cpp).
+void healStuckOverviewSubmap();

@@ -1,4 +1,5 @@
 #include "IOverview.hpp"
+#include "scrollOverview.hpp"
 #include "globals.hpp"
 
 #include <algorithm>
@@ -144,6 +145,9 @@ void unregisterScrollOverview(IOverview* overview) {
         g_dyingOverviewsSeq = g_pEventLoopManager->doLater([] {
             g_dyingOverviewsSeq = 0;
             g_dyingOverviews.clear();
+            // The destructors restored the submap; if none of them owned it
+            // and it is still the overview's, nothing else ever will.
+            healStuckOverviewSubmap();
         });
     }
 }

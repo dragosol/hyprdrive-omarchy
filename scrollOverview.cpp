@@ -10244,6 +10244,14 @@ void CScrollOverview::activateSubmapIfConfigured() {
         return;
 
     previousSubmapName = g_pKeybindManager->getCurrentSubmap().name;
+    // NEVER return INTO the overview's own submap (user, 2026-09-30: the whole
+    // bar stopped taking clicks and every Omarchy shortcut died). Opened while a
+    // stale overview submap was still current -- a plugin reload mid-overview
+    // left one behind -- this recorded it as "where to go back to", so every
+    // close re-entered it: only the submap's two click binds stayed live, and
+    // they ate every left click.
+    if (isOverviewSubmapName(previousSubmapName))
+        previousSubmapName.clear();
 
     const auto SUBMAP = boundOverviewSubmap();
     if (SUBMAP != std::string_view{OVERVIEW_SUBMAP})
@@ -10257,6 +10265,16 @@ void CScrollOverview::activateSubmapIfConfigured() {
 
     submapActive = true;
     borrowGlobalPassthroughBinds(previousSubmapName);
+}
+
+// No overview, yet Hyprland sits in the overview's submap: every normal bind
+// is dead and its click binds eat the pointer. Called at plugin load, on
+// every config reload, and after an overview's teardown.
+void healStuckOverviewSubmap() {
+    if (!g_pKeybindManager || !scrollOverviews().empty())
+        return;
+    if (isOverviewSubmapName(g_pKeybindManager->getCurrentSubmap().name))
+        (void)Config::Actions::setSubmap("reset");
 }
 
 void CScrollOverview::restoreSubmapIfActive() {
