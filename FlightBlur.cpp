@@ -118,6 +118,33 @@ namespace ScrollOverview::FlightBlur {
         };
         std::vector<SLastBox> g_lastLayoutBox;
 
+        // Every window's last floating state, and when it last flipped. A
+        // float<->tile toggle animates the window from its floating box into a
+        // tile slot (or back): a change of MODE, not layout motion, and smearing
+        // it drew its trail behind/between the neighbours as glitchy strips
+        // (user, 2026-10-01: "a motion blur artifact in that mpv retiling").
+        struct SModeSeen {
+            PHLWINDOWREF    window;
+            bool            floating = false;
+            Time::steady_tp flippedAt{};
+        };
+        std::vector<SModeSeen> g_modeSeen;
+        constexpr float        MODE_FLIP_QUIET_MS = 1000.F;
+
+        bool justFlippedMode(const PHLWINDOW& window, Time::steady_tp now) {
+            auto it = std::ranges::find_if(g_modeSeen, [&](const auto& e) { return e.window.lock() == window; });
+            if (it == g_modeSeen.end()) {
+                g_modeSeen.push_back({window, window->m_isFloating, {}});
+                return false;
+            }
+            if (it->floating != window->m_isFloating) {
+                it->floating  = window->m_isFloating;
+                it->flippedAt = now;
+            }
+            return it->flippedAt.time_since_epoch().count() != 0 &&
+                std::chrono::duration<float, std::milli>(now - it->flippedAt).count() < MODE_FLIP_QUIET_MS;
+        }
+
         // A scrolling desktop's tape is blurred only above this speed: a
         // flick, not a drift. Logical px per second.
         constexpr double FLICK_PX_PER_S = 12000.0; // user, 2026-09-30: 2500 then 5000 still blurred too early -- an ordinary snap of the tape peaks near 9000
@@ -295,6 +322,7 @@ namespace ScrollOverview::FlightBlur {
         if (!monitor)
             return;
         std::erase_if(g_lastLayoutBox, [](const auto& e) { return !e.window.lock(); });
+        std::erase_if(g_modeSeen, [](const auto& e) { return !e.window.lock(); });
 
         // A TRACKPAD WORKSPACE SWIPE (user, 2026-09-30: "add motion blur when
         // swiping through workspaces with the trackpad"): while the fingers
@@ -346,7 +374,8 @@ namespace ScrollOverview::FlightBlur {
                 const bool  SCROLLING = SPACE && SPACE->algorithm() && dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(SPACE->algorithm()->m_tiled.get());
                 const bool  RESIZING  = window->sizeAnimation()->isBeingAnimated();
                 const bool  MOVING    = window->positionAnimation()->isBeingAnimated();
-                if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
+                const bool  MODEFLIP  = justFlippedMode(window, NOW);
+                if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || MODEFLIP || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
                     if (IT != g_lastLayoutBox.end()) {
                         g_lastLayoutBox.erase(IT);
                         // It WAS smeared last frame: take that smear off now,
