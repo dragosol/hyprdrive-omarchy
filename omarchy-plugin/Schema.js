@@ -183,8 +183,7 @@ var sections = [
 var links = [
   { label: "GitHub", detail: "github.com/dragosol", icon: "", url: "https://github.com/dragosol" },
   { label: "Website", detail: "dragos.shastasia.com", icon: "", url: "https://dragos.shastasia.com" },
-  // TODO(user): the channel's URL was not on this machine; set it here.
-  { label: "YouTube", detail: "youtube.com/@dragosol", icon: "", url: "https://www.youtube.com/@dragosol" }
+  { label: "YouTube", detail: "youtube.com/@dragos-the-dragon", icon: "", url: "https://www.youtube.com/@dragos-the-dragon" }
 ]
 
 // The curve presets, as CSS cubic-bezier control points (Motion.cpp owns the
