@@ -426,6 +426,32 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
 
             {
                 auto bindPrefilter = g_pHyprRenderer->bindTempFB(entry.fb);
+
+                // A plain texture copy into a buffer of the TEXTURE's size, so
+                // no monitor projection (2026-10-01): bindTempFB leaves the
+                // monitor's viewport and projection in place, and on a rotated
+                // monitor that projection turns the box 90 degrees -- the copy
+                // landed outside this buffer, and every settled grid tile and
+                // strip mini drew as an empty outline (a half-rotated one while
+                // it flew). Same set-up Hyprland uses to scale a wallpaper into
+                // its own FB (Renderer.cpp, RPT_EXPORT).
+                auto&      RD           = g_pHyprRenderer->m_renderData;
+                const auto OLDPROJ      = RD.projectionType;
+                const auto OLDFBSIZE    = RD.fbSize;
+                const auto OLDTRANSFDMG = RD.transformDamage;
+                GLint      oldViewport[4] = {};
+                glGetIntegerv(GL_VIEWPORT, oldViewport);
+                RD.fbSize          = Vector2D{sc<double>(FBW), sc<double>(FBH)};
+                RD.transformDamage = false;
+                g_pHyprRenderer->setProjectionType(Render::RPT_EXPORT);
+                g_pHyprRenderer->setViewport(0, 0, FBW, FBH);
+                auto restoreTarget = Hyprutils::Utils::CScopeGuard([&RD, OLDPROJ, OLDFBSIZE, OLDTRANSFDMG, oldViewport] {
+                    RD.fbSize          = OLDFBSIZE;
+                    RD.transformDamage = OLDTRANSFDMG;
+                    g_pHyprRenderer->setProjectionType(OLDPROJ);
+                    g_pHyprRenderer->setViewport(oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3]);
+                });
+
                 g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, FULLDAMAGE);
                 g_pHyprRenderer->draw(CTexPassElement::SRenderData{.tex = SRC, .box = FULLBOX, .damage = FULLDAMAGE}, FULLDAMAGE);
             }
