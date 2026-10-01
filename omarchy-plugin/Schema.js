@@ -86,10 +86,6 @@ var sections = [
         { type: "slider", key: P + "dock:blur_size", label: "Blur size", min: -1, max: 32, step: 1, fmt: "follow",
           desc: "Leftmost follows Hyprland's decoration blur." },
         { type: "slider", key: P + "dock:blur_passes", label: "Blur passes", min: -1, max: 8, step: 1, fmt: "follow" }
-      ]},
-      { title: "Stacks", rows: [
-        { type: "choice", key: P + "dock:stack_motion", label: "Fan motion",
-          desc: "Dock stacks keep their own motion. The Animation curve leaves them alone." }
       ]}
     ]
   },

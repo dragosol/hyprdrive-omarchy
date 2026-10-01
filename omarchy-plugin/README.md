@@ -3,7 +3,7 @@
 The bar button and settings panel for the Hyprdrive compositor plugin.
 
 - **Overview**: Super tap, Mission Control grid, desktop strip, size, spacing, wallpaper blur, search extras
-- **Dock**: visibility, contents, appearance, frost, and the dock stacks' own motion
+- **Dock**: visibility, contents, appearance and frost
 - **Animation**: one curve preset (Hyprdrive, Serpantinum, Smooth, Swift, Springy, Linear) and one speed for everything hyprdrive animates except the dock stacks, plus per-feature timing
 - **Motion blur**: strength (in eighths) and fade shape for every animation hyprdrive smears, and sample counts
 - **Gestures**: the full trackpad map (fingers, direction, action, modifier keys, distance, inhibit)

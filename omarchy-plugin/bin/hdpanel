@@ -41,11 +41,6 @@ FADES = [
     {"value": "linear", "label": "Linear"},
     {"value": "constant", "label": "Constant"},
 ]
-STACK_MOTIONS = [
-    {"value": "serpantinum", "label": "Serpantinum"},
-    {"value": "extension", "label": "Dock Stacks extension"},
-]
-
 # The per-animation motion blur sites, mirroring FlightBlur.hpp's SITES table
 # (name, strength, fade): the defaults the engine ships.
 BLUR_SITES = [
@@ -100,7 +95,6 @@ KEY_META = [
     _k(PLUGIN + "dock:press_tilt", "bool", "dock", True),
     _k(PLUGIN + "dock:blur_size", "int", "dock", -1, min=-1, max=32),
     _k(PLUGIN + "dock:blur_passes", "int", "dock", -1, min=-1, max=8),
-    _k(PLUGIN + "dock:stack_motion", "enum", "dock", "serpantinum", options=STACK_MOTIONS),
     # Animation
     _k("animations:enabled", "bool", "animation", True),
     _k(PLUGIN + "anim_scale", "float", "animation", 1.0, min=0, max=10),
