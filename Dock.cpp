@@ -875,7 +875,9 @@ std::vector<SItem> buildDockItems() {
     const auto PLACEHOLDER = [&] {
         const auto& P = DockDrop::placeholderPath();
         out.emplace_back(SItem{
-            .icon         = "folder",
+            // Same lookup as the real stacks below, so the gap shows the user's
+            // icon pack's folder, not the fallback theme's.
+            .icon         = Stacks::themedIcon("folder"),
             .uri          = "file://" + P,
             .locationName = P.substr(P.find_last_of('/') + 1),
             .stack        = true,
