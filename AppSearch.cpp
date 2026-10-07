@@ -1,4 +1,5 @@
 #include "AppSearch.hpp"
+#include "Launch.hpp"
 
 #include "globals.hpp"
 
@@ -1186,10 +1187,11 @@ namespace AppSearch {
         if (args.empty())
             return false;
 
-        const auto BINARY = args.front();
+        auto binary = args.front();
         args.erase(args.begin());
+        ScrollOverview::Launch::wrap(binary, args); // its own scope, not Hyprland's (Launch.hpp)
 
-        CProcess process(BINARY, args);
+        CProcess process(binary, args);
         return process.runAsync();
     }
 
@@ -1201,7 +1203,8 @@ namespace AppSearch {
         if (ARGS.empty() || !::Config::Supplementary::executor())
             return false;
 
-        std::string cmd = "[" + execRule + "]";
+        // The rule rides the environment, which uwsm-app keeps (Launch.hpp).
+        std::string cmd = "[" + execRule + "] " + ScrollOverview::Launch::prefix();
         for (const auto& WORD : ARGS)
             cmd += " " + shellQuote(WORD);
 
@@ -1424,10 +1427,11 @@ namespace AppSearch {
         if (args.empty())
             return false;
 
-        const auto BINARY = args.front();
+        auto binary = args.front();
         args.erase(args.begin());
+        ScrollOverview::Launch::wrap(binary, args); // its own scope, not Hyprland's (Launch.hpp)
 
-        CProcess process(BINARY, args);
+        CProcess process(binary, args);
         return process.runAsync();
     }
 }

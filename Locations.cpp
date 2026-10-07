@@ -1,4 +1,5 @@
 #include "Locations.hpp"
+#include "Launch.hpp"
 
 #include "Config.hpp"
 
@@ -383,7 +384,12 @@ void activate(const std::string& uri) {
     // FileManager1 activation can land on Dolphin when Nautilus is slow or
     // stuck. This rice uses Nautilus as the file manager (dock + overview
     // search + trash). One argv element so a volume label stays one URI.
-    spawn("nautilus", {uri});
+    // Nautilus lives on: its own scope, not Hyprland's (Launch.hpp). The gio
+    // mount helpers below are gone in a second and stay as they are.
+    std::string              binary = "nautilus";
+    std::vector<std::string> args   = {uri};
+    Launch::wrap(binary, args);
+    spawn(binary, args);
 }
 
 void emptyTrash() {

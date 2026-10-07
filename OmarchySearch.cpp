@@ -1,4 +1,5 @@
 #include "OmarchySearch.hpp"
+#include "Launch.hpp"
 #include "ToolSearch.hpp"
 
 #include <hyprutils/os/Process.hpp>
@@ -1990,11 +1991,19 @@ bool activate(const SSearchItem& item) {
         return proc.runAsync();
     }
     if (item.kind == EItemKind::File) {
-        CProcess proc("/usr/bin/xdg-open", {item.filePath});
+        // The opened app is a child of this: its own scope (Launch.hpp).
+        std::string              binary = "/usr/bin/xdg-open";
+        std::vector<std::string> args   = {item.filePath};
+        ScrollOverview::Launch::wrap(binary, args);
+        CProcess proc(binary, args);
         return proc.runAsync();
     }
     if (item.kind == EItemKind::Agent || item.kind == EItemKind::Action) {
-        CProcess proc("/bin/bash", {"-c", item.actionCommand});
+        // An action can start an app (an agent opens a terminal): its own scope.
+        std::string              binary = "/bin/bash";
+        std::vector<std::string> args   = {"-c", item.actionCommand};
+        ScrollOverview::Launch::wrap(binary, args);
+        CProcess proc(binary, args);
         return proc.runAsync();
     }
     return false;

@@ -5401,9 +5401,11 @@ CBox roomPillGlobal(PHLMONITOR monitor) {
 bool debugActivate(PHLMONITOR monitor, const std::string& wmClass) {
     if (!monitor)
         return false;
-    const auto LAYOUT = layout(monitor);
+    // The base layout: an autohidden dock's live layout has no items at all.
+    const auto& LAYOUT = baseLayout(monitor);
     for (const auto& item : LAYOUT.items) {
-        if (item.wmClass == wmClass) {
+        // A pinned app that is not running has no class yet: its desktop id.
+        if (item.wmClass == wmClass || (!wmClass.empty() && (item.desktopId == wmClass || item.desktopId == wmClass + ".desktop"))) {
             activateItem(monitor, item, false);
             return true;
         }
