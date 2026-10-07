@@ -62,7 +62,9 @@ var sections = [
         { type: "toggle", key: P + "dock:autohide", label: "Autohide", when: "dockOn",
           desc: "Stay out of sight until the pointer presses the bottom edge." },
         { type: "toggle", key: P + "dock:windows_make_room", label: "Windows make room", when: "roomApplies",
-          desc: "With autohide off, tiled windows under the dock shorten to clear it." }
+          desc: "With autohide off, tiled windows under the dock shorten to clear it." },
+        { type: "choice", key: P + "dock:monitor", label: "Show on", when: "dockOn",
+          desc: "Put the dock on one screen only. While that screen is unplugged, the dock is on every screen." }
       ]},
       { title: "Contents", rows: [
         { type: "toggle", key: P + "dock:show_favorites", label: "Pinned favorites" },
@@ -70,7 +72,11 @@ var sections = [
         { type: "toggle", key: P + "dock:show_trash", label: "Trash" },
         { type: "toggle", key: P + "dock:show_mounts", label: "Mounted drives" },
         { type: "toggle", key: P + "dock:running_indicator", label: "Running indicators" },
-        { type: "toggle", key: P + "dock:notification_counter", label: "Notification badges" }
+        { type: "toggle", key: P + "dock:notification_counter", label: "Notification badges" },
+        { type: "toggle", key: P + "dock:isolate_in_overview", label: "Current desktop only in the overview", when: "isolateOvApplies",
+          desc: "In the overview, the dock lists only the apps and windows on the desktop you are viewing." },
+        { type: "toggle", key: P + "dock:isolate_workspaces", label: "Current desktop only, always",
+          desc: "The dock lists only the current desktop's apps and windows, outside the overview too." }
       ]},
       { title: "Appearance", rows: [
         { type: "slider", key: P + "dock:icon_size", label: "Icon size", min: 24, max: 96, step: 1, unit: "px" },

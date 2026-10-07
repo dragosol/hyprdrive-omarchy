@@ -154,7 +154,7 @@ inline Vector2D overviewCardOriginOffsetLive(PHLMONITOR monitor, float overviewS
     const float TOP = std::max(0.F, (overviewTopChromeBottomL(monitor) - sc<float>(monitor->m_position.y)) * MS);
 
     float bottom = H;
-    if (ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:dock:enabled")) {
+    if (ScrollOverview::Dock::onMonitor(monitor)) {
         const float ICON = sc<float>(std::clamp(ScrollOverview::Config::getValue<int>("plugin:hyprdrive:dock:icon_size"), 8, 512));
         // Dock.cpp: ICON_PAD 14 on top and bottom, EDGE_MARGIN 4 under the pill.
         const float DOCKH = ICON + 14.F + 14.F + 4.F;

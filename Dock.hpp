@@ -104,6 +104,9 @@ void setWindowDragActive(bool active);
 bool dockOwnsNativeDrag();
 void clearDockNativeDrag();
 
+// The dock is on and dock:monitor puts it on this output.
+bool    onMonitor(PHLMONITOR monitor);
+
 // Pure geometry, so a test rig can assert proportions without a frame.
 SLayout layout(PHLMONITOR monitor);
 void    render(PHLMONITOR monitor);

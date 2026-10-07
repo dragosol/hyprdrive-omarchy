@@ -331,6 +331,8 @@ constexpr const char* KEY_SCROLL_ACTION = "plugin:hyprdrive:dock:scroll_action";
 constexpr const char* KEY_MIDDLE_CLICK  = "plugin:hyprdrive:dock:middle_click_action";
 constexpr const char* KEY_SHIFT_MIDDLE  = "plugin:hyprdrive:dock:shift_middle_click_action";
 constexpr const char* KEY_ISOLATE_WS    = "plugin:hyprdrive:dock:isolate_workspaces";
+constexpr const char* KEY_ISOLATE_OV    = "plugin:hyprdrive:dock:isolate_in_overview";
+constexpr const char* KEY_MONITOR       = "plugin:hyprdrive:dock:monitor";
 constexpr const char* KEY_ISOLATE_LOCATIONS = "plugin:hyprdrive:dock:isolate_locations";
 constexpr const char* KEY_BUILTIN_ICONS     = "plugin:hyprdrive:dock:builtin_icons";
 constexpr const char* KEY_TRASH_ICON        = "plugin:hyprdrive:dock:trash_icon";
@@ -694,9 +696,21 @@ struct SInterestCfg {
     PHLWORKSPACE activeWorkspace = nullptr;
 };
 
+// isolate_workspaces everywhere, or isolate_in_overview while the focused
+// monitor's overview is open. The overview moves the monitor's active
+// workspace as the user walks the strip, so "current" follows it there too.
+bool isolateNow() {
+    if (Config::getValue<bool>(KEY_ISOLATE_WS))
+        return true;
+    if (!Config::getValue<bool>(KEY_ISOLATE_OV))
+        return false;
+    const auto MONITOR = Desktop::focusState()->monitor();
+    return MONITOR && scrollOverviewForMonitor(MONITOR);
+}
+
 SInterestCfg interestCfg() {
     SInterestCfg cfg;
-    cfg.isolate = Config::getValue<bool>(KEY_ISOLATE_WS);
+    cfg.isolate = isolateNow();
     if (!cfg.isolate)
         return cfg; // nothing below is read
 
@@ -1029,7 +1043,7 @@ SItemsKey itemsKey() {
     key.inventory  = AppSearch::inventoryGeneration();
     key.icons      = AppSearch::iconIndexGeneration();
 
-    const bool ISOLATE_WS = Config::getValue<bool>(KEY_ISOLATE_WS);
+    const bool ISOLATE_WS = isolateNow();
     key.config            = (Config::getValue<bool>(KEY_SHOW_FAVORITES) ? 1U : 0U) |      //
         (ISOLATE_WS ? 2U : 0U) |                                                          //
         (Config::getValue<bool>(KEY_AGNOSTIC_URG) ? 4U : 0U) |                            //
@@ -1690,7 +1704,7 @@ bool arrangeAnimating(MONITORID id) {
 SLayout buildBaseLayout(PHLMONITOR monitor) {
     SLayout out;
 
-    if (!monitor || !Config::getValue<bool>(KEY_ENABLED) || monitor->m_size.x < 1 || monitor->m_size.y < 1)
+    if (!monitor || !onMonitor(monitor) || monitor->m_size.x < 1 || monitor->m_size.y < 1)
         return out;
 
     auto items = dockItems();
@@ -1778,7 +1792,7 @@ const SLayout& baseLayout(PHLMONITOR monitor) {
     // that is switched off must not pay for an item model nobody will draw --
     // and damageIfChanged still runs on every pointer motion (user,
     // 2026-09-14).
-    if (!Config::getValue<bool>(KEY_ENABLED) || monitor->m_size.x < 1 || monitor->m_size.y < 1)
+    if (!onMonitor(monitor) || monitor->m_size.x < 1 || monitor->m_size.y < 1)
         return EMPTY;
 
     SBaseLayoutKey key;
@@ -1992,6 +2006,33 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
     R.pressure  = 0.F;
 }
 
+}
+
+// dock:monitor names the one output that gets the dock: a connector name, or
+// `desc:` + a prefix of the description, which survives a USB-C dock handing
+// the same screen a different DP-N. A chosen screen that is not connected
+// (the laptop off its desk) must not leave the user with no dock at all, so
+// the choice only applies while it matches something.
+bool onMonitor(PHLMONITOR monitor) {
+    if (!monitor || !Config::getValue<bool>(KEY_ENABLED))
+        return false;
+    const auto WANT = Config::getValue<std::string>(KEY_MONITOR);
+    if (WANT.empty())
+        return true;
+    const auto MATCHES = [&WANT](const PHLMONITOR& m) {
+        if (!m)
+            return false;
+        if (WANT.starts_with("desc:"))
+            return m->m_description.starts_with(std::string_view{WANT}.substr(5));
+        return m->m_name == WANT;
+    };
+    if (MATCHES(monitor))
+        return true;
+    for (const auto& MON : State::monitorState()->monitors()) {
+        if (MON && MON->m_enabled && MATCHES(MON))
+            return false;
+    }
+    return true;
 }
 
 SLayout layout(PHLMONITOR monitor) {

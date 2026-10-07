@@ -627,6 +627,14 @@ static void registerConfigValuesFor() {
                                     "hyprgnomedock: shift+middle click on an icon (D2D shift-middle-click-action)", Hyprlang::STRING{"launch"}));
     addKey(makeShared<CBoolValue>(KEY("dock:isolate_workspaces"),
                                   "hyprgnomedock: the dock lists only windows on the current workspace (D2D isolate-workspaces)", false));
+    // Asked for by a user (2026-10-07): the same scoping, but only while the
+    // overview is open -- the desktop's dock stays workspace-agnostic.
+    addKey(makeShared<CBoolValue>(KEY("dock:isolate_in_overview"),
+                                  "while the overview is open, the dock lists only windows on the current workspace (isolate_workspaces does it everywhere)", false));
+    addKey(makeShared<CStringValue>(KEY("dock:monitor"),
+                                    "draw the dock on one monitor only: its name (DP-1) or desc:<description prefix>; empty = every monitor. "
+                                    "A monitor that is not connected falls back to every monitor",
+                                    Hyprlang::STRING{""}));
     addKey(makeShared<CBoolValue>(KEY("dock:workspace_agnostic_urgent"),
                                   "hyprgnomedock: an urgent window stays listed even when isolate_workspaces hides its workspace "
                                   "(D2D workspace-agnostic-urgent-windows)",

@@ -82,6 +82,9 @@ KEY_META = [
     _k(PLUGIN + "dock:enabled", "bool", "dock", True),
     _k(PLUGIN + "dock:autohide", "bool", "dock", True),
     _k(PLUGIN + "dock:windows_make_room", "bool", "dock", True),
+    _k(PLUGIN + "dock:monitor", "str", "dock", ""),  # options: monitor_options(), per dump
+    _k(PLUGIN + "dock:isolate_in_overview", "bool", "dock", False),
+    _k(PLUGIN + "dock:isolate_workspaces", "bool", "dock", False),
     _k(PLUGIN + "dock:show_favorites", "bool", "dock", True),
     _k(PLUGIN + "dock:show_apps_button", "bool", "dock", True),
     _k(PLUGIN + "dock:show_trash", "bool", "dock", True),
@@ -569,9 +572,38 @@ def live_keys():
     return out
 
 
+def monitor_options(current):
+    """dock:monitor's choices: every monitor plus "All", made when the panel
+    loads because they are whatever is plugged in. A monitor is stored by
+    description (desc:...), which survives a USB-C dock renaming DP-5 to DP-6.
+    A chosen monitor that is unplugged stays listed so the choice still shows."""
+    opts = [{"value": "", "label": "All"}]
+    try:
+        mons = json.loads(hyprctl("-j", "monitors") or "[]")
+    except ValueError:
+        mons = []
+    for m in sorted(mons, key=lambda m: (m.get("x", 0), m.get("y", 0))):
+        desc, name = (m.get("description") or "").strip(), m.get("name") or ""
+        if name.startswith("eDP"):
+            label = "Built-in"
+        else:
+            label = (m.get("model") or "").strip() or name
+        value = "desc:" + desc if desc else name
+        opts.append({"value": value, "label": label})
+    if current and current not in [o["value"] for o in opts]:
+        gone = current[5:] if current.startswith("desc:") else current
+        opts.append({"value": current, "label": gone.split(" 0x")[0][:24] + " (unplugged)"})
+    return opts
+
+
 def dump():
     store = load_store()
     live = live_keys()
+    # Hyprlang reports an empty string option as [[EMPTY]].
+    mon_key = PLUGIN + "dock:monitor"
+    if live.get(mon_key) == "[[EMPTY]]":
+        live[mon_key] = ""
+    meta = [dict(m, options=monitor_options(live.get(mon_key, ""))) if m["key"] == mon_key else m for m in KEY_META]
     gestures = store.get("gestures")
     if not gestures:
         gestures = [dict(g) for g in DEFAULT_GESTURES]
@@ -596,7 +628,7 @@ def dump():
         "profileMode": store.get("profileMode", "auto"),
         "roundedRadius": store.get("roundedRadius", 24),
         "onBattery": on_battery(),
-        "meta": KEY_META,
+        "meta": meta,
         "actions": ACTIONS,
         "directions": DIRECTIONS,
     }
