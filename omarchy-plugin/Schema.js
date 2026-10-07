@@ -78,6 +78,14 @@ var sections = [
         { type: "toggle", key: P + "dock:isolate_workspaces", label: "Current desktop only, always",
           desc: "The dock lists only the current desktop's apps and windows, outside the overview too." }
       ]},
+      { title: "Drag and drop", rows: [
+        { type: "toggle", key: P + "drag:spring_dock", label: "Spring-loaded apps",
+          desc: "Hold a dragged file over a running app or one of its previews: the icon flashes twice and the app comes forward for the drop." },
+        { type: "toggle", key: P + "drag:spring_edges", label: "Switch desktops at the edges",
+          desc: "Hold a dragged file, folder or window at the left or right edge to move to the next desktop. Keep holding to keep going." },
+        { type: "slider", key: P + "drag:spring_delay_ms", label: "Hold time", min: 500, max: 4000, step: 100, unit: "ms", when: "springOn",
+          desc: "How long a drag waits over an app or at an edge before it springs." }
+      ]},
       { title: "Appearance", rows: [
         { type: "slider", key: P + "dock:icon_size", label: "Icon size", min: 24, max: 96, step: 1, unit: "px" },
         { type: "slider", key: P + "dock:corner_radius", label: "Corner radius", min: 0, max: 40, step: 1, unit: "px",
@@ -166,6 +174,12 @@ var sections = [
     id: "gestures", title: "Gestures", icon: "", group: "gestures",
     subtitle: "Swipes, pinches and clicks on the trackpad.",
     cards: [
+      { title: "Fingers", rows: [
+        { type: "toggle", key: P + "gestures:keep_swipe", label: "Lift fingers mid-swipe",
+          desc: "A swipe keeps going while any finger that started it is still down." },
+        { type: "toggle", key: P + "gestures:swipe_while_dragging", label: "Swipe while dragging",
+          desc: "Hold a drag with one finger and swipe with three or four others to switch desktops. A dragged window comes along." }
+      ]},
       { title: "Trackpad map", rows: [ { type: "gestures", label: "Gestures" } ] }
     ]
   },

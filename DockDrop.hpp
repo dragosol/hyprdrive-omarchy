@@ -32,6 +32,8 @@ namespace ScrollOverview::DockDrop {
     // What the drag is over, for the dock's hover ring and lift.
     const std::string& hoveredStack(); // "" = none
     bool               hoveringTrash();
+    // The drag in flight is only folders (they pin; they never spring-load).
+    bool               offerIsFolders();
 
     // Start a real Wayland drag of `paths` (a fan item dragged out), as the
     // plugin's own data source. False if another drag is running.

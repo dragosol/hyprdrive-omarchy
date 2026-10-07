@@ -92,6 +92,12 @@ KEY_META = [
     _k(PLUGIN + "dock:running_indicator", "bool", "dock", True),
     _k(PLUGIN + "dock:notification_counter", "bool", "dock", True),
     _k(PLUGIN + "dock:dance_urgent", "bool", "dock", True),
+    _k(PLUGIN + "drag:spring_dock", "bool", "dock", True),
+    _k(PLUGIN + "drag:spring_edges", "bool", "dock", True),
+    _k(PLUGIN + "drag:spring_delay_ms", "int", "dock", 1500, min=500, max=4000),
+    # Gestures (the map itself is DEFAULT_GESTURES, below)
+    _k(PLUGIN + "gestures:keep_swipe", "bool", "gestures", True),
+    _k(PLUGIN + "gestures:swipe_while_dragging", "bool", "gestures", True),
     _k(PLUGIN + "dock:icon_size", "int", "dock", 54, min=24, max=96),
     _k(PLUGIN + "dock:corner_radius", "int", "dock", 24, min=0, max=40),
     _k(PLUGIN + "dock:hover_tilt", "bool", "dock", True),
@@ -684,6 +690,20 @@ def default_of(meta):
     return meta.get("default")
 
 
+def reset_keys(store, group):
+    """A group's keys back to their defaults, live, and out of the store."""
+    metas = [m for m in KEY_META if m.get("group") == group and default_of(m) is not None]
+    if not metas:
+        return
+    pairs = [(m["key"], coerce(m, default_of(m))) for m in metas]
+    apply_live_many(pairs)
+    owned = store.setdefault("keys", {})
+    for key, _ in pairs:
+        owned.pop(key, None)
+    save_store(store)
+    write_panel_fragment(store)
+
+
 def cmd_reset(args):
     """Restore one panel section to hyprdrive's shipped values.
 
@@ -699,6 +719,8 @@ def cmd_reset(args):
         store["gestures"] = None
         save_store(store)
         write_gesture_fragment([dict(g) for g in DEFAULT_GESTURES])
+        # The section's switches too, written before the reload re-reads them.
+        reset_keys(store, group)
         if hyprctl("reload") is None:
             raise SystemExit("hdpanel: wrote gestures but hyprctl reload failed")
         print(json.dumps({"ok": True, "group": group}))

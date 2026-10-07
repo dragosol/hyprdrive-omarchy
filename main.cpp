@@ -89,6 +89,8 @@ using namespace Hyprutils::String;
 #include "Window.hpp"
 #include "WindowPill.hpp"
 #include "Placement.hpp"
+#include "FingerSwipe.hpp"
+#include "Spring.hpp"
 
 // Methods
 static CFunctionHook* g_pScrollRenderWorkspaceHook = nullptr;
@@ -198,6 +200,11 @@ static void hkTargetPlace(void* thisptr, const Layout::STargetBox& box, uint8_t 
 }
 
 static void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e) {
+    // A swipe the plugin owns (a continued one, or one under a held drag):
+    // libinput's leftover touchpad motion would move the pointer -- and fling
+    // the held drag with the sum of every finger.
+    if (ScrollOverview::FingerSwipe::swallowMotion(e))
+        return;
     rc<origOnMouseMoved>(g_pScrollMouseMovedHook->m_original)(thisptr, e);
     ScrollOverview::Dock::feedPointerMotion(e.delta);
 }
@@ -2023,6 +2030,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // A no-op unless the pointer set changed -- a reload is not a reason to
         // drop a touchpad gesture that is still under the hand.
         attachPadFingerListeners();
+        ScrollOverview::FingerSwipe::rescan();
         // FIRST, before anything in this plugin reads a config value this pass:
         // a value the user set under the old plugin:scrolloverview: name is
         // copied onto its plugin:hyprdrive: twin here and nowhere else, so the
@@ -2312,6 +2320,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::Minimize::adoptStashedWindows();
     registerRawKeyHooks();
     attachPadFingerListeners();
+    // Both read their keys at once: only after registerConfig() above.
+    ScrollOverview::FingerSwipe::init();
+    ScrollOverview::Spring::init();
 
     // Reload can drop live window alphas until decorations are recomputed.
     // Re-apply default-opacity (0.985 / 0.85) to already-mapped windows.
@@ -2473,6 +2484,11 @@ APICALL EXPORT void PLUGIN_EXIT() {
     ScrollOverview::Dock::stopUrgentHopTimer();
     AppInfo::shutdown();
     disableScrollOverviewHooks();
+
+    // Before the gesture teardown below: a swipe the plugin is driving ends
+    // through it, and the spring timer must not fire into unloaded code.
+    ScrollOverview::Spring::shutdown();
+    ScrollOverview::FingerSwipe::shutdown();
 
     if (g_pTrackpadGestures)
     {

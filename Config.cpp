@@ -635,6 +635,20 @@ static void registerConfigValuesFor() {
                                     "draw the dock on one monitor only: its name (DP-1) or desc:<description prefix>; empty = every monitor. "
                                     "A monitor that is not connected falls back to every monitor",
                                     Hyprlang::STRING{""}));
+    // Spring loading and the finger-aware swipe (user, 2026-10-07). Spring.cpp,
+    // FingerSwipe.cpp.
+    addKey(makeShared<CBoolValue>(KEY("drag:spring_dock"),
+                                  "a file drag held over a running app's dock icon or preview for spring_delay_ms flashes it twice and switches to it", true));
+    addKey(makeShared<CBoolValue>(KEY("drag:spring_edges"),
+                                  "a file/folder/window drag held at the left/right screen edge switches desktop that way every spring_delay_ms (a new one past the last)",
+                                  true));
+    addKey(makeShared<CIntValue>(KEY("drag:spring_delay_ms"), "how long a drag is held over a dock app or a screen edge before it springs", 1500,
+                                 SIntValueOptions{.min = 200, .max = 10000}));
+    addKey(makeShared<CBoolValue>(KEY("gestures:keep_swipe"),
+                                  "a 3/4-finger swipe keeps going after fingers lift, as long as one finger that started it is down (reads the touchpad's own touches)",
+                                  true));
+    addKey(makeShared<CBoolValue>(KEY("gestures:swipe_while_dragging"),
+                                  "with one finger holding a drag (button down), 3/4 other fingers swipe as a normal gesture instead of flinging the drag", true));
     addKey(makeShared<CBoolValue>(KEY("dock:workspace_agnostic_urgent"),
                                   "hyprgnomedock: an urgent window stays listed even when isolate_workspaces hides its workspace "
                                   "(D2D workspace-agnostic-urgent-windows)",

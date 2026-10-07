@@ -104,6 +104,17 @@ void setWindowDragActive(bool active);
 bool dockOwnsNativeDrag();
 void clearDockNativeDrag();
 
+// Spring loading (Dock.cpp, end): a client's file drag held over a running
+// app's icon or one of its previews for delayMs flashes the icon twice and
+// brings the app forward. True while it is waiting or flashing (keep ticking).
+bool    springUpdate(PHLMONITOR monitor, const Vector2D& local, bool folderDrag, int delayMs);
+void    springReset();
+float   springFlash(const SItem& item);
+bool    springArmed(const SItem& item);
+bool    springAnimating();
+// The theme's accent (Hyprland's active border), for chrome drawn elsewhere.
+CHyprColor accentColor();
+
 // The dock is on and dock:monitor puts it on this output.
 bool    onMonitor(PHLMONITOR monitor);
 
