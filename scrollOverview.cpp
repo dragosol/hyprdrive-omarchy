@@ -212,8 +212,10 @@ CScrollOverview::~CScrollOverview() {
     trailingWorkspace.reset();
     gapWorkspaces.clear();
     forgetPhantomsOf(this);
-    if (scrollOverviews().empty())
+    if (scrollOverviews().empty()) {
         Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+        g_overviewCursorYielded = false;
+    }
     if (const auto MONITOR = pMonitor.lock())
         MONITOR->m_blurFBDirty = true;
 }
@@ -386,6 +388,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
         keyboardKeyHook = Event::bus()->m_events.input.keyboard.key.listen([this](IKeyboard::SKeyEvent a0, Event::SCallbackInfo& a1) { onKeyboardKey(a0, a1); });
 
     Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+    g_overviewCursorYielded = false;
     OpenProf::mark("ctor hooks + anims");
 
     redrawAll();

@@ -129,11 +129,13 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
             // null and the pointer moves. Steal it back so the bar taking
             // pointer hover cannot keep the keys.
             stealOverviewKeyboard();
+            yieldOverviewCursor(true);
             return;
         }
 
         info.cancelled = true;
         stealOverviewKeyboard();
+        yieldOverviewCursor(false);
 
         // ONLY WHEN SOMETHING WOULD LOOK DIFFERENT. This used to be an
         // unconditional requestInputFrame(), and AQ_SCHEDULE_CURSOR_MOVE is the

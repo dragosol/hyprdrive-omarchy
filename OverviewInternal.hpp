@@ -414,6 +414,22 @@ inline constexpr const char* OVERVIEW_CLOSE_BEZIER = HOUSE_ACCEL_BEZIER;
 // scripts/symcheck.sh now diffs against the host's exports instead of grepping
 // for a namespace, precisely so the next global-scope symbol cannot hide.
 
+// The overview's arrow is a SPECIAL_ACTION override, which beats any shape a
+// client asks for -- so over a layer the overview lets the pointer through to,
+// that layer's own cursor never showed: slurp's crosshair stayed an arrow when
+// Print was pressed in the overview (user, 2026-10-07). Yield it there, take it
+// back when the pointer returns to the overview.
+inline bool g_overviewCursorYielded = false;
+inline void yieldOverviewCursor(bool yield) {
+    if (yield == g_overviewCursorYielded || !Pointer::Cursor::overrideController)
+        return;
+    g_overviewCursorYielded = yield;
+    if (yield)
+        Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+    else
+        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+}
+
 inline bool isPointerOnTopLayer(PHLMONITOR monitor) {
     if (!monitor)
         return false;
