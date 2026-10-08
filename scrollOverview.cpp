@@ -10,6 +10,7 @@
 #include "FramePacing.hpp"
 #include "DockStacks.hpp"
 #include "SearchLetters.hpp"
+#include "KeyboardCat.hpp"
 #include "Motion.hpp"
 
 #include "Compat.hpp"
@@ -7546,7 +7547,9 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         for (const auto& ROW : RESULTS)
             toolRowsHL += overviewToolRowHL(ROW, SPAN) + OVERVIEW_TOOL_GAPL;
     }
-    const float TARGET = PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, TOOLPANE, toolRowsHL) : 0.F;
+    // The easter egg's frame takes the same band (KeyboardCat::bandL), so the
+    // strip makes room for it the way it does for results.
+    const float TARGET = std::max(PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, TOOLPANE, toolRowsHL) : 0.F, ScrollOverview::KeyboardCat::bandL());
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 
@@ -7656,11 +7659,13 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
                                                               ScrollOverview::FlightBlur::layoutSamples());
         }
         drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
+        // The easter egg (KeyboardCat.hpp) opens out of the pill, over it.
+        ScrollOverview::KeyboardCat::render(monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
     }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor
     // will not schedule the rest of the pop on its own.
-    if (SearchLetters::g_searchLetters.busy(Time::steadyNow())) {
+    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()) || ScrollOverview::KeyboardCat::busy()) {
         damage();
         requestInputFrame();
     }

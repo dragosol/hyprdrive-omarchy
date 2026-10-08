@@ -166,10 +166,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|scratchpad|type|type \\S+|activate \\S+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|scratchpad|type|type \\S+|activate \\S+|press [0-9]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class>",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | press <keycode>",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
@@ -489,6 +489,9 @@ static void registerConfigValuesFor() {
     // default: they send what is typed to a third-party service, and a
     // compositor plugin must not start doing that on its own.
     addKey(makeShared<CBoolValue>(KEY("search:dictionary"), "`define <word>` in the overview search looks the word up on Wiktionary (sends the word to en.wiktionary.org)", false));
+    addKey(makeShared<CBoolValue>(KEY("search:easter_egg"), "overview search: type a letter and backspace five times in four seconds and the pill plays search:easter_egg_video", true));
+    addKey(makeShared<CStringValue>(KEY("search:easter_egg_video"), "the video the overview's easter egg plays, with its sound (needs ffmpeg); a missing file turns the egg off",
+                                    Hyprlang::STRING{"~/.local/share/hyprdrive/easter-egg.mp4"}));
     addKey(makeShared<CBoolValue>(KEY("search:translate"), "`tr <lang> <text>` in the overview search translates it (sends the text to the translate endpoint)", false));
     addKey(makeShared<CStringValue>(KEY("search:translate_endpoint"), "LibreTranslate-compatible base URL for `tr`; empty uses the free MyMemory API",
                                     Hyprlang::STRING{""}));

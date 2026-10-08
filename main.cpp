@@ -60,6 +60,7 @@ using namespace Hyprutils::String;
 #include "CursorShape.hpp"
 #include "globals.hpp"
 #include "SearchLetters.hpp"
+#include "KeyboardCat.hpp"
 
 #include "Compat.hpp"
 #include "AppSearch.hpp"
@@ -763,7 +764,12 @@ static constexpr int     LETTER_TICK_MS    = 8;
 
 static int letterTickCb(void*) {
     const auto NOW     = SearchLetters::clock::now();
-    const bool LETTERS = SearchLetters::g_searchLetters.busy(NOW);
+    // The easter egg is a video: it wants every frame while it plays, and the
+    // tick stays up while it does -- with or without an overview, so its
+    // watchdog can stop the sound if the overview went away under it.
+    ScrollOverview::KeyboardCat::watchdog();
+    const bool CAT     = ScrollOverview::KeyboardCat::busy();
+    const bool LETTERS = SearchLetters::g_searchLetters.busy(NOW) || CAT;
 
     bool again = false;
     for (const auto& OVERVIEW : scrollOverviews()) {
@@ -784,7 +790,7 @@ static int letterTickCb(void*) {
         again = true;
     }
 
-    if (again && g_letterTickTimer)
+    if ((again || CAT) && g_letterTickTimer)
         wl_event_source_timer_update(g_letterTickTimer, LETTER_TICK_MS);
 
     return 0;
@@ -938,6 +944,8 @@ static bool handleSearchPress(uint32_t keycode) {
         if (g_search.query.text.empty())
             g_search.query.active = false;
         afterQueryEdit();
+        if (ScrollOverview::KeyboardCat::noteBackspace())
+            armLetterTick(); // its frames start with the trigger
         return true;
     }
 
@@ -965,6 +973,7 @@ static bool handleSearchPress(uint32_t keycode) {
     if (g_search.query.windowsOnly)
         g_search.query.text.clear();
     g_search.query.text += KEY.text;
+    ScrollOverview::KeyboardCat::noteTyped();
     afterQueryEdit();
     return true;
 }
@@ -1099,6 +1108,16 @@ static void                registerRawKeyHooks() {
 
         if (!ISSUPER) {
             if (PRESSED) {
+                // The easter egg owns the overview's keys while it is up: the
+                // first ones are swallowed (the hands are still mid-spam), any
+                // after that stops it, and none of them types into the search.
+                if (overviewAcceptsSearch() && ScrollOverview::KeyboardCat::active() && !isGlobalPassthroughKeycode(event.keycode) &&
+                    ScrollOverview::KeyboardCat::handleKey(event.keycode)) {
+                    stopSearchRepeat();
+                    g_consumedPresses.insert(event.keycode);
+                    info.cancelled = true;
+                    return;
+                }
                 // V11 SPEC V5. SPACE PREVIEWS THE HOVERED FAN/GRID ITEM.
                 //
                 // THE SCOPE IS THE FEATURE. previewHovered() claims the key
@@ -1619,8 +1638,26 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
                 overview->damage();
         return {};
     }
+    // `press <evdev keycode>`: one key through the overview search's own press
+    // handler, as if typed -- the path `type` skips. For gates (the easter
+    // egg's trigger counts presses, not queries).
+    if (TOPIC == "press") {
+        if (data.size() < 2)
+            return {.success = false, .error = "press needs an evdev keycode"};
+        try {
+            const auto CODE = sc<uint32_t>(std::stoul(std::string{data[1]}));
+            if (ScrollOverview::KeyboardCat::active())
+                ScrollOverview::KeyboardCat::handleKey(CODE);
+            else
+                handleSearchPress(CODE);
+        } catch (...) { return {.success = false, .error = "press needs an evdev keycode"}; }
+        for (const auto& overview : scrollOverviews())
+            if (overview)
+                overview->damage();
+        return {};
+    }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|mem|activate <class>|scratchpad|type [text]"};
+        return {.success = false, .error = "hyprdrive:debug frames|mem|activate <class>|scratchpad|type [text]|press <keycode>"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {
@@ -2396,6 +2433,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    ScrollOverview::KeyboardCat::shutdown(); // ffmpeg killed, its reader joined, before the code goes
     stopSearchRepeat();
     if (g_searchRepeatTimer) {
         wl_event_source_remove(g_searchRepeatTimer);
