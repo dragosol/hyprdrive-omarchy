@@ -88,15 +88,54 @@ off — that is inheritance, not a missing feature.
 Do not pin `plugin:hyprdrive:col_highlight` (or dock colours) in a fragment
 unless you want that value frozen across theme changes.
 
-## Build and install
+## Install
+
+Install the **latest release**, not the tip of the branch: the branch can be
+ahead of the last release with work that has not been released yet. Each release
+is a `vX.Y.Z` tag ([Releases](https://github.com/dragosol/hyprdrive-omarchy/releases)),
+and the commands below check out the newest one.
+
+The plugin is compiled against the Hyprland on your machine (the headers come
+with the `hyprland` package), so it is built locally rather than downloaded.
 
 ```bash
+git clone https://github.com/dragosol/hyprdrive-omarchy.git ~/Projects/hyprdrive-omarchy
 cd ~/Projects/hyprdrive-omarchy
+git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"   # the latest release
 make all
 make install
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl reload
 hyprctl configerrors
+```
+
+### Update to the latest release
+
+```bash
+cd ~/Projects/hyprdrive-omarchy
+git fetch --tags
+git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"
+rm -f hyprdrive.so ~/.local/lib/hyprdrive/hyprdrive.so
+make all && make install
+omarchy restart shell
+```
+
+Then log out and back in to load the new plugin (or, with your hands off the
+trackpad, `hyprctl plugin unload ~/.local/lib/hyprdrive/hyprdrive.so && hyprctl
+plugin load ~/.local/lib/hyprdrive/hyprdrive.so`). `omarchy restart shell` makes
+the Hyprdrive settings panel pick up rows a release added; the shell's own plugin
+reload keeps the old ones.
+
+After a Hyprland update the plugin may refuse to load with `[he] Version mismatch`.
+Rebuild from scratch: `make clean && make all && make install`.
+
+## Building from a checkout
+
+For development, on whatever is checked out:
+
+```bash
+make all
+make install
 ```
 
 `make install` copies `hyprdrive.so` to `~/.local/lib/hyprdrive/`, lays fragments
