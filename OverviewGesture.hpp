@@ -160,6 +160,9 @@ class CHyprdriveForwardGesture : public ITrackpadGesture {
 class CScratchpadGesture : public CHyprdriveForwardGesture {
   public:
     explicit CScratchpadGesture(bool show) : m_show(show) {}
+    // Records the closed look a reveal starts from, and gives it back to a
+    // close that lost it (see the .cpp: Hyprland's gesture reads begun()).
+    void begin(const ITrackpadGesture::STrackpadGestureBegin& e) override;
 
   protected:
     ITrackpadGesture* pick() override;

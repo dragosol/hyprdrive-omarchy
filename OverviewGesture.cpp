@@ -16,6 +16,8 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <optional>
+#include <unordered_map>
+#include <hyprland/src/desktop/Workspace.hpp>
 #include <ranges>
 #include <string_view>
 #include <vector>
@@ -824,6 +826,71 @@ void CHyprdriveForwardGesture::end(const ITrackpadGesture::STrackpadGestureEnd& 
     if (m_active)
         m_active->end(e);
     m_active = nullptr;
+}
+
+// A CLOSE THAT FOLLOWS THE FINGERS (user, 2026-10-08: "4 fingers up to show
+// scratchpad follows my gestures but 4 fingers down does not to close it").
+// Hyprland's CSpecialWorkspaceGesture (0.56.2) moves between each animated
+// value's begun() and goal(), read at begin. A reveal BY GESTURE ends with
+// `*var = goal` on a var its updates already warped to that goal -- a no-op
+// that leaves begun() == goal() == open. The close gesture then lerps open ->
+// open: nothing moves under the fingers and the scratchpad snaps shut on
+// release. (Opened by a key, the open animation leaves begun() at closed, and
+// the close follows.)
+//
+// So: a reveal records the closed look it starts from (the native gesture's own
+// From values, read right after its begin), and a close whose vars have lost
+// it gets it back before the native begin reads them -- setValue(closed) then
+// warp(): value and goal are back at open and begun() is closed, in one
+// synchronous step with no frame between, so nothing visibly moves.
+namespace {
+    struct SClosedLook {
+        float    fade = 0.F, dim = 0.F, blur = 0.F, alpha = 0.F;
+        Vector2D offset;
+    };
+    std::unordered_map<std::string, SClosedLook> g_closedLook; // special workspace name -> its closed look
+
+    template <typename T>
+    void giveBackBegun(const PHLANIMVAR<T>& var, const T& closed) {
+        if (!var || var->begun() != var->goal() || var->goal() == closed || var->value() != var->goal())
+            return; // it still knows where it came from, or it is mid-animation: leave it
+        var->setValue(closed);
+        var->warp(false);
+    }
+}
+
+void CScratchpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    const auto MONITOR = Desktop::focusState()->monitor();
+    if (!m_show && MONITOR) {
+        if (const auto SHOWN = ScrollOverview::Scratchpad::shownOn(MONITOR); SHOWN && SHOWN->m_monitor) {
+            if (const auto IT = g_closedLook.find(SHOWN->m_name); IT != g_closedLook.end()) {
+                const auto  MON = SHOWN->m_monitor.lock();
+                const auto& C   = IT->second;
+                giveBackBegun(MON->m_specialFade, C.fade);
+                giveBackBegun(MON->m_specialDim, C.dim);
+                giveBackBegun(MON->m_specialBlur, C.blur);
+                giveBackBegun(SHOWN->m_alpha, C.alpha);
+                giveBackBegun(SHOWN->m_renderOffset, C.offset);
+            }
+        }
+    }
+
+    m_native.reset(); // pick() sets it only when it picks one, this time
+    CHyprdriveForwardGesture::begin(e);
+
+    // A reveal started: the native gesture just read its From values -- the
+    // closed look -- out of these same begun()s.
+    if (m_show && m_native && MONITOR)
+        if (const auto WS = ScrollOverview::Scratchpad::shownOn(MONITOR); WS && WS->m_monitor) {
+            const auto MON         = WS->m_monitor.lock();
+            g_closedLook[WS->m_name] = SClosedLook{
+                .fade   = MON->m_specialFade->begun(),
+                .dim    = MON->m_specialDim->begun(),
+                .blur   = MON->m_specialBlur->begun(),
+                .alpha  = WS->m_alpha->begun(),
+                .offset = WS->m_renderOffset->begun(),
+            };
+        }
 }
 
 ITrackpadGesture* CScratchpadGesture::pick() {
