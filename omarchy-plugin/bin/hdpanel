@@ -95,6 +95,7 @@ KEY_META = [
     _k(PLUGIN + "dock:show_apps_button", "bool", "dock", True),
     _k(PLUGIN + "dock:show_trash", "bool", "dock", True),
     _k(PLUGIN + "dock:show_mounts", "bool", "dock", False),
+    _k(PLUGIN + "dock:show_mounts_network", "bool", "dock", True),
     _k(PLUGIN + "dock:mount_sort", "enum", "dock", "mounted", options=MOUNT_SORTS),
     _k(PLUGIN + "dock:running_indicator", "bool", "dock", True),
     _k(PLUGIN + "dock:notification_counter", "bool", "dock", True),

@@ -3,6 +3,7 @@
 
 #include "Config.hpp"
 #include "MountSort.hpp"
+#include "GvfsMount.hpp"
 #include "StackModel.hpp"
 
 #include <gio/gio.h>
@@ -322,6 +323,107 @@ namespace {
     }
 }
 
+// THE FILE MANAGER'S OWN MOUNTS (GvfsMount.hpp): an smb://, sftp:// or MTP
+// mount made in Nautilus is gvfsd's, not the kernel's. Asked of gvfsd's
+// MountTracker exactly the way readOpenLocations asks Nautilus: never
+// auto-started (no gvfsd, no network mounts -- nothing to wait for) and
+// bounded at TIMEOUT_US, because this is the render thread once a second.
+// The list itself is gvfsd's in-memory table: no server is contacted, so a
+// share whose server has gone away still answers at once.
+static void readGvfsMounts(std::vector<SLocation>& out, bool network) {
+    sd_bus* bus = userBus();
+    if (!bus)
+        return;
+
+    sd_bus_message* call = nullptr;
+    if (sd_bus_message_new_method_call(bus, &call, "org.gtk.vfs.Daemon", "/org/gtk/vfs/mounttracker", "org.gtk.vfs.MountTracker", "ListMounts2") < 0 || !call)
+        return;
+    sd_bus_message_set_auto_start(call, 0);
+    sd_bus_message_append(call, "b", 1); // user-visible only
+
+    sd_bus_error    error = SD_BUS_ERROR_NULL;
+    sd_bus_message* reply = nullptr;
+    const int       R     = sd_bus_call(bus, call, TIMEOUT_US, &error, &reply);
+    sd_bus_message_unref(call);
+    sd_bus_error_free(&error);
+    if (R < 0 || !reply)
+        return;
+
+    // A byte string from gvfsd carries its NUL; one that fails to read is "".
+    const auto readBytes = [&](std::string& into) {
+        const void* data = nullptr;
+        size_t      size = 0;
+        into.clear();
+        if (sd_bus_message_read_array(reply, 'y', &data, &size) < 0 || !data)
+            return false;
+        into.assign(static_cast<const char*>(data), size);
+        while (!into.empty() && into.back() == '\0')
+            into.pop_back();
+        return true;
+    };
+
+    if (sd_bus_message_enter_container(reply, 'a', "(sossssssbay(aya{sv})ay)") > 0) {
+        while (sd_bus_message_enter_container(reply, 'r', "sossssssbay(aya{sv})ay") > 0) {
+            Gvfs::SMount m;
+            const char * id = nullptr, *obj = nullptr, *display = nullptr, *stable = nullptr, *xcontent = nullptr, *icon = nullptr, *symicon = nullptr, *enc = nullptr;
+            int          visible = 0;
+            bool         ok      = sd_bus_message_read(reply, "sossssssb", &id, &obj, &display, &stable, &xcontent, &icon, &symicon, &enc, &visible) >= 0;
+            ok                   = ok && readBytes(m.fuse);
+            if (ok && sd_bus_message_enter_container(reply, 'r', "aya{sv}") > 0) {
+                readBytes(m.prefix);
+                if (sd_bus_message_enter_container(reply, 'a', "{sv}") > 0) {
+                    while (sd_bus_message_enter_container(reply, 'e', "sv") > 0) {
+                        const char* key = nullptr;
+                        sd_bus_message_read(reply, "s", &key);
+                        std::string value;
+                        if (sd_bus_message_enter_container(reply, 'v', "ay") > 0) {
+                            readBytes(value);
+                            sd_bus_message_exit_container(reply);
+                        } else
+                            sd_bus_message_skip(reply, "v");
+                        if (key)
+                            m.spec.emplace_back(key, std::move(value));
+                        sd_bus_message_exit_container(reply);
+                    }
+                    sd_bus_message_exit_container(reply);
+                }
+                sd_bus_message_exit_container(reply);
+            }
+            std::string defaultLocation;
+            readBytes(defaultLocation);
+            sd_bus_message_exit_container(reply);
+            if (!ok)
+                continue;
+
+            m.display     = display ? display : "";
+            m.icon        = icon ? icon : "";
+            m.userVisible = visible != 0;
+            if (m.prefix.empty())
+                m.prefix = "/";
+            if (!Gvfs::listed(m) || (!network && Gvfs::isNetwork(Gvfs::specValue(m, "type"))))
+                continue;
+            const auto URI = Gvfs::uriFor(m);
+            if (!URI)
+                continue;
+
+            SLocation loc;
+            loc.uri       = *URI;
+            loc.mountPath = m.fuse; // what fstab order and the dedupe below compare
+            loc.name      = m.display.empty() ? *URI : m.display;
+            loc.icon      = Gvfs::firstThemedIcon(m.icon);
+            loc.mount     = true;
+            loc.canEject  = false;
+            loc.mounted   = true;
+            if (loc.icon.empty())
+                loc.icon = Gvfs::isNetwork(Gvfs::specValue(m, "type")) ? "folder-remote" : FALLBACK_MEDIA;
+            if (std::ranges::none_of(out, [&](const SLocation& l) { return l.uri == loc.uri; }))
+                out.emplace_back(std::move(loc));
+        }
+        sd_bus_message_exit_container(reply);
+    }
+    sd_bus_message_unref(reply);
+}
+
 const std::vector<SLocation>& items() {
     const auto NOW = std::chrono::steady_clock::now();
     if (g_have && NOW - g_polled < POLL)
@@ -343,6 +445,7 @@ const std::vector<SLocation>& items() {
     // `Locations.getApps()`: removables first, then the trash.
     if (Config::getValue<bool>(KEY_SHOW_MOUNTS)) {
         readMounts(g_items);
+        readGvfsMounts(g_items, Config::getValue<bool>(KEY_MOUNTS_NET));
         // dock:mount_sort (MountSort.hpp). `mounted` keeps the mount table's
         // order, which is the order the drives happened to be mounted in. Stable,
         // so drives with the same name keep that order between themselves.

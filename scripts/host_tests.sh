@@ -48,6 +48,7 @@ run strip_layout_test scripts/strip_layout_test.cpp
 run tool_search_test scripts/tool_search_test.cpp
 run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
 run mount_sort_test scripts/mount_sort_test.cpp
+run gvfs_mount_test scripts/gvfs_mount_test.cpp
 run dock_drop_test scripts/dock_drop_test.cpp
 run finger_swipe_test scripts/finger_swipe_test.cpp
 # shellcheck disable=SC2046
