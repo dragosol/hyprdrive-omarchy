@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dragos.hyprdrive",
   "name": "Hyprdrive",
-  "version": "1.9.21",
+  "version": "1.9.22",
   "author": "dragos",
   "license": "MIT",
   "description": "Hyprdrive settings: overview, dock, one animation curve and speed for everything, per-animation motion blur, a trackpad gesture editor, performance and AC/battery profiles.",
