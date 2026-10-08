@@ -473,6 +473,10 @@ namespace {
         int                 hover      = -1;
         int                 previewing = -1;    // the row Sushi is showing; drawn enlarged + ringed
         bool                keyboard   = false; // the keyboard moved last: `hover` is its selection
+        // The overview's SPACE rule (SearchIntent.hpp): while the user is
+        // TYPING a query, Space is a space; once they point at an item or move
+        // the selection, it previews (user, 2026-10-08: "I can't add spaces").
+        bool                typing     = false;
         int                 cols       = 1;     // the pane's column count (Task 7); 1 for the fan
         Vector2D            lastMouse;
         Time::steady_tp     lastDrawn{};                  // keyboardActive: only a popup actually on screen takes keys
@@ -1965,6 +1969,7 @@ namespace ScrollOverview::Stacks {
         P.hover      = P.visible.empty() ? -1 : 0;
         if (SETTLED)
             P.tl = timelineSpan(P);
+        P.typing = !P.query.empty();
         damagePopupMonitor();
     }
 
@@ -2021,6 +2026,10 @@ namespace ScrollOverview::Stacks {
                 P.query.clear();
                 queryChanged(P);
                 return true;
+            } else if (keycode == 57 && P.typing && !P.query.empty()) { // SPACE mid-query is a space
+                P.query += ' ';
+                queryChanged(P);
+                return true;
             } else if (keycode != 57 && keycode != 28) { // SPACE previews, ENTER opens
                 if (const auto K = TextInput::keyFor(overviewActiveXkbState(), keycode); K.consume) {
                     P.query += K.text;
@@ -2075,6 +2084,7 @@ namespace ScrollOverview::Stacks {
                 }
         }
         P.keyboard = true;
+        P.typing   = false;
         revealHover(P);
         damagePopupMonitor();
         return true;
@@ -2539,8 +2549,10 @@ namespace ScrollOverview::Stacks {
         // no motion hook and no second input path -- see the note on SItemDrag.
         const Vector2D MOUSE = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
         // The pointer moving takes the selection back from the keyboard.
-        if (MOUSE.distance(g_popup->lastMouse) > 2.0)
+        if (MOUSE.distance(g_popup->lastMouse) > 2.0) {
             g_popup->keyboard = false;
+            g_popup->typing   = false;
+        }
         g_popup->lastMouse = MOUSE;
 
         const auto drawGhost = [&] {

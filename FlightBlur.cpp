@@ -347,6 +347,38 @@ namespace ScrollOverview::FlightBlur {
         const bool SWIPEHOME = !SWIPING && s_swipeEndedAt.time_since_epoch().count() != 0 &&
             std::chrono::duration<float, std::milli>(Time::steadyNow() - s_swipeEndedAt).count() < 1000.F;
 
+        // A SCRATCHPAD UNDER THE FINGERS (user, 2026-10-08: "when i do the
+        // gesture (4 finger up/down) to show scratchpad there is no motion
+        // blur"). Hyprland's special-workspace gesture drives the render offset
+        // by hand each update -- set, not animated -- so isBeingAnimated() was
+        // false for the whole finger-driven part and only the release could
+        // blur. A special workspace whose offset MOVED since this monitor's last
+        // frame is sliding too, exactly as a desktop swipe is under the fingers.
+        struct SOffsetSeen {
+            PHLWORKSPACEREF ws;
+            Vector2D        off;
+            uint64_t        call  = 0;
+            bool            moved = false;
+        };
+        static std::vector<SOffsetSeen> s_offsets;
+        static uint64_t                 s_call = 0;
+        ++s_call;
+        std::erase_if(s_offsets, [](const auto& e) { return !e.ws.lock(); });
+        const auto offsetMoved = [&](const PHLWORKSPACE& ws) {
+            auto it = std::ranges::find_if(s_offsets, [&](const auto& e) { return e.ws.lock() == ws; });
+            if (it == s_offsets.end()) {
+                s_offsets.push_back({ws, ws->m_renderOffset->value(), s_call, false});
+                return false;
+            }
+            if (it->call != s_call) {
+                const auto OFF = ws->m_renderOffset->value();
+                it->moved      = OFF.distance(it->off) > 0.01;
+                it->off        = OFF;
+                it->call       = s_call;
+            }
+            return it->moved;
+        };
+
         const int N = layoutSamples();
         if (N >= 2 && monitor->m_transform == WL_OUTPUT_TRANSFORM_NORMAL) {
             // An interactive move/resize is the user's hand, not the layout's.
@@ -365,7 +397,8 @@ namespace ScrollOverview::FlightBlur {
                 const auto& WSOFFSET  = WS->m_renderOffset;
                 // A SPECIAL workspace sliding in (the scratchpad) moves its
                 // windows by the workspace's render offset, not their geometry.
-                const bool  SLIDING   = WS->m_isSpecialWorkspace && !window->m_pinned && WSOFFSET->isBeingAnimated();
+                const bool  HANDMOVED = WS->m_isSpecialWorkspace && offsetMoved(WS); // asked every frame, so its last offset is never stale
+                const bool  SLIDING   = WS->m_isSpecialWorkspace && !window->m_pinned && (WSOFFSET->isBeingAnimated() || HANDMOVED);
                 // An ordinary workspace moved by a trackpad swipe, fingers down
                 // or on the release.
                 const bool  SWIPED    = !WS->m_isSpecialWorkspace && !window->m_pinned && (SWIPING || (SWIPEHOME && WSOFFSET->isBeingAnimated()));
@@ -441,7 +474,8 @@ namespace ScrollOverview::FlightBlur {
                 // animation clock (progress 0: its smear is just its speed).
                 const float PCT  = SWIPED ? 0.F :
                                             std::max({MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F,
-                                                      SLIDING ? WSOFFSET->getPercent() : 0.F});
+                                                      // Under the fingers there is no clock: like a swipe, 0.
+                                                      SLIDING && WSOFFSET->isBeingAnimated() ? WSOFFSET->getPercent() : 0.F});
                 const ESite SITE = SWIPED                                          ? ESite::SWIPE :
                     SLIDING                                                        ? ESite::SCRATCHPAD :
                     (SCROLLING && MOVING && !RESIZING && !OFFSETS)                 ? ESite::FLICK :
