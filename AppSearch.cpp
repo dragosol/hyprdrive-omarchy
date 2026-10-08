@@ -627,10 +627,8 @@ namespace AppSearch {
         // changes. Otherwise prefer the largest raster, parsed out of the
         // "256x256" style directory name.
         int iconCandidateScore(const std::filesystem::path& path) {
-            if (path.extension() == ".svg")
-                return 100000;
-
-            if (path.extension() != ".png" && path.extension() != ".xpm")
+            const bool SVG = path.extension() == ".svg";
+            if (!SVG && path.extension() != ".png" && path.extension() != ".xpm")
                 return -1;
 
             int        size = 0;
@@ -642,6 +640,19 @@ namespace AppSearch {
                 while (i < PARENTS.size() && std::isdigit(static_cast<unsigned char>(PARENTS[i])))
                     n = (n * 10) + (PARENTS[i++] - '0');
                 size = std::max(size, n);
+            }
+
+            // SVGS RANKED BY THEIR FOLDER (2026-10-08). Every SVG used to score the
+            // same, so whichever size folder the directory walk reached first won:
+            // breeze-dark's folder-remote came out as the 24@3x MONOCHROME glyph
+            // where GTK, asked for a dock-sized icon, draws its 48 px colour folder.
+            // A vector still beats any bitmap; among vectors the larger nominal
+            // size wins ("24@3x" is 24 -- a scale, not a size), `scalable` is the
+            // largest, and a symbolic variant loses to a full-colour one.
+            if (SVG) {
+                const auto P     = path.string();
+                const int  NOMINAL = P.find("/scalable") != std::string::npos ? 4096 : std::min(size, 4095);
+                return 100000 + NOMINAL - (P.find("symbolic") != std::string::npos ? 50000 : 0);
             }
 
             // A themeless location (pixmaps) still beats nothing.

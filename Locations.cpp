@@ -330,6 +330,31 @@ namespace {
 // bounded at TIMEOUT_US, because this is the render thread once a second.
 // The list itself is gvfsd's in-memory table: no server is contacted, so a
 // share whose server has gone away still answers at once.
+// NAUTILUS'S ICON THEME (user, 2026-10-08: "network drives icon also needs to
+// adopt whatever icon theme nautilus is using"). Nautilus is GTK 4 and takes
+// the theme from org.gnome.desktop.interface icon-theme; the dock's bare names
+// resolve against GTK 3's settings.ini, which here names none (so Adwaita),
+// while Nautilus drew arcticons-dark -> breeze-dark. A dconf read is a mapped
+// file, not a round trip. The schema is looked up first: g_settings_new()
+// ABORTS the process on a schema that is not installed.
+static std::string nautilusIconTheme() {
+    static GSettings* settings = [] {
+        GSettingsSchemaSource* SRC = g_settings_schema_source_get_default();
+        GSettingsSchema*       SCH = SRC ? g_settings_schema_source_lookup(SRC, "org.gnome.desktop.interface", TRUE) : nullptr;
+        if (!SCH)
+            return static_cast<GSettings*>(nullptr);
+        const bool HASKEY = g_settings_schema_has_key(SCH, "icon-theme");
+        g_settings_schema_unref(SCH);
+        return HASKEY ? g_settings_new("org.gnome.desktop.interface") : static_cast<GSettings*>(nullptr);
+    }();
+    if (!settings)
+        return {};
+    gchar*      v   = g_settings_get_string(settings, "icon-theme");
+    std::string out = v ? v : "";
+    g_free(v);
+    return out;
+}
+
 static void readGvfsMounts(std::vector<SLocation>& out, bool network) {
     sd_bus* bus = userBus();
     if (!bus)
@@ -348,6 +373,11 @@ static void readGvfsMounts(std::vector<SLocation>& out, bool network) {
     sd_bus_error_free(&error);
     if (R < 0 || !reply)
         return;
+
+    // "@<theme>:" makes OverviewRender::appIcon resolve in that theme and its
+    // Inherits= chain -- the theme Nautilus draws these very icons with.
+    const auto THEME  = nautilusIconTheme();
+    const auto PREFIX = THEME.empty() ? std::string{} : "@" + THEME + ":";
 
     // A byte string from gvfsd carries its NUL; one that fails to read is "".
     const auto readBytes = [&](std::string& into) {
@@ -416,6 +446,7 @@ static void readGvfsMounts(std::vector<SLocation>& out, bool network) {
             loc.mounted   = true;
             if (loc.icon.empty())
                 loc.icon = Gvfs::isNetwork(Gvfs::specValue(m, "type")) ? "folder-remote" : FALLBACK_MEDIA;
+            loc.icon = PREFIX + loc.icon;
             if (std::ranges::none_of(out, [&](const SLocation& l) { return l.uri == loc.uri; }))
                 out.emplace_back(std::move(loc));
         }
