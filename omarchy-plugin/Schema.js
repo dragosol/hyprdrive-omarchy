@@ -53,7 +53,7 @@ var sections = [
       ]},
       { title: "Easter egg", rows: [
         { type: "toggle", key: P + "search:easter_egg", label: "Easter egg",
-          desc: "Can't make up your mind in the search? Change it a few times in a row, and someone may play you off." }
+          desc: "Indecision has its rewards." }
       ]}
     ]
   },
