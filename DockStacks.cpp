@@ -20,6 +20,7 @@
 #include "OverviewPassElement.hpp"
 #include "StackReader.hpp"
 #include "TextInput.hpp"
+#include "SearchLetters.hpp"
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,10 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
+#include <hyprland/src/render/gl/GLTexture.hpp>
+#include <drm_fourcc.h>
+#include <cairo/cairo.h>
+#include <format>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -418,6 +423,8 @@ namespace {
         float       e      = 1.F; // fan: the row's eased progress (0 in the cell)
         float       a      = 1.F; // fan: the row's opacity
         float       rot    = 0.F; // fan: the row's turn right now (radians)
+        float       drop   = 0.F; // fan: 0..1 of its way down into the cell's pile (scrolled off the bottom)
+        float       top    = 0.F; // fan: 0..1 of its way out past the top slot
     };
 
     struct SPopup {
@@ -426,8 +433,33 @@ namespace {
         StackModel::EView   view = StackModel::EView::Auto;
         bool                grid = false; // decided at open: view==Grid, or the fan does not fit
         CBox                lastPlate;    // the pane's plate last frame, for its entrance blur
-        size_t              fanCap   = 0; // View as Fan: rows the screen holds (0 = no cap)
-        size_t              overflow = 0; // entries behind the "N more in Files" row
+        // THE FAN SCROLLS (user, 2026-10-08: "scrollable so I can go through
+        // more than just what's displayed"). It replaces the "N more in Files"
+        // row: `slots` rows show at once, a window `scrollPos` rows into
+        // `visible`. A row scrolled off the bottom drops into the cell's pile,
+        // and comes back out of it the other way.
+        size_t              slots      = 0;   // rows the screen holds (0: not a fan)
+        float               scrollGoal = 0.F; // rows; whole once settled
+        float               scrollPos  = 0.F; // what is drawn, chasing the goal
+        float               scrollVel  = 0.F;
+        bool                fingerScroll = false; // a touchpad moved the goal: it snaps to a row once the fingers rest
+        Time::steady_tp     lastScrollAt{};       // the scrollbar shows from here, holds, then fades
+        float               barAlpha   = 0.F;     // the scrollbar's own fade
+        float               maxLabelW  = 0.F;     // the widest label the fan can show, render px (an estimate)
+        float               edgeShift  = 0.F;     // how far the left-edge clamp moved the settled fan
+        CBox                fanBounds;            // the fan's area as drawn: the wheel and typing answer anywhere in it
+        Vector2D            moreIcon;             // the "N more in Files" row's icon centre, as laid out
+        float               moreIconK = 0.F, moreIconRot = 0.F; // its scale (0: no such row) and turn
+        // THE FILTER FIELD beside the fan (2026-10-08): the overview's search
+        // pill without its glyph, grown from the side it hugs.
+        float               filterW = 0.F, filterV = 0.F;           // the pill's width, logical px (a spring)
+        float               filterScroll = 0.F, filterScrollV = 0.F; // text scrolled out of a capped pill, logical px
+        float               filterEdge = 0.F, filterEdgeV = 0.F;     // the edge it grows from, logical px
+        float               filterContentL = 0.F;                    // the query as last drawn, logical px
+        float               filterMaxL = 0.F;                        // the room on its side, logical px
+        bool                filterLeft = false, filterPlaced = false, filterMoving = false;
+        CBox                filterPill;                              // as DRAWN
+        SearchLetters::SAnimator letters;
         MONITORID           monitor = MONITOR_INVALID;
         CBox                anchor;  // the cell it grew out of
         std::vector<SEntry> entries;
@@ -458,7 +490,9 @@ namespace {
         std::string         hoverKey;                    // the row the pointer is on this frame
         float               lastProgress = 0.F;          // last frame's, for the motion blur's shutter
         Time::steady_tp     lastTick{};      // when tick() last advanced it
+        float               lastDT  = 0.F;   // the ms that tick advanced it by (animation-scaled)
         bool                ticked  = false;
+        bool                scrolled = false; // the fan has scrolled since it opened: its pile hands back to the cell's
     };
 
     std::string     g_trashStack;   // whose trash job is in flight (Stacks::trashFrom)
@@ -467,6 +501,14 @@ namespace {
     Time::steady_tp g_trashErrorAt{};
 
     std::optional<SPopup> g_popup;
+
+    // The fan scrollbar's texture (drawArcBar), kept while its shape holds.
+    struct SArcBar {
+        std::string          key;
+        SP<Render::ITexture> tex;
+        CBox                 box;
+    };
+    SArcBar g_arcBar;
 
     std::string popupState() {
         if (!g_popup)
@@ -485,6 +527,9 @@ namespace {
         // A fan row in flight is not a target yet: only once it has (nearly)
         // landed -- a click aimed at the stack must not catch a passing paper.
         if (R.e < 0.9F)
+            return false;
+        // Nor is one dropping into the pile or leaving past the top.
+        if (R.drop > 0.35F || R.top > 0.5F)
             return false;
         return !g_popup || !g_popup->grid || g_popup->gridBox.empty() || g_popup->gridBox.containsPoint(point);
     }
@@ -545,9 +590,25 @@ namespace {
         return std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count();
     }
 
+    // Rows the fan shows at once: every visible entry, up to its slots -- and
+    // one row ("Loading", "Empty folder", "No matches") when there is none.
+    size_t fanRows(const SPopup& p) {
+        const size_t N = p.visible.size();
+        return std::max<size_t>(1, p.slots > 0 ? std::min(N, p.slots) : N);
+    }
+    // How far the fan can scroll: 0 when everything shows.
+    float fanMaxScroll(const SPopup& p) {
+        return p.slots > 0 && p.visible.size() > p.slots ? sc<float>(p.visible.size() - p.slots) : 0.F;
+    }
+
+    // ...plus the "N more in Files" row on top of a fan that scrolls.
+    size_t fanRowsDrawn(const SPopup& p) {
+        return fanRows(p) + (fanMaxScroll(p) > 0.F ? 1 : 0);
+    }
+
     float fanStagger(const SPopup& p) {
         const auto&  M    = fanMotion();
-        const size_t ROWS = std::min(std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0)), STAGGER_ROWS);
+        const size_t ROWS = std::min(fanRowsDrawn(p), STAGGER_ROWS);
         return ROWS > 1 ? std::min(M.staggerMs, M.staggerCapMs / sc<float>(ROWS - 1)) : M.staggerMs;
     }
 
@@ -574,7 +635,7 @@ namespace {
         // Shifted so the earliest paper leaves at once: any lead-in before
         // the first movement reads as the click lagging.
         float lead = 1e9F;
-        const size_t ROWS = std::min(std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0)), STAGGER_ROWS);
+        const size_t ROWS = std::min(fanRowsDrawn(p), STAGGER_ROWS);
         for (size_t k = 0; k < ROWS; ++k)
             lead = std::min(lead, STAGGER * (0.55F * sc<float>(k) + 0.9F * (rowJitter(p, k, 1) + 1.F) / 2.F));
         return STAGGER * (0.55F * I + 0.9F * (rowJitter(p, i, 1) + 1.F) / 2.F) - lead;
@@ -585,7 +646,7 @@ namespace {
     float timelineSpan(const SPopup& p) {
         if (p.grid)
             return PANE_OPEN_MS;
-        const size_t ROWS = std::min(std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0)), STAGGER_ROWS);
+        const size_t ROWS = std::min(fanRowsDrawn(p), STAGGER_ROWS);
         float        last = 0.F;
         for (size_t i = 0; i < ROWS; ++i)
             last = std::max(last, rowDelay(p, i));
@@ -606,6 +667,46 @@ namespace {
     constexpr float HOVER_SCALE  = 1.10F;
     constexpr float OPEN_WAIT_MS = 400.F;
 
+    // THE FAN'S SCROLL MOTION. A critically damped spring: a wheel notch moves
+    // the goal a whole row and the fan glides there in ~250 ms, notches in a
+    // row stack up without a restart, and nothing overshoots -- an overshoot
+    // would bounce a paper back out of the pile it just landed on.
+    constexpr float SCROLL_OMEGA   = 18.F;  // 1/s
+    // THE SENSITIVITY IS NAUTILUS'S (user, 2026-10-08: "should be same scroll
+    // sensitivity as my nautilus app"). GTK moves a list by the axis delta 1:1
+    // in logical px, so a finger moves the fan one row per FAN_STEP of travel;
+    // a wheel notch is delta 15 and moves one row, and a high-resolution wheel
+    // that splits a notch into several events adds up to the same row (each of
+    // its events was a whole row at first: four rows a notch).
+    constexpr float WHEEL_NOTCH    = 15.F;  // Hyprland's axis delta for one wheel notch
+    constexpr float FINGER_REST_MS = 140.F; // no motion this long: snap to the nearest row
+    // The scrollbar is there only while the fan moves (user, 2026-10-08:
+    // "show up only during a scroll ... and fade away nicely").
+    constexpr float BAR_IN_MS   = 120.F;
+    constexpr float BAR_HOLD_MS = 650.F;
+    constexpr float BAR_OUT_MS  = 420.F;
+
+    bool scrollMoving(const SPopup& p) {
+        return p.scrollPos != p.scrollGoal || p.scrollVel != 0.F;
+    }
+
+    void stepScroll(SPopup& p, float dtMs) {
+        const float MAXS = fanMaxScroll(p);
+        p.scrollGoal     = std::clamp(p.scrollGoal, 0.F, MAXS);
+        for (float left = std::min(dtMs, 1000.F); left > 0.F;) {
+            const float H = std::min(4.F, left) / 1000.F;
+            left -= 4.F;
+            const float ACC = -SCROLL_OMEGA * SCROLL_OMEGA * (p.scrollPos - p.scrollGoal) - 2.F * SCROLL_OMEGA * p.scrollVel;
+            p.scrollVel += ACC * H;
+            p.scrollPos += p.scrollVel * H;
+        }
+        if (std::abs(p.scrollPos - p.scrollGoal) < 0.002F && std::abs(p.scrollVel) < 0.02F) {
+            p.scrollPos = p.scrollGoal;
+            p.scrollVel = 0.F;
+        }
+        p.scrollPos = std::clamp(p.scrollPos, -0.25F, MAXS + 0.25F);
+    }
+
     void tick(SPopup& p) {
         const auto NOW = Time::steadyNow();
         float      DT  = p.ticked ? std::min(std::chrono::duration<float, std::milli>(NOW - p.lastTick).count(), MAX_TICK_MS) : 0.F;
@@ -617,6 +718,7 @@ namespace {
             DT /= AS;
         p.lastTick     = NOW;
         p.ticked       = true;
+        p.lastDT       = DT;
         // Only a FIRST read holds it: a folder re-reading after a change still
         // has its previous entries to show, and shows them.
         if (!p.leaving && p.loading && p.entries.empty() && elapsed(p.since) < OPEN_WAIT_MS)
@@ -629,6 +731,27 @@ namespace {
             p.hoverMoving |= ON ? amt < 1.F : amt > 0.F;
         }
         std::erase_if(p.hoverAmt, [&](const auto& kv) { return kv.second <= 0.F && kv.first != p.hoverKey; });
+
+        // The fan's scroll, and the scrollbar that shows while it moves.
+        if (p.fingerScroll && elapsed(p.lastScrollAt) > FINGER_REST_MS) {
+            p.scrollGoal   = std::round(p.scrollGoal);
+            p.fingerScroll = false;
+        }
+        stepScroll(p, DT);
+        const bool BARON = !p.grid && fanMaxScroll(p) > 0.F && (scrollMoving(p) || p.fingerScroll || elapsed(p.lastScrollAt) < BAR_HOLD_MS);
+        p.barAlpha       = std::clamp(p.barAlpha + (BARON ? DT / BAR_IN_MS : -DT / BAR_OUT_MS), 0.F, 1.F);
+
+        // The filter field: the overview pill's springs (SSearchFieldMotion's
+        // PondFluid numbers), so the two fields move alike.
+        if (!p.grid) {
+            using M          = SSearchFieldMotion;
+            const float PADL = OVERVIEW_PILL_TAILL;
+            const float WANT = p.query.empty() ? 0.F : std::min(std::ceil(2.F * PADL + p.filterContentL + OVERVIEW_PILL_ENDROOML), std::max(2.F * PADL, p.filterMaxL));
+            const float OVER = p.query.empty() ? 0.F : std::max(0.F, std::ceil(2.F * PADL + p.filterContentL + OVERVIEW_PILL_ENDROOML) - WANT);
+            bool        mv   = qtSpringStep(p.filterW, p.filterV, WANT, M::WIDTH_SPRING, M::WIDTH_DAMPING, M::WIDTH_MASS, M::WIDTH_EPSILON, DT);
+            mv |= qtSpringStep(p.filterScroll, p.filterScrollV, OVER, M::SLIDE_SPRING, M::SLIDE_DAMPING, M::SLIDE_MASS, M::SLIDE_EPSILON, DT);
+            p.filterMoving = mv;
+        }
 
         const float SPAN = timelineSpan(p);
         if (p.leaving)
@@ -685,34 +808,67 @@ namespace {
         const float CX    = sc<float>(p.anchor.x) + sc<float>(p.anchor.width) / 2.F;
         const float BASE  = sc<float>(pill.y) - FAN_GAP * SCALE;
 
-        // One row per item (no cap: a stack that does not fit opens as the pane).
-        // An empty folder -- or one whose first listing has not landed -- still
-        // shows ONE row saying so, so a click always shows something.
-        const size_t ROWS     = std::max<size_t>(1, p.visible.size() + (p.overflow > 0 ? 1 : 0));
-        const bool   EMPTYROW = p.visible.empty(); // "Loading…" / "Empty folder"
+        // One row per item in view. An empty folder -- or one whose first
+        // listing has not landed, or a filter nothing matches -- still shows ONE
+        // row saying so, so a click always shows something.
+        const size_t N        = p.visible.size();
+        const bool   EMPTYROW = N == 0;
+        const size_t SLOTS    = fanRows(p);
+        const bool   SCROLLS  = fanMaxScroll(p) > 0.F;
+        const float  SP       = EMPTYROW ? 0.F : p.scrollPos;
+        const float  TOPSLOT  = sc<float>(SLOTS) - 1.F;
+
+        // THE WINDOW: entry j sits at slot u = j - SP. u in [0, SLOTS-1] is the
+        // fan; (-1, 0) is on its way down into the pile; (SLOTS-1, SLOTS) on
+        // its way out past the top.
+        int J0 = 0, J1 = 0;
+        if (!EMPTYROW) {
+            J0 = std::max(0, sc<int>(std::floor(SP)));
+            J1 = std::min(sc<int>(N) - 1, sc<int>(std::ceil(SP + sc<float>(SLOTS))) - 1);
+        }
+
+        // "N MORE IN FILES" IS BACK (user, 2026-10-08), as a row of its own
+        // above the top slot that stays put while the rest scroll: N is what
+        // is still above the window, so it counts down as the fan scrolls up,
+        // and at the end it just opens the folder. Rows leaving past the top
+        // fade into it.
+        const bool MOREROW = SCROLLS;
+        const int  MOREJ   = J1 + 1;
 
         p.rows.clear();
-        p.rows.reserve(ROWS);
+        p.rows.reserve(sc<size_t>(std::max(1, J1 - J0 + 2)));
         double minLeft = 1e9; // the settled fan's leftmost point, labels turned
-        for (size_t i = 0; i < ROWS; ++i) {
-            const bool  ACTION = EMPTYROW || i >= p.visible.size(); // the empty row, or "N more
-            const float FI     = sc<float>(i);
-            const float SHIFT  = FAN_SHIFT_K * std::pow(FI, FAN_SHIFT_P) * SCALE;
+        for (int j = J0; j <= J1 + (MOREROW ? 1 : 0); ++j) {
+            const bool  MORE = MOREROW && j == MOREJ;
+            const float U    = MORE ? sc<float>(SLOTS) : EMPTYROW ? 0.F : sc<float>(j) - SP;
+            if (!MORE && !EMPTYROW && (U <= -1.F || U >= sc<float>(SLOTS)))
+                continue;
+            const float DROP = MORE ? 0.F : std::clamp(-U, 0.F, 1.F);
+            const float TOP  = MORE ? 0.F : std::clamp(U - TOPSLOT, 0.F, 1.F);
+            // A row on its way into the pile keeps the bottom slot's place; the
+            // paint flies its icon on from there.
+            const float  G  = std::max(U, 0.F);
+            const size_t SI = MORE ? SLOTS : sc<size_t>(std::clamp(std::round(G), 0.F, TOPSLOT)); // its slot, for the opening's stagger and its throw
+            const float  SHIFT = FAN_SHIFT_K * std::pow(G, FAN_SHIFT_P) * SCALE;
 
             // The row's own eased progress on the ONE timeline (fanRowEase):
             // the stagger and the reversal both come from there.
-            const auto  EZ = fanRowEase(p, i, progress);
+            const auto  EZ = fanRowEase(p, SI, progress);
             const float E  = EZ.pos;
 
             const float ROWH  = FAN_ROW_H * SCALE;
-            const float RESTY = BASE - FAN_STEP * SCALE * (FI + 1.F);
+            const float RESTY = BASE - FAN_STEP * SCALE * (G + 1.F);
 
             std::string LABEL, ICON;
-            if (!ACTION) {
-                LABEL = p.entries[p.visible[i]].name;
-                ICON  = p.entries[p.visible[i]].icon;
+            if (MORE) {
+                const int ABOVE = std::max(0, sc<int>(N) - sc<int>(SLOTS) - sc<int>(std::round(SP)));
+                LABEL           = ABOVE > 0 ? std::to_string(ABOVE) + " more in Files" : std::string{"Open in Files"};
+                ICON            = "folder-open";
+            } else if (!EMPTYROW) {
+                LABEL = p.entries[p.visible[sc<size_t>(j)]].name;
+                ICON  = p.entries[p.visible[sc<size_t>(j)]].icon;
             } else {
-                LABEL = p.overflow > 0 ? std::to_string(p.overflow) + " more in Files" : p.loading ? std::string{"Loading\xe2\x80\xa6"} : std::string{"Empty folder"};
+                LABEL = p.loading && p.entries.empty() ? std::string{"Loading\xe2\x80\xa6"} : !p.query.empty() ? std::string{"No matches"} : std::string{"Empty folder"};
                 ICON  = "folder-open";
             }
 
@@ -750,46 +906,95 @@ namespace {
             double CXN = C0X + (C1X - C0X) * E, CYN = C0Y + (C1Y - C0Y) * E;
             if (fanMotion().serp) {
                 const double DX = C1X - C0X, DY = C1Y - C0Y, LEN = std::max(1.0, std::hypot(DX, DY));
-                const double BOW = LEN * 0.33 * rowJitter(p, i, 2);
+                const double BOW = LEN * 0.33 * rowJitter(p, SI, 2);
                 const double MX = (C0X + C1X) / 2.0 - DY / LEN * BOW, MY = (C0Y + C1Y) / 2.0 + DX / LEN * BOW;
-                const double U = 1.0 - E;
-                CXN            = U * U * C0X + 2.0 * U * E * MX + E * E * C1X;
-                CYN            = U * U * C0Y + 2.0 * U * E * MY + E * E * C1Y;
+                const double V = 1.0 - E;
+                CXN            = V * V * C0X + 2.0 * V * E * MX + E * E * C1X;
+                CYN            = V * V * C0Y + 2.0 * V * E * MY + E * E * C1Y;
             }
             // ...and it turns as it flies: from up to 40 degrees off its final
-            // tilt, settling onto it.
-            const float TILT  = FAN_TILT_DEG * FI * 3.14159265F / 180.F;
-            const float THROW = fanMotion().serp ? rowJitter(p, i, 3) * 40.F * 3.14159265F / 180.F : 0.F;
+            // tilt, settling onto it. A scrolling row turns with its slot.
+            const float TILT  = FAN_TILT_DEG * G * 3.14159265F / 180.F;
+            const float THROW = fanMotion().serp ? rowJitter(p, SI, 3) * 40.F * 3.14159265F / 180.F : 0.F;
             const float RROT  = TILT + THROW * (1.F - EZ.spin);
             // Where this row's label ends up once settled and turned: its far
             // end swings up and left about the icon by the row's tilt.
             // (The label is drawn from the ICON leftwards -- gap, then its pill
             // -- not from the row box, which is clamped.)
-            const double REACH = (ICONW / 2.0 + 8.0 * SCALE + labelW + 20.0 * SCALE) * HOVER_SCALE; // room for the hover blow-up
-            minLeft = std::min(minLeft, C1X - REACH * std::cos(TILT) - rest.height / 2.0 * std::sin(TILT));
-            CBox         box{CXN - (C1X - rest.x) * K, CYN - (C1Y - rest.y) * K, rest.width * K, rest.height * K};
+            if (!SCROLLS) {
+                const double REACH = (ICONW / 2.0 + 8.0 * SCALE + labelW + 20.0 * SCALE) * HOVER_SCALE; // room for the hover blow-up
+                minLeft            = std::min(minLeft, C1X - REACH * std::cos(TILT) - rest.height / 2.0 * std::sin(TILT));
+            }
+            CBox box{CXN - (C1X - rest.x) * K, CYN - (C1Y - rest.y) * K, rest.width * K, rest.height * K};
 
             p.rows.emplace_back(SRow{
                 .box    = box,
-                .path   = ACTION ? std::string{} : p.entries[p.visible[i]].path,
+                .path   = EMPTYROW || MORE ? std::string{} : p.entries[p.visible[sc<size_t>(j)]].path,
                 .name   = LABEL,
                 .icon   = ICON,
-                .action = ACTION,
-                .vis    = ACTION ? -1 : sc<int>(i),
+                .action = EMPTYROW || MORE,
+                .vis    = EMPTYROW || MORE ? -1 : j,
                 .k      = sc<float>(K),
                 .e      = E,
                 .a      = EZ.alpha,
                 .rot    = RROT,
+                .drop   = DROP,
+                .top    = TOP,
             });
+        }
+
+        // A scrolling fan's rows change under it, and a clamp measured off
+        // whichever labels are in view would slide the whole fan sideways at
+        // every step: it is measured off every slot at the widest label the
+        // folder has instead, so it holds still.
+        if (SCROLLS) {
+            const double ICONW = FAN_ICON * SCALE;
+            for (size_t k = 0; k <= SLOTS; ++k) { // the "more" row's slot too
+                const double TILT  = FAN_TILT_DEG * sc<double>(k) * 3.14159265 / 180.0;
+                const double C1X   = CX + FAN_SHIFT_K * std::pow(sc<double>(k), FAN_SHIFT_P) * SCALE;
+                const double REACH = (ICONW / 2.0 + 8.0 * SCALE + p.maxLabelW + 20.0 * SCALE) * HOVER_SCALE;
+                minLeft            = std::min(minLeft, C1X - REACH * std::cos(TILT) - FAN_ROW_H * SCALE / 2.0 * std::sin(TILT));
+            }
         }
 
         // A fan near the screen's left edge would put its turned labels off it
         // (2026-09-24): the whole settled fan moves right by the shortfall,
         // arc intact, each row by as much of it as it has flown.
         const double MARGIN = 8.0 * SCALE;
-        if (minLeft < MARGIN)
+        p.edgeShift         = minLeft < MARGIN ? sc<float>(MARGIN - minLeft) : 0.F;
+        if (p.edgeShift > 0.F)
             for (auto& R : p.rows)
-                R.box.x += (MARGIN - minLeft) * R.e;
+                R.box.x += p.edgeShift * R.e;
+
+        // Where the "more" row's folder icon is, for the rows flying into it
+        // (the same pivot drawFanRows turns that row about).
+        p.moreIconK = 0.F;
+        if (MOREROW && !p.rows.empty() && p.rows.back().action) {
+            const auto& R = p.rows.back();
+            p.moreIcon    = Vector2D{R.box.x + R.box.width - FAN_PAD_X * SCALE * R.k - FAN_ICON * SCALE * R.k / 2.0, R.box.y + R.box.height / 2.0};
+            p.moreIconK   = R.k;
+            p.moreIconRot = R.rot;
+        }
+
+        // Where the wheel and the keyboard count as "on the fan": every row it
+        // has, the gaps between them, and the scrollbar's gutter on the right.
+        CBox B;
+        for (const auto& R : p.rows) {
+            if (R.e < 0.5F)
+                continue;
+            if (B.width < 1)
+                B = R.box;
+            else {
+                const double X0 = std::min(B.x, R.box.x), Y0 = std::min(B.y, R.box.y);
+                const double X1 = std::max(B.x + B.width, R.box.x + R.box.width), Y1 = std::max(B.y + B.height, R.box.y + R.box.height);
+                B               = CBox{X0, Y0, X1 - X0, Y1 - Y0};
+            }
+        }
+        if (B.width >= 1) {
+            B.width += FAN_ICON * SCALE;
+            B.expand(10.0 * SCALE);
+        }
+        p.fanBounds = B;
     }
 
     // THE PANE (dock stacks A): a searchable grid of the VISIBLE entries,
@@ -988,26 +1193,18 @@ namespace {
         return rotatedFanCapacity(p, fanNames(p, p.entries.size()), ROOM) < std::max<size_t>(1, p.entries.size());
     }
 
-    // The pane's search: which entries the query keeps, in display order.
+    // The search: which entries the query keeps, in display order -- the
+    // pane's field, or the fan's (2026-10-08: type while on the fan).
     void refilter(SPopup& p) {
         // The preview ring indexes `visible`, which is about to change under it.
         if (p.previewing >= 0) {
             showPreviewClose();
             p.previewing = -1;
         }
-        p.visible = StackModel::filter(p.entries, p.grid ? p.query : std::string{});
-        // View as Fan on a folder taller than the screen: the first rows in
-        // the stack's sort order, and the last row says how many more there
-        // are and opens the folder -- the reference's fan does the same.
-        p.overflow = 0;
-        const size_t CAP = std::min(p.fanCap > 0 ? p.fanCap : FAN_MAX_ITEMS + 1, FAN_MAX_ITEMS + 1); // rows, the "more" row included
-        if (!p.grid && p.visible.size() > CAP - 1) {
-            const size_t KEEP = std::max<size_t>(1, std::min(CAP - 1, FAN_MAX_ITEMS));
-            p.overflow        = p.visible.size() - KEEP;
-            p.visible.resize(KEEP);
-        }
+        p.visible = StackModel::filter(p.entries, p.query);
         if (p.hover >= sc<int>(p.visible.size()))
             p.hover = p.visible.empty() ? -1 : 0;
+        p.scrollGoal = std::clamp(p.scrollGoal, 0.F, fanMaxScroll(p));
     }
 
     // Everything a new listing changes: the entries, the visible order, the
@@ -1017,17 +1214,27 @@ namespace {
         p.loading   = !L.ready;
         p.truncated = L.truncated;
         p.readerGen = StackReader::generation();
-        p.grid   = chooseGrid(p, monitor);
-        p.fanCap = 0;
+        p.grid      = chooseGrid(p, monitor);
+        p.slots     = 0;
         if (!p.grid && monitor) {
-            // Rows that fit with their tilt, the "N more" row included (it is
-            // measured as the row after the last item it would follow).
-            const auto  F     = fanFit(p, monitor);
-            const float ROOM  = F.pillTopL - F.gapL - F.topLimitL;
-            auto        names = fanNames(p, FAN_MAX_ITEMS + 1);
-            if (p.entries.size() > names.size() - (names.size() > 0 ? 0 : 0))
-                names.push_back("999 more in Files");
-            p.fanCap = std::max<size_t>(1, rotatedFanCapacity(p, names, ROOM));
+            // Rows that fit with their tilt. A folder that fits shows all of
+            // it; one that does not scrolls, and is measured as if every slot
+            // held its longest name -- whichever rows scroll into the top slots,
+            // their labels must still clear the bar.
+            const auto   F     = fanFit(p, monitor);
+            const float  ROOM  = F.pillTopL - F.gapL - F.topLimitL;
+            const size_t EXACT = rotatedFanCapacity(p, fanNames(p, FAN_MAX_ITEMS), ROOM);
+            std::string  longest;
+            for (const auto& E : p.entries)
+                if (E.name.size() > longest.size())
+                    longest = E.name;
+            if (p.entries.size() <= EXACT)
+                p.slots = std::max<size_t>(1, EXACT);
+            else // one slot less: the "N more in Files" row takes the top one
+                p.slots = std::max<size_t>(1, rotatedFanCapacity(p, std::vector<std::string>(FAN_MAX_ITEMS + 1, longest), ROOM)) - 1;
+            p.slots = std::max<size_t>(1, p.slots);
+            p.slots     = std::min(p.slots, FAN_MAX_ITEMS);
+            p.maxLabelW = std::min(sc<float>(longest.size()) * FAN_FONT * 0.6F, sc<float>(FAN_LABEL_MAX)) * std::max(monitor->m_scale, 0.01F);
         }
         refilter(p);
         if (p.hover >= sc<int>(p.visible.size()))
@@ -1442,6 +1649,7 @@ namespace ScrollOverview::Stacks {
     }
 
     void shutdown() {
+        g_arcBar = SArcBar{};
         if (g_inotifySource) {
             wl_event_source_remove(g_inotifySource);
             g_inotifySource = nullptr;
@@ -1526,6 +1734,8 @@ namespace ScrollOverview::Stacks {
 
         if (g_popup->grid && !g_popup->plate.empty() && g_popup->plate.containsPoint(point))
             return true;
+        if (!g_popup->grid && g_popup->filterPill.containsPoint(point))
+            return true; // the filter field is part of the fan: a press on it is not a miss
 
         for (const auto& R : g_popup->rows) {
             if (rowHit(R, point))
@@ -1724,6 +1934,53 @@ namespace ScrollOverview::Stacks {
     // last half second" went false half a second after the pointer stopped, and
     // typing only filtered while the mouse was moving. A pointer resting on the
     // pane says it is in front of the user just as well.
+    // THE FAN TAKES TYPING only while the pointer is on it (user, 2026-10-08:
+    // "if the stack is open and I'm focused on it (mousing-over the stack)"):
+    // anywhere in its area, on its cell, or on the filter field itself. The
+    // AREA, not the rows: a filter removes rows from under a still pointer,
+    // and the next letter must not fall through to the window behind.
+    static bool fanFocused() {
+        if (!g_popup || g_popup->leaving || g_popup->grid)
+            return false;
+        const auto MONITOR = popupMonitorPtr();
+        if (!MONITOR)
+            return false;
+        const auto POINTER = g_pInputManager->getMouseCoordsInternal();
+        if (!MONITOR->logicalBox().containsPoint(POINTER))
+            return false;
+        const Vector2D P = (POINTER - MONITOR->m_position) * MONITOR->m_scale;
+        return g_popup->fanBounds.containsPoint(P) || g_popup->filterPill.containsPoint(P) || Dock::cellHitBox(g_popup->anchor, MONITOR->m_scale).containsPoint(P);
+    }
+
+    // A query changed: refilter, start the list from its top, and keep a
+    // settled fan settled (its timeline's span depends on its row count, and a
+    // span that grew under it would replay the entrance).
+    static void queryChanged(SPopup& P) {
+        const bool SETTLED = !P.leaving && P.tl >= timelineSpan(P) - 0.5F;
+        refilter(P);
+        P.scroll     = 0.F;
+        P.scrollGoal = 0.F;
+        P.scrollPos  = 0.F;
+        P.scrollVel  = 0.F;
+        P.hover      = P.visible.empty() ? -1 : 0;
+        if (SETTLED)
+            P.tl = timelineSpan(P);
+        damagePopupMonitor();
+    }
+
+    // Keep the fan's keyboard selection on screen.
+    static void revealHover(SPopup& P) {
+        if (P.grid || P.hover < 0 || P.slots == 0)
+            return;
+        const float H = sc<float>(P.hover), S = sc<float>(P.slots);
+        if (H < P.scrollGoal)
+            P.scrollGoal = H;
+        else if (H > P.scrollGoal + S - 1.F)
+            P.scrollGoal = H - S + 1.F;
+        P.scrollGoal   = std::clamp(std::round(P.scrollGoal), 0.F, fanMaxScroll(P));
+        P.lastScrollAt = Time::steadyNow();
+    }
+
     bool keyboardActive() {
         if (!g_popup || g_popup->leaving)
             return false;
@@ -1731,6 +1988,8 @@ namespace ScrollOverview::Stacks {
         if (!MONITOR)
             return false;
         if (elapsed(g_popup->lastDrawn) < 500.F)
+            return true;
+        if (!g_popup->grid && fanFocused())
             return true;
         const auto POINTER = g_pInputManager->getMouseCoordsInternal();
         return MONITOR->logicalBox().containsPoint(POINTER) && contains(MONITOR, (POINTER - MONITOR->m_position) * MONITOR->m_scale);
@@ -1748,29 +2007,24 @@ namespace ScrollOverview::Stacks {
         // selection, else the item being previewed, else the row under the pointer.
         const int FROM = P.keyboard ? P.hover : (P.previewing >= 0 ? P.previewing : targetIndex());
 
-        if (P.grid) {
+        // The pane always types; the fan while the pointer is on it.
+        if (P.grid || fanFocused()) {
             if (keycode == 14) { // BACKSPACE
                 if (!P.query.empty()) {
                     TextInput::popCodepoint(P.query);
-                    refilter(P);
-                    P.scroll = 0.F;
-                    damagePopupMonitor();
+                    queryChanged(P);
+                    return true;
                 }
-                return true;
-            }
-            if (keycode == 1 && !P.query.empty() && P.previewing < 0) { // ESC clears first
+                if (P.grid)
+                    return true;
+            } else if (keycode == 1 && !P.query.empty() && P.previewing < 0) { // ESC clears first
                 P.query.clear();
-                refilter(P);
-                damagePopupMonitor();
+                queryChanged(P);
                 return true;
-            }
-            if (keycode != 57 && keycode != 28) { // SPACE previews, ENTER opens
+            } else if (keycode != 57 && keycode != 28) { // SPACE previews, ENTER opens
                 if (const auto K = TextInput::keyFor(overviewActiveXkbState(), keycode); K.consume) {
                     P.query += K.text;
-                    refilter(P);
-                    P.scroll = 0.F;
-                    P.hover  = P.visible.empty() ? -1 : 0;
-                    damagePopupMonitor();
+                    queryChanged(P);
                     return true;
                 }
             }
@@ -1821,6 +2075,7 @@ namespace ScrollOverview::Stacks {
                 }
         }
         P.keyboard = true;
+        revealHover(P);
         damagePopupMonitor();
         return true;
     }
@@ -1958,17 +2213,63 @@ namespace ScrollOverview::Stacks {
         return true;
     }
 
+    // What noteAxis was told about the event scroll() is handling.
+    static double g_axisDelta = 0.0;
+    static bool   g_axisWheel = true;
+
+    void noteAxis(double delta, bool wheel) {
+        g_axisDelta = delta;
+        g_axisWheel = wheel;
+    }
+
     bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
-        if (!g_popup || g_popup->leaving || !monitor || !contains(monitor, point))
+        if (!g_popup || g_popup->leaving || !monitor)
+            return false;
+        // The fan answers anywhere in its area: a tick between two rows must
+        // not scroll the window behind it.
+        const bool FANAREA = !g_popup->grid && g_popup->monitor == monitor->m_id && (g_popup->fanBounds.containsPoint(point) || g_popup->filterPill.containsPoint(point));
+        if (!FANAREA && !contains(monitor, point))
             return false;
 
-        if (!g_popup->grid)
-            return true; // the fan swallows the tick; it has nowhere to go
+        if (!g_popup->grid) {
+            auto&       P    = *g_popup;
+            const float MAXS = fanMaxScroll(P);
+            if (MAXS <= 0.F)
+                return true; // everything is showing: the tick is swallowed, it has nowhere to go
+            // UP drops the bottom rows into the cell and brings the next ones
+            // down from above; DOWN lifts them back out. By distance, as
+            // Nautilus scrolls (WHEEL_NOTCH), settling on a row once it rests.
+            const float PERROW = g_axisWheel ? WHEEL_NOTCH : FAN_STEP;
+            P.scrollGoal       = std::clamp(P.scrollGoal + sc<float>(std::abs(g_axisDelta)) / PERROW * (up ? 1.F : -1.F), 0.F, MAXS);
+            P.fingerScroll     = true;
+            P.lastScrollAt = Time::steadyNow();
+            P.keyboard     = false;
+            damagePopupMonitor();
+            return true;
+        }
 
         const float SCALE = std::max(monitor->m_scale, 0.01F);
         g_popup->scroll += (up ? -1.F : 1.F) * (Pane::CELL_H + Pane::SPACING) * SCALE * 0.5F;
         g_popup->keyboard = false;
         damagePopupMonitor();
+        return true;
+    }
+
+    bool scrollBy(float rows) {
+        if (!g_popup || g_popup->leaving || g_popup->grid)
+            return false;
+        auto& P        = *g_popup;
+        P.scrollGoal   = std::clamp(std::round(P.scrollGoal + rows), 0.F, fanMaxScroll(P));
+        P.lastScrollAt = Time::steadyNow();
+        damagePopupMonitor();
+        return true;
+    }
+
+    bool setQuery(const std::string& query) {
+        if (!g_popup || g_popup->leaving)
+            return false;
+        g_popup->query = query;
+        queryChanged(*g_popup);
         return true;
     }
 
@@ -1997,6 +2298,11 @@ namespace ScrollOverview::Stacks {
         // it was up. The two things that CAN change it while it sits there --
         // a wheel tick on a grid, and the view/sort rows of its menu -- damage
         // the monitor themselves now, because nothing else would.
+        // The fan's scroll, its scrollbar fading, and its filter field's
+        // springs and letters are wall-clock motion nothing else reports.
+        const auto& P = *g_popup;
+        if (scrollMoving(P) || P.fingerScroll || P.barAlpha > 0.F || P.filterMoving || P.letters.busy(Time::steadyNow()))
+            return true;
         return g_popup->leaving || popupProgress(*g_popup) < 1.F || g_popup->hoverMoving;
     }
 
@@ -2018,6 +2324,8 @@ namespace ScrollOverview::Stacks {
             out += g_popup->leaving ? "|x" : "|o";
             out += "|" + std::to_string(sc<int>(std::round(popupProgress(*g_popup) * 100.F)));
             out += "|" + std::to_string(sc<int>(std::round(g_popup->scroll)));
+            out += "|s" + std::to_string(sc<int>(std::round(g_popup->scrollPos * 100.F))) + "|a" + std::to_string(sc<int>(std::round(g_popup->barAlpha * 100.F)));
+            out += "|q" + g_popup->query + "|w" + std::to_string(sc<int>(std::round(g_popup->filterW)));
             // The hovered row repaints when the pointer moves onto another one.
             out += "|h" + hoveredItemPath() + "|p" + std::to_string(g_popup->previewing) + "|k" + std::to_string(g_popup->keyboard ? g_popup->hover : -1);
         }
@@ -2033,6 +2341,95 @@ namespace ScrollOverview::Stacks {
     }
 
     // ---------------------------------------------------------------- paint --
+    // THE FAN'S SCROLLBAR (user, 2026-10-08): a thin arc beside the icon
+    // column that follows the fan's own curve. A rect pass element cannot bend,
+    // and a chain of turned segments shows its joints, so the arc is stroked by
+    // cairo -- antialiased, round or square ends after the theme's corners --
+    // into one texture, re-rasterised only when its shape or its thumb moves.
+    // `pts`: the arc's centreline, render px, bottom first. The thumb covers
+    // [t0, t1] of its length.
+    static void drawArcBar(const std::vector<Vector2D>& pts, float t0, float t1, float thick, const CHyprColor& track, const CHyprColor& thumb, bool roundEnds, float alpha) {
+        if (pts.size() < 2 || alpha <= 0.01F)
+            return;
+        double X0 = 1e9, Y0 = 1e9, X1 = -1e9, Y1 = -1e9;
+        for (const auto& P : pts) {
+            X0 = std::min(X0, P.x), Y0 = std::min(Y0, P.y), X1 = std::max(X1, P.x), Y1 = std::max(Y1, P.y);
+        }
+        const double PAD = std::ceil(thick) + 2.0;
+        const CBox   BOX = CBox{std::floor(X0 - PAD), std::floor(Y0 - PAD), std::ceil(X1 - X0 + 2 * PAD) + 1, std::ceil(Y1 - Y0 + 2 * PAD) + 1};
+        if (!drawableBox(BOX))
+            return;
+
+        size_t H = std::hash<std::string>{}(std::format("{:.0f},{:.0f}|{:.3f},{:.3f}|{:.2f}|{}|{:.3f},{:.3f},{:.3f},{:.3f}|{:.3f},{:.3f},{:.3f},{:.3f}", BOX.x, BOX.y, t0, t1, thick,
+                                                           roundEnds, track.r, track.g, track.b, track.a, thumb.r, thumb.g, thumb.b, thumb.a));
+        for (const auto& P : pts)
+            H ^= std::hash<long long>{}(sc<long long>(std::llround(P.x * 4.0)) * 1000003LL + std::llround(P.y * 4.0)) + 0x9e3779b97f4a7c15ULL + (H << 6) + (H >> 2);
+        const auto KEY = std::to_string(H);
+
+        if (KEY != g_arcBar.key || !g_arcBar.tex) {
+            const int W = sc<int>(BOX.width), HT = sc<int>(BOX.height);
+            auto*     SURF = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, HT);
+            auto*     CR   = cairo_create(SURF);
+            cairo_set_antialias(CR, CAIRO_ANTIALIAS_BEST);
+            cairo_translate(CR, -BOX.x, -BOX.y);
+            cairo_set_line_width(CR, thick);
+            cairo_set_line_cap(CR, roundEnds ? CAIRO_LINE_CAP_ROUND : CAIRO_LINE_CAP_BUTT);
+            cairo_set_line_join(CR, CAIRO_LINE_JOIN_ROUND);
+
+            std::vector<double> len(pts.size(), 0.0);
+            for (size_t i = 1; i < pts.size(); ++i)
+                len[i] = len[i - 1] + pts[i].distance(pts[i - 1]);
+            const double TOTAL = std::max(1.0, len.back());
+            const auto   at    = [&](double l) {
+                for (size_t i = 1; i < pts.size(); ++i)
+                    if (len[i] >= l) {
+                        const double F = (l - len[i - 1]) / std::max(1e-6, len[i] - len[i - 1]);
+                        return pts[i - 1] + (pts[i] - pts[i - 1]) * F;
+                    }
+                return pts.back();
+            };
+            const auto strokeSpan = [&](double l0, double l1, const CHyprColor& c) {
+                if (l1 - l0 < 0.5 || c.a <= 0.0)
+                    return;
+                const auto A = at(l0);
+                cairo_move_to(CR, A.x, A.y);
+                for (size_t i = 1; i + 1 < pts.size(); ++i)
+                    if (len[i] > l0 && len[i] < l1)
+                        cairo_line_to(CR, pts[i].x, pts[i].y);
+                const auto B = at(l1);
+                cairo_line_to(CR, B.x, B.y);
+                cairo_set_source_rgba(CR, c.r, c.g, c.b, c.a);
+                cairo_stroke(CR);
+            };
+            // Round ends reach half a stroke past each end: inset by that so
+            // the bar stays inside its arc, and the thumb inside the track.
+            const double CAP = roundEnds ? thick / 2.0 : 0.0;
+            strokeSpan(CAP, TOTAL - CAP, track);
+            const double MINL = std::min(TOTAL - 2 * CAP, thick * 4.0);
+            double       l0   = CAP + (TOTAL - 2 * CAP) * std::clamp<double>(t0, 0.0, 1.0);
+            double       l1   = CAP + (TOTAL - 2 * CAP) * std::clamp<double>(t1, 0.0, 1.0);
+            if (l1 - l0 < MINL) {
+                const double MID = std::clamp((l0 + l1) / 2.0, CAP + MINL / 2.0, TOTAL - CAP - MINL / 2.0);
+                l0 = MID - MINL / 2.0, l1 = MID + MINL / 2.0;
+            }
+            strokeSpan(l0, l1, thumb);
+
+            cairo_surface_flush(SURF);
+            g_arcBar.tex = makeShared<Render::GL::CGLTexture>(DRM_FORMAT_ARGB8888, cairo_image_surface_get_data(SURF), sc<uint32_t>(cairo_image_surface_get_stride(SURF)),
+                                                             Vector2D{sc<double>(W), sc<double>(HT)});
+            cairo_destroy(CR);
+            cairo_surface_destroy(SURF);
+            g_arcBar.key = KEY;
+            g_arcBar.box = BOX;
+        }
+
+        CTexPassElement::SRenderData d;
+        d.tex = g_arcBar.tex;
+        d.box = g_arcBar.box;
+        d.a   = alpha;
+        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+    }
+
     void render(PHLMONITOR monitor, const Dock::SLayout& layout) {
         // Kept for the hidden dock's longer peek too (Dock::STACK_PEEK_MS); the
         // on-dock hop itself is over at HOP_MS and draws nothing after.
@@ -2301,6 +2698,92 @@ namespace ScrollOverview::Stacks {
         // outline meanwhile (popupShowsStack), so they visibly left it.
         const auto PILE = pileLayout(g_popup->path, g_popup->anchor);
 
+        // The scrollbar's gutter and the filter field both sit right of the
+        // icon column, clear of a hovered (blown-up), turned icon.
+        const float ICONCLEAR = FAN_ICON * SCALE / 2.F * HOVER_SCALE * 1.3F + 6.F * SCALE;
+        const float BARTHICK  = std::max(2.F, 1.5F * sc<float>(std::max(1, Config::getValue<int>("general:border_size")))) * SCALE;
+        const float FANCX     = sc<float>(g_popup->anchor.x + g_popup->anchor.width / 2.0) + g_popup->edgeShift;
+        const float FANBASE   = sc<float>(layout.pill.y) - FAN_GAP * SCALE;
+
+        // THE PILE THE FAN SCROLLED INTO (user, 2026-10-08: "items in the fan
+        // dropping neatly into the stack on the dock, and the reverse"). Rows
+        // scrolled off the bottom are papers on the cell, the latest on top;
+        // each new one pushes the rest a slot down, and the fourth one down
+        // fades into the stack. When the fan folds they settle into the cell's
+        // own pile -- the one it draws once the popup is gone -- so nothing
+        // jumps at the hand-off.
+        {
+            auto&       P  = *g_popup;
+            const float SP = P.visible.empty() ? 0.F : P.scrollPos;
+            const float W  = 1.F - PROGRESS; // how far into the hand-off to the cell's own pile
+            if (SP > 0.01F)
+                P.scrolled = true;
+            std::unordered_set<std::string> drawn;
+            for (const auto& R : P.rows)
+                if (!R.path.empty())
+                    drawn.insert(R.path);
+            const auto pileSlotOf = [&](const std::string& path) -> const SPileItem* {
+                for (const auto& PI : PILE)
+                    if (PI.entry.path == path)
+                        return &PI;
+                return nullptr;
+            };
+            const int PX = sc<int>(std::round(P.anchor.width));
+            const int J1 = std::min(sc<int>(P.visible.size()) - 1, sc<int>(std::floor(SP - 1.F + 1e-4F)));
+            for (int j = std::max(0, sc<int>(std::floor(SP)) - 5); j <= J1; ++j) {
+                const float DEPTH = SP - sc<float>(j) - 1.F; // 0: the top slot
+                if (DEPTH < 0.F || DEPTH >= 4.F)
+                    continue;
+                const auto& E   = P.entries[P.visible[sc<size_t>(j)]];
+                float       rot = 0.F;
+                CBox        box = pileSlot(P.anchor, DEPTH, rot);
+                float       a   = std::clamp(4.F - DEPTH, 0.F, 1.F); // the fourth paper down fades into the stack
+                if (const auto* HOME = pileSlotOf(E.path); HOME && W > 0.F) {
+                    box = CBox{box.x + (HOME->box.x - box.x) * W, box.y + (HOME->box.y - box.y) * W, box.width + (HOME->box.width - box.width) * W,
+                               box.height + (HOME->box.height - box.height) * W};
+                    rot += (HOME->rot - rot) * W;
+                    a += (1.F - a) * W;
+                } else
+                    a *= PROGRESS;
+                drawn.insert(E.path);
+                if (const auto TEX = iconTexture(E, PX, true))
+                    drawTex(TEX, OverviewRender::padBox(box, TEX), a, rot);
+            }
+            // The cell's own papers that neither the fan nor the scrolled pile
+            // holds fade back in as it folds.
+            if (P.scrolled && W > 0.F)
+                for (const auto& PI : PILE)
+                    if (!drawn.contains(PI.entry.path))
+                        if (const auto TEX = iconTexture(PI.entry, PX, true))
+                            drawTex(TEX, OverviewRender::padBox(PI.box, TEX), W, PI.rot);
+        }
+
+        // THE SCROLLBAR (user, 2026-10-08): minimal, only while the fan moves,
+        // fading after. A thin arc beside the icon column that bends with the
+        // fan's own curve -- the same shift and step the rows sit on -- so it
+        // reshapes itself with the fan: fewer slots, a shorter arc. The theme's
+        // accent for the thumb, its foreground faintly for the track, its
+        // border weight for the thickness, square ends on a square theme.
+        if (g_popup->barAlpha > 0.F && fanMaxScroll(*g_popup) > 0.F) {
+            const auto&  P  = *g_popup;
+            const size_t SL = fanRows(P);
+            const auto   centre = [&](float g) {
+                return Vector2D{FANCX + FAN_SHIFT_K * std::pow(std::max(g, 0.F), FAN_SHIFT_P) * SCALE, FANBASE - FAN_STEP * SCALE * (g + 1.F) + FAN_ROW_H * SCALE / 2.F};
+            };
+            std::vector<Vector2D> pts;
+            const float           G0 = -0.3F, G1 = sc<float>(SL) - 1.F + 0.3F;
+            for (float g = G0; g <= G1 + 1e-3F; g += 0.1F) {
+                const auto C  = centre(g);
+                const auto D  = centre(g + 0.05F) - centre(g - 0.05F);
+                const auto L  = std::max(1e-3, std::hypot(D.x, D.y));
+                pts.push_back(C + Vector2D{-D.y / L, D.x / L} * ICONCLEAR); // the right-hand normal of an upward curve
+            }
+            const float  N    = sc<float>(P.visible.size());
+            const float  E    = P.barAlpha * P.barAlpha * (3.F - 2.F * P.barAlpha);
+            drawArcBar(pts, P.scrollPos / N, (P.scrollPos + sc<float>(SL)) / N, BARTHICK, Config::themeForeground().modifyA(0.10F), Config::highlightColor().modifyA(0.95F),
+                       Config::themeRounding() > 0, ALPHA * E);
+        }
+
         g_popup->hoverKey.clear(); // re-found below, from the row actually under the pointer
         const auto drawFanRows = [&](const std::vector<SRow>& ROWS) {
         for (size_t i = 0; i < ROWS.size(); ++i) {
@@ -2321,8 +2804,8 @@ namespace ScrollOverview::Stacks {
 
             // The previewed row is enlarged 1.15x; it, the keyboard's selection
             // and the pointer's row take the accent on their label pill.
-            const bool PREV  = !R.action && sc<int>(i) == g_popup->previewing;
-            const bool SEL   = !R.action && g_popup->keyboard && sc<int>(i) == g_popup->hover;
+            const bool PREV  = !R.action && R.vis == g_popup->previewing;
+            const bool SEL   = !R.action && g_popup->keyboard && R.vis == g_popup->hover;
             const bool HOVER = !g_popup->keyboard && rowHit(R, MOUSE); // the "N more" row too: it opens the folder (2026-09-25)
             // The hover blow-up: this row's eased 0..1 on the frame clock.
             const std::string ROWKEY = R.path.empty() ? R.name : R.path;
@@ -2358,7 +2841,34 @@ namespace ScrollOverview::Stacks {
                 const double DX = x - PX, DY = y - PY;
                 return CBox{PX + DX * CS - DY * SN - w / 2.0, PY + DX * SN + DY * CS - h / 2.0, w, h};
             };
-            const CBox ib = turned(PX, PY, ICON, ICON).round();
+            CBox  ib    = turned(PX, PY, ICON, ICON).round();
+            float ICONROT = ROT;
+            // SCROLLED OFF THE BOTTOM: the icon flies on from the bottom slot
+            // into the top of the cell's pile, turning to that paper's angle,
+            // while its label fades where it was.
+            const float DROPE = R.drop * R.drop * (3.F - 2.F * R.drop);
+            if (DROPE > 0.F) {
+                float      prot = 0.F;
+                const CBox PT   = pileSlot(g_popup->anchor, 0.F, prot);
+                ib              = CBox{ib.x + (PT.x - ib.x) * DROPE, ib.y + (PT.y - ib.y) * DROPE, ib.width + (PT.width - ib.width) * DROPE,
+                          ib.height + (PT.height - ib.height) * DROPE};
+                ICONROT         = ROT + (prot - ROT) * DROPE;
+            }
+            // OUT PAST THE TOP: the icon shrinks into the "N more in Files"
+            // row's folder (and comes back out of it scrolling down), its label
+            // fading where it was.
+            float ICONA = A;
+            if (R.top > 0.F && g_popup->moreIconK > 0.F) {
+                const float  T  = R.top * R.top * (3.F - 2.F * R.top);
+                const double SZ = FAN_ICON * SCALE * g_popup->moreIconK * 0.45;
+                const double CXI = ib.x + ib.width / 2.0, CYI = ib.y + ib.height / 2.0;
+                const double NX = CXI + (g_popup->moreIcon.x - CXI) * T, NY = CYI + (g_popup->moreIcon.y - CYI) * T;
+                const double NW = ib.width + (SZ - ib.width) * T;
+                ib      = CBox{NX - NW / 2.0, NY - NW / 2.0, NW, NW};
+                ICONROT = ROT + (g_popup->moreIconRot - ROT) * T;
+                ICONA   = A * (1.F - R.top * R.top * R.top);
+            }
+            const float LABELA = A * (1.F - R.drop) * (1.F - R.drop) * (1.F - R.top) * (1.F - R.top);
 
             if (const auto TEX = OverviewRender::text(R.name, Config::themeForeground(), sc<int>(std::round(FAN_FONT * SCALE * KT)), false, "",
                                                       sc<int>(std::round(FAN_LABEL_MAX * SCALE * KT)), 500);
@@ -2384,8 +2894,8 @@ namespace ScrollOverview::Stacks {
                 // it turns with it.
                 const int BORDER = std::max(1, Config::getValue<int>("general:border_size")) * ((PREV || SEL || HOVER) ? 2 : 1);
                 const auto PILLTEX = OverviewRender::roundedRect(PILLW, PILLH, sc<int>(std::round(8.F * SCALE * KT)), BG, Config::highlightColor(), BORDER);
-                drawTex(PILLTEX, OverviewRender::padBox(turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY), PILLTEX), A, ROT);
-                drawTex(TEX, turned(CXL, PY, LW, LH).round(), A, ROT);
+                drawTex(PILLTEX, OverviewRender::padBox(turned(CXL, PY, LW + 2 * PADX, LH + 2 * PADY), PILLTEX), LABELA, ROT);
+                drawTex(TEX, turned(CXL, PY, LW, LH).round(), LABELA, ROT);
             }
 
             if (FROMPILE) {
@@ -2394,7 +2904,7 @@ namespace ScrollOverview::Stacks {
                 const CBox& P0 = FROMPILE->box;
                 CBox        fly{P0.x + (ib.x - P0.x) * E, P0.y + (ib.y - P0.y) * E, P0.width + (ib.width - P0.width) * E, P0.height + (ib.height - P0.height) * E};
                 const auto FLYTEX = iconTexture(FROMPILE->entry, sc<int>(std::round(FAN_ICON * SCALE * KS)), true);
-                drawTex(FLYTEX, OverviewRender::padBox(fly, FLYTEX), 1.F, FROMPILE->rot + (ROT - FROMPILE->rot) * E);
+                drawTex(FLYTEX, OverviewRender::padBox(fly, FLYTEX), 1.F - E * (1.F - ICONA), FROMPILE->rot + (ICONROT - FROMPILE->rot) * E);
             } else
             {
                 // Padded, so its turned edge is filtered, not stair-stepped. A
@@ -2402,7 +2912,7 @@ namespace ScrollOverview::Stacks {
                 const bool HASENTRY = R.vis >= 0 && sc<size_t>(R.vis) < g_popup->visible.size() && g_popup->visible[sc<size_t>(R.vis)] < g_popup->entries.size();
                 const auto ICONTEX  = HASENTRY ? iconTexture(g_popup->entries[g_popup->visible[sc<size_t>(R.vis)]], sc<int>(std::round(ICON)), true) :
                                                  OverviewRender::appIcon(themedIcon(R.icon), false, true);
-                drawTex(ICONTEX, OverviewRender::padBox(ib, ICONTEX), A, ROT);
+                drawTex(ICONTEX, OverviewRender::padBox(ib, ICONTEX), ICONA, ICONROT);
             }
         }
         };
@@ -2429,6 +2939,105 @@ namespace ScrollOverview::Stacks {
         } else
             drawFanRows(g_popup->rows);
         g_popup->lastProgress = PROGRESS;
+
+        // THE FILTER FIELD (user, 2026-10-08): typing while on the fan filters
+        // it, and the query shows in a pill beside the fan -- the overview's
+        // search pill, its plate, its springs and its letters, without the
+        // glyph. It grows out of the fan's side, right by default, left when
+        // the right has no room, and only ever as wide as that side's screen;
+        // a longer query scrolls inside it. Clearing the query folds it away.
+        {
+            auto&       P   = *g_popup;
+            const auto  NOW = Time::steadyNow();
+            P.letters.sync(P.query, NOW);
+            const float H      = OVERVIEW_PILL_HL * SCALE;
+            const float PAD    = OVERVIEW_PILL_TAILL * SCALE;
+            const float GAP    = 12.F * SCALE;
+            const float MARGIN = 8.F * SCALE;
+            const float ROW0Y  = FANBASE - FAN_STEP * SCALE + FAN_ROW_H * SCALE / 2.F;
+            const float RIGHTX = FANCX + ICONCLEAR + BARTHICK + GAP;
+            float       leftX  = 1e9F; // the labels of the bottom rows
+            for (const auto& R : P.rows) {
+                const float U = R.vis >= 0 ? sc<float>(R.vis) - P.scrollPos : 0.F;
+                if (R.e > 0.9F && R.drop < 0.5F && U < 1.5F)
+                    leftX = std::min(leftX, sc<float>(R.box.x));
+            }
+            if (leftX > 1e8F)
+                leftX = FANCX - FAN_ICON * SCALE;
+            leftX -= GAP;
+            const float ROOMR = sc<float>(monitor->m_size.x) * SCALE - MARGIN - RIGHTX;
+            const float ROOML = leftX - MARGIN;
+
+            if (P.query.empty() && P.filterW < 1.F)
+                P.filterPlaced = false;
+            bool warp = false;
+            if (!P.query.empty() && !P.filterPlaced) {
+                P.filterLeft   = ROOMR < 220.F * SCALE && ROOML > ROOMR;
+                P.filterPlaced = true;
+                warp           = true;
+            }
+            const float EDGEL = (P.filterLeft ? leftX : RIGHTX) / SCALE;
+            if (warp) {
+                P.filterEdge  = EDGEL;
+                P.filterEdgeV = 0.F;
+            } else if (qtSpringStep(P.filterEdge, P.filterEdgeV, EDGEL, SSearchFieldMotion::WIDTH_SPRING, SSearchFieldMotion::WIDTH_DAMPING, SSearchFieldMotion::WIDTH_MASS,
+                                    SSearchFieldMotion::WIDTH_EPSILON, P.lastDT))
+                P.filterMoving = true;
+            P.filterMaxL = std::max(0.F, (P.filterLeft ? ROOML : ROOMR) / SCALE);
+
+            // The letters, as the overview's field draws them: one texture per
+            // codepoint, popped in and flung out by SearchLetters. Measured even
+            // before the pill shows, so it grows straight to the query's width.
+            const bool  NOMATCH = !P.query.empty() && P.visible.empty();
+            const auto  FG      = NOMATCH ? Config::themeUrgent() : Config::themeForeground();
+            const int   FONTPX  = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
+            const auto  LIVE    = P.letters.liveGlyphs();
+            const float SPACING = std::max(1.F, SCALE);
+            std::vector<float> widths;
+            widths.reserve(LIVE.size());
+            for (const auto& G : LIVE) {
+                const auto TEX = OverviewRender::text(G, FG, FONTPX, false, "", 0, 600);
+                widths.push_back(TEX && TEX->ok() ? sc<float>(TEX->m_size.x) : sc<float>(FONTPX) * 0.5F);
+            }
+            P.filterContentL = P.letters.liveEndX(widths, SPACING) / SCALE;
+
+            const float WPX = std::max(0.F, P.filterW) * SCALE;
+            P.filterPill    = {};
+            if (WPX >= 2.F && P.filterPlaced) {
+                const float EDGE = P.filterEdge * SCALE;
+                CBox        pillBox{P.filterLeft ? EDGE - WPX : EDGE, ROW0Y - H / 2.F, WPX, H};
+                pillBox.round();
+                P.filterPill   = pillBox;
+                const float FA = ALPHA * std::clamp(WPX / H, 0.F, 1.F);
+                const int   RND = std::min({sc<int>(std::round(Config::themeRounding() * SCALE)), sc<int>(pillBox.height / 2.0), sc<int>(pillBox.width / 2.0)});
+                OverviewRender::themePlate(pillBox, RND, Config::themeRoundingPower(), FA, false, true);
+
+                const CBox  FIELD{pillBox.x + PAD, pillBox.y, std::max(0.0, pillBox.width - 2.0 * PAD), pillBox.height};
+                const float SCROLLPX = std::round(P.filterScroll * SCALE);
+                const float FADEPX   = std::max(1.F, OVERVIEW_PILL_FADEL * SCALE);
+                const float FADEON   = std::clamp(SCROLLPX / FADEPX, 0.F, 1.F);
+                for (const auto& PL : P.letters.place(widths, SPACING, SCALE, NOW, sc<int>(monitor->m_id))) {
+                    const auto TEX = OverviewRender::text(PL.glyph, FG, FONTPX, false, "", 0, 600);
+                    if (!TEX || !TEX->ok() || PL.opacity <= 0.F)
+                        continue;
+                    const float GW = sc<float>(TEX->m_size.x), GH = sc<float>(TEX->m_size.y);
+                    const float CX = sc<float>(FIELD.x) - SCROLLPX + PL.x + GW * 0.5F;
+                    const float CY = sc<float>(pillBox.y) + std::round((sc<float>(pillBox.height) - GH) / 2.F) + GH * 0.5F + PL.y;
+                    float       ea = 1.F;
+                    if (FADEON > 0.F) {
+                        const float T = std::clamp((CX - sc<float>(FIELD.x)) / FADEPX, 0.F, 1.F);
+                        ea            = 1.F - FADEON * (1.F - T * T * (3.F - 2.F * T));
+                    }
+                    CTexPassElement::SRenderData d;
+                    d.tex     = TEX;
+                    d.box     = CBox{CX - GW * PL.scale * 0.5F, CY - GH * PL.scale * 0.5F, GW * PL.scale, GH * PL.scale};
+                    d.a       = FA * PL.opacity * ea;
+                    d.clipBox = pillBox;
+                    if (drawableBox(d.box))
+                        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+                }
+            }
+        }
 
         drawGhost();
     }

@@ -130,8 +130,20 @@ namespace ScrollOverview::Stacks {
     bool contains(PHLMONITOR monitor, const Vector2D& point);
     // A press or release over the popup. Returns whether it was claimed.
     bool click(PHLMONITOR monitor, const Vector2D& point, bool release);
-    // A wheel tick over the popup: the grid scrolls, the fan swallows.
+    // A wheel tick over the popup: the grid scrolls, and so does a fan holding
+    // more than it shows (its bottom rows drop into the cell, the rows above
+    // come down).
     bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up);
+    // The axis event scroll() is about to be handed: its delta and whether it
+    // came from a wheel. Called just before scroll() by both scroll hooks, so a
+    // touchpad drives the fan by distance rather than one row per event.
+    void noteAxis(double delta, bool wheel);
+    // The open fan's scroll and filter, without the pointer or the keyboard:
+    // `hyprdrive:stack scroll <rows>` (positive = up, toward the bottom rows
+    // dropping into the cell) and `hyprdrive:stack filter [text]` (none
+    // clears). For keybinds and for the gates. False: no fan is open.
+    bool scrollBy(float rows);
+    bool setQuery(const std::string& query);
 
     // ---- V11 SPEC V5, the spacebar preview --------------------------------
     // The fan/grid ITEM under the pointer right now, or empty -- read off the
@@ -199,6 +211,9 @@ namespace ScrollOverview::Stacks {
     // The pile's items for a stack cell at `iconBox`, bottom first (empty for
     // Display as Folder, a file, an empty, missing or unread folder).
     std::vector<SPileItem> pileLayout(const std::string& stackPath, const CBox& iconBox);
+    // Where a paper `depth` slots down the pile sits (0 = the top slot), for a
+    // fan row scrolled back INTO the cell: fractional depths lie between slots.
+    CBox pileSlot(const CBox& iconBox, float depth, float& rot);
     // Draw a stack's dock cell. False: the caller draws its plain icon (a pinned FILE).
     // `pose`: the dock's hover/press tilt for this cell, applied to every texture of it.
     bool drawCell(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose);

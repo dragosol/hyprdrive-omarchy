@@ -1834,6 +1834,19 @@ static SDispatchResult onStackDispatcher(std::string arg) {
         return {.success = false, .error = "no such stack on this dock"};
     }
 
+    if (VERB == "scroll") {
+        try {
+            if (!ScrollOverview::Stacks::scrollBy(std::stof(rest)))
+                return {.success = false, .error = "no fan is open"};
+        } catch (...) { return {.success = false, .error = "expected a number of rows"}; }
+        return {};
+    }
+    if (VERB == "filter") {
+        if (!ScrollOverview::Stacks::setQuery(rest))
+            return {.success = false, .error = "no stack is open"};
+        return {};
+    }
+
     if (VERB == "view" || VERB == "sort") {
         const auto CUT2 = rest.find(' ');
         if (CUT2 == std::string::npos)
@@ -1879,7 +1892,7 @@ static SDispatchResult onStackDispatcher(std::string arg) {
         return {};
     }
 
-    return {.success = false, .error = "expected pin, unpin, toggle, view, sort or clear"};
+    return {.success = false, .error = "expected pin, unpin, toggle, open, view, sort, scroll, filter or clear"};
 }
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
@@ -2230,6 +2243,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (ScrollOverview::Dock::occupiesPointer(MONITOR, LOCAL))
             ScrollOverview::Dock::syncPointerFocus(MONITOR, LOCAL);
 
+        ScrollOverview::Stacks::noteAxis(event.delta, event.source == WL_POINTER_AXIS_SOURCE_WHEEL);
         if (ScrollOverview::Dock::scroll(MONITOR, LOCAL, event.delta < 0.0))
             info.cancelled = true;
     });

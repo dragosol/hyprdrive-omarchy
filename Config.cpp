@@ -151,9 +151,9 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // the path is checked by the filesystem, which is the only thing
             // that can actually answer.
             .name            = "stack",
-            .argPattern      = std::regex{"^(clear|(pin|unpin|toggle|open) .+|view (fan|grid|auto) .+|sort (name|mtime|added|modified|kind) .+)$"},
+            .argPattern      = std::regex{"^(clear|(pin|unpin|toggle|open) .+|view (fan|grid|auto) .+|sort (name|mtime|added|modified|kind) .+|scroll -?[0-9]+|filter( .*)?)$"},
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | open <path> | view auto|fan|grid <path> | sort name|added|modified|kind <path> | clear",
+            .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | open <path> | view auto|fan|grid <path> | sort name|added|modified|kind <path> | scroll <rows> | filter [text] | clear",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "stack"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.stack");

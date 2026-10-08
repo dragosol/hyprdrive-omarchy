@@ -116,6 +116,21 @@ namespace ScrollOverview::Stacks {
         return C.top;
     }
 
+    CBox pileSlot(const CBox& iconBox, float depth, float& rot) {
+        // 0 is the top slot (PILE[3]), 3 the bottom; between two slots, between
+        // their boxes and angles, so a paper settling deeper slides there.
+        const float D  = std::clamp(depth, 0.F, 3.F);
+        const int   LO = sc<int>(std::floor(D));
+        const int   HI = std::min(3, LO + 1);
+        const float F  = D - sc<float>(LO);
+        const auto& A = PILE[3 - LO];
+        const auto& B = PILE[3 - HI];
+        const float DEG = A.deg + (B.deg - A.deg) * F, DX = A.dx + (B.dx - A.dx) * F, DY = A.dy + (B.dy - A.dy) * F, SCALE = A.scale + (B.scale - A.scale) * F;
+        const float W   = sc<float>(iconBox.width) * SCALE;
+        rot             = DEG * 3.14159265F / 180.F;
+        return CBox{iconBox.x + iconBox.width * (0.5 + DX) - W / 2.0, iconBox.y + iconBox.height * (0.5 + DY) - W / 2.0, W, W};
+    }
+
     std::vector<SPileItem> pileLayout(const std::string& stackPath, const CBox& iconBox) {
         std::vector<SPileItem> out;
         const auto*            S = findStack(stackPath);

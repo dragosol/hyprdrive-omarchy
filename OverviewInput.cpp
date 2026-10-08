@@ -657,6 +657,8 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
         // A dock stack's grid pane scrolls under the wheel here too (user,
         // 2026-09-30): the desktop's dock scroll hook skips overview monitors,
         // so the pane never saw a tick while the overview was up.
+        if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+            ScrollOverview::Stacks::noteAxis(e.delta, e.source == WL_POINTER_AXIS_SOURCE_WHEEL);
         if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL && e.delta != 0.0 &&
             ScrollOverview::Stacks::scroll(pMonitor.lock(), getOverviewMousePosLocal(pMonitor.lock()), e.delta < 0.0))
             return;
