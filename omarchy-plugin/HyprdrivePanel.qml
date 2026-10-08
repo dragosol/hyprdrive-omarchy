@@ -182,6 +182,7 @@ Item {
   function rowEnabled(row) {
     switch (row.when) {
     case "dockOn": return kb("plugin:hyprdrive:dock:enabled")
+    case "mountsOn": return kb("plugin:hyprdrive:dock:enabled") && kb("plugin:hyprdrive:dock:show_mounts")
     case "springOn": return kb("plugin:hyprdrive:drag:spring_dock") || kb("plugin:hyprdrive:drag:spring_edges")
     case "isolateOvApplies": return !kb("plugin:hyprdrive:dock:isolate_workspaces")
     case "roomApplies": return kb("plugin:hyprdrive:dock:enabled") && !kb("plugin:hyprdrive:dock:autohide")

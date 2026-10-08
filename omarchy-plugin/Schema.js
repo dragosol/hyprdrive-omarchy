@@ -71,6 +71,8 @@ var sections = [
         { type: "toggle", key: P + "dock:show_apps_button", label: "Applications button" },
         { type: "toggle", key: P + "dock:show_trash", label: "Trash" },
         { type: "toggle", key: P + "dock:show_mounts", label: "Mounted drives" },
+        { type: "choice", key: P + "dock:mount_sort", label: "Drive order", when: "mountsOn",
+          desc: "By name sorts alphabetically with numbers as numbers. Smart also reads spelled-out and Roman numbers, so KleThree comes after KleTwo." },
         { type: "toggle", key: P + "dock:running_indicator", label: "Running indicators" },
         { type: "toggle", key: P + "dock:notification_counter", label: "Notification badges" },
         { type: "toggle", key: P + "dock:isolate_in_overview", label: "Current desktop only in the overview", when: "isolateOvApplies",

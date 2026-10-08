@@ -34,6 +34,11 @@ CURVES = [
     {"value": "springy", "label": "Springy"},
     {"value": "linear", "label": "Linear"},
 ]
+MOUNT_SORTS = [
+    {"value": "mounted", "label": "As mounted"},
+    {"value": "name", "label": "By name"},
+    {"value": "smart", "label": "Smart (One, Two, Three)"},
+]
 FADES = [
     {"value": "early", "label": "Early"},
     {"value": "full", "label": "Full"},
@@ -89,6 +94,7 @@ KEY_META = [
     _k(PLUGIN + "dock:show_apps_button", "bool", "dock", True),
     _k(PLUGIN + "dock:show_trash", "bool", "dock", True),
     _k(PLUGIN + "dock:show_mounts", "bool", "dock", False),
+    _k(PLUGIN + "dock:mount_sort", "enum", "dock", "mounted", options=MOUNT_SORTS),
     _k(PLUGIN + "dock:running_indicator", "bool", "dock", True),
     _k(PLUGIN + "dock:notification_counter", "bool", "dock", True),
     _k(PLUGIN + "dock:dance_urgent", "bool", "dock", True),

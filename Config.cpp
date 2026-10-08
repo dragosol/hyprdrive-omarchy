@@ -675,6 +675,10 @@ static void registerConfigValuesFor() {
                                   "hyprgnomedock: include network shares among the mounts (D2D show-mounts-network)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:show_mounts_only_mounted"),
                                   "hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted)", true));
+    addKey(makeShared<CStringValue>(KEY("dock:mount_sort"),
+                                    "dock: the mounted drives' order -- mounted (as they were mounted), name (alphabetical, numbers as numbers) or smart (name, reading "
+                                    "spelled-out and Roman numbers too: KleOne, KleTwo, KleThree)",
+                                    Hyprlang::STRING{"mounted"}));
     addKey(makeShared<CBoolValue>(KEY("dock:isolate_locations"),
                                   "hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations)", true));
     addKey(makeShared<CIntValue>(KEY("dock:stack_motion_blur"),

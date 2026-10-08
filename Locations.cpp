@@ -2,6 +2,8 @@
 #include "Launch.hpp"
 
 #include "Config.hpp"
+#include "MountSort.hpp"
+#include "StackModel.hpp"
 
 #include <gio/gio.h>
 #include <gio/gunixmounts.h>
@@ -28,6 +30,7 @@ namespace {
     constexpr const char* KEY_SHOW_MOUNTS = "plugin:hyprdrive:dock:show_mounts";
     constexpr const char* KEY_MOUNTS_NET  = "plugin:hyprdrive:dock:show_mounts_network";
     constexpr const char* KEY_MOUNTS_ONLY_MOUNTED = "plugin:hyprdrive:dock:show_mounts_only_mounted";
+    constexpr const char* KEY_MOUNT_SORT          = "plugin:hyprdrive:dock:mount_sort";
 
     constexpr const char* TRASH_URI = "trash:///";
 
@@ -338,8 +341,19 @@ const std::vector<SLocation>& items() {
     g_items.clear();
 
     // `Locations.getApps()`: removables first, then the trash.
-    if (Config::getValue<bool>(KEY_SHOW_MOUNTS))
+    if (Config::getValue<bool>(KEY_SHOW_MOUNTS)) {
         readMounts(g_items);
+        // dock:mount_sort (MountSort.hpp). `mounted` keeps the mount table's
+        // order, which is the order the drives happened to be mounted in. Stable,
+        // so drives with the same name keep that order between themselves.
+        switch (MountSort::orderFromName(Config::getValue<std::string>(KEY_MOUNT_SORT))) {
+            case MountSort::EOrder::Name:
+                std::ranges::stable_sort(g_items, [](const SLocation& a, const SLocation& b) { return StackModel::naturalLess(a.name, b.name); });
+                break;
+            case MountSort::EOrder::Smart: std::ranges::stable_sort(g_items, [](const SLocation& a, const SLocation& b) { return MountSort::smartLess(a.name, b.name); }); break;
+            case MountSort::EOrder::Mounted: break;
+        }
+    }
 
     if (Config::getValue<bool>(KEY_SHOW_TRASH))
         readTrash(g_items.emplace_back());
