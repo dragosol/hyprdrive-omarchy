@@ -72,7 +72,7 @@ var sections = [
         { type: "toggle", key: P + "dock:show_trash", label: "Trash" },
         { type: "toggle", key: P + "dock:show_mounts", label: "Mounted drives" },
         { type: "choice", key: P + "dock:mount_sort", label: "Drive order", when: "mountsOn",
-          desc: "By name sorts alphabetically with numbers as numbers. Smart also reads spelled-out and Roman numbers, so KleThree comes after KleTwo." },
+          desc: "By name sorts alphabetically with numbers as numbers. Smart also reads spelled-out and Roman numbers, so KleThree comes after KleTwo. As in fstab follows /etc/fstab's order; drives it does not list come after." },
         { type: "toggle", key: P + "dock:running_indicator", label: "Running indicators" },
         { type: "toggle", key: P + "dock:notification_counter", label: "Notification badges" },
         { type: "toggle", key: P + "dock:isolate_in_overview", label: "Current desktop only in the overview", when: "isolateOvApplies",

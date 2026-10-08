@@ -108,7 +108,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `show_mounts` | bool | `false` |  | hyprgnomedock: mounted volumes as dock items (D2D show-mounts) |
 | `show_mounts_network` | bool | `true` |  | hyprgnomedock: include network shares among the mounts (D2D show-mounts-network) |
 | `show_mounts_only_mounted` | bool | `true` |  | hyprgnomedock: only volumes that are mounted, not every one present (D2D show-mounts-only-mounted) |
-| `mount_sort` | string | `"mounted"` |  | dock: the mounted drives' order -- mounted (as they were mounted), name (alphabetical, numbers as numbers) or smart (name, reading spelled-out and Roman numbers too: KleOne, KleTwo, KleThree) |
+| `mount_sort` | string | `"mounted"` |  | dock: the mounted drives' order -- mounted (as they were mounted), name (alphabetical, numbers as numbers), smart (name, reading spelled-out and Roman numbers too: KleOne, KleTwo, KleThree) or fstab (their order in /etc/fstab; unlisted drives after) |
 | `isolate_locations` | bool | `true` |  | hyprgnomedock: a location's running state is its own, not the file manager's (D2D isolate-locations) |
 | `stack_motion_blur` | int | `8` | 0 .. 32 | dock stacks: motion blur samples while the fan moves (0 = off); each frame averages this many instants |
 | `windows_make_room` | bool | `true` |  | dock: with autohide off, tiled windows that would sit under the dock are shortened to clear it (only those in the way) |

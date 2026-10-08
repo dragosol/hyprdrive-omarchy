@@ -351,6 +351,21 @@ const std::vector<SLocation>& items() {
                 std::ranges::stable_sort(g_items, [](const SLocation& a, const SLocation& b) { return StackModel::naturalLess(a.name, b.name); });
                 break;
             case MountSort::EOrder::Smart: std::ranges::stable_sort(g_items, [](const SLocation& a, const SLocation& b) { return MountSort::smartLess(a.name, b.name); }); break;
+            case MountSort::EOrder::Fstab: {
+                // g_unix_mount_points_get is fstab, in file order (glib caches
+                // it on the file's mtime, so this is no re-parse per poll).
+                std::vector<std::string> fstab;
+                GList*                   points = g_unix_mount_points_get(nullptr);
+                for (GList* l = points; l; l = l->next)
+                    if (auto* POINT = static_cast<GUnixMountPoint*>(l->data))
+                        if (const char* P = g_unix_mount_point_get_mount_path(POINT))
+                            fstab.emplace_back(P);
+                g_list_free_full(points, reinterpret_cast<GDestroyNotify>(g_unix_mount_point_free));
+                std::ranges::stable_sort(g_items, [&](const SLocation& a, const SLocation& b) {
+                    return MountSort::fstabRank(fstab, a.mountPath) < MountSort::fstabRank(fstab, b.mountPath);
+                });
+                break;
+            }
             case MountSort::EOrder::Mounted: break;
         }
     }

@@ -58,8 +58,20 @@ int main() {
     expect(tokens("VOLUME")[0].number == false, "an upper-case word is not Roman");
     expect(roman("XIV") == 14 && roman("MCMXC") == 1990, "Roman values");
 
+    // fstab: its line order; unlisted drives after, in mount order (stable).
+    {
+        const std::vector<std::string> FSTAB = {"/", "/home", "/run/media/kleman/KleOne", "/run/media/kleman/KleTwo", "/run/media/kleman/KleThree"};
+        std::vector<std::string>       mounts = {"/run/media/kleman/KleThree", "/run/media/u/Stick", "/run/media/kleman/KleOne", "/run/media/u/Phone",
+                                                 "/run/media/kleman/KleTwo"};
+        std::stable_sort(mounts.begin(), mounts.end(), [&](const auto& a, const auto& b) { return fstabRank(FSTAB, a) < fstabRank(FSTAB, b); });
+        const std::vector<std::string> WANT = {"/run/media/kleman/KleOne", "/run/media/kleman/KleTwo", "/run/media/kleman/KleThree", "/run/media/u/Stick",
+                                               "/run/media/u/Phone"};
+        expect(mounts == WANT, "fstab order, unlisted after in mount order");
+        expect(fstabRank({}, "/x") == 0, "no fstab: everything ties");
+    }
+
     // The setting.
-    expect(orderFromName("name") == EOrder::Name && orderFromName("smart") == EOrder::Smart && orderFromName("mounted") == EOrder::Mounted &&
+    expect(orderFromName("name") == EOrder::Name && orderFromName("smart") == EOrder::Smart && orderFromName("mounted") == EOrder::Mounted && orderFromName("fstab") == EOrder::Fstab &&
                orderFromName("bogus") == EOrder::Mounted,
            "orderFromName");
 

@@ -38,6 +38,7 @@ MOUNT_SORTS = [
     {"value": "mounted", "label": "As mounted"},
     {"value": "name", "label": "By name"},
     {"value": "smart", "label": "Smart (One, Two, Three)"},
+    {"value": "fstab", "label": "As in fstab"},
 ]
 FADES = [
     {"value": "early", "label": "Early"},

@@ -7,6 +7,7 @@
 // there are two sorts beside the mount order:
 //
 //   name   -- natural: digit runs compare as numbers, letters without case.
+//   fstab  -- the order the drives are written in /etc/fstab (fstabRank).
 //   smart  -- name, but a name is read as WORDS (split at spaces, punctuation,
 //             letter/digit edges and camelCase humps), and a word that spells a
 //             number -- English or French, cardinal or ordinal, or a standalone
@@ -173,13 +174,28 @@ namespace ScrollOverview::MountSort {
         return a < b;
     }
 
-    enum class EOrder : uint8_t { Mounted, Name, Smart };
+    // FSTAB (the same user, 2026-10-08: "smart sort will struggle based on
+    // the user language, maybe fstab is our best friend"). The order the drives
+    // are written in /etc/fstab is one the user chose, in no language at all.
+    // A drive's rank is its line among the fstab mount points; one fstab does
+    // not list (a stick, a phone) ranks after every listed drive, and those
+    // keep their mount order between themselves (the sort is stable).
+    inline size_t fstabRank(const std::vector<std::string>& fstabPaths, const std::string& mountPath) {
+        for (size_t i = 0; i < fstabPaths.size(); ++i)
+            if (fstabPaths[i] == mountPath)
+                return i;
+        return fstabPaths.size();
+    }
+
+    enum class EOrder : uint8_t { Mounted, Name, Smart, Fstab };
 
     inline EOrder orderFromName(const std::string& s) {
         if (s == "name")
             return EOrder::Name;
         if (s == "smart")
             return EOrder::Smart;
+        if (s == "fstab")
+            return EOrder::Fstab;
         return EOrder::Mounted;
     }
 }
