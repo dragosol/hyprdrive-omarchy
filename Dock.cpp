@@ -2872,6 +2872,86 @@ void launchInEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
     launchApp(monitor, item, nullptr, true, "workspace " + std::to_string(TARGET.id));
 }
 
+// The empty desktop closest by id to `from`: `emptym`'s own test of empty -- no
+// such desktop yet, or one on `monitor` with no windows -- but searched outward
+// from `from` rather than up from 1, because a window being given room of its
+// own should land beside where it was, not back on desktop 1 from desktop 7. A
+// tie goes up, the direction Hyprland's own `emptyn` looks. Always answers: an
+// id past every existing desktop is empty by definition.
+WORKSPACEID nearestEmptyWorkspaceID(const PHLMONITOR& monitor, WORKSPACEID from) {
+    const auto EMPTY = [&monitor](WORKSPACEID id) {
+        for (const auto& CANDIDATE : State::workspaceState()->workspaces()) {
+            if (const auto WORKSPACE = CANDIDATE.lock(); WORKSPACE && WORKSPACE->m_id == id)
+                return WORKSPACE->getWindowCount() == 0 && WORKSPACE->m_monitor.lock() == monitor;
+        }
+        return true;
+    };
+
+    for (WORKSPACEID step = 1;; ++step) {
+        if (EMPTY(from + step))
+            return from + step;
+        if (from - step >= 1 && EMPTY(from - step))
+            return from - step;
+    }
+}
+
+// MOVE TO EMPTY WORKSPACE (user, 2026-10-08): the context menu's sibling of
+// "Open in Empty Workspace", for an app that already has a window -- the window
+// goes, rather than a new one coming. Which window is the dock's usual answer
+// for "this app": the one used most recently (recentWindow, as a click switching
+// back picks it). Hyprland's own movetoworkspace then moves it AND follows it,
+// so the user lands on the new desktop with it focused, the way Open in Empty
+// Workspace lands them beside the app it launched.
+void moveToEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
+    const auto WINDOWS = itemWindows(item);
+    if (!monitor || WINDOWS.empty())
+        return;
+    const auto WINDOW = recentWindow(WINDOWS);
+    if (!WINDOW)
+        return;
+
+    // A stashed window comes off the stash FIRST, for Scratchpad::moveWindowTo's
+    // reason: otherwise Minimize goes on owning it, and a later restore pulls it
+    // back off the desktop it was just given. Restoring also puts it back on its
+    // own desktop, which is then where "nearest" is measured from.
+    if (Minimize::isMinimized(WINDOW))
+        Minimize::restore(WINDOW);
+
+    // Measured from the window's desktop, on the monitor that desktop is on. A
+    // window with no ordinary desktop (one parked on a scratchpad, or on a named
+    // desktop with a negative id) has no "near" of its own: the dock's monitor
+    // and what it is showing stand in, and a non-positive anchor degrades to
+    // `emptym`'s lowest empty desktop.
+    const auto  FROM      = WINDOW->m_workspace;
+    const bool  ONDESKTOP = FROM && !FROM->m_isSpecialWorkspace;
+    const auto  HOME      = ONDESKTOP ? FROM->m_monitor.lock() : PHLMONITOR{};
+    const auto  MONITOR   = HOME ? HOME : monitor;
+    WORKSPACEID anchor    = ONDESKTOP ? FROM->m_id : MONITOR->m_activeWorkspace ? MONITOR->m_activeWorkspace->m_id : 0;
+    anchor                = std::max<WORKSPACEID>(anchor, 0);
+
+    const auto   ID = nearestEmptyWorkspaceID(MONITOR, anchor);
+    PHLWORKSPACE target;
+    for (const auto& CANDIDATE : State::workspaceState()->workspaces()) {
+        if (const auto WORKSPACE = CANDIDATE.lock(); WORKSPACE && WORKSPACE->m_id == ID)
+            target = WORKSPACE;
+    }
+    if (!target)
+        target = State::workspaceState()->create(ID, MONITOR->m_id, std::to_string(ID));
+    if (!target)
+        return;
+
+    // The overview first: a desktop switch under an open overview is a switch
+    // the user cannot see.
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+        OVERVIEW->close();
+    (void)::Config::Actions::moveToWorkspace(target, false, WINDOW);
+
+    // activateWindow's reason: the focus restored the seat onto the window while
+    // the pointer is still over the dock.
+    if (g_dockSeatHeld)
+        stealDockSeat();
+}
+
 void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl = false, bool emptyWorkspace = false) {
     // X35. A location has no windows to minimize: it is opened. Nautilus raises
     // the window it already has for a location rather than opening a second
@@ -3111,6 +3191,7 @@ enum class ERow : uint8_t {
     // user, 2026-09-22: "add a force quit option ... add quality of life features".
     NewWindow,
     OpenEmptyWorkspace,
+    MoveEmptyWorkspace,
     MinimizeAll,
     RestoreAll,
     ForceQuit,
@@ -3169,6 +3250,7 @@ namespace MenuGlyph {
     inline constexpr const char* TEXT     = "\uf036"; // align-left
     inline constexpr const char* CHECK    = "\uf00c"; // check
     inline constexpr const char* PENCIL   = "\uf040"; // pencil
+    inline constexpr const char* MOVE     = "\uf047"; // arrows (move)
 }
 
 struct SRow {
@@ -3322,6 +3404,10 @@ std::vector<SRow> buildRows(const SItem& item) {
     // Running or not: a new window of it, alone on a desktop of its own.
     if (!ID.empty())
         rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
+    // ...and one it already has, moved onto one. Any app with a window, desktop
+    // entry or not: there is no launch involved, only the window.
+    if (!WINDOWS.empty())
+        rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .glyph = MenuGlyph::MOVE});
 
     for (const auto& ACTION : AppSearch::actionsForId(ID))
         rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec, .glyph = MenuGlyph::ACTION});
@@ -3569,6 +3655,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::NewWindow: launchApp(monitor, item, nullptr, true); return;
 
         case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;
+
+        case ERow::MoveEmptyWorkspace: moveToEmptyWorkspace(monitor, item); return;
 
         case ERow::MinimizeAll: {
             ConfigureHold::CHold    oneResize;
