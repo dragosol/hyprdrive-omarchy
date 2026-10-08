@@ -84,6 +84,7 @@ KEY_META = [
     _k(PLUGIN + "blur", "bool", "overview", False),
     _k(PLUGIN + "search:dictionary", "bool", "overview", False),
     _k(PLUGIN + "search:translate", "bool", "overview", False),
+    _k(PLUGIN + "search:easter_egg", "bool", "overview", True),
     # Dock
     _k(PLUGIN + "dock:enabled", "bool", "dock", True),
     _k(PLUGIN + "dock:autohide", "bool", "dock", True),

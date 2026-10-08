@@ -50,6 +50,10 @@ var sections = [
           desc: "Type “define” and a word to look it up on Wiktionary." },
         { type: "toggle", key: P + "search:translate", label: "Translate",
           desc: "Type “tr” and some text to translate it (needs a LibreTranslate endpoint)." }
+      ]},
+      { title: "Easter egg", rows: [
+        { type: "toggle", key: P + "search:easter_egg", label: "Easter egg",
+          desc: "Can't make up your mind in the search? Change it a few times in a row, and someone may play you off." }
       ]}
     ]
   },
