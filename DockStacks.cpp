@@ -448,6 +448,7 @@ namespace {
         float               maxLabelW  = 0.F;     // the widest label the fan can show, render px (an estimate)
         float               edgeShift  = 0.F;     // how far the left-edge clamp moved the settled fan
         CBox                fanBounds;            // the fan's area as drawn: the wheel and typing answer anywhere in it
+        CBox                typingBounds;         // the fan's area when the query started: it keeps the keyboard while the filter shrinks the fan
         Vector2D            moreIcon;             // the "N more in Files" row's icon centre, as laid out
         float               moreIconK = 0.F, moreIconRot = 0.F; // its scale (0: no such row) and turn
         // THE FILTER FIELD beside the fan (2026-10-08): the overview's search
@@ -1953,6 +1954,12 @@ namespace ScrollOverview::Stacks {
         if (!MONITOR->logicalBox().containsPoint(POINTER))
             return false;
         const Vector2D P = (POINTER - MONITOR->m_position) * MONITOR->m_scale;
+        // A FILTER MUST NOT TAKE THE KEYBOARD AWAY (user, 2026-10-08): typing
+        // with the pointer on a high row shrinks the fan below the pointer, and
+        // the next letter left for the window behind. While a query is up, the
+        // area the fan had when it started still counts.
+        if (!g_popup->query.empty() && g_popup->typingBounds.containsPoint(P))
+            return true;
         return g_popup->fanBounds.containsPoint(P) || g_popup->filterPill.containsPoint(P) || Dock::cellHitBox(g_popup->anchor, MONITOR->m_scale).containsPoint(P);
     }
 
@@ -1960,6 +1967,12 @@ namespace ScrollOverview::Stacks {
     // settled fan settled (its timeline's span depends on its row count, and a
     // span that grew under it would replay the entrance).
     static void queryChanged(SPopup& P) {
+        // The first letter freezes the area the fan covers right now (it is
+        // still laid out unfiltered); clearing the query lets it go.
+        if (P.query.empty())
+            P.typingBounds = {};
+        else if (P.typingBounds.empty())
+            P.typingBounds = P.fanBounds;
         const bool SETTLED = !P.leaving && P.tl >= timelineSpan(P) - 0.5F;
         refilter(P);
         P.scroll     = 0.F;
