@@ -1415,8 +1415,10 @@ namespace AppSearch {
         std::vector<SAction> out;
         for (const auto& ID : order) {
             const auto IT = found.find(ID);
-            if (IT != found.end() && !IT->second.name.empty() && !IT->second.exec.empty())
+            if (IT != found.end() && !IT->second.name.empty() && !IT->second.exec.empty()) {
                 out.emplace_back(IT->second);
+                out.back().id = ID;
+            }
         }
 
         return out;

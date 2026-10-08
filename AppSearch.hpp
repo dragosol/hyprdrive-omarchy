@@ -31,6 +31,7 @@ namespace AppSearch {
     struct SAction {
         std::string name; // Name=
         std::string exec; // raw Exec=, field codes not yet stripped
+        std::string id;   // the `[Desktop Action <id>]` group: language-independent, unlike Name
     };
 
     // Scans lazily on first call. ~19 visible apps in the test VM, so this is a

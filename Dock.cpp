@@ -2896,18 +2896,13 @@ WORKSPACEID nearestEmptyWorkspaceID(const PHLMONITOR& monitor, WORKSPACEID from)
 }
 
 // MOVE TO EMPTY WORKSPACE (user, 2026-10-08): the context menu's sibling of
-// "Open in Empty Workspace", for an app that already has a window -- the window
-// goes, rather than a new one coming. Which window is the dock's usual answer
-// for "this app": the one used most recently (recentWindow, as a click switching
-// back picks it). Hyprland's own movetoworkspace then moves it AND follows it,
-// so the user lands on the new desktop with it focused, the way Open in Empty
-// Workspace lands them beside the app it launched.
-void moveToEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
-    const auto WINDOWS = itemWindows(item);
-    if (!monitor || WINDOWS.empty())
-        return;
-    const auto WINDOW = recentWindow(WINDOWS);
-    if (!WINDOW)
+// "Open in Empty Workspace", offered under each of the app's windows -- that
+// window goes, rather than a new one coming. Hyprland's own movetoworkspace
+// moves it AND follows it, so the user lands on the new desktop with it
+// focused, the way Open in Empty Workspace lands them beside the app it
+// launched.
+void moveToEmptyWorkspace(PHLMONITOR monitor, const PHLWINDOW& WINDOW) {
+    if (!monitor || !WINDOW)
         return;
 
     // A stashed window comes off the stash FIRST, for Scratchpad::moveWindowTo's
@@ -3257,11 +3252,12 @@ struct SRow {
     ERow         kind = ERow::Separator;
     std::string  label;
     std::string  exec;   // ERow::Action
-    PHLWINDOWREF window; // ERow::Window
+    PHLWINDOWREF window; // ERow::Window, ERow::MoveEmptyWorkspace
     CBox         box;    // monitor-local RENDER px, filled by renderMenu
     std::string  glyph;          // Nerd Font glyph for the leading column; empty = none
     std::string  hint;           // dim, right-aligned: a window's desktop, say
     bool         danger = false; // Force Quit: drawn in the warning colour
+    bool         sub    = false; // belongs to the row above: indented one glyph column
 };
 
 struct SMenu {
@@ -3312,7 +3308,7 @@ std::string itemDesktopId(const SItem& item) {
     return !item.desktopId.empty() ? item.desktopId : AppSearch::idForClass(item.wmClass);
 }
 
-std::vector<SRow> buildRows(const SItem& item) {
+std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
     std::vector<SRow> rows;
 
     // X35. A location's menu is its `list_actions()` and nothing else -- no
@@ -3397,19 +3393,34 @@ std::vector<SRow> buildRows(const SItem& item) {
     const auto  WINDOWS = itemWindows(item);
     const auto  ID      = itemDesktopId(item);
 
+    // An app that declares its OWN new-window action (Zen, Ghostty, Nautilus,
+    // Chromium, Evince, Showtime here: `[Desktop Action new-window]`, Name=New
+    // Window) listed it a second time under the dock's New Window (user,
+    // 2026-10-08: "why do I have two 'new window' context entries?"). The app's
+    // one wins: it is the app's own word for a new window (`zen --new-window`,
+    // where the dock's would re-run the main Exec), and it is there whether or
+    // not the app is running. It takes the dock's row's place at the top.
+    auto       actions   = AppSearch::actionsForId(ID);
+    const auto NEWWINDOW = std::ranges::find_if(actions, [](const AppSearch::SAction& a) {
+        const auto LOWER = [](std::string s) {
+            std::ranges::transform(s, s.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
+            return s;
+        };
+        return LOWER(a.id) == "new-window" || LOWER(a.name) == "new window";
+    });
+    if (NEWWINDOW != actions.end()) {
+        rows.emplace_back(SRow{.kind = ERow::Action, .label = NEWWINDOW->name, .exec = NEWWINDOW->exec, .glyph = MenuGlyph::NEW});
+        actions.erase(NEWWINDOW);
+    }
     // New Window first when there is something to launch: the one thing a
     // running app's icon cannot do on a click, which focuses instead.
-    if (!ID.empty() && !WINDOWS.empty())
+    else if (!ID.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::NewWindow, .label = "New Window", .glyph = MenuGlyph::NEW});
     // Running or not: a new window of it, alone on a desktop of its own.
     if (!ID.empty())
         rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
-    // ...and one it already has, moved onto one. Any app with a window, desktop
-    // entry or not: there is no launch involved, only the window.
-    if (!WINDOWS.empty())
-        rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .glyph = MenuGlyph::MOVE});
 
-    for (const auto& ACTION : AppSearch::actionsForId(ID))
+    for (const auto& ACTION : actions)
         rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec, .glyph = MenuGlyph::ACTION});
 
     if (!rows.empty() && !WINDOWS.empty())
@@ -3418,17 +3429,35 @@ std::vector<SRow> buildRows(const SItem& item) {
     // Each window with WHERE it is: its desktop, the scratchpad, or minimized.
     // A list of identical app names with nothing to tell them apart was the
     // commonest reason to open the hover panel instead.
-    size_t minimized = 0;
+    //
+    // The ones on the desktop this monitor is showing say so (user, 2026-10-08)
+    // -- in the hint, the dim words the row already has, so the marker costs no
+    // new ink: "3 \u00b7 current". A minimized window counts by the desktop it
+    // came off and comes back to. A scratchpad's is never the current one.
+    const auto  ACTIVE    = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
+    const auto  ACTIVEID  = ACTIVE && !ACTIVE->m_isSpecialWorkspace ? ACTIVE->m_id : WORKSPACE_INVALID;
+    size_t      minimized = 0;
     for (const auto& WINDOW : WINDOWS) {
         std::string where;
+        WORKSPACEID on = WORKSPACE_INVALID;
         if (Minimize::isMinimized(WINDOW)) {
             where = "minimized";
+            on    = Minimize::originalWorkspace(WINDOW);
             ++minimized;
         } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
             where = Scratchpad::label(SCRATCH);
-        else if (WINDOW->m_workspace)
+        else if (WINDOW->m_workspace) {
             where = WINDOW->m_workspace->m_name;
+            on    = WINDOW->m_workspace->m_id;
+        }
+        if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
+            where += " \u00b7 current";
         rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
+        // Its own Move to Empty Workspace, right under it and indented, so which
+        // window it moves is never a question (user, 2026-10-08). The menu has
+        // no submenus to put it in; an indented row is the flat menu's way of
+        // saying "this belongs to the line above".
+        rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
     }
 
     // Every window of the app at once, where they can be compared: the overview
@@ -3656,7 +3685,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;
 
-        case ERow::MoveEmptyWorkspace: moveToEmptyWorkspace(monitor, item); return;
+        case ERow::MoveEmptyWorkspace: moveToEmptyWorkspace(monitor, row.window.lock()); return;
 
         case ERow::MinimizeAll: {
             ConfigureHold::CHold    oneResize;
@@ -3754,7 +3783,8 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             t.hint = OverviewRender::text(ROW.hint, DIM_COLOR, FONTPX, false, "", 0, 400);
 
         const float HINTW = t.hint && t.hint->ok() ? HINTGAP + sc<float>(t.hint->m_size.x) : 0.F;
-        width             = std::max(width, 2.F * MENU_PAD_X * SCALE + GLYPHCOLW + sc<float>(t.label->m_size.x) + HINTW);
+        const float SUBW  = ROW.sub ? GLYPHCOLW : 0.F;
+        width             = std::max(width, 2.F * MENU_PAD_X * SCALE + SUBW + GLYPHCOLW + sc<float>(t.label->m_size.x) + HINTW);
         height += sc<float>(t.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
         textures.emplace_back(std::move(t));
     }
@@ -3831,7 +3861,8 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
         }
 
-        const float TEXTX = std::round(plate.x + MENU_PAD_X * SCALE);
+        // A sub-row starts where its parent's label does.
+        const float TEXTX = std::round(plate.x + MENU_PAD_X * SCALE + (row.sub ? GLYPHCOLW : 0.F));
         const float TEXTY = std::round(y + MENU_ROW_PAD_Y * SCALE);
         const float LH    = sc<float>(TEX.label->m_size.y);
 
@@ -4868,7 +4899,7 @@ bool openMenu(PHLMONITOR monitor, const Vector2D& point) {
     if (ITEM == LAYOUT.items.end())
         return false;
 
-    g_menu = SMenu{.monitor = monitor->m_id, .item = *ITEM, .anchor = ITEM->iconBox, .box = {}, .rows = buildRows(*ITEM)};
+    g_menu = SMenu{.monitor = monitor->m_id, .item = *ITEM, .anchor = ITEM->iconBox, .box = {}, .rows = buildRows(*ITEM, monitor)};
     return true;
 }
 
@@ -4988,7 +5019,7 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
         return true;
     }
     if (ROW->kind == ERow::StackEmptyCancel) {
-        g_menu->rows = buildRows(g_menu->item);
+        g_menu->rows = buildRows(g_menu->item, monitor);
         return true;
     }
     if (ROW->kind == ERow::StackRename) {
@@ -5006,7 +5037,7 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
         const auto ITEM    = g_menu->item;
         g_menu->infoView   = INFO;
         g_menu->infoGen    = AppInfo::generation();
-        g_menu->rows       = INFO ? infoRows(ITEM) : buildRows(ITEM);
+        g_menu->rows       = INFO ? infoRows(ITEM) : buildRows(ITEM, monitor);
         if (INFO)
             armInfoPoll();
         return true;
