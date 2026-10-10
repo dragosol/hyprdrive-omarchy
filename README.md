@@ -6,9 +6,6 @@ without a second theme pipeline.
 
 > Built against Hyprland **0.56.2** (Omarchy 4).
 
-This is a fork of [Hyprdrive](https://github.com/dragosol/Hyprdrive). Upstream
-is the original plugin; this repo is the Omarchy adaptation.
-
 ## What it does
 
 **Overview** (tap Super):
