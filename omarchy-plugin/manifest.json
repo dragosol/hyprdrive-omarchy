@@ -4,7 +4,7 @@
   "name": "Hyprdrive",
   "version": "1.9.27",
   "author": "dragos",
-  "license": "MIT",
+  "license": "BSD-3-Clause",
   "description": "Hyprdrive settings: overview, dock, one animation curve and speed for everything, per-animation motion blur, a trackpad gesture editor, performance and AC/battery profiles.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
