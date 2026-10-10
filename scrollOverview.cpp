@@ -7791,7 +7791,10 @@ void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, 
     const CBox PREV  = dragBlurWindow.lock() == WINDOW ? dragBlurPrev : CBox{};
     dragBlurPrev     = windowBox;
     dragBlurWindow   = WINDOW;
-    const bool GROWS = PREV.w >= 1 && (std::abs(PREV.w - windowBox.w) > 0.5 || std::abs(PREV.h - windowBox.h) > 0.5);
+    // Over 2px: windowBox is rounded (x and w apart), so a proxy that only
+    // follows the pointer wobbles a pixel in size -- and every wobble was one
+    // frame through the blurred path (user's recording, 2026-10-10).
+    const bool GROWS = PREV.w >= 1 && (std::abs(PREV.w - windowBox.w) > 2.0 || std::abs(PREV.h - windowBox.h) > 2.0);
     if (GROWS &&
         ScrollOverview::FlightBlur::drawBlurred(monitor, WINDOW, ScrollOverview::FlightBlur::shape(ScrollOverview::FlightBlur::ESite::DRAG, PREV, windowBox, 0.F), windowBox,
                                                 [&] { renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true, 1.F, false); },

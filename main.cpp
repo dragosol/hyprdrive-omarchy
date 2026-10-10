@@ -2374,6 +2374,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Both read their keys at once: only after registerConfig() above.
     ScrollOverview::FingerSwipe::init();
     ScrollOverview::Spring::init();
+    ScrollOverview::FlightBlur::init();
 
     // Reload can drop live window alphas until decorations are recomputed.
     // Re-apply default-opacity (0.985 / 0.85) to already-mapped windows.
@@ -2511,6 +2512,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     ScrollOverview::Flight::abortAll("plugin-exit");
     // A flying window may hold the flight's blur transformer; its destructor is
     // this plugin's code, so it goes before the dlclose (Hyprland's own exit too).
+    ScrollOverview::FlightBlur::shutdown();
     ScrollOverview::FlightBlur::detachAll();
     OverviewRender::stopIconWarmer();
     // Nothing may stay held once the hook goes with the plugin.

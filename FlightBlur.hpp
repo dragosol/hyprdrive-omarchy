@@ -115,6 +115,10 @@ namespace ScrollOverview::FlightBlur {
 
     // PLUGIN_EXIT: no window may keep an object whose code is being unloaded.
     void detachAll();
+    // The frost behind a window our transformer is on (FlightBlur.cpp,
+    // onPreWindow): init after registerConfig(), shutdown in PLUGIN_EXIT.
+    void init();
+    void shutdown();
 
     // Take `window`'s smear off NOW: a flight reversed or restarted. The last
     // flight's boxes must never be applied to the next one (user, 2026-09-30:

@@ -17,6 +17,8 @@
 #define private public
 #define protected public
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/output/MonitorResources.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #undef protected
@@ -163,7 +165,10 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
     //       and why these are xray=false in the first place).
     // Left alone deliberately.
     SP<Render::ITexture> blurred;
-    if (data.xray)
+    if (data.hyprlandCache) {
+        if (const auto RES = MONITOR->resources(); RES && RES->m_blurFB)
+            blurred = RES->m_blurFB->getTexture();
+    } else if (data.xray)
         blurred = OverviewRender::frameChromeBlur();
     if (!blurred || !blurred->ok()) {
         CRegion fullDamage{CBox{0, 0, MONSIZE.x, MONSIZE.y}};
@@ -198,13 +203,13 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
 
 
 bool COverviewBlurPassElement::needsLiveBlur() {
-    return !data.xray && data.alpha > 0.F;
+    return !data.xray && !data.hyprlandCache && data.alpha > 0.F;
 }
 
 bool COverviewBlurPassElement::needsPrecomputeBlur() {
-    // X88: we sample OverviewRender::frameChromeBlur(), not m_blurFB. Advertising
-    // needsPrecomputeBlur would only make Hyprland maintain the desktop xray FB.
-    return false;
+    // X88: xray samples OverviewRender::frameChromeBlur(), not m_blurFB, so only
+    // the hyprlandCache mode needs Hyprland to keep m_blurFB current.
+    return data.hyprlandCache && data.alpha > 0.F;
 }
 
 std::optional<CBox> COverviewBlurPassElement::boundingBox() {

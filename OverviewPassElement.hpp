@@ -12,6 +12,11 @@ class COverviewBlurPassElement : public IPassElement {
         float roundingPower = 2.F;
         float alpha         = 1.F;
         bool  xray          = false;
+        // Sample Hyprland's own cached background blur (Monitor m_blurFB, what a
+        // tiled window's new_optimizations blur reads) instead of blurring
+        // live. FlightBlur's moving windows use it so a window frosts the same
+        // moving as standing still.
+        bool  hyprlandCache = false;
 
         // X29. The dock's frost is the reference's, not the desktop's. The blur
         // runs inside draw(), long after whoever queued this element returned, so

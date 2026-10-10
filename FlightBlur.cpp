@@ -21,13 +21,18 @@
 #include <span>
 #include <format>
 #define private public
+#define protected public // IHyprRenderer::shouldBlur, as Window.cpp reads it
+#include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/pass/Pass.hpp> // drawBlurred reads/moves the nested pass's elements
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#undef protected
 #undef private
 #include "FlightBlur.hpp"
 #include <string_view>
 #include <array>
 
 #include "Config.hpp"
+#include "OverviewPassElement.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
@@ -43,6 +48,7 @@
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 
 #include <chrono>
@@ -58,8 +64,11 @@ namespace ScrollOverview::FlightBlur {
         // the box it is given, so anything past this is cut, not blurred.
         constexpr double MARGIN = 48.0;
 
+        // Over a pixel, not half of one: boxes are rounded, and rounding x and
+        // w separately wobbles a still box by 1px from frame to frame -- which
+        // sent single frames down the blurred path (2026-10-10 recording).
         bool moved(const CBox& a, const CBox& b) {
-            return std::abs(a.x - b.x) > 0.5 || std::abs(a.y - b.y) > 0.5 || std::abs(a.w - b.w) > 0.5 || std::abs(a.h - b.h) > 0.5;
+            return std::abs(a.x - b.x) > 1.0 || std::abs(a.y - b.y) > 1.0 || std::abs(a.w - b.w) > 1.0 || std::abs(a.h - b.h) > 1.0;
         }
 
         bool valid(const CBox& b) {
@@ -160,8 +169,85 @@ namespace ScrollOverview::FlightBlur {
             return nullptr;
         }
 
+        // While our transformer is on a window, Hyprland renders it through its
+        // transformed-window path, and that path draws the window's blur in one
+        // combined textured draw with the window (blur + matte + motion blur)
+        // that veils it: half-strength text, no border, for every frame the
+        // transformer was attached (user, 2026-10-10: "literally every time
+        // there's a movement ... there's a fucking glitch"). So Hyprland's blur
+        // is held off for the window (noBlur at LAYOUT priority, the lowest: a
+        // user's own rule still wins) and RENDER_PRE_WINDOW queues the same
+        // frost as a separate element behind it (onPreWindow).
+        void holdHyprlandBlur(const PHLWINDOW& window, bool hold) {
+            if (!window || !window->m_ruleApplicator)
+                return;
+            if (hold)
+                window->m_ruleApplicator->noBlur().set(true, Desktop::Types::PRIORITY_LAYOUT);
+            else
+                window->m_ruleApplicator->noBlur().unset(Desktop::Types::PRIORITY_LAYOUT);
+        }
+
+        CFlightBlurTransformer* attach(const PHLWINDOW& window) {
+            window->m_transformers.emplace_back(makeUnique<CFlightBlurTransformer>());
+            holdHyprlandBlur(window, true);
+            return sc<CFlightBlurTransformer*>(window->m_transformers.back().get());
+        }
+
         void detach(const PHLWINDOW& window) {
             std::erase_if(window->m_transformers, [](const auto& t) { return dynamic_cast<CFlightBlurTransformer*>(t.get()) != nullptr; });
+            holdHyprlandBlur(window, false);
+        }
+
+        // The frost a window gets behind it while it moves: Hyprland's cached
+        // background blur where Hyprland itself would read that for this window
+        // standing still, a live blur where hyprdrive blocks the cache (a
+        // dragged or floating tile) or Hyprland would blur live -- so moving
+        // and still look the same. box: monitor-local physical px.
+        void queueFrost(const PHLWINDOW& window, const CBox& box, int rounding, float roundingPower, float alpha, bool live) {
+            if (box.w < 2 || box.h < 2 || alpha <= 0.F)
+                return;
+            COverviewBlurPassElement::SData frost;
+            frost.box           = box;
+            frost.rounding      = rounding;
+            frost.roundingPower = roundingPower;
+            frost.alpha         = std::clamp(alpha, 0.F, 1.F);
+            frost.xray          = false;
+            frost.hyprlandCache = !live && window && g_pHyprRenderer->shouldUseNewBlurOptimizations(nullptr, window);
+            g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(frost));
+        }
+
+        // Windows already given their frost this frame. RENDER_PRE_WINDOW fires
+        // for each pass a window is rendered in (main, then popups); a frost
+        // queued in the popup pass would land on top of the windows after it.
+        std::vector<Desktop::View::CWindow*> g_frostedThisFrame;
+        std::vector<CHyprSignalListener>     g_frostListeners;
+
+        void onPreWindow() {
+            const auto WINDOW  = g_pHyprRenderer->m_renderData.currentWindow.lock();
+            const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+            if (!WINDOW || !MONITOR || !transformerOf(WINDOW))
+                return;
+            if (std::ranges::find(g_frostedThisFrame, WINDOW.get()) != g_frostedThisFrame.end())
+                return;
+            g_frostedThisFrame.push_back(WINDOW.get());
+
+            // Would Hyprland have blurred it, our hold aside?
+            holdHyprlandBlur(WINDOW, false);
+            const bool WANT = g_pHyprRenderer->shouldBlur(WINDOW);
+            holdHyprlandBlur(WINDOW, true);
+            if (!WANT)
+                return;
+
+            // renderWindow's own box and fade (Renderer.cpp, renderWindow).
+            const auto WS     = WINDOW->m_workspace;
+            const auto OFFSET = WS && !WINDOW->m_pinned ? WS->m_renderOffset->value() : Vector2D{};
+            const auto POS    = WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + OFFSET + WINDOW->m_floatingOffset - MONITOR->m_position;
+            CBox       box{POS, WINDOW->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
+            box.scale(MONITOR->m_scale).round();
+            const float FADE  = WINDOW->alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * WINDOW->alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) *
+                WINDOW->alphaValue(Desktop::View::WINDOW_ALPHA_LAYOUT) * (WINDOW->m_pinned || !WS ? 1.F : WS->m_alpha->value());
+            const int ROUND = sc<int>(std::max(WINDOW->rounding() * MONITOR->m_scale - 1.F, 0.F));
+            queueFrost(WINDOW, box, ROUND, WINDOW->roundingPower(), FADE, false);
         }
     }
 
@@ -182,17 +268,63 @@ namespace ScrollOverview::FlightBlur {
         if (nested->empty())
             return true;
 
+        // BLUR FLICKER (user, 2026-10-09: "when I am in overview or using 3
+        // finger gesture to switch desktops, blur glitches on and off"). The
+        // nested pass is drawn into an offscreen buffer cleared to transparent,
+        // so any blur INSIDE it frosts nothing: a moving window came out clear
+        // on every frame the smear was armed and frosted on every frame it was
+        // not. Blur has to see the real frame, outside the nested pass:
+        //   - a window's own surface blur becomes a frost element of its own,
+        //     queued BEHIND the element at the window's box. NOT the element's
+        //     blur/blurBox: Hyprland composites those with the window in one
+        //     textured draw (blur + matte + motion blur), and that draw veiled
+        //     the window -- text at half strength, border gone, for exactly the
+        //     frames the smear was on (user's recording, 2026-10-10). The frost
+        //     reads what the window would have read standing still: Hyprland's
+        //     cached background blur, or live where hyprdrive blocks that.
+        //   - a frosted plate (the search pane, dock chrome) moves out to the
+        //     main pass, ahead of the element, so it frosts what is under it.
+        bool  surfaceBlur = false;
+        bool  blurLive    = false;
+        int   blurRound   = 0;
+        float blurPower   = 2.F;
+        float blurA       = 1.F;
+        auto& elements    = nested->m_passElements;
+        for (auto it = elements.begin(); it != elements.end();) {
+            auto* EL = it->element.get();
+            if (auto* surface = dynamic_cast<CSurfacePassElement*>(EL); surface && surface->m_data.blur) {
+                surface->m_data.blur = false;
+                blurLive             = blurLive || surface->m_data.blockBlurOptimization;
+                if (!surfaceBlur || surface->m_data.mainSurface) {
+                    blurRound = std::max(surface->m_data.rounding - 1, 0);
+                    blurPower = surface->m_data.roundingPower;
+                    blurA     = surface->m_data.fadeAlpha;
+                }
+                surfaceBlur = true;
+            } else if (dynamic_cast<COverviewBlurPassElement*>(EL)) {
+                g_pHyprRenderer->addPassElement(std::move(it->element));
+                it = elements.erase(it);
+                continue;
+            }
+            ++it;
+        }
+        if (nested->empty())
+            return true;
+
         const float SCALE = monitor->m_scale;
         const CBox  PREV  = logical(prevBox, SCALE);
         const CBox  CUR   = logical(box, SCALE);
         CBox        drawn = CUR.copy().expand(MARGIN);
+
+        if (surfaceBlur)
+            queueFrost(window, box.copy().round(), blurRound, blurPower, blurA, blurLive);
 
         g_pHyprRenderer->addPassElement(makeUnique<CTransformedWindowPassElement>(CTransformedWindowPassElement::SData{
             .pass       = std::move(nested),
             .window     = window,
             .currentBox = drawn,
             .blurBox    = box.copy().round(),
-            .blur       = false, // the surfaces frost themselves, inside the pass
+            .blur       = false, // see queueFrost: never Hyprland's combined blur
             .motionBlur = motionFor(drawn, PREV, CUR, N),
         }));
         return true;
@@ -209,10 +341,8 @@ namespace ScrollOverview::FlightBlur {
                 t->m_armed = false;
             return;
         }
-        if (!t) {
-            window->m_transformers.emplace_back(makeUnique<CFlightBlurTransformer>());
-            t = sc<CFlightBlurTransformer*>(window->m_transformers.back().get());
-        }
+        if (!t)
+            t = attach(window);
 
         const float SCALE = monitor->m_scale;
         t->m_prev         = logical(prevBox, SCALE);
@@ -487,10 +617,8 @@ namespace ScrollOverview::FlightBlur {
                 }
 
                 auto* t = transformerOf(window);
-                if (!t) {
-                    window->m_transformers.emplace_back(makeUnique<CFlightBlurTransformer>());
-                    t = sc<CFlightBlurTransformer*>(window->m_transformers.back().get());
-                }
+                if (!t)
+                    t = attach(window);
                 t->m_prev    = PREV;
                 t->m_cur     = NOWBOX;
                 t->m_armed   = true;
@@ -522,14 +650,33 @@ namespace ScrollOverview::FlightBlur {
             } else
                 ++it;
         }
+        // Drawn without the transformer, the window blurs the ordinary way.
+        if (!m_held.empty())
+            holdHyprlandBlur(window, false);
     }
 
     CSuspend::~CSuspend() {
         if (m_held.empty())
             return;
-        if (const auto WINDOW = m_window.lock())
+        if (const auto WINDOW = m_window.lock()) {
             for (auto& t : m_held)
                 WINDOW->m_transformers.emplace_back(std::move(t));
+            holdHyprlandBlur(WINDOW, true);
+        }
+    }
+
+    void init() {
+        g_frostListeners.push_back(Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
+            if (stage == RENDER_BEGIN)
+                g_frostedThisFrame.clear();
+            else if (stage == RENDER_PRE_WINDOW)
+                onPreWindow();
+        }));
+    }
+
+    void shutdown() {
+        g_frostListeners.clear();
+        g_frostedThisFrame.clear();
     }
 
     void detachAll() {
