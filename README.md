@@ -4,7 +4,7 @@ A mission-control overview and a full dock for [Hyprland](https://hyprland.org),
 forked to sit on [Omarchy](https://omarchy.org/) without a settings app and
 without a second theme pipeline.
 
-> Private development. Built against Hyprland **0.56.2** (Omarchy 4).
+> Built against Hyprland **0.56.2** (Omarchy 4).
 
 This is a fork of [Hyprdrive](https://github.com/dragosol/Hyprdrive). Upstream
 is the original plugin; this repo is the Omarchy adaptation.
