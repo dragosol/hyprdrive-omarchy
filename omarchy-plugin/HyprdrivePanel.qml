@@ -249,7 +249,9 @@ Item {
     id: resolveProc
     command: ["bash", "-lc",
       'c="$HOME/.config/omarchy/plugins/dragos.hyprdrive/bin/hdpanel"; ' +
+      'm="$HOME/.config/omarchy/plugins/dragos.hyprdrive/omarchy-plugin/bin/hdpanel"; ' +
       'if [ -x "$c" ]; then echo "$c"; ' +
+      'elif [ -x "$m" ]; then echo "$m"; ' +
       'elif [ -x "$HOME/Projects/hyprdrive-omarchy/omarchy-plugin/bin/hdpanel" ]; then echo "$HOME/Projects/hyprdrive-omarchy/omarchy-plugin/bin/hdpanel"; ' +
       'else echo "$HOME/.local/lib/hyprdrive/hdpanel"; fi']
     stdout: StdioCollector {
@@ -463,6 +465,7 @@ Item {
       border.color: sl.dragging ? root.tint(root.accent, 0.6) : root.hairline
       Behavior on color { ColorAnimation { duration: root.quick } }
       Text {
+        textFormat: Text.PlainText
         id: chipText
         anchors.centerIn: parent
         text: sl.valueText
@@ -514,6 +517,7 @@ Item {
           width: segLabel.implicitWidth + Style.space(22)
           height: seg.height - Style.space(6)
           Text {
+            textFormat: Text.PlainText
             id: segLabel
             anchors.centerIn: parent
             text: modelData.label
@@ -606,6 +610,7 @@ Item {
       anchors.centerIn: parent
       spacing: Style.space(7)
       Text {
+        textFormat: Text.PlainText
         visible: gb.glyph !== ""
         text: gb.glyph
         color: gb.emphasis ? root.bg : root.dim
@@ -614,6 +619,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
       }
       Text {
+        textFormat: Text.PlainText
         text: gb.label
         color: gb.emphasis ? root.bg : root.fg
         font.family: root.fontFamily
@@ -668,6 +674,7 @@ Item {
         lineWidth: Style.space(1.5)
       }
       Text {
+        textFormat: Text.PlainText
         text: db.current.label || db.value
         color: root.fg
         font.family: root.fontFamily
@@ -676,6 +683,7 @@ Item {
       }
     }
     Text {
+      textFormat: Text.PlainText
       anchors.right: parent.right
       anchors.rightMargin: Style.space(10)
       anchors.verticalCenter: parent.verticalCenter
@@ -734,6 +742,7 @@ Item {
       opacity: sr.live ? 1 : 0.45
       Behavior on opacity { NumberAnimation { duration: root.calm } }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: sr.row.label || ""
         color: root.fg
@@ -742,6 +751,7 @@ Item {
         elide: Text.ElideRight
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: !!sr.row.desc
         text: sr.row.desc || ""
@@ -919,8 +929,8 @@ Item {
         anchors.top: parent.top
         width: parent.width * 0.44
         spacing: Style.space(6)
-        Text { text: cc.row.label || ""; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-        Text { width: parent.width; text: cc.row.desc || ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap }
+        Text { textFormat: Text.PlainText; text: cc.row.label || ""; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+        Text { textFormat: Text.PlainText; width: parent.width; text: cc.row.desc || ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap }
         Item { width: 1; height: Style.space(4) }
         DropButton {
           implicitWidth: Math.min(parent.width, Style.space(220))
@@ -930,7 +940,7 @@ Item {
           live: cc.rowLive
           onPicked: function(v) { root.setKey(cc.row.key, v) }
         }
-        Text { text: cc.preset.note; color: root.faint; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+        Text { textFormat: Text.PlainText; text: cc.preset.note; color: root.faint; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
       }
 
       Rectangle {
@@ -1017,6 +1027,7 @@ Item {
             border.color: sel ? root.accent : root.hairline
             Behavior on color { ColorAnimation { duration: root.quick } }
             Text {
+              textFormat: Text.PlainText
               id: chipLabel
               anchors.centerIn: parent
               text: Model.gestureLabel(modelData, root.hd.actions)
@@ -1048,7 +1059,7 @@ Item {
           spacing: Style.space(12)
           Row {
             spacing: Style.space(12)
-            Text { text: "Fingers"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
+            Text { textFormat: Text.PlainText; text: "Fingers"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
             Segmented {
               options: [{ value: "2", label: "2" }, { value: "3", label: "3" }, { value: "4", label: "4" }, { value: "5", label: "5" }]
               value: g ? String(g.fingers) : "3"
@@ -1057,13 +1068,13 @@ Item {
           }
           Row {
             spacing: Style.space(12)
-            Text { text: "Direction"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
+            Text { textFormat: Text.PlainText; text: "Direction"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
             DropButton {
               options: (root.hd.directions || []).map(function(d) { return { value: d, label: d } })
               value: g ? g.direction : "up"
               onPicked: function(v) { root.editGestures(function(l) { l[root.gestureIndex].direction = v }) }
             }
-            Text { text: "Action"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(52) }
+            Text { textFormat: Text.PlainText; text: "Action"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(52) }
             DropButton {
               implicitWidth: Style.space(260)
               options: root.hd.actions || []
@@ -1073,7 +1084,7 @@ Item {
           }
           Row {
             spacing: Style.space(12)
-            Text { text: "Keys held"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
+            Text { textFormat: Text.PlainText; text: "Keys held"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
             Rectangle {
               width: Style.space(200); height: Style.space(30); radius: Style.space(8)
               color: root.tint(root.fg, 0.03); border.width: 1; border.color: modsInput.activeFocus ? root.accent : root.hairline
@@ -1085,10 +1096,11 @@ Item {
                 color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
                 selectByMouse: true
                 onEditingFinished: { var v = text; root.editGestures(function(l) { l[root.gestureIndex].mods = v }) }
-                Text { visible: !parent.text && !parent.activeFocus; text: "SUPER, ALT, CTRL"; color: root.faint; font: parent.font; anchors.verticalCenter: parent.verticalCenter }
+                Text { textFormat: Text.PlainText; visible: !parent.text && !parent.activeFocus; text: "SUPER, ALT, CTRL"; color: root.faint; font: parent.font; anchors.verticalCenter: parent.verticalCenter }
               }
             }
             Text {
+              textFormat: Text.PlainText
               visible: g && Model.actionNeedsArg(g.action)
               text: "Argument"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter
             }
@@ -1105,13 +1117,13 @@ Item {
                 selectByMouse: true
                 clip: true
                 onEditingFinished: { var v = text; root.editGestures(function(l) { l[root.gestureIndex].arg = v }) }
-                Text { visible: !parent.text && !parent.activeFocus; text: g ? Model.argPlaceholder(g.action) : ""; color: root.faint; font: parent.font; anchors.verticalCenter: parent.verticalCenter }
+                Text { textFormat: Text.PlainText; visible: !parent.text && !parent.activeFocus; text: g ? Model.argPlaceholder(g.action) : ""; color: root.faint; font: parent.font; anchors.verticalCenter: parent.verticalCenter }
               }
             }
           }
           Row {
             spacing: Style.space(12)
-            Text { text: "Distance"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
+            Text { textFormat: Text.PlainText; text: "Distance"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter; width: Style.space(72) }
             ValueSlider {
               implicitWidth: Style.space(300)
               from: 0.2; to: 3; stepSize: 0.05
@@ -1119,7 +1131,7 @@ Item {
               valueText: current.toFixed(2) + "×"
               onReleased: function(v) { root.editGestures(function(l) { l[root.gestureIndex].scale = v }) }
             }
-            Text { text: "Ignore inhibit"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter }
+            Text { textFormat: Text.PlainText; text: "Ignore inhibit"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter }
             Switch {
               anchors.verticalCenter: parent.verticalCenter
               checked: !!(g && g.disable_inhibit)
@@ -1158,6 +1170,7 @@ Item {
           color: root.onBattery ? root.urgent : root.accent
         }
         Text {
+          textFormat: Text.PlainText
           text: (root.onBattery ? "On battery" : "On AC power") + " · " + (parent.parent.mode === "auto" ? "profiles follow the charger" : "profile forced")
           color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body
           anchors.verticalCenter: parent.verticalCenter
@@ -1169,6 +1182,7 @@ Item {
         onPicked: function(v) { root.runCtl(["profile-mode", v], true) }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         wrapMode: Text.WordWrap
         text: "Save what the panel is set to now as the AC or battery profile. In Auto, the matching one is applied when the charger is plugged in or pulled."
@@ -1298,6 +1312,7 @@ Item {
             x: root.isOpen ? 0 : -Style.space(8)
             Behavior on opacity { NumberAnimation { duration: root.slow; easing.type: Easing.OutCubic } }
             Text {
+              textFormat: Text.PlainText
               text: "Hyprdrive"
               color: root.fg
               font.family: root.fontFamily
@@ -1312,6 +1327,7 @@ Item {
               color: root.tint(root.accent, 0.16)
               visible: verText.text !== ""
               Text {
+                textFormat: Text.PlainText
                 id: verText
                 anchors.centerIn: parent
                 text: root.hd.version ? "v" + root.hd.version : ""
@@ -1339,6 +1355,7 @@ Item {
           border.color: searchField.activeFocus ? root.tint(root.accent, 0.85) : root.hairline
           Behavior on border.color { ColorAnimation { duration: root.quick } }
           Text {
+            textFormat: Text.PlainText
             id: searchGlyph
             anchors.left: parent.left
             anchors.leftMargin: Style.space(11)
@@ -1363,6 +1380,7 @@ Item {
             onTextChanged: root.query = text
             Keys.onDownPressed: keys.forceActiveFocus()
             Text {
+              textFormat: Text.PlainText
               visible: !parent.text
               text: "Find a setting"
               color: root.faint
@@ -1433,6 +1451,7 @@ Item {
                   Behavior on color { ColorAnimation { duration: root.quick } }
                 }
                 Text {
+                  textFormat: Text.PlainText
                   id: navGlyph
                   anchors.left: parent.left
                   anchors.leftMargin: Style.space(16)
@@ -1448,6 +1467,7 @@ Item {
                   Behavior on scale { NumberAnimation { duration: root.calm; easing.type: Easing.OutBack } }
                 }
                 Text {
+                  textFormat: Text.PlainText
                   id: navTitle
                   anchors.left: navGlyph.right
                   anchors.leftMargin: Style.space(12)
@@ -1470,6 +1490,7 @@ Item {
                   radius: Style.space(8)
                   color: root.tint(root.accent, 0.16)
                   Text {
+                    textFormat: Text.PlainText
                     id: navExp
                     anchors.centerIn: parent
                     text: "Experimental"
@@ -1479,6 +1500,7 @@ Item {
                   }
                 }
                 Text {
+                  textFormat: Text.PlainText
                   anchors.right: parent.right
                   anchors.rightMargin: Style.space(12)
                   anchors.verticalCenter: parent.verticalCenter
@@ -1517,6 +1539,7 @@ Item {
           color: fbArea.containsMouse ? root.tint(root.accent, 0.16) : "transparent"
           Behavior on color { ColorAnimation { duration: root.quick } }
           Text {
+            textFormat: Text.PlainText
             id: fbGlyph
             anchors.left: parent.left
             anchors.leftMargin: Style.space(14)
@@ -1529,6 +1552,7 @@ Item {
             font.pixelSize: Style.font.title
           }
           Text {
+            textFormat: Text.PlainText
             anchors.left: fbGlyph.right
             anchors.leftMargin: Style.space(12)
             anchors.verticalCenter: parent.verticalCenter
@@ -1579,17 +1603,18 @@ Item {
               GradientStop { position: 0; color: root.mix(root.accent, root.fg, 0.25) }
               GradientStop { position: 1; color: root.mix(root.accent, root.bg, 0.35) }
             }
-            Text { anchors.centerIn: parent; text: "d"; color: root.bg; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.weight: Font.Bold }
+            Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "d"; color: root.bg; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.weight: Font.Bold }
           }
           Row {
             anchors.left: avatar.right
             anchors.leftMargin: Style.space(10)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(5)
-            Text { text: "by"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-            Text { text: "dragosol"; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.weight: Font.DemiBold }
+            Text { textFormat: Text.PlainText; text: "by"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+            Text { textFormat: Text.PlainText; text: "dragosol"; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.weight: Font.DemiBold }
           }
           Text {
+            textFormat: Text.PlainText
             anchors.right: parent.right
             anchors.rightMargin: Style.space(10)
             anchors.verticalCenter: parent.verticalCenter
@@ -1651,6 +1676,7 @@ Item {
                   opacity: signature.revealed ? 1 : 0
                   Behavior on opacity { SequentialAnimation { PauseAnimation { duration: signature.revealed ? 30 + linkRow.index * 45 : 0 } NumberAnimation { duration: root.quick } } }
                   Text {
+                    textFormat: Text.PlainText
                     id: linkGlyph
                     anchors.left: parent.left
                     anchors.leftMargin: Style.space(10)
@@ -1669,10 +1695,11 @@ Item {
                     anchors.rightMargin: Style.space(6)
                     anchors.verticalCenter: parent.verticalCenter
                     // Bounded and elided: a long handle must never run out of the card.
-                    Text { width: parent.width; elide: Text.ElideRight; text: linkRow.modelData.label; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                    Text { width: parent.width; elide: Text.ElideRight; text: linkRow.modelData.detail; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: linkRow.modelData.label; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                    Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: linkRow.modelData.detail; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                   }
                   Text {
+                    textFormat: Text.PlainText
                     id: linkArrow
                     anchors.right: parent.right
                     anchors.rightMargin: Style.space(10)
@@ -1750,6 +1777,7 @@ Item {
             Row {
               spacing: Style.space(10)
               Text {
+                textFormat: Text.PlainText
                 text: root.query !== "" ? "Results" : root.shownSectionData.title
                 color: root.fg
                 font.family: root.fontFamily
@@ -1765,6 +1793,7 @@ Item {
                 radius: Style.space(10)
                 color: root.tint(root.accent, 0.16)
                 Text {
+                  textFormat: Text.PlainText
                   id: pageExp
                   anchors.centerIn: parent
                   text: "Experimental"
@@ -1775,6 +1804,7 @@ Item {
               }
             }
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               elide: Text.ElideRight
               text: root.query !== ""
@@ -1859,6 +1889,7 @@ Item {
                   spacing: Style.space(8)
                   height: Style.space(22)
                   Text {
+                    textFormat: Text.PlainText
                     text: cardItem.modelData.title.toUpperCase()
                     color: root.faint
                     font.family: root.fontFamily
@@ -1869,6 +1900,7 @@ Item {
                   }
                   // In search results, a way back to where the setting lives.
                   Text {
+                    textFormat: Text.PlainText
                     visible: root.query !== "" && !!cardItem.modelData.section
                     text: "Open "
                     color: root.accent
@@ -1917,8 +1949,8 @@ Item {
               Column {
                 anchors.centerIn: parent
                 spacing: Style.space(8)
-                Text { anchors.horizontalCenter: parent.horizontalCenter; text: ""; color: root.faint; font.family: root.fontFamily; font.pixelSize: Style.font.display }
-                Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Try “blur”, “dock” or “speed”"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+                Text { textFormat: Text.PlainText; anchors.horizontalCenter: parent.horizontalCenter; text: ""; color: root.faint; font.family: root.fontFamily; font.pixelSize: Style.font.display }
+                Text { textFormat: Text.PlainText; anchors.horizontalCenter: parent.horizontalCenter; text: "Try “blur”, “dock” or “speed”"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.body }
               }
             }
           }
@@ -1942,8 +1974,8 @@ Item {
             id: toastRow
             anchors.centerIn: parent
             spacing: Style.space(8)
-            Text { text: ""; color: root.accent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter }
-            Text { text: root.toastText; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter }
+            Text { textFormat: Text.PlainText; text: ""; color: root.accent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter }
+            Text { textFormat: Text.PlainText; text: root.toastText; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.verticalCenter: parent.verticalCenter }
           }
         }
 
@@ -2043,10 +2075,11 @@ Item {
                     anchors.left: menuLayer.kind === "curve" ? optCurve.right : parent.left
                     anchors.leftMargin: Style.space(10)
                     anchors.verticalCenter: parent.verticalCenter
-                    Text { text: opt.modelData.label || opt.modelData.value; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.weight: opt.sel ? Font.DemiBold : Font.Normal }
-                    Text { visible: !!opt.modelData.note; text: opt.modelData.note || ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    Text { textFormat: Text.PlainText; text: opt.modelData.label || opt.modelData.value; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.weight: opt.sel ? Font.DemiBold : Font.Normal }
+                    Text { textFormat: Text.PlainText; visible: !!opt.modelData.note; text: opt.modelData.note || ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                   }
                   Text {
+                    textFormat: Text.PlainText
                     anchors.right: parent.right
                     anchors.rightMargin: Style.space(10)
                     anchors.verticalCenter: parent.verticalCenter
@@ -2142,6 +2175,7 @@ Item {
               radius: Style.space(11)
               color: root.tint(root.accent, 0.16)
               Text {
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 text: confirmLayer.shown.glyph || ""
                 color: root.accent
@@ -2150,6 +2184,7 @@ Item {
               }
             }
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               text: confirmLayer.shown.title || ""
               color: root.fg
@@ -2159,6 +2194,7 @@ Item {
               wrapMode: Text.WordWrap
             }
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               visible: !!confirmLayer.shown.body
               text: confirmLayer.shown.body || ""

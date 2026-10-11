@@ -29,7 +29,7 @@ DEPS := $(OBJS:.o=.d)
 VERSION_HEADER = .build/PluginVersion.hpp
 VERSION_SCRIPT = scripts/generate-plugin-version.sh
 
-.PHONY: all check clean install FORCE
+.PHONY: all check clean install uninstall FORCE
 
 # An undefined symbol is a lazy-bind compositor kill (three same-day incidents
 # recorded in symcheck.sh's header), so the check IS part of the build. So is
@@ -62,6 +62,7 @@ check: hyprdrive.so
 	bash scripts/keycheck.sh
 	bash scripts/gen_keys_table.sh --check
 	bash scripts/host_tests.sh
+	python3 scripts/manifest_check.py
 
 PREFIX ?= $(HOME)/.local
 
@@ -72,6 +73,9 @@ install: hyprdrive.so check
 	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
 	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
 	bash scripts/install-fragments.sh
+
+uninstall:
+	bash scripts/uninstall.sh
 
 clean:
 	rm -rf .build hyprdrive.so

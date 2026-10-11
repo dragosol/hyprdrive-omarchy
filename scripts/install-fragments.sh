@@ -58,7 +58,14 @@ fi
 
 PLUGIN_SRC=$ROOT/omarchy-plugin
 PLUGIN_DEST=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/dragos.hyprdrive
-if [ -d "$PLUGIN_SRC" ]; then
+# INSTALLED FROM THE MARKETPLACE: `omarchy plugin add` cloned this very
+# repository into $PLUGIN_DEST, and its root manifest.json points the shell at
+# omarchy-plugin/Panel.qml. The panel is already installed -- it IS this
+# checkout -- and copying omarchy-plugin/ over the clone's root would dirty it
+# and break `omarchy plugin update`.
+if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ]; then
+    echo "omarchy plugin: $PLUGIN_DEST is this checkout (marketplace install) -- panel already in place"
+elif [ -d "$PLUGIN_SRC" ]; then
     # The Omarchy shell watches this directory with inotify and re-initialises
     # EVERY installed plugin whenever a loadable source (manifest.json, *.qml,
     # *.js) is written. Three of the files below are loadable, and they land

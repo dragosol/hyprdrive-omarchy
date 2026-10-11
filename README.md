@@ -95,6 +95,30 @@ and the commands below check out the newest one.
 The plugin is compiled against the Hyprland on your machine (the headers come
 with the `hyprland` package), so it is built locally rather than downloaded.
 
+**Needs:** Omarchy on Hyprland 0.56, and the build tools (`base-devel`, `pkgconf`;
+everything else it links against ships with Omarchy). Optional: `ffmpeg` for the
+search easter egg, GNOME Sushi for Space-to-preview in dock stacks.
+
+### From the Omarchy plugin marketplace
+
+The marketplace installs the settings panel; the compositor plugin is then built
+from that same checkout -- this is the manual step.
+
+```bash
+omarchy plugin add https://github.com/dragosol/hyprdrive-omarchy
+cd ~/.config/omarchy/plugins/dragos.hyprdrive
+make all
+make install
+hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
+hyprctl reload
+```
+
+Enable the panel with `omarchy plugin enable dragos.hyprdrive` (or answer yes when
+`plugin add` asks). To update: `omarchy plugin update dragos.hyprdrive`, then run
+`make all && make install` in that folder again and log out and back in.
+
+### From source
+
 ```bash
 git clone https://github.com/dragosol/hyprdrive-omarchy.git ~/Projects/hyprdrive-omarchy
 cd ~/Projects/hyprdrive-omarchy
@@ -125,6 +149,36 @@ reload keeps the old ones.
 
 After a Hyprland update the plugin may refuse to load with `[he] Version mismatch`.
 Rebuild from scratch: `make clean && make all && make install`.
+
+## Removal
+
+From the checkout you installed from (for a marketplace install,
+`~/.config/omarchy/plugins/dragos.hyprdrive`):
+
+```bash
+make uninstall
+omarchy plugin remove dragos.hyprdrive   # marketplace installs only
+```
+
+`make uninstall` removes the plugin (`~/.local/lib/hyprdrive`), the loader and the
+`require("hypr.hyprdrive")` line it added to `~/.config/hypr/hyprland.lua` (a backup
+is kept beside it), and a settings panel `make install` copied. The fragments in
+`~/.config/hypr/hyprdrive/` are moved aside rather than deleted, because they hold
+your own raw-snippet edits. Your saved state (`~/.local/state/hyprdrive`: favourites,
+stacks, Mosaic sizes) is kept; delete it by hand to start fresh. Log out and back in
+to unload the running plugin.
+
+## The marketplace card
+
+`preview.png` is built with the marketplace publishing skill's generator, from
+the overview frame of the Hyprdrive film (`C00-v3t1`) and the panel icon:
+
+```bash
+make_preview.py --shot overview.png --icon omarchy-plugin/hyprdrive-icon.png \
+  --name Hypr --name2 drive --accent '#7aa2f7' \
+  --tagline 'Mission control,|a real dock and|Mosaic for Omarchy.' \
+  --features 'overview · dock|stacks · mosaic' --out preview.png
+```
 
 ## Building from a checkout
 
