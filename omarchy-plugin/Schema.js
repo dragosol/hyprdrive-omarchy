@@ -208,13 +208,15 @@ var sections = [
   },
   {
     // Last, so Alt+1..6 keep reaching the sections they always have.
-    id: "mosaic", title: "Mosaic", icon: "", group: "mosaic",
-    subtitle: "A third desktop mode: windows at their own size, arranged like tiles.",
+    // `experimental`: an accent "Experimental" pill beside the title, in the
+    // nav and on the page -- it works, and it is still finding its shape.
+    id: "mosaic", title: "Mosaic", icon: "", group: "mosaic", experimental: true,
+    subtitle: "A third desktop mode: windows at their own size, arranged like tiles. Best on large displays.",
     cards: [
       { title: "Desktop mode", rows: [
         // `confirm`: switching it on changes Super+L, so the panel asks first.
         { type: "toggle", key: P + "mosaic:enabled", label: "Mosaic",
-          desc: "Windows keep their natural size and gather in the middle of the desktop. When they no longer fit, the desktop tiles them, and goes back to the mosaic once they fit again. Super+L cycles Dwindle → Scrolling → Mosaic.",
+          desc: "Windows keep their natural size and gather in the middle of the desktop. When they no longer fit, the desktop tiles them, and goes back to the mosaic once they fit again. Drag a window's corner to resize it. Super+L cycles Dwindle → Scrolling → Mosaic. Recommended for large displays: on a laptop screen only a couple of windows fit before it tiles.",
           confirm: {
             title: "Add Mosaic as a third desktop mode?",
             body: "Super+L will cycle Dwindle → Scrolling → Mosaic instead of switching between two. Turning Mosaic off puts Super+L back the way it was.",
@@ -226,6 +228,10 @@ var sections = [
     ]
   }
 ]
+
+// "Send feedback", above the signature: GitHub's issue form (.github/
+// ISSUE_TEMPLATE/feedback.yml), opened with the installed version filled in.
+var feedbackUrl = "https://github.com/dragosol/hyprdrive-omarchy/issues/new?template=feedback.yml"
 
 var links = [
   { label: "GitHub", detail: "github.com/dragosol", icon: "", url: "https://github.com/dragosol" },

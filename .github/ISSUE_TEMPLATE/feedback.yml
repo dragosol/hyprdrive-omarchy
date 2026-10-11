@@ -1,0 +1,33 @@
+name: Feedback
+description: A bug, a feature idea, or anything else about Hyprdrive.
+title: "[Feedback] "
+labels: ["feedback"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options:
+        - Bug
+        - Feature request
+        - Feedback / something else
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Tell me about it
+      description: What happened, or what you'd like. For a bug, what you did and what you expected. Screenshots and clips are welcome -- paste or drag them in.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Hyprdrive version
+      description: Filled in for you when you come from the settings panel.
+      placeholder: "1.9.27"
+  - type: input
+    id: system
+    attributes:
+      label: Hyprland / Omarchy version (optional)
+      description: "`hyprctl version | head -1` and `omarchy version`, if it's a bug."

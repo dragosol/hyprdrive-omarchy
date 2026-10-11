@@ -1448,6 +1448,7 @@ Item {
                   Behavior on scale { NumberAnimation { duration: root.calm; easing.type: Easing.OutBack } }
                 }
                 Text {
+                  id: navTitle
                   anchors.left: navGlyph.right
                   anchors.leftMargin: Style.space(12)
                   anchors.verticalCenter: parent.verticalCenter
@@ -1457,6 +1458,25 @@ Item {
                   font.pixelSize: Style.font.body
                   font.weight: navItem.active ? Font.DemiBold : Font.Normal
                   Behavior on color { ColorAnimation { duration: root.quick } }
+                }
+                // A section still finding its shape says so (Schema `experimental`).
+                Rectangle {
+                  visible: !!navItem.modelData.experimental
+                  anchors.left: navTitle.right
+                  anchors.leftMargin: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: navExp.implicitWidth + Style.space(10)
+                  height: Style.space(16)
+                  radius: Style.space(8)
+                  color: root.tint(root.accent, 0.16)
+                  Text {
+                    id: navExp
+                    anchors.centerIn: parent
+                    text: "Experimental"
+                    color: root.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption - 1
+                  }
                 }
                 Text {
                   anchors.right: parent.right
@@ -1477,6 +1497,54 @@ Item {
                   onClicked: root.goTo(navItem.modelData.id)
                 }
               }
+            }
+          }
+        }
+
+        // SEND FEEDBACK (user, 2026-10-11): always in view, right above the
+        // signature. GitHub's issue form for Hyprdrive, with this install's
+        // version already filled in -- a bug, an idea, anything.
+        Rectangle {
+          id: feedbackRow
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: signature.top
+          anchors.leftMargin: Style.space(14)
+          anchors.rightMargin: Style.space(14)
+          anchors.bottomMargin: Style.space(2)
+          height: Style.space(36)
+          radius: Style.space(10)
+          color: fbArea.containsMouse ? root.tint(root.accent, 0.16) : "transparent"
+          Behavior on color { ColorAnimation { duration: root.quick } }
+          Text {
+            id: fbGlyph
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(14)
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(18)
+            horizontalAlignment: Text.AlignHCenter
+            text: "\uf0e6"
+            color: fbArea.containsMouse ? root.accent : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.title
+          }
+          Text {
+            anchors.left: fbGlyph.right
+            anchors.leftMargin: Style.space(12)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Send feedback"
+            color: fbArea.containsMouse ? root.fg : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+          MouseArea {
+            id: fbArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              Qt.openUrlExternally(Schema.feedbackUrl + (root.hd.version ? "&version=" + encodeURIComponent(root.hd.version) : ""))
+              if (root.host) root.host.close()
             }
           }
         }
@@ -1679,13 +1747,32 @@ Item {
             anchors.rightMargin: Style.space(16)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(4)
-            Text {
-              text: root.query !== "" ? "Results" : root.shownSectionData.title
-              color: root.fg
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
-              font.weight: Font.Bold
-              font.letterSpacing: -0.4
+            Row {
+              spacing: Style.space(10)
+              Text {
+                text: root.query !== "" ? "Results" : root.shownSectionData.title
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.display
+                font.weight: Font.Bold
+                font.letterSpacing: -0.4
+              }
+              Rectangle {
+                visible: root.query === "" && !!root.shownSectionData.experimental
+                anchors.verticalCenter: parent.verticalCenter
+                width: pageExp.implicitWidth + Style.space(14)
+                height: Style.space(20)
+                radius: Style.space(10)
+                color: root.tint(root.accent, 0.16)
+                Text {
+                  id: pageExp
+                  anchors.centerIn: parent
+                  text: "Experimental"
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
             }
             Text {
               width: parent.width
