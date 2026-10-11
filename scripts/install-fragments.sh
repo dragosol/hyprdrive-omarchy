@@ -81,7 +81,15 @@ elif [ -d "$PLUGIN_SRC" ]; then
     fi
 
     mkdir -p "$PLUGIN_DEST/bin"
-    install -Dm644 "$PLUGIN_SRC/manifest.json" "$PLUGIN_DEST/manifest.json"
+    # ONE MANIFEST: the marketplace refuses a repository with a second
+    # manifest.json near the top, so the copied panel's is generated from the
+    # root one, with the entry point moved to where Panel.qml lands here.
+    python3 - "$ROOT/manifest.json" "$PLUGIN_DEST/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["entryPoints"] = {k: v.split("/")[-1] for k, v in m.get("entryPoints", {}).items()}
+open(sys.argv[2], "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+PY
     install -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
     install -Dm644 "$PLUGIN_SRC/HyprdrivePanel.qml" "$PLUGIN_DEST/HyprdrivePanel.qml"
     install -Dm644 "$PLUGIN_SRC/Schema.js" "$PLUGIN_DEST/Schema.js"

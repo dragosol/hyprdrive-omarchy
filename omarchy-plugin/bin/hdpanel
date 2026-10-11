@@ -777,7 +777,12 @@ def dump():
                 gestures.append(dict(g))
     version = ""
     try:
-        version = json.loads((pathlib.Path(__file__).resolve().parent.parent / "manifest.json").read_text()).get("version", "")
+        # Beside the copied panel (plugins/dragos.hyprdrive/manifest.json), or at
+        # the repository root when this runs from a checkout -- a marketplace
+        # install or a dev tree, where hdpanel sits in omarchy-plugin/bin/.
+        here = pathlib.Path(__file__).resolve().parent.parent
+        mf = next((p for p in (here / "manifest.json", here.parent / "manifest.json") if p.is_file()), None)
+        version = json.loads(mf.read_text()).get("version", "") if mf else ""
     except (OSError, ValueError):
         pass
     return {

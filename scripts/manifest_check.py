@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-"""The two manifests must agree.
+"""The repository has exactly one plugin manifest, at its root.
 
-manifest.json (repo root) is what the Omarchy marketplace and `omarchy plugin
-add` read: the repository IS the plugin folder there, so its entry point is
-omarchy-plugin/Panel.qml. omarchy-plugin/manifest.json is what `make install`
-copies into ~/.config/omarchy/plugins/dragos.hyprdrive, where Panel.qml sits at
-the top. They differ in entryPoints and (the root's longer, listing-facing)
-description, and in nothing else -- above all not in version, which a release
-bumps in both.
+The Omarchy marketplace refuses a submission with any other manifest.json in
+the top two levels of the tree (build-catalog.mjs, inspectPluginManifests:
+"exactly one plugin manifest at the repository root"). `omarchy plugin add`
+clones the repository as the plugin folder, so the root manifest points the
+shell at omarchy-plugin/Panel.qml; `make install` generates the copied
+panel's manifest from it (scripts/install-fragments.sh).
 """
-import json, pathlib, sys
+import json, pathlib, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-a = json.loads((ROOT / "manifest.json").read_text())
-b = json.loads((ROOT / "omarchy-plugin" / "manifest.json").read_text())
-IGNORED = {"entryPoints", "description"}
-bad = sorted(k for k in set(a) | set(b) if k not in IGNORED and a.get(k) != b.get(k))
-if a.get("entryPoints", {}).get("barWidget") != "omarchy-plugin/Panel.qml":
-    bad.append("entryPoints (root must point at omarchy-plugin/Panel.qml)")
-if len(a.get("description", "")) > 500:
-    bad.append("description (marketplace limit is 500 characters)")
+bad = []
+tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True).stdout.split()
+extra = [p for p in tracked if p.endswith("manifest.json") and p != "manifest.json" and p.count("/") <= 1]
+if extra:
+    bad.append("a second manifest near the root: " + ", ".join(extra))
+m = json.loads((ROOT / "manifest.json").read_text())
+if m.get("entryPoints", {}).get("barWidget") != "omarchy-plugin/Panel.qml":
+    bad.append("entryPoints.barWidget must be omarchy-plugin/Panel.qml")
+if len(m.get("description", "")) > 500:
+    bad.append("description over the marketplace's 500 characters")
 if bad:
-    print("manifest_check: FAIL -- the manifests disagree on: " + ", ".join(bad))
+    print("manifest_check: FAIL -- " + "; ".join(bad))
     sys.exit(1)
-print(f"manifest_check: OK -- root and omarchy-plugin manifests agree (v{a['version']})")
+print(f"manifest_check: OK -- one plugin manifest, at the root (v{m['version']})")
