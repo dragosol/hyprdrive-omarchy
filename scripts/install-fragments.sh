@@ -82,6 +82,9 @@ if [ -d "$PLUGIN_SRC" ]; then
     install -Dm644 "$PLUGIN_SRC/README.md" "$PLUGIN_DEST/README.md"
     install -Dm644 "$PLUGIN_SRC/hyprdrive-icon.png" "$PLUGIN_DEST/hyprdrive-icon.png"
     install -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
+    # Super+L's layout cycle while the panel's Mosaic switch is on; 40-panel.lua
+    # binds it by this path (hdpanel's LAYOUT_CYCLE, beside hdpanel itself).
+    install -Dm755 "$PLUGIN_SRC/bin/hd-layout-cycle" "$PLUGIN_DEST/bin/hd-layout-cycle"
     echo "omarchy plugin: $PLUGIN_DEST"
 
     if [ -n "$RELOAD_PAUSE" ]; then

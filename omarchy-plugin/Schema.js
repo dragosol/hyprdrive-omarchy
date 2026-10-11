@@ -205,6 +205,25 @@ var sections = [
       ]},
       { title: "Power profiles", rows: [ { type: "power", label: "Power profiles" } ] }
     ]
+  },
+  {
+    // Last, so Alt+1..6 keep reaching the sections they always have.
+    id: "mosaic", title: "Mosaic", icon: "", group: "mosaic",
+    subtitle: "A third desktop mode: windows at their own size, arranged like tiles.",
+    cards: [
+      { title: "Desktop mode", rows: [
+        // `confirm`: switching it on changes Super+L, so the panel asks first.
+        { type: "toggle", key: P + "mosaic:enabled", label: "Mosaic",
+          desc: "Windows keep their natural size and gather in the middle of the desktop. When they no longer fit, the desktop tiles them, and goes back to the mosaic once they fit again. Super+L cycles Dwindle → Scrolling → Mosaic.",
+          confirm: {
+            title: "Add Mosaic as a third desktop mode?",
+            body: "Super+L will cycle Dwindle → Scrolling → Mosaic instead of switching between two. Turning Mosaic off puts Super+L back the way it was.",
+            allow: "Allow", glyph: ""
+          } },
+        { type: "toggle", key: P + "mosaic:default", label: "Make Mosaic the default", when: "mosaicOn",
+          desc: "New desktops, and any you have not set with Super+L, start in Mosaic. Off restores the previous default." }
+      ]}
+    ]
   }
 ]
 

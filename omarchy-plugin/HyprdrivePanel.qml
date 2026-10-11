@@ -178,6 +178,13 @@ Item {
     toastTimer.restart()
   }
 
+  function askConfirm(spec, onAllow) {
+    if (menuLayer.owner) menuLayer.close()
+    // Off the search field, so Enter and Escape reach the confirm.
+    keys.forceActiveFocus()
+    confirmLayer.ask(spec, onAllow)
+  }
+
   // ------------------------------------------------------------- conditions
   function rowEnabled(row) {
     switch (row.when) {
@@ -188,6 +195,7 @@ Item {
     case "roomApplies": return kb("plugin:hyprdrive:dock:enabled") && !kb("plugin:hyprdrive:dock:autohide")
     case "motionOn": return kn("plugin:hyprdrive:anim_scale") > 0.001
     case "blurOn": return kb("plugin:hyprdrive:motion_blur:enabled")
+    case "mosaicOn": return kb("plugin:hyprdrive:mosaic:enabled")
     default: return true
     }
   }
@@ -790,7 +798,13 @@ Item {
       property var row: parent ? parent.row : ({})
       checked: root.kb(row.key)
       live: parent ? parent.live : true
-      onToggled: root.setKey(row.key, !root.kb(row.key))
+      // A row with `confirm` (Schema.js) reaches outside hyprdrive when it
+      // turns on, so on asks first and only Allow sets it. Off never asks.
+      onToggled: {
+        var key = row.key, next = !root.kb(key)
+        if (next && row.confirm) root.askConfirm(row.confirm, function() { root.setKey(key, true) })
+        else root.setKey(key, next)
+      }
     }
   }
 
@@ -1189,6 +1203,13 @@ Item {
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(e) {
         var typing = searchField.activeFocus
+        // The confirm owns the keyboard while it is up: Escape cancels,
+        // Enter allows, and nothing else reaches the page behind it.
+        if (confirmLayer.open) {
+          if (e.key === Qt.Key_Escape) confirmLayer.cancel()
+          else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) confirmLayer.allow()
+          e.accepted = true; return
+        }
         if (e.key === Qt.Key_Escape) {
           if (menuLayer.owner) menuLayer.close()
           else if (root.query !== "" || typing) { searchField.text = ""; keys.forceActiveFocus() }
@@ -1962,6 +1983,110 @@ Item {
                   }
                 }
               }
+            }
+          }
+        }
+      }
+
+      // ------------------------------------------------------- the confirm
+      // A question before a row changes something outside hyprdrive (a row's
+      // `confirm` in Schema.js). Only Allow runs the change; Cancel, Escape
+      // or a click outside the card leave everything as it was. Drawn like
+      // the dropdowns, over a dimmed panel.
+      Item {
+        id: confirmLayer
+        anchors.fill: parent
+        z: 60
+        property var spec: null
+        property var onAllow: null
+        // What the card shows. Kept after a close so the text does not
+        // blank out while the card fades.
+        property var shown: ({})
+        readonly property bool open: spec !== null
+        visible: open || card.opacity > 0.01
+
+        function ask(s, cb) {
+          shown = s
+          onAllow = cb
+          spec = s
+        }
+        function cancel() { spec = null; onAllow = null }
+        function allow() {
+          var cb = onAllow
+          cancel()
+          if (cb) cb()
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          radius: root.radius
+          color: root.tint(root.bg, 0.6)
+          opacity: confirmLayer.open ? 1 : 0
+          Behavior on opacity { NumberAnimation { duration: root.calm; easing.type: Easing.OutCubic } }
+        }
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: confirmLayer.cancel() }
+
+        Rectangle {
+          id: card
+          anchors.centerIn: parent
+          width: Math.min(Style.space(440), parent.width - Style.space(60))
+          height: cardCol.implicitHeight + Style.space(44)
+          radius: Style.space(14)
+          color: root.mix(root.bg, root.fg, 0.07)
+          border.width: 1
+          border.color: root.tint(root.fg, 0.14)
+          opacity: confirmLayer.open ? 1 : 0
+          scale: confirmLayer.open ? 1 : 0.94
+          Behavior on opacity { NumberAnimation { duration: root.quick; easing.type: Easing.OutCubic } }
+          Behavior on scale { NumberAnimation { duration: root.calm; easing.type: Easing.OutBack } }
+          // Clicks on the card itself are not a click outside it.
+          MouseArea { anchors.fill: parent }
+
+          Column {
+            id: cardCol
+            x: Style.space(22)
+            y: Style.space(22)
+            width: parent.width - Style.space(44)
+            spacing: Style.space(10)
+
+            Rectangle {
+              visible: !!confirmLayer.shown.glyph
+              width: Style.space(40); height: width
+              radius: Style.space(11)
+              color: root.tint(root.accent, 0.16)
+              Text {
+                anchors.centerIn: parent
+                text: confirmLayer.shown.glyph || ""
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+            Text {
+              width: parent.width
+              text: confirmLayer.shown.title || ""
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.weight: Font.DemiBold
+              wrapMode: Text.WordWrap
+            }
+            Text {
+              width: parent.width
+              visible: !!confirmLayer.shown.body
+              text: confirmLayer.shown.body || ""
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              lineHeight: 1.2
+            }
+            Item { width: 1; height: Style.space(4) }
+            Row {
+              anchors.right: parent.right
+              spacing: Style.space(8)
+              GhostButton { label: confirmLayer.shown.cancel || "Cancel"; onActivated: confirmLayer.cancel() }
+              GhostButton { label: confirmLayer.shown.allow || "Allow"; emphasis: true; onActivated: confirmLayer.allow() }
             }
           }
         }

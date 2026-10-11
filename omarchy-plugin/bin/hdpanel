@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 
@@ -139,7 +140,24 @@ KEY_META = [
     _k(PLUGIN + "smooth_frames", "bool", "performance", False),
     _k(PLUGIN + "live_layer_frost", "bool", "performance", True),
     _k(PLUGIN + "prefilter_below", "float", "performance", 0.55, min=0, max=1),
+    # Mosaic (the plugin's "mosaic" tiled layout). Kept out of AC/battery
+    # profiles: see PROFILE_SKIP.
+    _k(PLUGIN + "mosaic:enabled", "bool", "mosaic", False),
+    _k(PLUGIN + "mosaic:default", "bool", "mosaic", False),
 ]
+
+# Groups a power profile neither saves nor applies. Mosaic rebinds Super+L and
+# can change the default layout; plugging in the charger must not do either.
+PROFILE_SKIP = {"mosaic"}
+
+MOSAIC_ON = PLUGIN + "mosaic:enabled"
+MOSAIC_DEFAULT = PLUGIN + "mosaic:default"
+# Super+L's script while Mosaic is on. It ships beside this file, so an
+# installed panel binds the installed copy and a dev checkout its own.
+LAYOUT_CYCLE = pathlib.Path(__file__).resolve().parent / "hd-layout-cycle"
+# Where omarchy-hyprland-workspace-layout-toggle (and hd-layout-cycle) persist
+# each workspace's layout. Omarchy hard-codes ~/.local/state, so this does too.
+OMARCHY_LAYOUTS = pathlib.Path(os.path.expanduser("~/.local/state/omarchy/workspace-layouts"))
 
 DEFAULT_GESTURES = [
     {"fingers": 3, "direction": "up", "action": "overview", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
@@ -444,15 +462,147 @@ def write_panel_fragment(store):
     tree = {}
     for k, v in keys.items():
         nest_set(tree, k, v)
-    if tree:
+    mosaic = mosaic_lua(store)
+    if tree or mosaic:
         body.append("if hyprdrive_loaded() then")
-        body.append("    hl.config(%s)" % emit_table(tree, 4))
+        if tree:
+            body.append("    hl.config(%s)" % emit_table(tree, 4))
+        body.extend("    " + line if line else "" for line in mosaic)
         body.append("end")
     body.append("")
     FRAGDIR.mkdir(parents=True, exist_ok=True)
     path = FRAGDIR / PANEL_FRAG
     write_fragment(path, compose_fragment("\n".join(body), path))
     return path
+
+
+# ------------------------------------------------------------------ Mosaic
+#
+# The switch does three things outside hyprdrive's own keys, all of them in
+# 40-panel.lua so a reload or a reboot replays them and turning Mosaic off is
+# just their absence:
+#   - Super+L runs hd-layout-cycle instead of Omarchy's two-way toggle;
+#   - with "default" on, general.layout = "mosaic" for every workspace that
+#     has no rule of its own;
+#   - both sit inside hyprdrive_loaded(), because "mosaic" is a layout only
+#     the loaded plugin provides.
+
+def mosaic_state(store):
+    """-> (enabled, default). Default without enabled means nothing."""
+    keys = store.get("keys", {})
+    on = bool(keys.get(MOSAIC_ON, False))
+    return on, on and bool(keys.get(MOSAIC_DEFAULT, False))
+
+
+def mosaic_lua(store):
+    on, default = mosaic_state(store)
+    lines = []
+    if on:
+        lines += [
+            "",
+            "-- Mosaic: Super+L cycles dwindle -> scrolling -> mosaic. A second bind",
+            "-- of a chord does not replace the first (both would fire), so drop",
+            "-- Omarchy's toggle first -- the unbind-then-bind its bindings.lua",
+            "-- template documents. Mosaic off removes these lines, and the next",
+            "-- parse binds Omarchy's toggle again untouched.",
+            "hl.unbind(%s)" % lua_lit("SUPER + L"),
+            "hl.bind(%s, hl.dsp.exec_cmd(%s), { description = %s })" % (
+                lua_lit("SUPER + L"), lua_lit(shlex.quote(str(LAYOUT_CYCLE))), lua_lit("Cycle workspace layout")),
+        ]
+    if default:
+        lines += [
+            "",
+            "-- Mosaic is the default: workspaces with no Super+L choice start in it.",
+            "-- Loaded after looknfeel.lua, so this wins; off, looknfeel's stands.",
+            "hl.config({ general = { layout = 'mosaic' } })",
+        ]
+    return lines
+
+
+def autoreload_off():
+    v = getoption("misc:disable_autoreload")
+    return v is True or v == 1
+
+
+def revert_mosaic_workspaces(fallback, chosen_too):
+    """Move workspaces off mosaic, live.
+
+    A workspace on mosaic only because it was the default goes back to the
+    restored default (`fallback`). One that Super+L put on mosaic has
+    Omarchy's state file saying so; with `chosen_too` (Mosaic itself is going
+    away) that file, which every parse replays, is rewritten to dwindle -- the
+    cycle's first mode and Omarchy's own default -- and the workspace follows.
+    Without it (only "default" turned off) a chosen mosaic stays.
+    """
+    persisted = set()
+    if OMARCHY_LAYOUTS.is_dir():
+        for f in sorted(OMARCHY_LAYOUTS.glob("*.lua")):
+            try:
+                text = f.read_text()
+            except OSError:
+                continue
+            if '"mosaic"' not in text:
+                continue
+            persisted.add(f.stem)
+            if chosen_too:
+                f.write_text('hl.workspace_rule({ workspace = "%s", layout = "dwindle" })\n' % f.stem)
+    try:
+        workspaces = json.loads(hyprctl("-j", "workspaces") or "[]")
+    except ValueError:
+        workspaces = []
+    rules = []
+    for ws in workspaces:
+        wid = str(ws.get("id", ""))
+        if ws.get("tiledLayout") != "mosaic" or not wid.lstrip("-").isdigit():
+            continue
+        if wid in persisted and not chosen_too:
+            continue
+        layout = "dwindle" if wid in persisted else fallback
+        rules.append("hl.workspace_rule({ workspace = %s, layout = %s })" % (lua_lit(wid), lua_lit(layout)))
+    if rules:
+        eval_lua("\n".join(rules))
+
+
+def mosaic_before_write(store, before):
+    """Bookkeeping that has to happen before 40-panel.lua changes."""
+    was_on, was_default = before
+    on, default = mosaic_state(store)
+    if default and not was_default:
+        # Remember what default it displaces, for the live restore below.
+        # The durable restore needs no record: looknfeel.lua still sets it.
+        cur = getoption("general:layout")
+        if isinstance(cur, str) and cur and cur != "mosaic":
+            store["mosaicPrevLayout"] = cur
+    if (was_on and not on) or (was_default and not default):
+        revert_mosaic_workspaces(store.get("mosaicPrevLayout") or "dwindle", chosen_too=was_on and not on)
+
+
+def mosaic_after_write(store, before):
+    """40-panel.lua changed its Mosaic lines: make them live.
+
+    Super+L and general.layout follow from a parse of the config, and with
+    autoreload on (Omarchy's default) the fragment write already queued one;
+    a second, explicit reload would be a second ~100 ms hitch for nothing.
+    Only a session that turned autoreload off gets one here.
+    """
+    if mosaic_state(store) == before:
+        return
+    if autoreload_off():
+        hyprctl("reload")
+    was_default = before[1]
+    if was_default and not mosaic_state(store)[1]:
+        # The reload re-reads looknfeel.lua's layout; this covers the moment
+        # until it lands, and a session where it does not.
+        prev = store.get("mosaicPrevLayout") or "dwindle"
+        eval_lua("hl.config({ general = { layout = %s } })" % lua_lit(prev))
+
+
+def commit_store(store, before):
+    """Save the store and 40-panel.lua, with Mosaic's side effects around it."""
+    mosaic_before_write(store, before)
+    save_store(store)
+    write_panel_fragment(store)
+    mosaic_after_write(store, before)
 
 
 def lua_direction(direction):
@@ -662,18 +812,26 @@ def set_keys(pairs, preview=False):
         if meta is None:
             raise SystemExit("hdpanel: unknown key %s" % key)
         coerced.append((key, coerce(meta, value)))
+    store = load_store()
+    asked = dict(coerced)
+    # Mosaic off takes "Mosaic is the default" with it, and the default cannot
+    # be switched on by itself: it would set a layout Super+L cannot leave
+    # through Mosaic's cycle.
+    if asked.get(MOSAIC_ON) is False and MOSAIC_DEFAULT not in asked:
+        coerced.append((MOSAIC_DEFAULT, False))
+    if asked.get(MOSAIC_DEFAULT) is True and not asked.get(MOSAIC_ON, mosaic_state(store)[0]):
+        raise SystemExit("hdpanel: turn Mosaic on before making it the default")
     if not apply_live_many(coerced):
         raise SystemExit("hdpanel: live apply failed")
     if preview:
         return coerced
-    store = load_store()
+    before = mosaic_state(store)
     store.setdefault("keys", {})
     for key, value in coerced:
         store["keys"][key] = value
         if key == PLUGIN + "dock:corner_radius" and int(value) > 0:
             store["roundedRadius"] = int(value)
-    save_store(store)
-    write_panel_fragment(store)
+    commit_store(store, before)
     return coerced
 
 
@@ -706,11 +864,11 @@ def reset_keys(store, group):
         return
     pairs = [(m["key"], coerce(m, default_of(m))) for m in metas]
     apply_live_many(pairs)
+    before = mosaic_state(store)
     owned = store.setdefault("keys", {})
     for key, _ in pairs:
         owned.pop(key, None)
-    save_store(store)
-    write_panel_fragment(store)
+    commit_store(store, before)
 
 
 def cmd_reset(args):
@@ -741,13 +899,13 @@ def cmd_reset(args):
     if not apply_live_many(pairs):
         raise SystemExit("hdpanel: live reset failed")
     store = load_store()
+    before = mosaic_state(store)
     owned = store.setdefault("keys", {})
     for key, _ in pairs:
         owned.pop(key, None)
     if group == "dock":
         store["roundedRadius"] = 24
-    save_store(store)
-    write_panel_fragment(store)
+    commit_store(store, before)
     print(json.dumps({"ok": True, "group": group, "keys": {k: v for k, v in pairs}}))
     return 0
 
@@ -771,11 +929,16 @@ def cmd_gestures_set(args):
     return 0
 
 
+def profile_key(key):
+    meta = next((m for m in KEY_META if m["key"] == key), None)
+    return meta is not None and meta.get("group") not in PROFILE_SKIP
+
+
 def snapshot_keys():
     live = live_keys()
     store = load_store()
     live.update(store.get("keys", {}))
-    return live
+    return {k: v for k, v in live.items() if profile_key(k)}
 
 
 def cmd_profile_save(args):
@@ -797,7 +960,7 @@ def apply_profile(name):
     pairs = []
     for k, v in prof.items():
         meta = next((m for m in KEY_META if m["key"] == k), None)
-        if meta is None:
+        if meta is None or meta.get("group") in PROFILE_SKIP:
             continue
         v = coerce(meta, v)
         pairs.append((k, v))

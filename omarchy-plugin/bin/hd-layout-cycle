@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Super+L while the panel's Mosaic switch is on (40-panel.lua binds it there,
+# after unbinding Omarchy's omarchy-hyprland-workspace-layout-toggle).
+#
+# Cycles the active workspace dwindle -> scrolling -> mosaic -> dwindle. With
+# plugin:hyprdrive:mosaic:enabled off, or the plugin not loaded at all, it is
+# Omarchy's toggle exactly (dwindle <-> scrolling): "mosaic" is a layout the
+# plugin registers, and a workspace rule naming it without the plugin would
+# leave that workspace on whatever Hyprland falls back to.
+#
+# The persistence is Omarchy's on purpose -- same directory, same one-line
+# file per workspace -- because default/hypr/workspace-layouts.lua replays
+# those files on every config parse, so a mosaic workspace survives a reload
+# or a reboot the same way a scrolling one does, and Omarchy's own toggle
+# keeps reading what this one wrote.
+
+ACTIVE=$(hyprctl activeworkspace -j) || exit 1
+ACTIVE_WORKSPACE=$(jq -r '.id' <<<"$ACTIVE")
+[[ $ACTIVE_WORKSPACE =~ ^-?[0-9]+$ ]] || exit 1
+CURRENT_LAYOUT=$(jq -r '.tiledLayout' <<<"$ACTIVE")
+LAYOUTS_DIR="$HOME/.local/state/omarchy/workspace-layouts"
+LAYOUT_FILE="$LAYOUTS_DIR/$ACTIVE_WORKSPACE.lua"
+
+# "no such option" (plugin not loaded, or a build without Mosaic) is plain
+# text, not JSON, so jq fails and Mosaic stays out of the cycle.
+mosaic_enabled() {
+  hyprctl getoption plugin:hyprdrive:mosaic:enabled -j 2>/dev/null |
+    jq -e 'if has("bool") then .bool elif has("int") then .int != 0 else false end' >/dev/null 2>&1
+}
+
+case "$CURRENT_LAYOUT" in
+  dwindle) NEW_LAYOUT=scrolling ;;
+  scrolling)
+    if mosaic_enabled; then
+      NEW_LAYOUT=mosaic
+    else
+      NEW_LAYOUT=dwindle
+    fi
+    ;;
+  *) NEW_LAYOUT=dwindle ;;
+esac
+
+mkdir -p "$LAYOUTS_DIR"
+printf 'hl.workspace_rule({ workspace = "%s", layout = "%s" })\n' "$ACTIVE_WORKSPACE" "$NEW_LAYOUT" >"$LAYOUT_FILE"
+
+hyprctl eval "hl.workspace_rule({ workspace = \"$ACTIVE_WORKSPACE\", layout = \"$NEW_LAYOUT\" })" >/dev/null 2>&1 || \
+  hyprctl keyword workspace "$ACTIVE_WORKSPACE, layout:$NEW_LAYOUT"
+
+LABEL=$NEW_LAYOUT
+[[ $NEW_LAYOUT == mosaic ]] && LABEL=Mosaic
+omarchy-notification-send -g 󱂬 "Workspace layout set to $LABEL"
