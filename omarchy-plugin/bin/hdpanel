@@ -519,11 +519,6 @@ def mosaic_lua(store):
     return lines
 
 
-def autoreload_off():
-    v = getoption("misc:disable_autoreload")
-    return v is True or v == 1
-
-
 def revert_mosaic_workspaces(fallback, chosen_too):
     """Move workspaces off mosaic, live.
 
@@ -580,15 +575,17 @@ def mosaic_before_write(store, before):
 def mosaic_after_write(store, before):
     """40-panel.lua changed its Mosaic lines: make them live.
 
-    Super+L and general.layout follow from a parse of the config, and with
-    autoreload on (Omarchy's default) the fragment write already queued one;
-    a second, explicit reload would be a second ~100 ms hitch for nothing.
-    Only a session that turned autoreload off gets one here.
+    Super+L and general.layout follow from a parse of the config, so this
+    reloads explicitly, autoreload or not. MEASURED 2026-10-11: with
+    misc:disable_autoreload false, writing 40-panel.lua (a file the config
+    `require`s, not hyprland.lua itself) did NOT re-parse -- Mosaic was on, the
+    fragment had the new Super+L, and Hyprland kept Omarchy's bind until an
+    explicit `hyprctl reload`. One ~100 ms hitch, and only when Mosaic's own
+    switches change.
     """
     if mosaic_state(store) == before:
         return
-    if autoreload_off():
-        hyprctl("reload")
+    hyprctl("reload")
     was_default = before[1]
     if was_default and not mosaic_state(store)[1]:
         # The reload re-reads looknfeel.lua's layout; this covers the moment
