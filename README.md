@@ -171,7 +171,7 @@ to unload the running plugin.
 ## The marketplace card
 
 `preview.png` is built with the marketplace publishing skill's generator, from
-the overview frame of the Hyprdrive film (`C00-v3t1`) and the panel icon:
+the overview frame of the Hyprdrive film (`C00-v3t1` at 6.5 s, full 2880×1800) and the panel icon:
 
 ```bash
 make_preview.py --shot overview.png --icon omarchy-plugin/hyprdrive-icon.png \
