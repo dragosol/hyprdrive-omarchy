@@ -489,6 +489,11 @@ static void registerConfigValuesFor() {
     // default: they send what is typed to a third-party service, and a
     // compositor plugin must not start doing that on its own.
     addKey(makeShared<CBoolValue>(KEY("search:dictionary"), "`define <word>` in the overview search looks the word up on Wiktionary (sends the word to en.wiktionary.org)", false));
+    // MOSAIC (Mosaic.hpp). The layout itself is always registered; these two are
+    // the panel's: enabled puts it on Super+L's cycle, default makes it the
+    // layout of desktops with none of their own.
+    addKey(makeShared<CBoolValue>(KEY("mosaic:enabled"), "mosaic: Super+L cycles Dwindle -> Scrolling -> Mosaic (the panel asks before turning it on)", false));
+    addKey(makeShared<CBoolValue>(KEY("mosaic:default"), "mosaic: new desktops use the Mosaic layout (needs mosaic:enabled)", false));
     addKey(makeShared<CBoolValue>(KEY("search:easter_egg"), "overview search: type a letter and backspace five times in four seconds and the pill plays search:easter_egg_video", true));
     addKey(makeShared<CStringValue>(KEY("search:easter_egg_video"), "the video the overview's easter egg plays, with its sound (needs ffmpeg); a missing file turns the egg off",
                                     Hyprlang::STRING{"~/.local/share/hyprdrive/easter-egg.mp4"}));
