@@ -1,8 +1,15 @@
 # Hyprdrive for Omarchy
 
-A mission-control overview and a full dock for [Hyprland](https://hyprland.org),
-forked to sit on [Omarchy](https://omarchy.org/) without a settings app and
-without a second theme pipeline.
+A mission-control overview, a full dock with stacks, and Mosaic, a hybrid
+layout, for [Hyprland](https://hyprland.org) on [Omarchy](https://omarchy.org/).
+Everything is set from a settings panel in Omarchy's own bar, and it follows
+your Omarchy theme instead of shipping one of its own.
+
+![Tap Super: every window on every desktop, in one overview](https://hyprdrive.shastasia.com/readme/overview.gif)
+
+[Website](https://hyprdrive.shastasia.com) ·
+[Demo film on YouTube](https://www.youtube.com/watch?v=RRkIViQvAOY) ·
+[Releases](https://github.com/dragosol/hyprdrive-omarchy/releases)
 
 > Built against Hyprland **0.56.2** (Omarchy 4).
 
@@ -12,7 +19,14 @@ without a second theme pipeline.
 
 - Mission-control grid of real compositor-rendered windows.
 - Type-to-search: installed apps, open windows, and GNOME search providers.
-- Workspace strip. Drag a tile onto a strip cell and the window teleports there.
+
+  ![Just start typing: apps, windows and files in one search](https://hyprdrive.shastasia.com/readme/search.gif)
+
+- Workspace strip. Drag a tile onto a strip cell and the window teleports there,
+  including an empty desktop, to give it one of its own.
+
+  ![Drag a window to a new desktop](https://hyprdrive.shastasia.com/readme/new-desktop.gif)
+
 - Scroll-wheel workspace stepping, trackpad follow, keyboard navigation.
 - Several monitors act as one: the overview opens and closes on all of them,
   and Tab walks search -> each monitor's grid (or strip -> grid on each
@@ -52,6 +66,23 @@ without a second theme pipeline.
   store is `~/.local/state/hyprdrive/stacks`; removing a stack never touches
   the folder.
 
+  ![A Downloads stack fanning out, with a Space preview](https://hyprdrive.shastasia.com/readme/stacks.gif)
+
+**Mosaic** (experimental): a third layout beside Dwindle and Scrolling, after
+GNOME's planned Mosaic. Windows keep their natural size and gather in a centred
+cluster that re-arranges itself as windows open and close; when they no longer
+fit, the desktop tiles them, and it goes back to the mosaic once they fit again.
+Turn it on in the panel's Mosaic section, then Super+L cycles Dwindle ->
+Scrolling -> Mosaic. Drag a window's corner to resize it, and an app closed at
+a size you like reopens at that size. Best on large displays.
+
+**Settings panel** (`dragos.hyprdrive`, in Omarchy's bar): every option in one
+place -- one animation curve and speed for everything, per-animation motion
+blur, a trackpad gesture editor, dock and overview options, Mosaic, and
+performance and AC/battery profiles. "Send feedback" at the bottom opens a short
+GitHub form with your version filled in. The same keys are plain Lua fragments
+in `~/.config/hypr/hyprdrive/` if you would rather edit files.
+
 **Search tools** (opt-in, see below):
 
 - `define <word>` turns the results panel into a dictionary (Wiktionary).
@@ -62,6 +93,8 @@ without a second theme pipeline.
 *tap* (press and release, no other key) toggles the overview.
 
 ## Theming
+
+![Change the Omarchy theme and Hyprdrive follows](https://hyprdrive.shastasia.com/readme/themes.gif)
 
 Appearance is Hyprland's. The plugin does not ship colours, rounding, or blur of
 its own. Unset plugin keys (alpha 0 / `-1`) read the compositor's live values,
@@ -269,7 +302,8 @@ so it follows the fingers; three-finger left/right stay workspace switching.
 
 ## What this fork dropped
 
-- The Quickshell settings app (and its schema, slideshow, and monitor countdown)
+- Upstream's own Quickshell settings app (and its schema, slideshow, and monitor
+  countdown). Settings live in the Omarchy panel above instead.
 - The matugen / illogical-impulse theme-sync path unit
 - Super+1..0 dock hotkeys, which collided with Omarchy workspaces
 
