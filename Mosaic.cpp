@@ -14,13 +14,93 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/state/ViewState.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/layout/supplementary/DragController.hpp>
+#include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
+#include <linux/input-event-codes.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <typeinfo>
+#include <unordered_map>
 #include <vector>
 
 namespace ScrollOverview::Mosaic {
+
+    class CMosaicAlgorithm;
+    // Every live mosaic layout -- one per desktop on mosaic. Hyprland keeps the
+    // algorithm behind a desktop private, so "is this window on a mosaic
+    // desktop" is answered from here instead.
+    static std::vector<CMosaicAlgorithm*> g_instances;
+
+    // ---------------------------------------------------------- remembered sizes --
+    // AN APP'S MOSAIC SIZE (user, 2026-10-11: "if i close a particular app at
+    // that size DURING MOSAIC then that becomes the app's default size when
+    // mosaic is open. dwindle and scrolling modes don't apply"). Keyed on the
+    // app's class; learned only when a window CLOSES while its desktop is in the
+    // mosaic arrangement (not its tiles), and used only by mosaic. One line per
+    // app: class<TAB>width<TAB>height, in $XDG_STATE_HOME/hyprdrive/mosaic-sizes.
+    namespace {
+        std::unordered_map<std::string, Vector2D> g_sizes;
+        bool                                      g_sizesLoaded = false;
+
+        std::filesystem::path sizesPath() {
+            if (const char* S = std::getenv("XDG_STATE_HOME"); S && *S)
+                return std::filesystem::path{S} / "hyprdrive" / "mosaic-sizes";
+            const char* HOME = std::getenv("HOME");
+            return std::filesystem::path{HOME ? HOME : "/tmp"} / ".local" / "state" / "hyprdrive" / "mosaic-sizes";
+        }
+
+        void loadSizes() {
+            if (g_sizesLoaded)
+                return;
+            g_sizesLoaded = true;
+            std::ifstream in(sizesPath());
+            std::string   line;
+            while (std::getline(in, line)) {
+                const auto T1 = line.find('\t'), T2 = line.find('\t', T1 == std::string::npos ? 0 : T1 + 1);
+                if (T1 == std::string::npos || T2 == std::string::npos)
+                    continue;
+                try {
+                    g_sizes[line.substr(0, T1)] = Vector2D{std::stod(line.substr(T1 + 1, T2 - T1 - 1)), std::stod(line.substr(T2 + 1))};
+                } catch (...) {}
+            }
+        }
+
+        void saveSize(const std::string& app, const Vector2D& size) {
+            loadSizes();
+            const auto OLD = g_sizes.find(app);
+            if (OLD != g_sizes.end() && std::abs(OLD->second.x - size.x) < 1 && std::abs(OLD->second.y - size.y) < 1)
+                return; // nothing new: no write
+            g_sizes[app] = size;
+            std::error_code ec;
+            std::filesystem::create_directories(sizesPath().parent_path(), ec);
+            std::ostringstream out;
+            for (const auto& [K, V] : g_sizes)
+                out << K << '\t' << std::lround(V.x) << '\t' << std::lround(V.y) << '\n';
+            const auto TMP = sizesPath().string() + ".tmp";
+            if (std::ofstream f(TMP); f) {
+                f << out.str();
+                f.close();
+                std::filesystem::rename(TMP, sizesPath(), ec);
+            }
+        }
+
+        std::string appOf(const PHLWINDOW& w) {
+            if (!w)
+                return {};
+            return !w->m_initialClass.empty() ? w->m_initialClass : w->m_class;
+        }
+    }
 
     // One window of the layout, in arrival order (the order the rows read).
     struct SMosaicEntry {
@@ -30,8 +110,29 @@ namespace ScrollOverview::Mosaic {
 
     class CMosaicAlgorithm : public Layout::ITiledAlgorithm {
       public:
-        CMosaicAlgorithm() = default;
-        ~CMosaicAlgorithm() override = default;
+        CMosaicAlgorithm() {
+            g_instances.push_back(this);
+        }
+        ~CMosaicAlgorithm() override {
+            std::erase(g_instances, this);
+        }
+
+        // For the corner grab and the remembered sizes.
+        bool holds(const PHLWINDOW& w) const {
+            for (const auto& E : m_entries)
+                if (const auto T = E.target.lock(); T && T->window() == w)
+                    return true;
+            return false;
+        }
+        bool arrangedAsMosaic() const {
+            return m_asMosaic;
+        }
+        std::optional<Vector2D> naturalOf(const PHLWINDOW& w) const {
+            for (const auto& E : m_entries)
+                if (const auto T = E.target.lock(); T && T->window() == w)
+                    return E.natural;
+            return std::nullopt;
+        }
 
         void newTarget(SP<Layout::ITarget> target) override {
             m_entries.push_back({target, naturalFor(target, true)});
@@ -53,12 +154,21 @@ namespace ScrollOverview::Mosaic {
         // A resize changes the size the window keeps: dragging its edge in the
         // mosaic is choosing a new natural size.
         void resizeTarget(const Vector2D& delta, SP<Layout::ITarget> target, Layout::eRectCorner corner = Layout::CORNER_NONE) override {
-            (void)corner;
             const int I = indexOf(target);
             if (I < 0)
                 return;
-            auto& n   = m_entries[sc<size_t>(I)].natural;
-            n         = Vector2D{std::max(MIN_SIDE, n.x + delta.x), std::max(MIN_SIDE, n.y + delta.y)};
+            // The window grows toward the corner being dragged: a left or top
+            // corner pulled outward is a BIGGER window, not a smaller one.
+            // Doubled, because a mosaic window grows evenly about its centre,
+            // so the grabbed corner keeps up with the pointer. No corner (a
+            // keyboard resizeactive): the delta is the size change itself.
+            Vector2D grow = delta;
+            if (corner != Layout::CORNER_NONE) {
+                grow.x = 2.0 * (Layout::edgeLeft(corner) ? -delta.x : delta.x);
+                grow.y = 2.0 * (Layout::edgeTop(corner) ? -delta.y : delta.y);
+            }
+            auto& n = m_entries[sc<size_t>(I)].natural;
+            n       = Vector2D{std::max(MIN_SIDE, n.x + grow.x), std::max(MIN_SIDE, n.y + grow.y)};
             recalculate();
         }
 
@@ -99,7 +209,9 @@ namespace ScrollOverview::Mosaic {
                 sizes.push_back({0, 0, E.natural.x, E.natural.y});
 
             const MosaicPack::SRect AREAR{AREA.x, AREA.y, AREA.w, AREA.h};
+            m_asMosaic = false;
             if (const auto PLACED = MosaicPack::mosaicScaled(sizes, AREAR, innerGap(), MIN_SCALE)) {
+                m_asMosaic = true;
                 // THE MOSAIC: each window exactly where the pack put it. A
                 // non-empty visual box is placed as given -- Hyprland adds no
                 // tile gaps to it -- and the logical box is the same rect.
@@ -193,6 +305,7 @@ namespace ScrollOverview::Mosaic {
         static constexpr double MIN_SCALE = 0.75;
 
         std::vector<SMosaicEntry> m_entries;
+        bool                      m_asMosaic = false; // the last arrangement was the mosaic, not its tiles
 
         int indexOf(const SP<Layout::ITarget>& t) const {
             for (size_t i = 0; i < m_entries.size(); ++i)
@@ -223,6 +336,10 @@ namespace ScrollOverview::Mosaic {
                 return FALLBACK;
 
             const auto valid = [](const Vector2D& v) { return v.x >= MIN_SIDE && v.y >= MIN_SIDE; };
+            // The size this app had when it last closed in a mosaic wins.
+            loadSizes();
+            if (const auto IT = g_sizes.find(appOf(t->window())); IT != g_sizes.end() && valid(IT->second))
+                return IT->second;
             const auto FLOAT = t->lastFloatingSize();
             if (!fresh && valid(FLOAT))
                 return FLOAT;
@@ -233,6 +350,152 @@ namespace ScrollOverview::Mosaic {
             return FALLBACK;
         }
     };
+
+    // ------------------------------------------------------------ corner grab --
+    // CORNER RESIZE (user, 2026-10-11: "if I hold down super and go to the
+    // corner of a window i can resize it, that or corner resize is always
+    // available in mosaic"). Both:
+    //   - on a mosaic desktop, a plain left press on a window's corner resizes
+    //     it, and the pointer shows the resize cursor over a corner;
+    //   - with Super held, the same press resizes on ANY layout, in place of
+    //     Omarchy's Super+drag move -- which still moves from anywhere else.
+    // The resize is Hyprland's own drag (beginDragTarget with the corner
+    // forced), so tiled layouts get resizeTarget and floating windows their
+    // usual live resize. The press is claimed, so Hyprland's bind handler never
+    // sees it and would never end the drag: the matching release ends it here.
+    namespace {
+        bool        g_ourDrag   = false;
+        bool        g_hoverSet  = false;
+        // How far INSIDE a window a corner reaches. Outside, it is Hyprland's
+        // own border grab width; inside, only this much, so an app's own
+        // controls in its corners keep their clicks.
+        constexpr double INNER = 6.0;
+
+        bool onMosaic(const PHLWINDOW& w) {
+            return w && std::ranges::any_of(g_instances, [&](const CMosaicAlgorithm* a) { return a->holds(w); });
+        }
+
+        // The corner of `w` under `p`, or CORNER_NONE.
+        Layout::eRectCorner cornerAt(const PHLWINDOW& w, const Vector2D& p) {
+            static auto PBORDER = CConfigValue<Config::INTEGER>("general:border_size");
+            static auto PEXTEND = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
+            const double OUT    = std::max<double>(8.0, sc<double>(*PBORDER + *PEXTEND));
+            const CBox   B      = w->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+            const bool   LEFT   = p.x >= B.x - OUT && p.x <= B.x + INNER;
+            const bool   RIGHT  = p.x >= B.x + B.w - INNER && p.x <= B.x + B.w + OUT;
+            const bool   TOP    = p.y >= B.y - OUT && p.y <= B.y + INNER;
+            const bool   BOTTOM = p.y >= B.y + B.h - INNER && p.y <= B.y + B.h + OUT;
+            if (TOP && LEFT)
+                return Layout::CORNER_TOPLEFT;
+            if (TOP && RIGHT)
+                return Layout::CORNER_TOPRIGHT;
+            if (BOTTOM && LEFT)
+                return Layout::CORNER_BOTTOMLEFT;
+            if (BOTTOM && RIGHT)
+                return Layout::CORNER_BOTTOMRIGHT;
+            return Layout::CORNER_NONE;
+        }
+
+        const char* cursorFor(Layout::eRectCorner c) {
+            switch (c) {
+                case Layout::CORNER_TOPLEFT: return "nw-resize";
+                case Layout::CORNER_TOPRIGHT: return "ne-resize";
+                case Layout::CORNER_BOTTOMLEFT: return "sw-resize";
+                default: return "se-resize";
+            }
+        }
+
+        // Which window's corner the pointer is on, if any. The corner zone
+        // reaches past the window into the gap, where the hit test finds no
+        // window -- so every window of the visible desktops is asked, the
+        // focused one first (floating windows overlap).
+        std::pair<PHLWINDOW, Layout::eRectCorner> cornerTarget(const Vector2D& p, bool superHeld) {
+            const auto TRY = [&](const PHLWINDOW& w) -> Layout::eRectCorner {
+                if (!w || !w->m_isMapped || w->isHidden() || !w->m_workspace || !w->m_workspace->isVisible() || Fullscreen::controller()->isFullscreen(w) ||
+                    (w->m_isX11 && w->isX11OverrideRedirect()) || !w->layoutTarget())
+                    return Layout::CORNER_NONE;
+                // Without Super only a TILED window of a mosaic desktop has corners.
+                if (!superHeld && (w->layoutTarget()->floating() || !onMosaic(w)))
+                    return Layout::CORNER_NONE;
+                return cornerAt(w, p);
+            };
+            if (const auto F = Desktop::focusState()->window(); F)
+                if (const auto C = TRY(F); C != Layout::CORNER_NONE)
+                    return {F, C};
+            for (const auto& W : Desktop::windowState()->windows())
+                if (const auto C = TRY(W); C != Layout::CORNER_NONE)
+                    return {W, C};
+            return {nullptr, Layout::CORNER_NONE};
+        }
+
+        // Plain (no modifier) or Super alone; anything else is someone's chord.
+        int modsNow() {
+            return sc<int>(g_pInputManager->getModsFromAllKBs());
+        }
+    }
+
+    bool onButton(const IPointer::SButtonEvent& e, bool blocked) {
+        const bool PRESSED = e.state == WL_POINTER_BUTTON_STATE_PRESSED;
+        if (!PRESSED) {
+            if (g_ourDrag && e.button == BTN_LEFT) {
+                g_ourDrag = false;
+                if (g_layoutManager && g_layoutManager->dragController()->target())
+                    g_layoutManager->endDragTarget();
+                return true;
+            }
+            return false;
+        }
+        if (blocked || e.button != BTN_LEFT || !g_layoutManager || g_layoutManager->dragController()->target())
+            return false;
+        const int MODS = modsNow();
+        if (MODS != 0 && MODS != HL_MODIFIER_META)
+            return false;
+        const auto [W, CORNER] = cornerTarget(g_pInputManager->getMouseCoordsInternal(), MODS == HL_MODIFIER_META);
+        if (!W || CORNER == Layout::CORNER_NONE)
+            return false;
+        g_layoutManager->beginDragTarget(W->layoutTarget(), MBIND_RESIZE, CORNER);
+        g_ourDrag = g_layoutManager->dragController()->target() != nullptr;
+        return g_ourDrag;
+    }
+
+    void onMove(bool blocked) {
+        const bool DRAGGING = g_layoutManager && g_layoutManager->dragController()->target();
+        Layout::eRectCorner corner = Layout::CORNER_NONE;
+        if (!blocked && !DRAGGING) {
+            const int MODS = modsNow();
+            if (MODS == 0 || MODS == HL_MODIFIER_META)
+                corner = cornerTarget(g_pInputManager->getMouseCoordsInternal(), MODS == HL_MODIFIER_META).second;
+        }
+        if (corner != Layout::CORNER_NONE) {
+            Pointer::Cursor::overrideController->setOverride(cursorFor(corner), Pointer::Cursor::CURSOR_OVERRIDE_WINDOW_EDGE);
+            g_hoverSet = true;
+        } else if (g_hoverSet && !DRAGGING) {
+            Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_WINDOW_EDGE);
+            g_hoverSet = false;
+        }
+    }
+
+    void shutdown() {
+        if (g_ourDrag && g_layoutManager && g_layoutManager->dragController()->target())
+            g_layoutManager->endDragTarget();
+        g_ourDrag = false;
+        if (g_hoverSet)
+            Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_WINDOW_EDGE);
+        g_hoverSet = false;
+    }
+
+    void onWindowClose(const PHLWINDOW& w) {
+        const auto APP = appOf(w);
+        if (APP.empty())
+            return;
+        for (const auto* A : g_instances)
+            if (A->holds(w)) {
+                if (A->arrangedAsMosaic())
+                    if (const auto N = A->naturalOf(w))
+                        saveSize(APP, *N);
+                return;
+            }
+    }
 
     void registerLayout(HANDLE handle) {
         HyprlandAPI::addTiledAlgo(handle, "mosaic", &typeid(CMosaicAlgorithm), [] { return makeUnique<CMosaicAlgorithm>(); });

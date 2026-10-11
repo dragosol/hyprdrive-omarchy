@@ -2,6 +2,8 @@
 
 #include "globals.hpp"
 
+#include <hyprland/src/devices/IPointer.hpp>
+
 // MOSAIC (user, 2026-10-11): a Hyprland tiled layout named "mosaic", after
 // GNOME's planned Mosaic. Windows keep their natural size and gather into one
 // cluster centred on the desktop; when they no longer fit -- too many, or one
@@ -21,4 +23,17 @@ namespace ScrollOverview::Mosaic {
     // PLUGIN_EXIT, FIRST: every desktop on mosaic is handed back to the default
     // layout -- its algorithm objects destroyed -- while this code is mapped.
     void unregisterLayout(HANDLE handle);
+
+    // CORNER RESIZE (Mosaic.cpp). A mouse button event, before Hyprland sees
+    // it: true = claimed (a corner resize started, or ours ended). `blocked`:
+    // the overview, the dock or a lock screen owns the pointer.
+    bool onButton(const IPointer::SButtonEvent& e, bool blocked);
+    // Pointer motion: the resize cursor while over a grabbable corner.
+    void onMove(bool blocked);
+    // A window is closing (Hyprland's window.close, before the layout drops
+    // it): on a desktop in the mosaic arrangement, its size becomes its app's
+    // size in mosaic from now on.
+    void onWindowClose(const PHLWINDOW& w);
+    // PLUGIN_EXIT: our drag ended, our cursor override dropped.
+    void shutdown();
 }

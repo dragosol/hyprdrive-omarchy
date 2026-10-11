@@ -62,6 +62,7 @@ using namespace Hyprutils::String;
 #include "SearchLetters.hpp"
 #include "KeyboardCat.hpp"
 #include "Mosaic.hpp"
+#include <hyprland/src/managers/SessionLockManager.hpp>
 
 #include "Compat.hpp"
 #include "AppSearch.hpp"
@@ -2058,7 +2059,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // no event announces them.
     g_pMembOpenHook  = Event::bus()->m_events.window.open.listen([](PHLWINDOW) { Membership::bump("window.open"); });
     g_pMembLateHook  = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW) { Membership::bump("window.openLate"); });
-    g_pMembCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) { Membership::bump("window.close"); });
+    g_pMembCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
+        Membership::bump("window.close");
+        ScrollOverview::Mosaic::onWindowClose(w); // its mosaic size, remembered per app
+    });
     g_pMembKillHook  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
     g_pMembGoneHook  = Event::bus()->m_events.window.destroy.listen([](PHLWINDOWREF) { Membership::bump("window.destroy"); });
     g_pMembPinHook   = Event::bus()->m_events.window.pin.listen([](PHLWINDOW) { Membership::bump("window.pin"); });
@@ -2139,6 +2143,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::DockDrop::onPointerMove(HIT ? HIT->first : PHLMONITOR{}, HIT ? HIT->second : Vector2D{});
         // A fan item pulled out becomes a real drag (DockDrop::startFileDrag).
         ScrollOverview::Stacks::onPointerMove();
+        // Mosaic's corner resize: the resize cursor over a grabbable corner.
+        ScrollOverview::Mosaic::onMove(!HIT || ScrollOverview::Dock::occupiesPointer(HIT->first, HIT->second) || g_pSessionLockManager->isSessionLocked());
 
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
@@ -2183,6 +2189,16 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (handleClickGestureButton(event)) {
             info.cancelled = true;
             return;
+        }
+
+        // Mosaic's corner resize (Mosaic.hpp). Not over the dock or an open
+        // overview (monitorUnderCursor skips those monitors), not while locked.
+        {
+            const auto HITM = monitorUnderCursor();
+            if (ScrollOverview::Mosaic::onButton(event, !HITM || ScrollOverview::Dock::occupiesPointer(HITM->first, HITM->second) || g_pSessionLockManager->isSessionLocked())) {
+                info.cancelled = true;
+                return;
+            }
         }
 
         const auto HIT = monitorUnderCursor();
@@ -2440,6 +2456,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 APICALL EXPORT void PLUGIN_EXIT() {
     // FIRST: Hyprland hands every mosaic desktop back to its default layout and
     // destroys our algorithm objects -- while their code is still mapped.
+    ScrollOverview::Mosaic::shutdown();
     ScrollOverview::Mosaic::unregisterLayout(SCROLLOVERVIEW_HANDLE);
     ScrollOverview::KeyboardCat::shutdown(); // ffmpeg killed, its reader joined, before the code goes
     stopSearchRepeat();
