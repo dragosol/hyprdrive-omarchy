@@ -31,7 +31,31 @@ caller: the settings app's raw-snippet editor, which is a text area over the raw
 block. Doing that edit any other way would mean a second implementation of the
 marker contract, and the whole point of this file is that there is one.
 """
-import sys, os, pathlib
+import sys, os, pathlib, stat
+
+
+def replace_file(path, data, fsync=False):
+    """Atomic replace that never widens access (marketplace review, #11012).
+
+    The temp file is CREATED with the destination's mode -- 0600 when there is
+    no destination yet -- so a private file is never, even for an instant,
+    replaced by a umask-default 0644 one. Every config and state writer in
+    scripts/ goes through here. `data` is str or bytes."""
+    path = pathlib.Path(path)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o600
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.unlink(missing_ok=True)  # a leftover temp would keep ITS mode
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data.encode() if isinstance(data, str) else data)
+        if fsync:
+            fh.flush()
+            os.fsync(fh.fileno())
+    os.chmod(tmp, mode)  # the umask can only have narrowed it; restore it exactly
+    os.replace(tmp, path)
 
 BEGIN = "-- BEGIN raw-snippet (hand edits below survive regeneration)"
 END   = "-- END raw-snippet"
@@ -83,9 +107,7 @@ def main(argv):
         # this file is sourced by the session's own hyprland.lua. The temp name
         # ends .lua.tmp, which hyprland.lua's `%.lua$` matcher does not take --
         # so even the instant it exists it is not a config file.
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(compose(machine, raw))
-        os.replace(tmp, path)
+        replace_file(path, compose(machine, raw))
         kept = "raw block: %d lines kept" if cmd == "write" else "raw block: %d lines written"
         print(("wrote %s (" + kept + ")") % (path, len(raw.splitlines())))
         return 0

@@ -37,13 +37,21 @@ if [ -f "$LOADER" ]; then rm -f "$LOADER"; echo "removed $LOADER"; fi
 if [ -f "$HYPRLAND_LUA" ] && grep -q 'require("hypr.hyprdrive")' "$HYPRLAND_LUA"; then
     # Exactly the block install-fragments appends: its comment and the require.
     python3 - "$HYPRLAND_LUA" <<'PY'
-import sys, re
+import sys, re, os, stat
 p = sys.argv[1]
+# The backup is created with hyprland.lua's own mode: a private 0600 config
+# must not reappear as a umask-default 0644 copy (marketplace review, #11012).
+mode = stat.S_IMODE(os.stat(p).st_mode)
 s = open(p).read()
 s2 = re.sub(r'\n?-- Hyprdrive \(overview \+ dock\)\. Fragments live in hypr/hyprdrive/\.\n', '\n', s)
 s2 = re.sub(r'^require\("hypr\.hyprdrive"\)\n?', '', s2, flags=re.M)
 if s2 != s:
-    open(p + ".hyprdrive-bak", "w").write(s)
+    bak = p + ".hyprdrive-bak"
+    if os.path.lexists(bak):
+        os.unlink(bak)
+    with os.fdopen(os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "w") as fh:
+        fh.write(s)
+    os.chmod(bak, mode)
     open(p, "w").write(s2)
     print(f"removed require(\"hypr.hyprdrive\") from {p} (backup: {p}.hyprdrive-bak)")
 PY

@@ -37,7 +37,6 @@ was; restoring bytes is restoring it.
 """
 import argparse
 import json
-import os
 import pathlib
 import subprocess
 import sys
@@ -151,9 +150,7 @@ def do_revert(why):
         if p["previous"] is None:
             frag_path().unlink(missing_ok=True)
         else:
-            tmp = frag_path().with_suffix(".lua.tmp")
-            tmp.write_text(p["previous"])
-            os.replace(tmp, frag_path())
+            hdctl.replace_file(frag_path(), p["previous"])
         store = hdctl.load_store()
         store["panes"]["monitors"] = p["previous_settings"]
         hdctl.save_store(store)

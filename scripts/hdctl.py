@@ -58,6 +58,8 @@ import re
 import subprocess
 import sys
 
+from fragment import replace_file  # noqa: E402  -- the one atomic, mode-keeping writer
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FRAGMENT = ROOT / "scripts" / "fragment.py"
 SCHEMA = ROOT / "docs" / "schema.json"
@@ -144,12 +146,7 @@ def atomic_json(path, obj):
     power going out" is one implementation and one hope. A revert record still in
     the page cache when the machine goes down is not a revert record."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as fh:
-        json.dump(obj, fh, indent=1)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    replace_file(path, json.dumps(obj, indent=1), fsync=True)
     d = os.open(str(path.parent), os.O_RDONLY)
     try:
         os.fsync(d)
@@ -172,9 +169,7 @@ def flock_or_none(path):
 
 def save_store(s):
     STATE.mkdir(parents=True, exist_ok=True)
-    tmp = STORE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(s, indent=1, sort_keys=True) + "\n")
-    os.replace(tmp, STORE)
+    replace_file(STORE, json.dumps(s, indent=1, sort_keys=True) + "\n")
 
 
 def schema():
@@ -556,9 +551,7 @@ def ii_write(path, value):
     elif isinstance(old, float):
         val = float(val)
     cur[parts[-1]] = val
-    tmp = IICONF.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(d, indent=2) + "\n")
-    os.replace(tmp, IICONF)
+    replace_file(IICONF, json.dumps(d, indent=2) + "\n")
     print("ii: %s = %s (was %s)" % (path, val, old))
     return val
 

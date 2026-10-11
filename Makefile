@@ -63,6 +63,7 @@ check: hyprdrive.so
 	bash scripts/gen_keys_table.sh --check
 	bash scripts/host_tests.sh
 	python3 scripts/manifest_check.py
+	python3 scripts/private_modes_test.py
 
 PREFIX ?= $(HOME)/.local
 

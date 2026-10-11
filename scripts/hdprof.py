@@ -141,6 +141,11 @@ def stage():
 
     A copy and not a symlink farm: the repo has to hold the BYTES, because the
     thing it is insuring against is those bytes changing."""
+    # The repo holds copies of hyprland.lua and every fragment: owner-only, like
+    # a private config itself (marketplace review, #11012). Re-applied on every
+    # stage so a repo made before this rule is closed too.
+    REPO.mkdir(parents=True, exist_ok=True)
+    os.chmod(REPO, 0o700)
     live = surface_files()
     for rel, path in live.items():
         dst = REPO / rel
@@ -196,9 +201,7 @@ def restore(ref):
             continue
         # Atomic per file: a fragment caught half-written is a config that does
         # not parse, and hyprland.lua sources these [fragment.py].
-        tmp = dest.with_suffix(dest.suffix + ".tmp")
-        tmp.write_bytes(blob)
-        os.replace(tmp, dest)
+        hdctl.replace_file(dest, blob)
         written.append(rel)
     for rel in sorted(surface_files()):
         if rel not in want:
@@ -339,6 +342,7 @@ def cmd_init(a):
             print("hdprof: already initialised at %s (HEAD %s)" % (REPO, head()))
         return 0
     REPO.mkdir(parents=True, exist_ok=True)
+    os.chmod(REPO, 0o700)
     git("init", "-q", "-b", "main")
     (REPO / "README").write_text(
         "Hyprdrive config profiles.\n\n"

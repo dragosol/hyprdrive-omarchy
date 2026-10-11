@@ -80,9 +80,7 @@ def load():
 
 def save(d):
     hdctl.STATE.mkdir(parents=True, exist_ok=True)
-    tmp = REPOS.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(d, indent=1, sort_keys=True) + "\n")
-    os.replace(tmp, REPOS)
+    hdctl.replace_file(REPOS, json.dumps(d, indent=1, sort_keys=True) + "\n")
 
 
 def setting(key, fallback=None):
