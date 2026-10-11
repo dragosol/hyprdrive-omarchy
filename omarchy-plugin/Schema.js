@@ -211,7 +211,7 @@ var sections = [
     // `experimental`: an accent "Experimental" pill beside the title, in the
     // nav and on the page -- it works, and it is still finding its shape.
     id: "mosaic", title: "Mosaic", icon: "", group: "mosaic", experimental: true,
-    subtitle: "A third desktop mode: windows at their own size, arranged like tiles. Best on large displays.",
+    subtitle: "Windows at their own size, centred. Best on large displays.",
     cards: [
       { title: "Desktop mode", rows: [
         // `confirm`: switching it on changes Super+L, so the panel asks first.
