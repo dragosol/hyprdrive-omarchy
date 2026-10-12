@@ -55,7 +55,12 @@ fi
 NEXT=${WALL:-$(find "$DIR" -maxdepth 1 -name '*.jpg' ! -wholename "$CUR" | shuf -n1)}
 [ -n "$NEXT" ] && [ -f "$NEXT" ] || exit 0
 
-jq --arg p "$NEXT" '.background.wallpaperPath = $p' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+# mktemp creates the temp file 0600 and chmod --reference gives it the config's
+# own mode, so a private config is never replaced by a umask-default 0644 copy
+# (marketplace review, #11012).
+TMP=$(mktemp "$CFG.XXXXXX") || exit 1
+if jq --arg p "$NEXT" '.background.wallpaperPath = $p' "$CFG" > "$TMP" \
+    && chmod --reference="$CFG" "$TMP" && mv "$TMP" "$CFG"; then :; else rm -f "$TMP"; exit 1; fi
 echo "wallpaper -> $NEXT"
 
 # The image matugen reads. For a still it is the wallpaper; for a video it is one

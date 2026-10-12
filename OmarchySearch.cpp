@@ -1,5 +1,6 @@
 #include "OmarchySearch.hpp"
 #include "Launch.hpp"
+#include "ShellQuote.hpp"
 #include "ToolSearch.hpp"
 
 #include <hyprutils/os/Process.hpp>
@@ -519,8 +520,14 @@ static SSearchItem agentItem(const SAgentDef& AG, const std::string& prompt) {
     } else {
         item.name        = "Ask " + AG.name;
         item.description = prompt;
-        std::string escPrompt = replaceAll(prompt, "\"", "\\\"");
-        item.actionCommand    = replaceAll(AG.commandTemplate, "%P%", escPrompt);
+        // The prompt is user text going into a `bash -c` string (activate()):
+        // one single-quoted word, so the shell expands none of it -- `$(...)`,
+        // backticks and `$VAR` reach the agent as typed (marketplace review,
+        // #11012). The templates wrap %P% in double quotes, which would expand;
+        // the quoted word replaces the quotes too.
+        const std::string QUOTED = ScrollOverview::shellQuote(prompt);
+        item.actionCommand       = replaceAll(AG.commandTemplate, "\"%P%\"", QUOTED);
+        item.actionCommand       = replaceAll(item.actionCommand, "%P%", QUOTED);
     }
     return item;
 }

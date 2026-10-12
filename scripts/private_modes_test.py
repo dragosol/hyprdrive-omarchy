@@ -68,4 +68,44 @@ with tempfile.TemporaryDirectory() as home:
         print("uninstall.sh left the require in hyprland.lua")
         fails.append("uninstall require")
 
+    # The settings panel's back end (omarchy-plugin/bin/hdpanel, its own copy of
+    # the writer): panel.json and a fragment, both already 0600.
+    import importlib.machinery, importlib.util
+    os.environ["XDG_STATE_HOME"] = home + "/.local/state"
+    os.environ["HYPRDRIVE_FRAGMENTS"] = str(hypr / "hyprdrive")
+    loader = importlib.machinery.SourceFileLoader("hdpanel", str(ROOT / "omarchy-plugin/bin/hdpanel"))
+    spec = importlib.util.spec_from_loader("hdpanel", loader)
+    hdpanel = importlib.util.module_from_spec(spec)
+    loader.exec_module(hdpanel)
+    hdpanel.save_store({"keys": {}})
+    expect("hdpanel panel.json, new, is 0600", hdpanel.STORE, 0o600)
+    os.chmod(hdpanel.STORE, 0o600)
+    hdpanel.save_store({"keys": {}, "gestures": [{"args": "private"}]})
+    expect("hdpanel panel.json keeps 0600", hdpanel.STORE, 0o600)
+    (hypr / "hyprdrive").mkdir(exist_ok=True)  # uninstall above moved it aside
+    pfrag = hypr / "hyprdrive/40-panel.lua"
+    pfrag.write_text("-- old\n")
+    os.chmod(pfrag, 0o600)
+    hdpanel.write_fragment(pfrag, "-- new\n")
+    expect("hdpanel fragment keeps 0600", pfrag, 0o600)
+
+    # The wallpaper rotation rewrites illogical-impulse's whole config.json.
+    # Stand-ins first in PATH: the script may pkill mpvpaper and must not touch
+    # the real desktop from a test.
+    shims = pathlib.Path(home, "shims"); shims.mkdir()
+    for tool in ("pkill", "hyprctl", "mpvpaper", "matugen"):
+        (shims / tool).write_text("#!/bin/sh\nexit 0\n"); os.chmod(shims / tool, 0o755)
+    walls = pathlib.Path(home, "walls"); walls.mkdir()
+    (walls / "a.jpg").write_bytes(b"x"); (walls / "b.jpg").write_bytes(b"x")
+    ii = pathlib.Path(home, ".config/illogical-impulse"); ii.mkdir(parents=True)
+    cfg = ii / "config.json"
+    cfg.write_text('{"background": {"wallpaperPath": "%s"}}\n' % (walls / "a.jpg"))
+    os.chmod(cfg, 0o600)
+    wenv = dict(env, PATH="%s:%s" % (shims, os.environ["PATH"]), DIR=str(walls), WALL=str(walls / "b.jpg"))
+    subprocess.run(["bash", ROOT / "scripts/hyprwall-rotate.sh"], check=True, env=wenv, capture_output=True)
+    expect("hyprwall-rotate.sh config.json keeps 0600", cfg, 0o600)
+    if "b.jpg" not in cfg.read_text():
+        print("hyprwall-rotate.sh did not write the new wallpaper")
+        fails.append("rotate write")
+
 sys.exit(1 if fails else 0)

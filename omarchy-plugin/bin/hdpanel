@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -380,11 +381,31 @@ def load_store():
     }
 
 
+def replace_file(path, text):
+    """Atomic replace that never widens access (marketplace review, #11012).
+
+    The temp file is CREATED with the destination's mode -- 0600 when there is
+    no destination yet -- so a private file is never replaced by a
+    umask-default 0644 one. The panel ships on its own (the marketplace copies
+    omarchy-plugin/), so this is its own copy of scripts/fragment.py's
+    replace_file; scripts/private_modes_test.py checks both."""
+    path = pathlib.Path(path)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o600
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.unlink(missing_ok=True)  # a leftover temp would keep ITS mode
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    os.chmod(tmp, mode)  # the umask can only have narrowed it; restore it exactly
+    os.replace(tmp, path)
+
+
 def save_store(s):
     STATE.mkdir(parents=True, exist_ok=True)
-    tmp = STORE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(s, indent=1, sort_keys=True) + "\n")
-    os.replace(tmp, STORE)
+    replace_file(STORE, json.dumps(s, indent=1, sort_keys=True) + "\n")
 
 
 def write_fragment(path, text):
@@ -395,7 +416,7 @@ def write_fragment(path, text):
             return
     except OSError:
         pass
-    path.write_text(text)
+    replace_file(path, text)
 
 
 def lua_lit(v):

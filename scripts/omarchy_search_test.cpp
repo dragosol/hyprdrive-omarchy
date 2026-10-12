@@ -4,6 +4,10 @@
 #include <chrono>
 #include <iostream>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 static int s_testsPassed = 0;
 
@@ -167,6 +171,47 @@ int main() {
         // Hovering a previewable file triggers preview
         CHECK(overviewSpacePreviews(ESearchIntent::Hovering, true, false, false));
         CHECK(!overviewSpacePreviews(ESearchIntent::Hovering, false, true, true));
+    }
+
+    // Agent prompts reach `bash -c` (activate()) as typed text, never as shell
+    // (marketplace review, #11012). Every agent's real command is run through
+    // bash with stand-in launchers first in PATH that record the last argv word
+    // -- the prompt -- byte for byte. A canary file must not appear.
+    {
+        namespace fs = std::filesystem;
+        char tmpl[] = "/tmp/hd-agent-test-XXXXXX";
+        const fs::path DIR = mkdtemp(tmpl);
+        const fs::path USAGE = DIR / "omarchy/agents/usage";
+        fs::create_directories(USAGE);
+        for (const char* ID : {"grok", "antigravity", "gemini", "claude", "opencode", "codex", "copilot", "crush", "pi", "agent"})
+            std::ofstream(USAGE / (std::string(ID) + ".json")) << "{\"ready\": true}";
+        setenv("XDG_STATE_HOME", DIR.c_str(), 1);
+        const fs::path BIN = DIR / "bin";
+        fs::create_directories(BIN);
+        for (const char* L : {"omarchy-launch-tui", "omarchy-agent"}) {
+            std::ofstream(BIN / L) << "#!/bin/bash\nprintf '%s' \"${@: -1}\" > \"$HD_GOT\"\n";
+            fs::permissions(BIN / L, fs::perms::owner_all);
+        }
+        const fs::path CANARY = DIR / "pwned";
+        const std::string PROMPT = "fix $(touch " + CANARY.string() + ") and `touch " + CANARY.string() + "` for $HOME's \"quoted\" \\ it's\nok";
+        const auto ITEMS = OmarchySearch::promptAllAgents(PROMPT);
+        CHECK(ITEMS.size() == 10);
+        for (const auto& IT : ITEMS) {
+            const fs::path GOT = DIR / "got";
+            fs::remove(GOT);
+            // hand actionCommand to bash -c exactly as activate() does: as one argv word, via a file
+            std::ofstream(DIR / "cmd") << IT.actionCommand;
+            const int RC = std::system(("env PATH='" + BIN.string() + ":/usr/bin:/bin' HD_GOT='" + GOT.string() + "' /bin/bash -c \"$(cat '" + (DIR / "cmd").string() + "')\"").c_str());
+            CHECK(RC == 0);
+            std::ifstream f(GOT);
+            std::stringstream got;
+            got << f.rdbuf();
+            if (got.str() != PROMPT)
+                std::cerr << IT.name << ": got [" << got.str() << "]" << std::endl;
+            CHECK(got.str() == PROMPT);
+            CHECK(!fs::exists(CANARY));
+        }
+        fs::remove_all(DIR);
     }
 
     std::cout << "omarchy_search_test: " << s_testsPassed << " checks OK" << std::endl;
