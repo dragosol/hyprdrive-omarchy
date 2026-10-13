@@ -240,6 +240,7 @@ Item {
   // own, and a search must not wait behind a queue of key writes.
   readonly property string iconsPath: ctlPath === "" ? "" : ctlPath.replace(/hdpanel$/, "hdicons")
   property var iconApps: []
+  property var iconTrash: []
   property var iconSettings: ({ dirs: [], selfhst: false })
   property string iconSel: ""
   property string iconQuery: ""
@@ -248,6 +249,7 @@ Item {
   property var iconQueue: []
   readonly property var iconApp: {
     for (var i = 0; i < iconApps.length; i++) if (iconApps[i].id === iconSel) return iconApps[i]
+    for (var j = 0; j < iconTrash.length; j++) if (iconTrash[j].id === iconSel) return iconTrash[j]
     return null
   }
   function iconsRun(args, relist) {
@@ -270,7 +272,7 @@ Item {
   }
   function pickIcon(value, label) {
     if (!iconApp) return
-    var name = iconApp.name
+    var name = iconApp.trash ? "Trash · " + iconApp.name : iconApp.name
     iconsRun(["set", iconApp.id, value], true)
     showToast(name + " now uses " + label)
   }
@@ -319,6 +321,7 @@ Item {
         if (d && d.ok === false) root.showToast(d.error || "That didn't work")
         else if (d && d.apps) {
           root.iconApps = d.apps
+          root.iconTrash = d.trash || []
           root.iconSettings = d.settings || root.iconSettings
           if (root.iconSel === "" && d.apps.length) root.iconSel = d.apps[0].id
         } else if (d && d.settings) root.iconSettings = d.settings
@@ -1298,13 +1301,14 @@ Item {
         var a = root.iconApp
         if (!a || seeded === a.id) return
         seeded = a.id
-        pickField.text = String(a.name || "").toLowerCase()
+        pickField.text = a.trash ? "trash" : String(a.name || "").toLowerCase()
         root.iconsSearch(pickField.text)
       }
       Connections {
         target: root
         function onIconSelChanged() { ie.seed() }
         function onIconAppsChanged() { ie.seed() }
+        function onIconTrashChanged() { ie.seed() }
       }
 
       Text {
@@ -1350,6 +1354,54 @@ Item {
         }
       }
 
+      // The Trash: one picture per state, empty or full, on a dark dock or a
+      // light one -- the dock picks the state; each can be changed alone.
+      Column {
+        visible: root.iconTrash.length > 0
+        width: parent.width
+        spacing: Style.space(6)
+        Text {
+          textFormat: Text.PlainText
+          text: "Trash -- one icon for each state. The dock shows the one that matches: empty or full, on a dark dock or a light one."
+          width: parent.width; wrapMode: Text.WordWrap
+          color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+        }
+        Flow {
+          width: parent.width
+          spacing: Style.space(8)
+          Repeater {
+            model: root.iconTrash
+            Rectangle {
+              required property var modelData
+              readonly property bool sel: modelData.id === root.iconSel
+              readonly property bool lightDock: modelData.id.indexOf("-light") > 0
+              width: Style.space(104); height: Style.space(86)
+              radius: Style.space(12)
+              // The tile wears the dock's shade for that state, so a light-dock
+              // picture is judged on a light background.
+              color: lightDock ? "#e8e8ea" : "#18181b"
+              border.width: sel ? 2 : 1
+              border.color: sel ? root.accent : (trashArea.containsMouse ? root.tint(root.fg, 0.3) : root.hairline)
+              IconPic { anchors.horizontalCenter: parent.horizontalCenter; y: Style.space(10); src: modelData.shown }
+              Rectangle {
+                visible: modelData.override !== ""
+                width: Style.space(8); height: width; radius: width / 2; color: root.accent
+                anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Style.space(7)
+              }
+              Text {
+                anchors.bottom: parent.bottom; anchors.bottomMargin: Style.space(9)
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Style.space(10); horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight; textFormat: Text.PlainText
+                text: modelData.name; color: parent.lightDock ? "#3f3f46" : "#d4d4d8"
+                font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              }
+              MouseArea { id: trashArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.iconSel = modelData.id }
+            }
+          }
+        }
+      }
+
       // The chosen app: what it has now, and where to find another.
       Rectangle {
         visible: root.iconApp !== null
@@ -1373,7 +1425,7 @@ Item {
               Text { textFormat: Text.PlainText; text: root.iconApp ? root.iconApp.name : ""; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body }
               Text {
                 textFormat: Text.PlainText
-                text: root.iconApp && root.iconApp.override !== "" ? "Custom icon" : "Its own icon"
+                text: root.iconApp && root.iconApp.override !== "" ? "Custom icon" : (root.iconApp && root.iconApp.trash ? "Hyprdrive's Trash" : "Its own icon")
                 color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
               }
             }
@@ -1381,7 +1433,7 @@ Item {
               visible: root.iconApp !== null && root.iconApp.override !== ""
               anchors.verticalCenter: parent.verticalCenter
               label: "Reset"; glyph: ""
-              onActivated: { var n = root.iconApp.name; root.iconsRun(["reset", root.iconApp.id], true); root.showToast(n + " has its own icon again") }
+              onActivated: { var a = root.iconApp; root.iconsRun(["reset", a.id], true); root.showToast(a.trash ? "Trash · " + a.name + " is back to the default" : a.name + " has its own icon again") }
             }
           }
           Rectangle {

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Hyprdrive dock icons: the settings panel's Icons section.
 
-    hdicons list                 the dock's apps, their own icon and any override
+    hdicons list                 the dock's apps and the Trash's four states, with any override
     hdicons search QUERY         replacement icons: icon themes, your folders, selfh.st
     hdicons set ID VALUE         VALUE = theme:NAME | file:/abs/path | selfhst:REF
+                                 ID = a desktop id, or trash:empty-dark|full-dark|empty-light|full-light
     hdicons reset ID             back to the app's own icon
     hdicons reset-all            every app back to its own icon
     hdicons config JSON          {"dirs": [...], "selfhst": bool}
@@ -44,6 +45,13 @@ DATA = pathlib.Path(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local
 CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))) / "hyprdrive"
 OVERRIDES = STATE / "icons"
 DOCK_APPS = STATE / "dock-apps"
+TRASH_STATES = STATE / "trash-states"
+TRASH_LABELS = {
+    "trash:empty-dark": "Empty · dark dock",
+    "trash:full-dark": "Full · dark dock",
+    "trash:empty-light": "Empty · light dock",
+    "trash:full-light": "Full · light dock",
+}
 SETTINGS = STATE / "icons-settings.json"
 STORE_DIR = DATA / "icons"
 
@@ -350,7 +358,22 @@ def cmd_list(_args):
         cur = ov.get(app_id, "")
         apps.append({"id": app_id, "name": name, "icon": icon, "override": cur,
                      "own": resolve(icon, idx), "shown": resolve(cur, idx) if cur else resolve(icon, idx)})
-    return out({"ok": True, "apps": apps, "settings": settings(), "dockRunning": DOCK_APPS.exists()})
+    # The Trash, one entry per state (the dock writes trash-states with the
+    # picture each state gets by default).
+    trash = []
+    try:
+        tlines = TRASH_STATES.read_text().splitlines()
+    except OSError:
+        tlines = []
+    for line in tlines:
+        parts = line.split("\t")
+        if len(parts) < 2 or parts[0] not in TRASH_LABELS:
+            continue
+        tid, icon = parts[0], parts[1]
+        cur = ov.get(tid, "")
+        trash.append({"id": tid, "name": TRASH_LABELS[tid], "icon": icon, "override": cur, "trash": True,
+                      "own": resolve(icon, idx), "shown": resolve(cur, idx) if cur else resolve(icon, idx)})
+    return out({"ok": True, "apps": apps, "trash": trash, "settings": settings(), "dockRunning": DOCK_APPS.exists()})
 
 
 def cmd_search(args):

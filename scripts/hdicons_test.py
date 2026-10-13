@@ -87,6 +87,13 @@ with tempfile.TemporaryDirectory() as home:
     check("reset removes the line", "org.gnome.Nautilus" not in overrides.read_text())
     check("reset prunes the unused copy", not any(store.iterdir()))
 
+    # The Trash's four states, from the dock's trash-states
+    (state / "trash-states").write_text("".join("trash:%s\t%s\n" % (k, svg) for k in ("empty-dark", "full-dark", "empty-light", "full-light")))
+    d = run(env, "list")
+    check("list: the Trash's four states", [t["id"] for t in d.get("trash", [])] == ["trash:empty-dark", "trash:full-dark", "trash:empty-light", "trash:full-light"])
+    d = run(env, "set", "trash:full-light", "file:" + str(svg))
+    check("set: a Trash state takes an override", d.get("ok") is True and "trash:full-light\t" in overrides.read_text())
+
     run(env, "set", "zen", "file:" + str(svg))
     run(env, "reset-all")
     check("reset-all clears every override", all(not l or l.startswith("#") for l in overrides.read_text().splitlines()))

@@ -118,7 +118,7 @@ var sections = [
     cards: [
       { title: "Dock icons", rows: [
         { type: "icons", label: "Change an app's icon",
-          desc: "Pick an app, then a new icon from your icon theme, your own folders or selfh.st. Reset puts the app's own icon back." }
+          desc: "Pick an app, or one of the Trash's four states (empty or full, on a dark or light dock), then a new icon from your icon theme, your own folders or selfh.st. Reset puts the original back." }
       ]}
     ]
   },

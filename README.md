@@ -82,7 +82,9 @@ downloaded icon pack, say) or, if you switch it on, the
 [selfh.st](https://selfh.st/icons) collection of about 3,000 app logos. The
 picture is copied into `~/.local/share/hyprdrive/icons`, so tidying the folder
 later does not take the dock's icon with it. Reset, or Restore defaults for
-every app, puts the app's own icon back. The choices are kept in
+every app, puts the app's own icon back. The Trash has its own group with one
+icon per state -- empty or full, on a dark dock or a light one -- and the dock
+shows whichever matches. The choices are kept in
 `~/.local/state/hyprdrive/icons`, one `desktop-id<TAB>icon` per line.
 
 **Settings panel** (`dragos.hyprdrive`, in Omarchy's bar): every option in one

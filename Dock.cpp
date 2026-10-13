@@ -796,6 +796,18 @@ std::string pendingLaunchKey(const SItem& item) {
     return !item.uri.empty() ? item.uri : (item.desktopId.empty() ? item.wmClass : item.desktopId);
 }
 
+// Is the dock's own background dark? The Trash's automatic glass reads this
+// the same way (light glass on a dark dock).
+static bool dockIsDark() {
+    const auto BG = Config::dockBackgroundColor();
+    return 0.2126 * BG.r + 0.7152 * BG.g + 0.0722 * BG.b < 0.5;
+}
+
+// The override id of one Trash state, as hdicons and the panel spell it.
+static std::string trashStateId(bool empty, bool darkDock) {
+    return std::string("trash:") + (empty ? "empty" : "full") + (darkDock ? "-dark" : "-light");
+}
+
 std::vector<SItem> buildDockItems() {
     const auto RUNNING = runningClasses();
 
@@ -944,6 +956,11 @@ std::vector<SItem> buildDockItems() {
                 icon = WHICH == "gtk" || WHICH == "omarchy" ?
                     Stacks::themePrefix(WHICH) + LOCATION.icon :
                     BuiltinIcons::trashName(LOCATION.empty, style, Config::getValue<std::string>("plugin:hyprdrive:dock:trash_papers"));
+                // The settings panel's Icons -> Trash: one picture per state,
+                // empty or full, on a dark dock or a light one (user,
+                // 2026-10-13). The dock's own background decides the mode.
+                if (const auto* OVERRIDE = IconOverrides::forId(trashStateId(LOCATION.empty, dockIsDark())))
+                    icon = *OVERRIDE;
             }
             out.emplace_back(SItem{
                 .icon         = icon,
@@ -1091,6 +1108,62 @@ static void publishDockApps(const std::vector<SItem>& items) {
             continue;
         text += IT.desktopId + "\t" + ENTRY->name + "\t" + ENTRY->icon + "\n";
     }
+    // The Trash's four states and the picture each gets by default, so the
+    // panel can show them: `id TAB icon` in trash-states. A built-in picture is
+    // written out as an SVG beside it (it exists only in the plugin), anything
+    // else is an icon name the panel resolves itself.
+    {
+        const auto        DIR   = favoritesPath().parent_path();
+        const auto        WHICH = Config::getValue<std::string>(KEY_TRASH_ICON);
+        const auto        STYLE = Config::getValue<std::string>("plugin:hyprdrive:dock:trash_style");
+        const auto        PAPERS = Config::getValue<std::string>("plugin:hyprdrive:dock:trash_papers");
+        const auto        A     = ScrollOverview::Config::highlightColor();
+        const auto        HEX   = std::format("#{:02x}{:02x}{:02x}", sc<int>(std::clamp(A.r, 0.0, 1.0) * 255.0), sc<int>(std::clamp(A.g, 0.0, 1.0) * 255.0),
+                                              sc<int>(std::clamp(A.b, 0.0, 1.0) * 255.0));
+        static std::string lastKey;
+        const std::string  KEY = WHICH + "|" + STYLE + "|" + PAPERS + "|" + HEX;
+        std::string        states;
+        for (const bool DARK : {true, false}) {
+            if (KEY == lastKey)
+                break;
+            for (const bool EMPTY : {true, false}) {
+                const auto ID = trashStateId(EMPTY, DARK);
+                std::string def;
+                if (WHICH == "gtk" || WHICH == "omarchy")
+                    def = EMPTY ? "user-trash" : "user-trash-full";
+                else {
+                    const std::string GLASS = STYLE == "light" || STYLE == "dark" || STYLE == "clear" ? STYLE : (DARK ? "light" : "dark");
+                    def = (DIR / ("trash-default-" + ID.substr(6) + ".svg")).string();
+                    const auto SVG = BuiltinIcons::svg(BuiltinIcons::trashName(EMPTY, GLASS, PAPERS), HEX);
+                    std::error_code ec;
+                    std::filesystem::create_directories(DIR, ec);
+                    std::ifstream     in(def);
+                    std::stringstream old;
+                    old << in.rdbuf();
+                    if (old.str() != SVG) {
+                        std::ofstream out(def + ".tmp", std::ios::trunc);
+                        out << SVG;
+                        out.close();
+                        std::filesystem::rename(def + ".tmp", def, ec);
+                    }
+                }
+                states += ID + "\t" + def + "\n";
+            }
+        }
+        static std::string lastStates;
+        if (KEY != lastKey && states != lastStates) {
+            lastStates = states;
+            std::error_code ec;
+            const auto      P = DIR / "trash-states";
+            {
+                std::ofstream out(P.string() + ".tmp", std::ios::trunc);
+                out << states;
+            }
+            std::filesystem::rename(P.string() + ".tmp", P, ec);
+        }
+        lastKey = KEY;
+    }
+
     static std::string last;
     if (text == last)
         return;
