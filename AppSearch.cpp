@@ -1280,6 +1280,43 @@ namespace AppSearch {
             }
         }
 
+        // A LOOSER second pass, only when nothing above claimed the class (user,
+        // 2026-10-13: LocalSend had no dock icon). Flutter and Electron apps
+        // name their window after a reverse-DNS id the desktop file never
+        // states -- `org.localsend.localsend_app` for `localsend.desktop`, no
+        // StartupWMClass. So: the class's last part without a trailing
+        // `_app` / `-app` / `-desktop`, then its middle parts, each against
+        // whole desktop ids. Strict matches always win, so no app that resolved
+        // before can resolve differently now.
+        if (found == std::string::npos) {
+            std::vector<std::string> parts;
+            for (size_t at = 0; at <= WANT.size();) {
+                const size_t DOT = WANT.find('.', at);
+                parts.emplace_back(WANT.substr(at, DOT == std::string::npos ? std::string::npos : DOT - at));
+                at = DOT == std::string::npos ? WANT.size() + 1 : DOT + 1;
+            }
+            std::vector<std::string> cands;
+            if (!parts.empty()) {
+                std::string last = parts.back();
+                for (const std::string_view SUFFIX : {"_app", "-app", "-desktop", "_desktop"})
+                    if (last.size() > SUFFIX.size() + 2 && last.ends_with(SUFFIX))
+                        last.resize(last.size() - SUFFIX.size());
+                cands.push_back(last);
+                // The middle of `org.localsend.localsend_app`; never the first
+                // part (org, com, io, dev ...).
+                for (size_t k = 1; k + 1 < parts.size(); ++k)
+                    if (parts[k].size() >= 3)
+                        cands.push_back(parts[k]);
+            }
+            for (const auto& C : cands) {
+                for (size_t i = 0; i < INV.size() && found == std::string::npos; ++i)
+                    if (lower(INV[i].id) == C)
+                        found = i;
+                if (found != std::string::npos)
+                    break;
+            }
+        }
+
         cache[wmClass] = found;
         return found;
     }
