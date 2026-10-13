@@ -3025,6 +3025,28 @@ void launchInEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
     launchApp(monitor, item, nullptr, true, "workspace " + std::to_string(TARGET.id));
 }
 
+// OPEN IN SCRATCHPAD (user, 2026-10-13): a new window of the app, born on the
+// scratchpad -- Omarchy's own `special:scratchpad` when there is none yet --
+// and the scratchpad pulled up so the user sees it arrive. A location (the
+// Trash) cannot take a launch rule, so its window opens on the scratchpad by
+// opening it while the scratchpad is the shown, focused workspace.
+void launchInScratchpad(PHLMONITOR monitor, const SItem& item) {
+    if (!monitor || item.stack || item.scratchpad)
+        return;
+    const auto SCRATCH = Scratchpad::ensureDefault(monitor);
+    if (!SCRATCH)
+        return;
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+        OVERVIEW->close();
+    if (!item.uri.empty()) {
+        Scratchpad::show(SCRATCH);
+        Locations::activate(item.uri);
+        return;
+    }
+    launchApp(monitor, item, nullptr, true, "workspace " + SCRATCH->m_name);
+    Scratchpad::show(SCRATCH);
+}
+
 // The empty desktop closest by id to `from`: `emptym`'s own test of empty -- no
 // such desktop yet, or one on `monitor` with no windows -- but searched outward
 // from `from` rather than up from 1, because a window being given room of its
@@ -3342,6 +3364,9 @@ enum class ERow : uint8_t {
     NewWindow,
     OpenEmptyWorkspace,
     MoveEmptyWorkspace,
+    // user, 2026-10-13: the same two, onto the scratchpad.
+    OpenScratchpad,
+    MoveScratchpad,
     MinimizeAll,
     RestoreAll,
     ForceQuit,
@@ -3391,6 +3416,7 @@ namespace MenuGlyph {
     inline constexpr const char* BACK     = "\uf053"; // chevron-left
     inline constexpr const char* COPY     = "\uf0c5"; // copy
     inline constexpr const char* IMAGE    = "\uf03e"; // image
+    inline constexpr const char* STASH    = "\uf187"; // archive: the scratchpad's box
     inline constexpr const char* PACKAGE  = "\uf1b2"; // cube
     inline constexpr const char* TAG      = "\uf02b"; // tag
     inline constexpr const char* TERMINAL = "\uf120"; // terminal
@@ -3502,6 +3528,9 @@ void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WIN
         // no submenus to put it in; an indented row is the flat menu's way of
         // saying "this belongs to the line above".
         rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
+        // ...and onto the scratchpad, unless it is already there.
+        if (!Scratchpad::workspaceFor(WINDOW))
+            rows.emplace_back(SRow{.kind = ERow::MoveScratchpad, .label = "Move to Scratchpad", .window = WINDOW, .glyph = MenuGlyph::STASH, .sub = true});
     }
 
     // Every window of the app at once, where they can be compared: the overview
@@ -3606,6 +3635,7 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
             const auto WINDOWS = locationWindows(item);
             rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = WINDOWS.empty() ? "Open" : "New Window", .glyph = WINDOWS.empty() ? MenuGlyph::FOLDER : MenuGlyph::NEW});
             rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
+            rows.emplace_back(SRow{.kind = ERow::OpenScratchpad, .label = "Open in Scratchpad", .glyph = MenuGlyph::STASH});
             if (!WINDOWS.empty())
                 rows.emplace_back(SRow{.kind = ERow::Separator});
             appendWindowRows(rows, WINDOWS, item, monitor);
@@ -3651,8 +3681,10 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
     else if (!ID.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::NewWindow, .label = "New Window", .glyph = MenuGlyph::NEW});
     // Running or not: a new window of it, alone on a desktop of its own.
-    if (!ID.empty())
+    if (!ID.empty()) {
         rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
+        rows.emplace_back(SRow{.kind = ERow::OpenScratchpad, .label = "Open in Scratchpad", .glyph = MenuGlyph::STASH});
+    }
 
     for (const auto& ACTION : actions)
         rows.emplace_back(SRow{.kind = ERow::Action, .label = ACTION.name, .exec = ACTION.exec, .glyph = MenuGlyph::ACTION});
@@ -3932,6 +3964,21 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;
 
         case ERow::MoveEmptyWorkspace: moveToEmptyWorkspace(monitor, row.window.lock()); return;
+
+        case ERow::OpenScratchpad: launchInScratchpad(monitor, item); return;
+
+        case ERow::MoveScratchpad: {
+            const auto WINDOW = row.window.lock();
+            if (!WINDOW)
+                return;
+            // Off the minimize stash first, for the reason moveToEmptyWorkspace
+            // gives: otherwise a later restore pulls it back out.
+            if (Minimize::isMinimized(WINDOW))
+                Minimize::restore(WINDOW);
+            if (const auto SCRATCH = Scratchpad::ensureDefault(monitor))
+                Scratchpad::moveWindowTo(WINDOW, SCRATCH);
+            return;
+        }
 
         case ERow::MinimizeAll: {
             ConfigureHold::CHold    oneResize;
