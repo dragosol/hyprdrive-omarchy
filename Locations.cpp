@@ -281,7 +281,7 @@ namespace {
             return;
 
         sd_bus_message* call = nullptr;
-        if (sd_bus_message_new_method_call(bus, &call, "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.Properties", "Get") < 0 || !call)
+        if (sd_bus_message_new_method_call(bus, &call, "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.DBus.Properties", "Get") < 0 || !call)
             return;
 
         sd_bus_message_set_auto_start(call, 0);
