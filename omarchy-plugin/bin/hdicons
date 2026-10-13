@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+"""Hyprdrive dock icons: the settings panel's Icons section.
+
+    hdicons list                 the dock's apps, their own icon and any override
+    hdicons search QUERY         replacement icons: icon themes, your folders, selfh.st
+    hdicons set ID VALUE         VALUE = theme:NAME | file:/abs/path | selfhst:REF
+    hdicons reset ID             back to the app's own icon
+    hdicons reset-all            every app back to its own icon
+    hdicons config JSON          {"dirs": [...], "selfhst": bool}
+
+Every command prints one JSON object.
+
+The overrides live in ~/.local/state/hyprdrive/icons (`id TAB icon` per line),
+which the dock re-reads within half a second (IconOverrides.hpp). The apps come
+from ~/.local/state/hyprdrive/dock-apps, which the dock writes, so the ids are
+exactly the ones it keys on.
+
+Every picture an override points at is COPIED into
+~/.local/share/hyprdrive/icons under a name made from its content: the dock
+caches textures by name, so a new picture must be a new path, and a folder the
+user later tidies must not take the dock's icon with it.
+
+NETWORK: none unless "selfh.st icons" is switched on in the Icons section
+(`selfhst`, off by default). Then search reads the collection's index and the
+picker shows its previews, both from cdn.jsdelivr.net, and choosing one
+downloads that single SVG or PNG. Nothing else is sent: no query, no app list.
+Icons from selfh.st/icons are CC BY 4.0 (https://selfh.st/icons).
+"""
+from __future__ import annotations
+
+import configparser
+import hashlib
+import json
+import os
+import pathlib
+import re
+import stat
+import sys
+import time
+import urllib.request
+
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))) / "hyprdrive"
+DATA = pathlib.Path(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))) / "hyprdrive"
+CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))) / "hyprdrive"
+OVERRIDES = STATE / "icons"
+DOCK_APPS = STATE / "dock-apps"
+SETTINGS = STATE / "icons-settings.json"
+STORE_DIR = DATA / "icons"
+
+EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
+MAX_BYTES = 4 * 1024 * 1024
+SELFHST_BASE = "https://cdn.jsdelivr.net/gh/selfhst/icons/"  # the latest release; @main is refused (repo over jsDelivr's size limit)
+SELFHST_INDEX_TTL = 24 * 3600
+REF_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
+THEME_NAME_RE = re.compile(r"^[A-Za-z0-9._+-]{1,200}$")
+LIMIT = 48
+
+
+def out(obj):
+    print(json.dumps(obj))
+    return 0
+
+
+def fail(msg):
+    print(json.dumps({"ok": False, "error": msg}))
+    return 1
+
+
+# ------------------------------------------------------------------ files --
+def replace_file(path, data):
+    """Atomic, and never wider than the file it replaces (0600 when new)."""
+    path = pathlib.Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o600
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data.encode() if isinstance(data, str) else data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def read_overrides():
+    m = {}
+    try:
+        text = OVERRIDES.read_text()
+    except OSError:
+        return m
+    for line in text.splitlines():
+        line = line.rstrip(" \t\r")
+        if not line or line.startswith("#") or "\t" not in line:
+            continue
+        k, v = line.split("\t", 1)
+        if k and v:
+            m[k] = v
+    return m
+
+
+def write_overrides(m):
+    body = "# Hyprdrive dock icons (settings panel -> Icons): desktop id TAB icon\n"
+    body += "".join("%s\t%s\n" % (k, m[k]) for k in sorted(m))
+    replace_file(OVERRIDES, body)
+    prune_store(m)
+
+
+def prune_store(m):
+    """Drop copies no override points at any more -- only our own files."""
+    used = {v for v in m.values() if v.startswith(str(STORE_DIR) + "/")}
+    try:
+        for f in STORE_DIR.iterdir():
+            if f.is_file() and str(f) not in used and f.suffix.lower() in EXTS:
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def settings():
+    try:
+        s = json.loads(SETTINGS.read_text())
+    except (OSError, ValueError):
+        s = {}
+    dirs = [d for d in s.get("dirs", []) if isinstance(d, str)]
+    return {"dirs": dirs, "selfhst": bool(s.get("selfhst", False))}
+
+
+def valid_id(i):
+    return isinstance(i, str) and 0 < len(i) <= 255 and "\t" not in i and "\n" not in i
+
+
+def sniff(data, ext):
+    """The bytes are the picture the extension says, or it is refused."""
+    head = data[:2048].lstrip()
+    if ext == ".svg":
+        low = head.lower()
+        return b"<svg" in low and (low.startswith(b"<svg") or low.startswith(b"<?xml") or low.startswith(b"<!--"))
+    if ext == ".png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if ext in (".jpg", ".jpeg"):
+        return data.startswith(b"\xff\xd8\xff")
+    if ext == ".webp":
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return False
+
+
+def keep_copy(app_id, data, ext):
+    digest = hashlib.sha256(data).hexdigest()[:16]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", app_id)[:60] or "app"
+    dest = STORE_DIR / ("%s-%s%s" % (stem, digest, ext))
+    if not dest.exists():
+        STORE_DIR.mkdir(parents=True, exist_ok=True)
+        replace_file(dest, data)
+        os.chmod(dest, 0o644)  # a picture, read by the compositor
+    return str(dest)
+
+
+# ------------------------------------------------------------- icon themes --
+def data_dirs():
+    home = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    rest = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+    return [home] + [d for d in rest if d]
+
+
+def gtk_theme():
+    t = os.environ.get("XDG_ICON_THEME")
+    if t:
+        return t
+    cfg = pathlib.Path(os.path.expanduser("~/.config/gtk-3.0/settings.ini"))
+    try:
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.read(cfg)
+        name = cp.get("Settings", "gtk-icon-theme-name", fallback="").strip().strip('"')
+        if name:
+            return name
+    except (configparser.Error, OSError):
+        pass
+    return "Adwaita"
+
+
+def theme_dirs(theme):
+    return [pathlib.Path(d) / "icons" / theme for d in data_dirs()] + [pathlib.Path(os.path.expanduser("~/.icons")) / theme]
+
+
+def theme_chain(theme):
+    """The dock's order: the theme, what it Inherits, then hicolor."""
+    chain, todo = [], [theme]
+    while todo:
+        t = todo.pop(0)
+        if t in chain:
+            continue
+        chain.append(t)
+        for d in theme_dirs(t):
+            idx = d / "index.theme"
+            if idx.is_file():
+                cp = configparser.ConfigParser(interpolation=None, strict=False)
+                try:
+                    cp.read(idx)
+                    inh = cp.get("Icon Theme", "Inherits", fallback="")
+                except configparser.Error:
+                    inh = ""
+                todo += [x.strip() for x in inh.split(",") if x.strip()]
+                break
+    if "hicolor" not in chain:
+        chain.append("hicolor")
+    return chain
+
+
+def score(path):
+    if path.suffix == ".svg":
+        return 100000
+    nums = [int(n) for n in re.findall(r"\d+", str(path.parent))]
+    return max(nums) if nums else 0
+
+
+def theme_index():
+    """{icon name -> best file}, cached until a theme directory moves."""
+    chain = theme_chain(gtk_theme())
+    roots = [d for t in chain for d in theme_dirs(t) if d.is_dir()]
+    roots.append(pathlib.Path("/usr/share/pixmaps"))
+    sig = [[str(r), r.stat().st_mtime if r.exists() else 0] for r in roots]
+    cache = CACHE / "icon-index.json"
+    try:
+        c = json.loads(cache.read_text())
+        if c.get("sig") == sig:
+            return c["index"]
+    except (OSError, ValueError, KeyError):
+        pass
+    index, best = {}, {}
+    for rank, root in enumerate(roots):
+        for dirpath, _dirs, files in os.walk(root):
+            for f in files:
+                p = pathlib.Path(dirpath) / f
+                if p.suffix not in (".svg", ".png"):
+                    continue
+                name = p.stem
+                s = (-rank, score(p))  # an earlier theme in the chain wins, then size
+                if name not in best or s > best[name]:
+                    best[name] = s
+                    index[name] = str(p)
+    try:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        replace_file(cache, json.dumps({"sig": sig, "index": index}))
+    except OSError:
+        pass
+    return index
+
+
+def resolve(icon, index=None):
+    """A displayable file for an Icon= value or an override."""
+    if not icon:
+        return ""
+    if icon.startswith("/"):
+        return icon if os.path.isfile(icon) else ""
+    index = index if index is not None else theme_index()
+    return index.get(icon, "")
+
+
+# --------------------------------------------------------------- selfh.st --
+def fetch(url, limit=MAX_BYTES, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": "hyprdrive-icons"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # https only: the URLs are ours
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("too large")
+    return data
+
+
+def selfhst_index():
+    cache = CACHE / "selfhst-index.json"
+    try:
+        if time.time() - cache.stat().st_mtime < SELFHST_INDEX_TTL:
+            return json.loads(cache.read_text())
+    except (OSError, ValueError):
+        pass
+    data = fetch(SELFHST_BASE + "index.json", limit=16 * 1024 * 1024)
+    rows = json.loads(data)
+    slim = [{"name": r.get("Name", ""), "ref": r.get("Reference", ""), "svg": r.get("SVG") == "Yes"}
+            for r in rows if isinstance(r, dict) and REF_RE.match(str(r.get("Reference", "")))]
+    CACHE.mkdir(parents=True, exist_ok=True)
+    replace_file(cache, json.dumps(slim))
+    return slim
+
+
+# ------------------------------------------------------------------ search --
+def rank(name, q):
+    n = name.lower()
+    if n == q:
+        return 0
+    if n.startswith(q):
+        return 1
+    if q in n:
+        return 2
+    return None
+
+
+def search(query):
+    q = query.strip().lower()
+    st = settings()
+    results = {"theme": [], "folders": [], "selfhst": [], "selfhstEnabled": st["selfhst"]}
+    if not q:
+        return results
+    idx = theme_index()
+    hits = sorted((r, len(n), n) for n in idx if (r := rank(n, q)) is not None)
+    results["theme"] = [{"label": n, "value": "theme:" + n, "preview": idx[n]} for _r, _l, n in hits[:LIMIT]]
+
+    found = []
+    for d in st["dirs"]:
+        root = pathlib.Path(os.path.expanduser(d))
+        if not root.is_dir():
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for f in files:
+                p = pathlib.Path(dirpath) / f
+                if p.suffix.lower() in EXTS and (r := rank(p.stem, q)) is not None:
+                    found.append((r, len(p.stem), str(p)))
+            if len(found) > 2000:
+                break
+    found.sort()
+    results["folders"] = [{"label": pathlib.Path(p).stem, "value": "file:" + p, "preview": p} for _r, _l, p in found[:LIMIT]]
+
+    if st["selfhst"]:
+        try:
+            rows = selfhst_index()
+            hits = sorted((r, len(x["name"]), x["name"], x["ref"]) for x in rows
+                          if (r := min(filter(lambda v: v is not None, [rank(x["name"], q), rank(x["ref"], q), 9]))) != 9)
+            results["selfhst"] = [{"label": name, "value": "selfhst:" + ref,
+                                   "preview": SELFHST_BASE + "png/" + ref + ".png"} for _r, _l, name, ref in hits[:LIMIT]]
+        except Exception as e:  # noqa: BLE001 -- offline is a state, not a crash
+            results["selfhstError"] = "selfh.st unreachable (%s)" % type(e).__name__
+    return results
+
+
+# ---------------------------------------------------------------- commands --
+def cmd_list(_args):
+    ov = read_overrides()
+    idx = theme_index()
+    apps = []
+    try:
+        lines = DOCK_APPS.read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 3 or not parts[0]:
+            continue
+        app_id, name, icon = parts[0], parts[1], parts[2]
+        cur = ov.get(app_id, "")
+        apps.append({"id": app_id, "name": name, "icon": icon, "override": cur,
+                     "own": resolve(icon, idx), "shown": resolve(cur, idx) if cur else resolve(icon, idx)})
+    return out({"ok": True, "apps": apps, "settings": settings(), "dockRunning": DOCK_APPS.exists()})
+
+
+def cmd_search(args):
+    return out({"ok": True, **search(" ".join(args))})
+
+
+def cmd_set(args):
+    if len(args) != 2 or not valid_id(args[0]):
+        return fail("usage: hdicons set ID VALUE")
+    app_id, value = args
+    if value.startswith("theme:"):
+        name = value[6:]
+        if not THEME_NAME_RE.match(name):
+            return fail("not an icon name")
+        if name not in theme_index():
+            return fail("no icon called %s in your icon theme" % name)
+        icon = name
+    elif value.startswith("file:"):
+        src = pathlib.Path(value[5:])
+        ext = src.suffix.lower()
+        if not src.is_absolute() or ext not in EXTS or not src.is_file():
+            return fail("not an SVG, PNG, JPEG or WebP file")
+        if src.stat().st_size > MAX_BYTES:
+            return fail("file is over 4 MB")
+        data = src.read_bytes()
+        if not sniff(data, ".jpg" if ext == ".jpeg" else ext):
+            return fail("file is not the image its name says")
+        icon = keep_copy(app_id, data, ext)
+    elif value.startswith("selfhst:"):
+        ref = value[8:]
+        if not settings()["selfhst"]:
+            return fail("selfh.st icons are off")
+        if not REF_RE.match(ref):
+            return fail("not a selfh.st icon")
+        row = next((r for r in selfhst_index() if r["ref"] == ref), None)
+        if row is None:
+            return fail("not in the selfh.st collection")
+        ext = ".svg" if row["svg"] else ".png"
+        try:
+            data = fetch(SELFHST_BASE + ext[1:] + "/" + ref + ext)
+        except Exception as e:  # noqa: BLE001
+            return fail("download failed (%s)" % type(e).__name__)
+        if not sniff(data, ext):
+            return fail("download is not an image")
+        icon = keep_copy(app_id, data, ext)
+    else:
+        return fail("VALUE must be theme:, file: or selfhst:")
+    ov = read_overrides()
+    ov[app_id] = icon
+    write_overrides(ov)
+    return out({"ok": True, "id": app_id, "icon": icon, "shown": resolve(icon)})
+
+
+def cmd_reset(args):
+    if len(args) != 1 or not valid_id(args[0]):
+        return fail("usage: hdicons reset ID")
+    ov = read_overrides()
+    ov.pop(args[0], None)
+    write_overrides(ov)
+    return out({"ok": True, "id": args[0]})
+
+
+def cmd_reset_all(_args):
+    write_overrides({})
+    return out({"ok": True})
+
+
+def cmd_config(args):
+    try:
+        new = json.loads(args[0] if args else sys.stdin.read())
+    except ValueError:
+        return fail("config expects JSON")
+    s = settings()
+    if isinstance(new.get("dirs"), list):
+        s["dirs"] = [d for d in new["dirs"] if isinstance(d, str) and d.strip()][:20]
+    if "selfhst" in new:
+        s["selfhst"] = bool(new["selfhst"])
+    replace_file(SETTINGS, json.dumps(s, indent=1) + "\n")
+    return out({"ok": True, "settings": s})
+
+
+def main(argv):
+    fn = {"list": cmd_list, "search": cmd_search, "set": cmd_set, "reset": cmd_reset, "reset-all": cmd_reset_all, "config": cmd_config}.get(argv[1] if len(argv) > 1 else "")
+    if not fn:
+        print(__doc__)
+        return 0 if len(argv) < 2 else 2
+    return fn(argv[2:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

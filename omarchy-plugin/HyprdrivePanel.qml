@@ -156,6 +156,11 @@ Item {
   }
 
   function restoreSection(sec) {
+    if (sec.group === "icons") {
+      iconsRun(["reset-all"], true)
+      showToast("Every dock app has its own icon again")
+      return
+    }
     runCtl(["reset", sec.group], true)
     var next = Object.assign({}, pending)
     for (var key in defaults) {
@@ -230,6 +235,50 @@ Item {
   onSectionChanged: pageSwap.restart()
   onQueryChanged: pageSwap.restart()
 
+  // ------------------------------------------------------------------- icons
+  // bin/hdicons, beside hdpanel. Its own process: it answers in JSON of its
+  // own, and a search must not wait behind a queue of key writes.
+  readonly property string iconsPath: ctlPath === "" ? "" : ctlPath.replace(/hdpanel$/, "hdicons")
+  property var iconApps: []
+  property var iconSettings: ({ dirs: [], selfhst: false })
+  property string iconSel: ""
+  property string iconQuery: ""
+  property var iconResults: ({})
+  property bool iconSearching: false
+  property var iconQueue: []
+  readonly property var iconApp: {
+    for (var i = 0; i < iconApps.length; i++) if (iconApps[i].id === iconSel) return iconApps[i]
+    return null
+  }
+  function iconsRun(args, relist) {
+    if (iconsPath === "") return
+    iconQueue = iconQueue.concat([{ args: args, relist: relist === true }])
+    pumpIcons()
+  }
+  function pumpIcons() {
+    if (iconsPath === "" || iconsProc.running || iconQueue.length === 0) return
+    var q = iconQueue.slice(), job = q.shift()
+    iconQueue = q
+    iconsProc.relist = job.relist
+    iconsProc.command = [iconsPath].concat(job.args)
+    iconsProc.running = true
+  }
+  function iconsList() { iconsRun(["list"], false) }
+  function iconsSearch(text) {
+    iconQuery = text
+    iconSearchDebounce.restart()
+  }
+  function pickIcon(value, label) {
+    if (!iconApp) return
+    var name = iconApp.name
+    iconsRun(["set", iconApp.id, value], true)
+    showToast(name + " now uses " + label)
+  }
+  function iconsConfig(change) {
+    iconsRun(["config", JSON.stringify(change)], true)
+  }
+  onIconsPathChanged: if (iconsPath !== "") iconsList()
+
   // ----------------------------------------------------------------- gestures
   readonly property var gestureList: gestureDraft !== null ? gestureDraft : Model.cloneGestures(hd.gestures)
   function editGestures(mutator) {
@@ -245,6 +294,49 @@ Item {
   }
 
   // --------------------------------------------------------------- processes
+  Process {
+    id: iconsProc
+    property bool relist: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var d = null
+        try { d = JSON.parse(String(text || "{}")) } catch (e) { d = null }
+        if (d && d.ok === false) root.showToast(d.error || "That didn't work")
+        else if (d && d.apps) {
+          root.iconApps = d.apps
+          root.iconSettings = d.settings || root.iconSettings
+          if (root.iconSel === "" && d.apps.length) root.iconSel = d.apps[0].id
+        } else if (d && d.settings) root.iconSettings = d.settings
+      }
+    }
+    onExited: {
+      if (relist) root.iconsList()
+      root.pumpIcons()
+    }
+  }
+  Process {
+    id: iconSearchProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.iconResults = JSON.parse(String(text || "{}")) } catch (e) { root.iconResults = ({}) }
+        root.iconSearching = false
+      }
+    }
+  }
+  Timer {
+    id: iconSearchDebounce
+    interval: 220
+    onTriggered: {
+      if (root.iconsPath === "" || root.iconQuery.trim() === "") { root.iconResults = ({}); return }
+      iconSearchProc.running = false
+      root.iconSearching = true
+      iconSearchProc.command = [root.iconsPath, "search", root.iconQuery]
+      iconSearchProc.running = true
+    }
+  }
+
   Process {
     id: resolveProc
     command: ["bash", "-lc",
@@ -587,6 +679,26 @@ Item {
     }
   }
 
+  // A picture the panel can show: a file path, a URL, or nothing.
+  component IconPic: Item {
+    property string src: ""
+    property real px: Style.space(36)
+    width: px; height: px
+    Image {
+      anchors.fill: parent
+      visible: parent.src !== ""
+      source: parent.src === "" ? "" : (parent.src.indexOf("://") > 0 ? parent.src : "file://" + parent.src)
+      sourceSize.width: parent.px * 2; sourceSize.height: parent.px * 2
+      fillMode: Image.PreserveAspectFit
+      asynchronous: true; smooth: true; mipmap: true
+    }
+    Rectangle {
+      anchors.fill: parent; visible: parent.src === ""
+      radius: width * 0.22; color: root.tint(root.fg, 0.08)
+      Text { anchors.centerIn: parent; text: "?"; color: root.faint; font.pixelSize: parent.height * 0.45; font.family: root.fontFamily }
+    }
+  }
+
   // A button that reads as text until hovered.
   component GhostButton: Rectangle {
     id: gb
@@ -711,7 +823,7 @@ Item {
     property var row: ({})
     property bool first: false
     readonly property bool live: root.rowEnabled(row)
-    readonly property bool wide: row.type === "gestures" || row.type === "power" || row.type === "curve"
+    readonly property bool wide: row.type === "gestures" || row.type === "power" || row.type === "curve" || row.type === "icons"
     width: parent ? parent.width : 0
     implicitHeight: wide ? wideCol.implicitHeight + Style.space(24) : Math.max(labelCol.implicitHeight, controlHolder.implicitHeight) + Style.space(26)
 
@@ -795,7 +907,7 @@ Item {
       Loader {
         width: parent.width
         active: sr.wide
-        sourceComponent: sr.row.type === "curve" ? curveControl : sr.row.type === "gestures" ? gestureEditor : sr.row.type === "power" ? powerControl : null
+        sourceComponent: sr.row.type === "curve" ? curveControl : sr.row.type === "gestures" ? gestureEditor : sr.row.type === "power" ? powerControl : sr.row.type === "icons" ? iconEditor : null
         property var row: sr.row
         property bool live: sr.live
       }
@@ -1153,6 +1265,199 @@ Item {
           }
         }
         GhostButton { visible: root.gestureDirty; label: "Discard changes"; onActivated: { root.gestureDraft = null; root.gestureDirty = false } }
+      }
+    }
+  }
+
+  // Icons: the dock's apps as tiles; the chosen one's replacements below.
+  Component {
+    id: iconEditor
+    Column {
+      id: ie
+      spacing: Style.space(14)
+      Component.onCompleted: root.iconsList()
+
+      Text {
+        visible: root.iconApps.length === 0
+        width: parent.width; wrapMode: Text.WordWrap; textFormat: Text.PlainText
+        text: "No dock apps yet. The list comes from the running dock -- open the dock once, then come back."
+        color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+      }
+
+      Flow {
+        width: parent.width
+        spacing: Style.space(8)
+        Repeater {
+          model: root.iconApps
+          Rectangle {
+            required property var modelData
+            readonly property bool sel: modelData.id === root.iconSel
+            width: Style.space(84); height: Style.space(86)
+            radius: Style.space(12)
+            color: sel ? root.tint(root.accent, 0.18) : (appArea.containsMouse ? root.tint(root.fg, 0.07) : root.raised)
+            border.width: 1
+            border.color: sel ? root.accent : root.hairline
+            Behavior on color { ColorAnimation { duration: root.quick } }
+            IconPic { anchors.horizontalCenter: parent.horizontalCenter; y: Style.space(10); src: modelData.shown }
+            Rectangle {
+              visible: modelData.override !== ""
+              width: Style.space(8); height: width; radius: width / 2; color: root.accent
+              anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Style.space(7)
+            }
+            Text {
+              anchors.bottom: parent.bottom; anchors.bottomMargin: Style.space(9)
+              anchors.horizontalCenter: parent.horizontalCenter
+              width: parent.width - Style.space(10); horizontalAlignment: Text.AlignHCenter
+              elide: Text.ElideRight; textFormat: Text.PlainText
+              text: modelData.name; color: parent.sel ? root.fg : root.dim
+              font.family: root.fontFamily; font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: appArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                root.iconSel = modelData.id
+                var guess = String(modelData.name || "").toLowerCase()
+                pickField.text = guess
+                root.iconsSearch(guess)
+              }
+            }
+          }
+        }
+      }
+
+      // The chosen app: what it has now, and where to find another.
+      Rectangle {
+        visible: root.iconApp !== null
+        width: parent.width
+        height: pickCol.implicitHeight + Style.space(28)
+        radius: Style.space(10)
+        color: root.raised
+        border.width: 1
+        border.color: root.hairline
+        Column {
+          id: pickCol
+          anchors.fill: parent
+          anchors.margins: Style.space(14)
+          spacing: Style.space(12)
+          Row {
+            spacing: Style.space(12)
+            IconPic { src: root.iconApp ? root.iconApp.shown : ""; px: Style.space(44); anchors.verticalCenter: parent.verticalCenter }
+            Column {
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+              Text { textFormat: Text.PlainText; text: root.iconApp ? root.iconApp.name : ""; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+              Text {
+                textFormat: Text.PlainText
+                text: root.iconApp && root.iconApp.override !== "" ? "Custom icon" : "Its own icon"
+                color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              }
+            }
+            GhostButton {
+              visible: root.iconApp !== null && root.iconApp.override !== ""
+              anchors.verticalCenter: parent.verticalCenter
+              label: "Reset"; glyph: ""
+              onActivated: { var n = root.iconApp.name; root.iconsRun(["reset", root.iconApp.id], true); root.showToast(n + " has its own icon again") }
+            }
+          }
+          Rectangle {
+            width: parent.width; height: Style.space(34); radius: Style.space(8)
+            color: root.tint(root.fg, 0.03); border.width: 1; border.color: pickField.activeFocus ? root.accent : root.hairline
+            TextInput {
+              id: pickField
+              anchors.fill: parent; anchors.leftMargin: Style.space(12); anchors.rightMargin: Style.space(12)
+              verticalAlignment: TextInput.AlignVCenter
+              color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+              selectByMouse: true
+              onTextEdited: root.iconsSearch(text)
+              Keys.onEscapePressed: function(e) { text = ""; root.iconsSearch(""); e.accepted = true }
+              Text { textFormat: Text.PlainText; visible: !parent.text; text: "Search icons -- “firefox”, “terminal”, “mail”"; color: root.faint; font: parent.font; anchors.verticalCenter: parent.verticalCenter }
+            }
+          }
+          Repeater {
+            model: [
+              { key: "theme", title: "Your icon theme" },
+              { key: "folders", title: "Your folders" },
+              { key: "selfhst", title: "selfh.st" }
+            ]
+            Column {
+              required property var modelData
+              readonly property var hits: root.iconResults[modelData.key] || []
+              visible: hits.length > 0
+              width: pickCol.width
+              spacing: Style.space(6)
+              Text { textFormat: Text.PlainText; text: modelData.title + " · " + hits.length; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+              Flow {
+                width: parent.width
+                spacing: Style.space(6)
+                Repeater {
+                  model: parent.parent.hits
+                  Rectangle {
+                    required property var modelData
+                    width: Style.space(52); height: width; radius: Style.space(10)
+                    color: hitArea.containsMouse ? root.tint(root.accent, 0.2) : root.tint(root.fg, 0.04)
+                    border.width: 1; border.color: hitArea.containsMouse ? root.accent : "transparent"
+                    IconPic { anchors.centerIn: parent; src: modelData.preview; px: Style.space(34) }
+                    MouseArea {
+                      id: hitArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                      onClicked: root.pickIcon(modelData.value, modelData.label)
+                      ToolTip.visible: containsMouse; ToolTip.delay: 400; ToolTip.text: modelData.label
+                    }
+                  }
+                }
+              }
+            }
+          }
+          Text {
+            visible: pickField.text.trim() !== "" && !root.iconSearching
+                     && !(root.iconResults.theme || []).length && !(root.iconResults.folders || []).length && !(root.iconResults.selfhst || []).length
+            textFormat: Text.PlainText; width: parent.width; wrapMode: Text.WordWrap
+            text: "Nothing called that." + (root.iconSettings.selfhst ? "" : " Turn on selfh.st below for app logos.")
+            color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+          }
+          Text {
+            visible: !!root.iconResults.selfhstError
+            textFormat: Text.PlainText; text: root.iconResults.selfhstError || ""
+            color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
+      // Where icons come from.
+      Row {
+        spacing: Style.space(12)
+        width: parent.width
+        Switch {
+          anchors.verticalCenter: parent.verticalCenter
+          checked: root.iconSettings.selfhst
+          onToggled: root.iconsConfig({ selfhst: !root.iconSettings.selfhst })
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          width: parent.width - Style.space(60); wrapMode: Text.WordWrap; textFormat: Text.PlainText
+          text: "selfh.st icons -- about 3,000 app logos. Searching them and showing previews loads from cdn.jsdelivr.net; picking one downloads it once. Off, Hyprdrive never goes online for icons. Logos by selfh.st/icons, CC BY 4.0."
+          color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+        }
+      }
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
+        Text { textFormat: Text.PlainText; text: "Your icon folders -- searched too. One per line, e.g. a downloaded icon pack."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+        Rectangle {
+          width: parent.width; height: Math.max(Style.space(34), dirsInput.contentHeight + Style.space(16)); radius: Style.space(8)
+          color: root.tint(root.fg, 0.03); border.width: 1; border.color: dirsInput.activeFocus ? root.accent : root.hairline
+          TextEdit {
+            id: dirsInput
+            anchors.fill: parent; anchors.margins: Style.space(8); anchors.leftMargin: Style.space(12)
+            text: (root.iconSettings.dirs || []).join("\n")
+            color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+            selectByMouse: true; textFormat: TextEdit.PlainText
+            onActiveFocusChanged: if (!activeFocus) {
+              var dirs = text.split("\n").map(function(s) { return s.trim() }).filter(function(s) { return s !== "" })
+              if (JSON.stringify(dirs) !== JSON.stringify(root.iconSettings.dirs || [])) root.iconsConfig({ dirs: dirs })
+            }
+            Text { textFormat: Text.PlainText; visible: !parent.text && !parent.activeFocus; text: "~/Pictures/icons"; color: root.faint; font: parent.font }
+          }
+        }
       }
     }
   }

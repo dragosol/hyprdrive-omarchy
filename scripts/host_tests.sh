@@ -50,6 +50,7 @@ run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
 run mount_sort_test scripts/mount_sort_test.cpp
 run gvfs_mount_test scripts/gvfs_mount_test.cpp
 run mosaic_pack_test scripts/mosaic_pack_test.cpp
+run icon_overrides_test scripts/icon_overrides_test.cpp
 run dock_drop_test scripts/dock_drop_test.cpp
 run finger_swipe_test scripts/finger_swipe_test.cpp
 # shellcheck disable=SC2046

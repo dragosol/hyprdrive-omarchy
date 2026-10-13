@@ -14,6 +14,7 @@
 //   blur     -- one motion-blur site: strength (0..1 in 1/8ths) + fade (site, clock)
 //   gestures -- the trackpad map editor
 //   power    -- AC / battery profiles
+//   icons    -- per-app dock icons (bin/hdicons)
 //
 // `when` names a condition (HyprdrivePanel.qml, rowEnabled) under which the
 // row applies; otherwise it is drawn dimmed and does not take input.
@@ -108,6 +109,16 @@ var sections = [
         { type: "slider", key: P + "dock:blur_size", label: "Blur size", min: -1, max: 32, step: 1, fmt: "follow",
           desc: "Leftmost follows Hyprland's decoration blur." },
         { type: "slider", key: P + "dock:blur_passes", label: "Blur passes", min: -1, max: 8, step: 1, fmt: "follow" }
+      ]}
+    ]
+  },
+  {
+    id: "icons", title: "Icons", icon: "\uf03e", group: "icons",
+    subtitle: "Give any app on the dock a different icon.",
+    cards: [
+      { title: "Dock icons", rows: [
+        { type: "icons", label: "Change an app's icon",
+          desc: "Pick an app, then a new icon from your icon theme, your own folders or selfh.st. Reset puts the app's own icon back." }
       ]}
     ]
   },

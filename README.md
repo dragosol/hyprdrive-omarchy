@@ -76,6 +76,15 @@ Turn it on in the panel's Mosaic section, then Super+L cycles Dwindle ->
 Scrolling -> Mosaic. Drag a window's corner to resize it, and an app closed at
 a size you like reopens at that size. Best on large displays.
 
+**Dock icons** (settings panel -> Icons): give any app on the dock a different
+icon. Pick an app, then search your icon theme, folders of your own (a
+downloaded icon pack, say) or, if you switch it on, the
+[selfh.st](https://selfh.st/icons) collection of about 3,000 app logos. The
+picture is copied into `~/.local/share/hyprdrive/icons`, so tidying the folder
+later does not take the dock's icon with it. Reset, or Restore defaults for
+every app, puts the app's own icon back. The choices are kept in
+`~/.local/state/hyprdrive/icons`, one `desktop-id<TAB>icon` per line.
+
 **Settings panel** (`dragos.hyprdrive`, in Omarchy's bar): every option in one
 place -- one animation curve and speed for everything, per-animation motion
 blur, a trackpad gesture editor, dock and overview options, Mosaic, and
@@ -243,8 +252,9 @@ failed.
 
 ## Network use
 
-Hyprdrive makes **no network requests by default.** The two search tools are
-off until you turn them on, because they send what you type to a third party:
+Hyprdrive makes **no network requests by default.** Three features go online,
+and each is off until you turn it on. The two search tools send what you type to
+a third party:
 
 | key | sends | to |
 | --- | --- | --- |
@@ -259,6 +269,13 @@ translations on your own machine. Requests run off the compositor thread via
 ```lua
 hl.config({ plugin = { hyprdrive = { search = { dictionary = true, translate = true } } } })
 ```
+
+**selfh.st icons** (settings panel -> Icons, off by default) searches the
+[selfh.st/icons](https://selfh.st/icons) collection for a dock app's new icon.
+While it is on, the panel downloads the collection's index (once a day) and
+shows previews, all from `cdn.jsdelivr.net`. Picking a logo downloads that one
+SVG or PNG. Nothing you type and nothing about your apps is sent. The
+collection is CC BY 4.0.
 
 ## Configuration
 

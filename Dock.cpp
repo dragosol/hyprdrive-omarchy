@@ -38,6 +38,7 @@
 #include "StackReader.hpp"
 #include "TextInput.hpp"
 #include "BuiltinIcons.hpp"
+#include "IconOverrides.hpp"
 #include "DockDrop.hpp"
 #include "DockStacks.hpp"
 #include "DockTilt.hpp"
@@ -819,6 +820,9 @@ std::vector<SItem> buildDockItems() {
             item.desktopId = ID;
             item.icon      = ENTRY->icon;
             item.favorite  = true;
+            // The settings panel's Icons section (IconOverrides.hpp).
+            if (const auto* OVERRIDE = IconOverrides::forId(ID))
+                item.icon = *OVERRIDE;
 
             // Every running class that resolves to this id owns the slot, so a
             // pinned app that IS running is one icon, not two -- including a
@@ -852,6 +856,8 @@ std::vector<SItem> buildDockItems() {
             icon = RUNNING[i];
             std::ranges::transform(icon, icon.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
         }
+        if (const auto* OVERRIDE = IconOverrides::forId(runningIds[i]))
+            icon = *OVERRIDE;
 
         out.emplace_back(SItem{
             .wmClass   = RUNNING[i],
@@ -1002,6 +1008,7 @@ struct SItemsKey {
     uint64_t  themes     = 0; // icon themes + the Trash's look
     uint64_t  inventory  = 0;
     uint64_t  icons      = 0;
+    uint64_t  overrides  = 0; // the settings panel's per-app icons
     long long activeWs   = 0;
     uint32_t  config     = 0;
 
@@ -1042,6 +1049,7 @@ SItemsKey itemsKey() {
     // The GENERATION: a rescan that swaps one entry for another keeps the size.
     key.inventory  = AppSearch::inventoryGeneration();
     key.icons      = AppSearch::iconIndexGeneration();
+    key.overrides  = IconOverrides::generation();
 
     const bool ISOLATE_WS = isolateNow();
     key.config            = (Config::getValue<bool>(KEY_SHOW_FAVORITES) ? 1U : 0U) |      //
@@ -1066,6 +1074,39 @@ SItemsKey itemsKey() {
     return key;
 }
 
+// The settings panel's Icons section lists the apps ON the dock, under the
+// exact desktop ids the dock keys overrides on -- which only the dock knows
+// (AppSearch::idForClass's rules, Chromium webapps included). So the dock says:
+// ~/.local/state/hyprdrive/dock-apps, `id TAB name TAB own icon` per app, in
+// dock order, rewritten only when that text changes (a rebuild of the item
+// list is usually a window opening, not an app arriving).
+static void publishDockApps(const std::vector<SItem>& items) {
+    std::string text;
+    std::unordered_set<std::string> seen;
+    for (const auto& IT : items) {
+        if (IT.desktopId.empty() || !IT.uri.empty() || !seen.insert(IT.desktopId).second)
+            continue;
+        const auto* ENTRY = AppSearch::entryForId(IT.desktopId);
+        if (!ENTRY)
+            continue;
+        text += IT.desktopId + "\t" + ENTRY->name + "\t" + ENTRY->icon + "\n";
+    }
+    static std::string last;
+    if (text == last)
+        return;
+    last = text;
+
+    const auto      PATH = favoritesPath().parent_path() / "dock-apps";
+    std::error_code ec;
+    std::filesystem::create_directories(PATH.parent_path(), ec);
+    const auto TMP = PATH.string() + ".tmp";
+    {
+        std::ofstream out(TMP, std::ios::trunc);
+        out << text;
+    }
+    std::filesystem::rename(TMP, PATH, ec);
+}
+
 const std::vector<SItem>& dockItems() {
     static std::vector<SItem> cache;
     static SItemsKey          cachedKey;
@@ -1076,6 +1117,7 @@ const std::vector<SItem>& dockItems() {
         filled    = true;
         cache     = buildDockItems();
         ++g_itemsGeneration;
+        publishDockApps(cache);
     }
 
     return cache;
