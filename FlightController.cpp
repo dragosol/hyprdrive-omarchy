@@ -23,6 +23,7 @@
 #undef protected
 #undef private
 
+#include "Locations.hpp"
 #include "FlightController.hpp"
 #include "Motion.hpp"
 
@@ -896,7 +897,19 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
         const auto  WINDOW = it->window.lock();
         const float T      = flightProgress(*it);
         const auto  CLASS  = WINDOW ? AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title) : std::string{};
-        const auto  ITEM   = WINDOW ? std::ranges::find_if(layout.items, [&](const SItem& item) { return item.wmClass == CLASS; }) : layout.items.end();
+        // A file manager window showing a dock LOCATION (the Trash) flies to
+        // that location's icon, not to the file manager's: the location's own
+        // windows are what its icon minimizes and restores (Dock.cpp,
+        // locationWindows). Looked for first, since the file manager's icon
+        // would otherwise match by class.
+        auto ITEM = WINDOW ? std::ranges::find_if(layout.items,
+                                                  [&](const SItem& item) {
+                                                      return !item.uri.empty() && !item.stack && !item.locationName.empty() && WINDOW->m_title == item.locationName &&
+                                                          Locations::openWindows(item.uri);
+                                                  }) :
+                             layout.items.end();
+        if (WINDOW && ITEM == layout.items.end())
+            ITEM = std::ranges::find_if(layout.items, [&](const SItem& item) { return item.wmClass == CLASS; });
 
         if (!WINDOW || T >= 1.F || ITEM == layout.items.end()) {
             zdbg("flightEnd id=%llu win=%d T=%f item=%d restoring=%d held=%d phase=%s\n", (unsigned long long)it->id, (int)(bool)WINDOW, T, ITEM != layout.items.end(),

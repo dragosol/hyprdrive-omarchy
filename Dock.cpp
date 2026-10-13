@@ -2639,10 +2639,15 @@ std::vector<PHLWINDOW> locationWindows(const SItem& item) {
 
 // What a menu's window rows act on: an app's windows, or a location's.
 std::vector<PHLWINDOW> menuWindows(const SItem& item) {
-    return item.uri.empty() ? itemWindows(item) : locationWindows(item);
+    return itemWindows(item);
 }
 
 std::vector<PHLWINDOW> itemWindows(const SItem& item) {
+    // A location's windows are the file manager's windows showing it, so a
+    // click, the menu's window rows and the hover previews treat the Trash the
+    // way they treat an app (user, 2026-10-13).
+    if (!item.uri.empty())
+        return item.stack ? std::vector<PHLWINDOW>{} : locationWindows(item);
     if (item.wmClass.empty() && item.desktopId.empty())
         return {};
 
@@ -2679,6 +2684,8 @@ std::vector<PHLWINDOW> itemWindowsHere(const SItem& item, PHLMONITOR monitor) {
 }
 
 std::string itemCycleKey(const SItem& item) {
+    if (!item.uri.empty())
+        return item.uri;
     return !item.wmClass.empty() ? item.wmClass : item.desktopId;
 }
 
@@ -3066,7 +3073,9 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
         return;
     }
 
-    if (!item.uri.empty()) {
+    // A location with no window showing it is opened; with one, it is an app
+    // like any other below: switch back to it, minimize it, restore it.
+    if (!item.uri.empty() && itemWindows(item).empty()) {
         launchApp(monitor, item);
         return;
     }
