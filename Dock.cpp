@@ -2621,6 +2621,27 @@ bool windowMatchesItem(const PHLWINDOW& window, const SItem& item, const SIntere
     return false;
 }
 
+// A LOCATION's windows (user, 2026-10-13: the Trash's menu "is lacking a lot"
+// next to Files'): the file manager's windows showing it. Files says WHICH
+// locations it has open (FileManager1.OpenWindowsWithLocations, Locations.cpp)
+// but not in compositor windows, and titles a window after its location's
+// display name -- the same name the dock gives the item. So: a window titled
+// that while Files reports the location open.
+std::vector<PHLWINDOW> locationWindows(const SItem& item) {
+    if (item.uri.empty() || item.stack || item.locationName.empty() || !Locations::openWindows(item.uri))
+        return {};
+    std::vector<PHLWINDOW> out;
+    for (const auto& WINDOW : Desktop::windowState()->windows())
+        if (WINDOW->m_isMapped && WINDOW->m_title == item.locationName)
+            out.emplace_back(WINDOW);
+    return out;
+}
+
+// What a menu's window rows act on: an app's windows, or a location's.
+std::vector<PHLWINDOW> menuWindows(const SItem& item) {
+    return item.uri.empty() ? itemWindows(item) : locationWindows(item);
+}
+
 std::vector<PHLWINDOW> itemWindows(const SItem& item) {
     if (item.wmClass.empty() && item.desktopId.empty())
         return {};
@@ -2898,9 +2919,19 @@ void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace =
 // if need be, with the usual animation), and launch pinned to it, so an app
 // that maps slowly still lands there if the user has moved on.
 void launchInEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
-    if (!monitor || item.stack || item.scratchpad || !item.uri.empty())
+    if (!monitor || item.stack || item.scratchpad)
         return;
     const auto TARGET = getWorkspaceIDNameFromString("emptym");
+    // A location (the Trash): its file manager window, opened on the empty
+    // desktop -- it opens where the user is, so go there first.
+    if (!item.uri.empty()) {
+        if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+            OVERVIEW->close();
+        if (TARGET.id != WORKSPACE_INVALID && (!monitor->m_activeWorkspace || monitor->m_activeWorkspace->m_id != TARGET.id))
+            (void)::Config::Actions::changeWorkspace(std::to_string(TARGET.id));
+        Locations::activate(item.uri);
+        return;
+    }
     if (TARGET.id == WORKSPACE_INVALID) {
         launchApp(monitor, item, nullptr, true);
         return;
@@ -3353,6 +3384,59 @@ std::string itemDesktopId(const SItem& item) {
     return !item.desktopId.empty() ? item.desktopId : AppSearch::idForClass(item.wmClass);
 }
 
+// The rows an item's WINDOWS get, shared by an app and a location (the Trash):
+// each window with where it is and its own Move to Empty Workspace, then Show
+// Windows and whole-item Minimize / Show.
+void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WINDOWS, const SItem& item, const PHLMONITOR& monitor) {
+    // Each window with WHERE it is: its desktop, the scratchpad, or minimized.
+    // A list of identical app names with nothing to tell them apart was the
+    // commonest reason to open the hover panel instead.
+    //
+    // The ones on the desktop this monitor is showing say so (user, 2026-10-08)
+    // -- in the hint, the dim words the row already has, so the marker costs no
+    // new ink: "3 \u00b7 current". A minimized window counts by the desktop it
+    // came off and comes back to. A scratchpad's is never the current one.
+    const auto  ACTIVE    = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
+    const auto  ACTIVEID  = ACTIVE && !ACTIVE->m_isSpecialWorkspace ? ACTIVE->m_id : WORKSPACE_INVALID;
+    size_t      minimized = 0;
+    for (const auto& WINDOW : WINDOWS) {
+        std::string where;
+        WORKSPACEID on = WORKSPACE_INVALID;
+        if (Minimize::isMinimized(WINDOW)) {
+            where = "minimized";
+            on    = Minimize::originalWorkspace(WINDOW);
+            ++minimized;
+        } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
+            where = Scratchpad::label(SCRATCH);
+        else if (WINDOW->m_workspace) {
+            where = WINDOW->m_workspace->m_name;
+            on    = WINDOW->m_workspace->m_id;
+        }
+        if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
+            where += " \u00b7 current";
+        rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
+        // Its own Move to Empty Workspace, right under it and indented, so which
+        // window it moves is never a question (user, 2026-10-08). The menu has
+        // no submenus to put it in; an indented row is the flat menu's way of
+        // saying "this belongs to the line above".
+        rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
+    }
+
+    // Every window of the app at once, where they can be compared: the overview
+    // filtered on the app's name.
+    if (!WINDOWS.empty())
+        rows.emplace_back(SRow{.kind = ERow::ShowWindows, .label = "Show Windows", .glyph = MenuGlyph::GRID});
+
+    // Whole-app minimize / restore, offered in whichever direction does
+    // something. The flight into (and out of) the icon is the dock's own.
+    if (!WINDOWS.empty()) {
+        if (minimized < WINDOWS.size())
+            rows.emplace_back(SRow{.kind = ERow::MinimizeAll, .label = WINDOWS.size() > 1 ? "Minimize All" : "Minimize", .glyph = MenuGlyph::MINIMIZE});
+        if (minimized > 0)
+            rows.emplace_back(SRow{.kind = ERow::RestoreAll, .label = minimized > 1 ? "Show All" : "Show", .glyph = MenuGlyph::RESTORE});
+    }
+}
+
 std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
     std::vector<SRow> rows;
 
@@ -3434,12 +3518,24 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
             // menu offers that means something for a folder -- open it, Get
             // Info -- and Empty Trash, always there, dimmed while there is
             // nothing to empty rather than vanishing, so the menu keeps its shape.
-            rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = "Open", .glyph = MenuGlyph::FOLDER});
+            // Its windows are the file manager's windows showing it, and get
+            // the rows an app's windows get. No Force Quit: every Files window
+            // is one process, so it would kill the user's other folders too.
+            const auto WINDOWS = locationWindows(item);
+            rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = WINDOWS.empty() ? "Open" : "New Window", .glyph = WINDOWS.empty() ? MenuGlyph::FOLDER : MenuGlyph::NEW});
+            rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
+            if (!WINDOWS.empty())
+                rows.emplace_back(SRow{.kind = ERow::Separator});
+            appendWindowRows(rows, WINDOWS, item, monitor);
             rows.emplace_back(SRow{.kind = ERow::Separator});
             rows.emplace_back(SRow{.kind = ERow::EmptyTrash, .label = "Empty Trash", .glyph = MenuGlyph::TRASH, .hint = item.trashEmpty ? "empty" : "",
                                    .danger = !item.trashEmpty, .disabled = item.trashEmpty});
             rows.emplace_back(SRow{.kind = ERow::Separator});
             rows.emplace_back(SRow{.kind = ERow::Details, .label = "Get Info", .glyph = MenuGlyph::DETAILS});
+            if (!WINDOWS.empty()) {
+                rows.emplace_back(SRow{.kind = ERow::Separator});
+                rows.emplace_back(SRow{.kind = ERow::Quit, .label = WINDOWS.size() > 1 ? "Close " + std::to_string(WINDOWS.size()) + " Windows" : "Close Window", .glyph = MenuGlyph::QUIT});
+            }
         }
 
         return rows;
@@ -3482,53 +3578,7 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
     if (!rows.empty() && !WINDOWS.empty())
         rows.emplace_back(SRow{.kind = ERow::Separator});
 
-    // Each window with WHERE it is: its desktop, the scratchpad, or minimized.
-    // A list of identical app names with nothing to tell them apart was the
-    // commonest reason to open the hover panel instead.
-    //
-    // The ones on the desktop this monitor is showing say so (user, 2026-10-08)
-    // -- in the hint, the dim words the row already has, so the marker costs no
-    // new ink: "3 \u00b7 current". A minimized window counts by the desktop it
-    // came off and comes back to. A scratchpad's is never the current one.
-    const auto  ACTIVE    = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
-    const auto  ACTIVEID  = ACTIVE && !ACTIVE->m_isSpecialWorkspace ? ACTIVE->m_id : WORKSPACE_INVALID;
-    size_t      minimized = 0;
-    for (const auto& WINDOW : WINDOWS) {
-        std::string where;
-        WORKSPACEID on = WORKSPACE_INVALID;
-        if (Minimize::isMinimized(WINDOW)) {
-            where = "minimized";
-            on    = Minimize::originalWorkspace(WINDOW);
-            ++minimized;
-        } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
-            where = Scratchpad::label(SCRATCH);
-        else if (WINDOW->m_workspace) {
-            where = WINDOW->m_workspace->m_name;
-            on    = WINDOW->m_workspace->m_id;
-        }
-        if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
-            where += " \u00b7 current";
-        rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
-        // Its own Move to Empty Workspace, right under it and indented, so which
-        // window it moves is never a question (user, 2026-10-08). The menu has
-        // no submenus to put it in; an indented row is the flat menu's way of
-        // saying "this belongs to the line above".
-        rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
-    }
-
-    // Every window of the app at once, where they can be compared: the overview
-    // filtered on the app's name.
-    if (!WINDOWS.empty())
-        rows.emplace_back(SRow{.kind = ERow::ShowWindows, .label = "Show Windows", .glyph = MenuGlyph::GRID});
-
-    // Whole-app minimize / restore, offered in whichever direction does
-    // something. The flight into (and out of) the icon is the dock's own.
-    if (!WINDOWS.empty()) {
-        if (minimized < WINDOWS.size())
-            rows.emplace_back(SRow{.kind = ERow::MinimizeAll, .label = WINDOWS.size() > 1 ? "Minimize All" : "Minimize", .glyph = MenuGlyph::MINIMIZE});
-        if (minimized > 0)
-            rows.emplace_back(SRow{.kind = ERow::RestoreAll, .label = minimized > 1 ? "Show All" : "Show", .glyph = MenuGlyph::RESTORE});
-    }
+    appendWindowRows(rows, WINDOWS, item, monitor);
 
     // A class no desktop entry claims has nothing to show the details of and
     // nothing to favourite by id, so both rows are left out rather than drawn
@@ -3781,13 +3831,17 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::Favorite: toggleFavorite(itemDesktopId(item)); return;
 
         case ERow::ShowWindows: {
+            if (!item.uri.empty()) {
+                openScrollOverviewWithQuery(monitor, item.locationName);
+                return;
+            }
             const auto* ENTRY = AppSearch::entryForId(itemDesktopId(item));
             openScrollOverviewWithQuery(monitor, ENTRY && !ENTRY->name.empty() ? ENTRY->name : wmClass);
             return;
         }
 
         case ERow::Quit:
-            for (const auto& WINDOW : itemWindows(item))
+            for (const auto& WINDOW : menuWindows(item))
                 WINDOW->sendClose();
             return;
 
@@ -3799,8 +3853,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         case ERow::MinimizeAll: {
             ConfigureHold::CHold    oneResize;
-            Minimize::CGestureBoxes boxesBeforeAnyMoves(itemWindows(item));
-            for (const auto& WINDOW : itemWindows(item))
+            Minimize::CGestureBoxes boxesBeforeAnyMoves(menuWindows(item));
+            for (const auto& WINDOW : menuWindows(item))
                 if (!Minimize::isMinimized(WINDOW))
                     Flight::minimize(monitor, WINDOW, false);
             return;
@@ -3809,8 +3863,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::RestoreAll: {
             ConfigureHold::CHold oneResize;
             {
-                Minimize::CRestoreSlots ownSlots(itemWindows(item));
-                for (const auto& WINDOW : itemWindows(item))
+                Minimize::CRestoreSlots ownSlots(menuWindows(item));
+                for (const auto& WINDOW : menuWindows(item))
                     if (Minimize::isMinimized(WINDOW))
                         Flight::restore(monitor, WINDOW);
             }
