@@ -25,6 +25,8 @@ Panel {
   // Kept loaded after a close long enough for the exit animation to finish;
   // KeyboardPanel's card fade is 140 ms, the content's own exit a little less.
   property bool lingering: false
+  // Set by the `icons` IPC call; HyprdrivePanel takes it (and clears it).
+  property string pendingIconApp: ""
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -67,6 +69,8 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
+    // The dock's Get Info -> App Icon: open on Icons with this app chosen.
+    function icons(appId: string): void { root.pendingIconApp = appId; root.open() }
   }
 
   // The bar icon is hyprdrive's own mark rather than a font glyph (user,

@@ -3235,6 +3235,7 @@ enum class ERow : uint8_t {
     // Get Info's own view (user, 2026-09-24). The menu swaps to these in place.
     InfoLine,   // "Version  1.3.1": click copies the value (kept whole in `exec`)
     InfoReveal, // Show in Files
+    InfoIcon,   // App Icon: the settings panel's Icons section, on this app (exec = desktop id)
     InfoCopyAll,
     InfoBack,
     // The overview, filtered on the app (user, 2026-09-24).
@@ -3276,6 +3277,7 @@ namespace MenuGlyph {
     inline constexpr const char* UNPIN    = "\uf08d"; // thumb-tack
     inline constexpr const char* BACK     = "\uf053"; // chevron-left
     inline constexpr const char* COPY     = "\uf0c5"; // copy
+    inline constexpr const char* IMAGE    = "\uf03e"; // image
     inline constexpr const char* PACKAGE  = "\uf1b2"; // cube
     inline constexpr const char* TAG      = "\uf02b"; // tag
     inline constexpr const char* TERMINAL = "\uf120"; // terminal
@@ -3300,6 +3302,7 @@ struct SRow {
     std::string  hint;           // dim, right-aligned: a window's desktop, say
     bool         danger = false; // Force Quit: drawn in the warning colour
     bool         sub    = false; // belongs to the row above: indented one glyph column
+    bool         disabled = false; // greyed out and not clickable (Empty Trash on an empty Trash)
 };
 
 struct SMenu {
@@ -3425,8 +3428,19 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
                 if (item.canEject)
                     rows.emplace_back(SRow{.kind = ERow::Eject, .label = "Eject", .glyph = MenuGlyph::EJECT});
             }
-        } else if (!item.trashEmpty)
-            rows.emplace_back(SRow{.kind = ERow::EmptyTrash, .label = "Empty Trash", .glyph = MenuGlyph::TRASH});
+        } else if (item.uri == "trash:///") {
+            // The Trash's menu (user, 2026-10-13: "needs same options as other
+            // app icons AND empty trash, greyed out when empty"): what an app's
+            // menu offers that means something for a folder -- open it, Get
+            // Info -- and Empty Trash, always there, dimmed while there is
+            // nothing to empty rather than vanishing, so the menu keeps its shape.
+            rows.emplace_back(SRow{.kind = ERow::StackOpen, .label = "Open", .glyph = MenuGlyph::FOLDER});
+            rows.emplace_back(SRow{.kind = ERow::Separator});
+            rows.emplace_back(SRow{.kind = ERow::EmptyTrash, .label = "Empty Trash", .glyph = MenuGlyph::TRASH, .hint = item.trashEmpty ? "empty" : "",
+                                   .danger = !item.trashEmpty, .disabled = item.trashEmpty});
+            rows.emplace_back(SRow{.kind = ERow::Separator});
+            rows.emplace_back(SRow{.kind = ERow::Details, .label = "Get Info", .glyph = MenuGlyph::DETAILS});
+        }
 
         return rows;
     }
@@ -3544,7 +3558,40 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
 // GET INFO's rows: the .desktop entry's own answers straight away, the package
 // manager's as soon as AppInfo has them. Each value row carries the WHOLE value
 // in `exec` (the hint is elided to fit) so a click copies all of it.
+// The Trash's Get Info: what is in it and where it lives. Counted from the top
+// level of Trash/files -- one entry per thing trashed, however deep a trashed
+// folder is -- so opening the view never walks a large trash.
+static std::vector<SRow> trashInfoRows() {
+    std::vector<SRow> rows;
+    std::string       data;
+    if (const char* X = std::getenv("XDG_DATA_HOME"); X && *X)
+        data = X;
+    else if (const char* HOME = std::getenv("HOME"); HOME && *HOME)
+        data = std::string(HOME) + "/.local/share";
+    const std::string DIR = data + "/Trash";
+    size_t            n   = 0;
+    std::error_code   ec;
+    for (auto it = std::filesystem::directory_iterator(DIR + "/files", ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec))
+        if (++n >= 100000)
+            break;
+    std::string shown = DIR;
+    if (const char* HOME = std::getenv("HOME"); HOME && *HOME && shown.starts_with(HOME))
+        shown = "~" + shown.substr(std::strlen(HOME));
+    rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Name", .exec = "Trash", .glyph = MenuGlyph::TAG, .hint = "Trash"});
+    const std::string COUNT = n == 0 ? "Empty" : std::to_string(n) + (n == 1 ? " item" : " items");
+    rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Contents", .exec = COUNT, .glyph = MenuGlyph::TRASH, .hint = COUNT});
+    rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Location", .exec = DIR, .glyph = MenuGlyph::FOLDER, .hint = shown});
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+    rows.emplace_back(SRow{.kind = ERow::InfoReveal, .label = "Show in Files", .exec = DIR + "/files", .glyph = MenuGlyph::FOLDER});
+    rows.emplace_back(SRow{.kind = ERow::InfoCopyAll, .label = "Copy Info", .glyph = MenuGlyph::COPY});
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+    rows.emplace_back(SRow{.kind = ERow::InfoBack, .label = "Back", .glyph = MenuGlyph::BACK});
+    return rows;
+}
+
 std::vector<SRow> infoRows(const SItem& item) {
+    if (item.uri == "trash:///")
+        return trashInfoRows();
     std::vector<SRow> rows;
     const auto*       ENTRY = AppSearch::entryForId(itemDesktopId(item));
 
@@ -3607,6 +3654,14 @@ std::vector<SRow> infoRows(const SItem& item) {
         rows.emplace_back(SRow{.kind = ERow::ShowWindows, .label = "Open windows", .glyph = MenuGlyph::WINDOW, .hint = std::to_string(N) + "  \uf054"});
 
     rows.emplace_back(SRow{.kind = ERow::Separator});
+    // App Icon (user, 2026-10-13): change it right here rather than hunting
+    // for the app in the settings panel. Only an app with a desktop id can
+    // have an override -- that is what the store is keyed on.
+    if (ENTRY && !itemDesktopId(item).empty()) {
+        const bool CUSTOM = IconOverrides::forId(itemDesktopId(item)) != nullptr;
+        rows.emplace_back(SRow{.kind = ERow::InfoIcon, .label = "App Icon", .exec = itemDesktopId(item), .glyph = MenuGlyph::IMAGE,
+                               .hint = std::string(CUSTOM ? "Custom  " : "Change  ") + "\uf054"});
+    }
     if (ENTRY)
         rows.emplace_back(SRow{.kind = ERow::InfoReveal, .label = "Show in Files", .exec = ENTRY->path, .glyph = MenuGlyph::FOLDER});
     rows.emplace_back(SRow{.kind = ERow::InfoCopyAll, .label = "Copy Info", .glyph = MenuGlyph::COPY});
@@ -3700,6 +3755,19 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
                 Hyprutils::OS::CProcess("/usr/bin/wl-copy", {all}).runAsync();
             return;
         }
+
+        case ERow::InfoIcon:
+            // The Omarchy shell's IPC: open the Hyprdrive panel on Icons with
+            // this app chosen (Panel.qml, `icons`). argv, no shell: the id is
+            // one argument whatever it contains.
+            // The overview first: it owns the keyboard and draws over the
+            // shell, so the panel would open unseen and close again at once.
+            if (row.exec.empty())
+                return;
+            if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+                OVERVIEW->close();
+            Hyprutils::OS::CProcess("/usr/bin/qs", {"-p", "/usr/share/omarchy/shell", "ipc", "call", "dragos.hyprdrive", "icons", row.exec}).runAsync();
+            return;
 
         case ERow::InfoReveal:
             // FileManager1.ShowItems: the freedesktop call every file manager
@@ -3813,14 +3881,14 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
         }
 
         SRowTex t;
-        t.label = OverviewRender::text(ROW.label, ROW.danger ? DANGER_COLOR : LABEL_COLOR, FONTPX, false, "", 0, 500);
+        t.label = OverviewRender::text(ROW.label, ROW.disabled ? DIM_COLOR.modifyA(0.6F) : ROW.danger ? DANGER_COLOR : LABEL_COLOR, FONTPX, false, "", 0, 500);
         if (!t.label || !t.label->ok()) {
             textures.emplace_back();
             height += MENU_SEP_H * SCALE;
             continue;
         }
         if (!ROW.glyph.empty())
-            t.glyph = OverviewRender::text(ROW.glyph, ROW.danger ? DANGER_COLOR : DIM_COLOR.modifyA(0.8F), FONTPX, false, "JetBrainsMono Nerd Font", 0, 400);
+            t.glyph = OverviewRender::text(ROW.glyph, ROW.disabled ? DIM_COLOR.modifyA(0.45F) : ROW.danger ? DANGER_COLOR : DIM_COLOR.modifyA(0.8F), FONTPX, false, "JetBrainsMono Nerd Font", 0, 400);
         if (!ROW.hint.empty())
             t.hint = OverviewRender::text(ROW.hint, DIM_COLOR, FONTPX, false, "", 0, 400);
 
@@ -3871,7 +3939,7 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
         const float ROWH = sc<float>(TEX.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
         row.box          = CBox{plate.x, std::round(y), plate.width, std::round(ROWH)};
 
-        if (row.box.containsPoint(MOUSE)) {
+        if (!row.disabled && row.box.containsPoint(MOUSE)) {
             // X56: the context menu's row highlight follows the theme too --
             // except on the destructive row, which lights in its own colour so
             // the pointer landing on it is noticed.
@@ -5071,7 +5139,7 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
         g_menu->rows     = {SRow{.kind = ERow::StackRenameField, .label = g_menu->editText + "\u2502", .glyph = MenuGlyph::PENCIL, .hint = "type to rename \u00b7 \u21b5 save"}};
         return true;
     }
-    if (ROW->kind == ERow::StackRenameField || ROW->kind == ERow::InfoLine)
+    if (ROW->kind == ERow::StackRenameField || ROW->kind == ERow::InfoLine || ROW->disabled)
         return true; // the field and the question are not buttons
 
     if (ROW->kind == ERow::Details || ROW->kind == ERow::InfoBack) {

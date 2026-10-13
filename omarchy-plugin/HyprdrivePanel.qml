@@ -278,6 +278,20 @@ Item {
     iconsRun(["config", JSON.stringify(change)], true)
   }
   onIconsPathChanged: if (iconsPath !== "") iconsList()
+  // The dock's Get Info -> App Icon (Panel.qml's `icons` IPC call).
+  function takePendingIcon() {
+    if (!host || !host.pendingIconApp) return
+    iconSel = host.pendingIconApp
+    host.pendingIconApp = ""
+    goTo("icons")
+    iconsList()
+  }
+  onHostChanged: takePendingIcon()
+  Connections {
+    target: root.host
+    ignoreUnknownSignals: true
+    function onPendingIconAppChanged() { root.takePendingIcon() }
+  }
 
   // ----------------------------------------------------------------- gestures
   readonly property var gestureList: gestureDraft !== null ? gestureDraft : Model.cloneGestures(hd.gestures)
@@ -1276,6 +1290,22 @@ Item {
       id: ie
       spacing: Style.space(14)
       Component.onCompleted: root.iconsList()
+      // A newly chosen app starts with a search for its own name -- from a
+      // tile click or from the dock's Get Info alike. The list may arrive after
+      // the choice (opened from the dock), so both changes are watched.
+      property string seeded: ""
+      function seed() {
+        var a = root.iconApp
+        if (!a || seeded === a.id) return
+        seeded = a.id
+        pickField.text = String(a.name || "").toLowerCase()
+        root.iconsSearch(pickField.text)
+      }
+      Connections {
+        target: root
+        function onIconSelChanged() { ie.seed() }
+        function onIconAppsChanged() { ie.seed() }
+      }
 
       Text {
         visible: root.iconApps.length === 0
@@ -1314,12 +1344,7 @@ Item {
             }
             MouseArea {
               id: appArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                root.iconSel = modelData.id
-                var guess = String(modelData.name || "").toLowerCase()
-                pickField.text = guess
-                root.iconsSearch(guess)
-              }
+              onClicked: root.iconSel = modelData.id
             }
           }
         }
