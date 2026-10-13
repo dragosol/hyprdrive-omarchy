@@ -76,6 +76,18 @@ with tempfile.TemporaryDirectory() as home:
     run(env, "config", '{"selfhst": false}')
     check("search offline with selfh.st off: no selfh.st rows", run(env, "search", "files").get("selfhst") == [])
 
+    # An SVG that reaches outside itself is refused; one using its own #ids is fine
+    ext_svg = pics / "outside.svg"
+    ext_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="file:///etc/passwd"/></svg>')
+    check("refuses an SVG with an outside href", run(env, "set", "zen", "file:" + str(ext_svg)).get("ok") is False)
+    url_svg = pics / "url.svg"
+    url_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:url(http://x.example/a.png)"/></svg>')
+    check("refuses an SVG with an outside url()", run(env, "set", "zen", "file:" + str(url_svg)).get("ok") is False)
+    own_svg = pics / "own.svg"
+    own_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g"/></defs><rect fill="url(#g)"/><use href="#g"/></svg>')
+    check("accepts an SVG that only uses its own #ids", run(env, "set", "zen", "file:" + str(own_svg)).get("ok") is True)
+    run(env, "reset", "zen")
+
     # Folder search finds the folder's pictures
     (pics / "terminal-dark.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
     run(env, "config", json.dumps({"dirs": [str(pics)]}))

@@ -38,6 +38,7 @@ import re
 import stat
 import sys
 import time
+import urllib.error
 import urllib.request
 
 STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))) / "hyprdrive"
@@ -144,7 +145,19 @@ def sniff(data, ext):
     head = data[:2048].lstrip()
     if ext == ".svg":
         low = head.lower()
-        return b"<svg" in low and (low.startswith(b"<svg") or low.startswith(b"<?xml") or low.startswith(b"<!--"))
+        if not (b"<svg" in low and (low.startswith(b"<svg") or low.startswith(b"<?xml") or low.startswith(b"<!--"))):
+            return False
+        # No outside references: every href / xlink:href / url() must point
+        # inside the picture itself (#id) or be inline data. A logo needs
+        # nothing else, and the renderers below (librsvg, Qt) are not asked to
+        # resolve anything.
+        whole = data.lower()
+        for m in re.finditer(rb"""(?:href\s*=\s*["']|url\(\s*["']?)\s*([^"')\s]*)""", whole):
+            target = m.group(1)
+            if target and not (target.startswith(b"#") or target.startswith(b"data:image/")):
+                return False
+        return b"<!entity" not in whole
+
     if ext == ".png":
         return data.startswith(b"\x89PNG\r\n\x1a\n")
     if ext in (".jpg", ".jpeg"):
@@ -267,9 +280,24 @@ def resolve(icon, index=None):
 
 
 # --------------------------------------------------------------- selfh.st --
+class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to https://cdn.jsdelivr.net -- never to another
+    host or down to http."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://cdn.jsdelivr.net/"):
+            raise urllib.error.HTTPError(newurl, code, "redirect off cdn.jsdelivr.net refused", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SameHostRedirects)
+
+
 def fetch(url, limit=MAX_BYTES, timeout=20):
+    if not url.startswith(SELFHST_BASE):
+        raise ValueError("not a selfh.st URL")
     req = urllib.request.Request(url, headers={"User-Agent": "hyprdrive-icons"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # https only: the URLs are ours
+    with _OPENER.open(req, timeout=timeout) as r:
         data = r.read(limit + 1)
     if len(data) > limit:
         raise ValueError("too large")

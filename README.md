@@ -274,10 +274,12 @@ hl.config({ plugin = { hyprdrive = { search = { dictionary = true, translate = t
 
 **selfh.st icons** (settings panel -> Icons, off by default) searches the
 [selfh.st/icons](https://selfh.st/icons) collection for a dock app's new icon.
-While it is on, the panel downloads the collection's index (once a day) and
-shows previews, all from `cdn.jsdelivr.net`. Picking a logo downloads that one
-SVG or PNG. Nothing you type and nothing about your apps is sent. The
-collection is CC BY 4.0.
+While it is on, the panel downloads the collection's index from
+`cdn.jsdelivr.net` once a day and searches it on your machine, so your search
+text is never sent. Previews of the matching logos load from the same CDN,
+which can therefore see which logos were shown. Picking one downloads that one
+SVG or PNG, refused if it is not a picture or an SVG points outside itself.
+Nothing about your apps is sent. The collection is CC BY 4.0.
 
 ## Configuration
 

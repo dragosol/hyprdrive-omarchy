@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dragos.hyprdrive",
   "name": "Hyprdrive",
-  "version": "1.9.32",
+  "version": "1.9.33",
   "author": "dragos",
   "license": "BSD-3-Clause",
   "description": "Mission-control overview, a full dock (stacks, previews, drive and network mounts) and Mosaic, a hybrid layout, for Hyprland on Omarchy, plus this settings panel: one animation curve and speed for everything, per-animation motion blur, a trackpad gesture editor, and performance and AC/battery profiles. The panel installs with the plugin; the compositor plugin itself is built from source against your Hyprland (see the README).",

@@ -712,7 +712,7 @@ Item {
     Rectangle {
       anchors.fill: parent; visible: parent.src === ""
       radius: width * 0.22; color: root.tint(root.fg, 0.08)
-      Text { anchors.centerIn: parent; text: "?"; color: root.faint; font.pixelSize: parent.height * 0.45; font.family: root.fontFamily }
+      Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "?"; color: root.faint; font.pixelSize: parent.height * 0.45; font.family: root.fontFamily }
     }
   }
 
@@ -1477,7 +1477,14 @@ Item {
                     MouseArea {
                       id: hitArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                       onClicked: root.pickIcon(modelData.value, modelData.label)
-                      ToolTip.visible: containsMouse; ToolTip.delay: 400; ToolTip.text: modelData.label
+                    }
+                    // Its own tooltip with a PLAIN-text label: an attached
+                    // ToolTip.text is AutoText, and a name from the selfh.st
+                    // index or a file name in a folder is not ours to parse.
+                    ToolTip {
+                      visible: hitArea.containsMouse
+                      delay: 400
+                      contentItem: Text { textFormat: Text.PlainText; text: modelData.label; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                     }
                   }
                 }
@@ -1511,7 +1518,7 @@ Item {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           width: parent.width - Style.space(60); wrapMode: Text.WordWrap; textFormat: Text.PlainText
-          text: "selfh.st icons -- about 3,000 app logos. Searching them and showing previews loads from cdn.jsdelivr.net; picking one downloads it once. Off, Hyprdrive never goes online for icons. Logos by selfh.st/icons, CC BY 4.0."
+          text: "selfh.st icons -- about 3,000 app logos. The list is downloaded from cdn.jsdelivr.net once a day and searched here; previews of the matches load from there too (so it can see which logos were shown), and picking one downloads it. Off, Hyprdrive never goes online for icons. Logos by selfh.st/icons, CC BY 4.0."
           color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
         }
       }
