@@ -61,6 +61,14 @@ int main() {
         CHECK(C > 0.25 && C < 0.9);
     }
     CHECK(BuiltinIcons::svg(BuiltinIcons::STACK_EMPTY, "#12ab34").find("#12ab34") != std::string::npos);
+    // Hold to swap's mark is line art: lighter coverage than the solid icons,
+    // but it must render and take the accent.
+    {
+        const auto SVG = BuiltinIcons::svg(BuiltinIcons::SWAP, "#12ab34");
+        CHECK(SVG.starts_with("<svg") && SVG.find("#ACCENT") == std::string::npos && SVG.find("#12ab34") != std::string::npos);
+        const double C = coverage(SVG);
+        CHECK(C > 0.08 && C < 0.6);
+    }
     CHECK(BuiltinIcons::svg("hyprdrive-nope", "#fff").empty());
     CHECK(BuiltinIcons::trashName(true, "x", "y") == "hyprdrive-trash-empty-light-white");
     CHECK(BuiltinIcons::trashName(false, "dark", "color") == "hyprdrive-trash-full-dark-color");

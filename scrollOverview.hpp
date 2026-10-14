@@ -387,6 +387,15 @@ class CScrollOverview : public IOverview {
     void      beginWindowDragFrom(const PHLWINDOW& window, const CBox& miniOrigin) override;
     void      updateWindowDrag();
     void      endWindowDrag();
+    // HOLD TO SWAP (user, 2026-10-13). A dragged window held over another one --
+    // a tile in the grid or a mini in the desktop strip -- for drag:hold_to_swap_ms
+    // dims both and pops a "Swap" label in (the detent number's entrance); let go
+    // there and the two trade places. Off the target, the hold starts over.
+    PHLWINDOW swapCandidateAt(const Vector2D& point, CBox* targetBox);
+    void      updateSwapHold();
+    void      renderSwapTargetDim(PHLMONITOR monitor);
+    void      renderSwapLabel(PHLMONITOR monitor);
+    bool      commitSwap(const PHLWINDOW& dragged, const PHLWINDOW& other);
     // The three gathering stages of a drop, in the order endWindowDrag() runs
     // them: each one only asks what the stage before it did not already settle,
     // because a release on the dock pill has to return before a workspace is
@@ -714,6 +723,13 @@ class CScrollOverview : public IOverview {
         // that rubs the proxy off an output is the frame after it left it, so
         // the cross-monitor damage gate has to look at both.
         CBox            lastGlobalBox           = CBox{};
+        // Hold to swap: the window the drag rests over, since when, and when the
+        // hold completed (the dim and the label pop in from that moment).
+        PHLWINDOWREF    swapCandidate;
+        CBox            swapTargetBox           = CBox{};
+        Time::steady_tp swapSince               = {};
+        bool            swapArmed               = false;
+        Time::steady_tp swapArmedAt             = {};
     };
 
     struct SWindowResize {

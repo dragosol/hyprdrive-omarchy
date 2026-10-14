@@ -94,6 +94,8 @@ using namespace Hyprutils::String;
 #include "Placement.hpp"
 #include "FingerSwipe.hpp"
 #include "Spring.hpp"
+#include "HotCorner.hpp"
+#include "Ripple.hpp"
 
 // Methods
 static CFunctionHook* g_pScrollRenderWorkspaceHook = nullptr;
@@ -1594,6 +1596,26 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
             return {.success = false, .error = std::format("hyprdrive:debug activate: no dock item for class {}", CLASS)};
         return {};
     }
+    // `ripple [x y]`: the hot corner's ripple on the focused monitor, from its
+    // top-left corner or from global logical (x, y) -- the rig has no pointer
+    // that can reach a corner.
+    if (TOPIC == "ripple") {
+        auto MONITOR = Desktop::focusState()->monitor();
+        if (!MONITOR)
+            return {.success = false, .error = "hyprdrive:debug ripple: no monitor"};
+        Vector2D origin = MONITOR->logicalBox().pos();
+        if (data.size() > 2) {
+            try {
+                origin = Vector2D{std::stod(std::string{data[1]}), std::stod(std::string{data[2]})};
+            } catch (...) { return {.success = false, .error = "hyprdrive:debug ripple: x y must be numbers"}; }
+            // The monitor the point is on (a corner sits on the box's edge).
+            for (const auto& M : State::monitorState()->monitors())
+                if (M && M->m_enabled && M->logicalBox().copy().expand(1).containsPoint(origin))
+                    MONITOR = M;
+        }
+        ScrollOverview::Ripple::trigger(MONITOR, origin);
+        return {};
+    }
     // `scratchpad`: exactly a click on the overview's Scratchpad cell -- show
     // the default scratchpad, then close the overview (the test rig's trigger).
     if (TOPIC == "scratchpad") {
@@ -2394,6 +2416,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Both read their keys at once: only after registerConfig() above.
     ScrollOverview::FingerSwipe::init();
     ScrollOverview::Spring::init();
+    ScrollOverview::HotCorner::init();
+    ScrollOverview::Ripple::init();
     ScrollOverview::FlightBlur::init();
 
     // Reload can drop live window alphas until decorations are recomputed.
@@ -2566,6 +2590,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // Before the gesture teardown below: a swipe the plugin is driving ends
     // through it, and the spring timer must not fire into unloaded code.
     ScrollOverview::Spring::shutdown();
+    ScrollOverview::HotCorner::shutdown();
     ScrollOverview::FingerSwipe::shutdown();
 
     if (g_pTrackpadGestures)
@@ -2591,7 +2616,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // and clearGestures() is what already answers it for them.
     if (g_pHyprRenderer) {
         for (const char* TYPE : {"COverviewBlurPassElement", "COverviewSplitBorderPassElement", "COverviewShadowPassElement", "CDockLivePreviewPassElement",
-                                 "CDockTiltPassElement", "CStackBlurPassElement"})
+                                 "CDockTiltPassElement", "CStackBlurPassElement", ScrollOverview::Ripple::PASS_NAME})
             g_pHyprRenderer->m_renderPass.removeAllOfType(TYPE);
     }
 
@@ -2599,6 +2624,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // its GL program has to go while this object's code is still mapped.
     ScrollOverview::DockTilt::shutdown();
     ScrollOverview::StackBlur::shutdown();
+    ScrollOverview::Ripple::shutdown();
 
     HyprlandAPI::reloadConfig(); // re-adds built-in gestures cleared above
 }

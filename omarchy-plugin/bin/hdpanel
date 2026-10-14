@@ -42,6 +42,12 @@ MOUNT_SORTS = [
     {"value": "smart", "label": "Smart (One, Two, Three)"},
     {"value": "fstab", "label": "As in fstab"},
 ]
+HOT_CORNERS = [
+    {"value": "top-left", "label": "Top left"},
+    {"value": "top-right", "label": "Top right"},
+    {"value": "bottom-left", "label": "Bottom left"},
+    {"value": "bottom-right", "label": "Bottom right"},
+]
 FADES = [
     {"value": "early", "label": "Early"},
     {"value": "full", "label": "Full"},
@@ -87,6 +93,12 @@ KEY_META = [
     _k(PLUGIN + "search:dictionary", "bool", "overview", False),
     _k(PLUGIN + "search:translate", "bool", "overview", False),
     _k(PLUGIN + "search:easter_egg", "bool", "overview", True),
+    _k(PLUGIN + "hot_corner:enabled", "bool", "overview", False),
+    _k(PLUGIN + "hot_corner:corner", "enum", "overview", "top-left", options=HOT_CORNERS),
+    _k(PLUGIN + "hot_corner:delay_ms", "int", "overview", 150, min=0, max=1000),
+    _k(PLUGIN + "hot_corner:ripple", "bool", "overview", True),
+    _k(PLUGIN + "drag:hold_to_swap", "bool", "overview", True),
+    _k(PLUGIN + "drag:hold_to_swap_ms", "int", "overview", 1500, min=500, max=4000),
     # Dock
     _k(PLUGIN + "dock:enabled", "bool", "dock", True),
     _k(PLUGIN + "dock:autohide", "bool", "dock", True),
@@ -529,7 +541,16 @@ def mosaic_lua(store):
             "hl.unbind(%s)" % lua_lit("SUPER + L"),
             "hl.bind(%s, hl.dsp.exec_cmd(%s), { description = %s })" % (
                 lua_lit("SUPER + L"), lua_lit(shlex.quote(str(LAYOUT_CYCLE))), lua_lit("Cycle workspace layout")),
+            "",
+            "-- Mosaic: Super+arrows move focus by position on a mosaic desktop (its",
+            "-- bunched windows rarely share the edges Hyprland's movefocus looks",
+            "-- for) and fall through to movefocus everywhere else.",
         ]
+        for chord, d, word in (("SUPER + LEFT", "l", "left"), ("SUPER + RIGHT", "r", "right"), ("SUPER + UP", "u", "up"), ("SUPER + DOWN", "d", "down")):
+            lines += [
+                "hl.unbind(%s)" % lua_lit(chord),
+                "hl.bind(%s, hl.plugin.hyprdrive.focus(%s), { description = %s })" % (lua_lit(chord), lua_lit(d), lua_lit("Focus on %s window" % word)),
+            ]
     if default:
         lines += [
             "",

@@ -61,6 +61,9 @@ namespace {
     constexpr char STACK_EMPTY_SVG[] = {
 #embed "assets/icons/stack-empty.svg"
         , 0};
+    constexpr char SWAP_SVG[] = {
+#embed "assets/icons/swap.svg"
+        , 0};
 }
 
 namespace ScrollOverview::BuiltinIcons {
@@ -70,7 +73,9 @@ namespace ScrollOverview::BuiltinIcons {
     }
 
     std::string svg(std::string_view name, std::string_view accentHex) {
-        std::string out = name.starts_with(TRASH_PREFIX) ? trashSvg(name.substr(TRASH_PREFIX.size())) : name == STACK_EMPTY ? std::string(STACK_EMPTY_SVG) : std::string();
+        std::string out = name.starts_with(TRASH_PREFIX) ? trashSvg(name.substr(TRASH_PREFIX.size())) : name == STACK_EMPTY ? std::string(STACK_EMPTY_SVG) :
+            name == SWAP                                                                    ? std::string(SWAP_SVG) :
+                                                                                              std::string();
         constexpr std::string_view TOKEN = "#ACCENT";
         for (size_t at = out.find(TOKEN); at != std::string::npos; at = out.find(TOKEN, at + accentHex.size()))
             out.replace(at, TOKEN.size(), accentHex);

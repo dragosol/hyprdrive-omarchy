@@ -166,15 +166,24 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|scratchpad|type|type \\S+|activate \\S+|press [0-9]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|scratchpad|type|type \\S+|activate \\S+|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | press <keycode>",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
                 return dispatcherFactoryLua(L, "debug");
             },
+        },
+        {
+            // Mosaic.cpp: focus by direction, mosaic-aware (Super+arrows).
+            .name            = "focus",
+            .argPattern      = std::regex{"^(l|r|u|d|left|right|up|down)$"},
+            .typeArgError    = "expected a string argument",
+            .invalidArgError = "expected one of: l, r, u, d",
+            .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "focus"); },
+            .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "focus"); },
         },
         {
             .name            = "window",
@@ -652,6 +661,21 @@ static void registerConfigValuesFor() {
                                   true));
     addKey(makeShared<CIntValue>(KEY("drag:spring_delay_ms"), "how long a drag is held over a dock app or a screen edge before it springs", 1500,
                                  SIntValueOptions{.min = 200, .max = 10000}));
+    // Hold to swap and the hot corner (user, 2026-10-13, asked for on r/omarchy).
+    // scrollOverview.cpp (updateSwapHold), HotCorner.cpp.
+    addKey(makeShared<CBoolValue>(KEY("drag:hold_to_swap"),
+                                  "in the overview, a window dragged and held over another window (in the grid or the desktop strip) for hold_to_swap_ms swaps "
+                                  "places with it when let go there",
+                                  true));
+    addKey(makeShared<CIntValue>(KEY("drag:hold_to_swap_ms"), "how long a dragged window is held over another before letting go swaps them", 1500,
+                                 SIntValueOptions{.min = 300, .max = 5000}));
+    addKey(makeShared<CBoolValue>(KEY("hot_corner:enabled"), "resting the pointer in a screen corner opens the overview, and closes it again, like GNOME's Activities corner", false));
+    addKey(makeShared<CStringValue>(KEY("hot_corner:corner"),
+                                    "the hot corner: top-left, top-right, bottom-left or bottom-right (an outer corner only; between two monitors the pointer crosses)",
+                                    Hyprlang::STRING{"top-left"}));
+    addKey(makeShared<CIntValue>(KEY("hot_corner:delay_ms"), "how long the pointer rests in the hot corner before the overview opens", 150,
+                                 SIntValueOptions{.min = 0, .max = 2000}));
+    addKey(makeShared<CBoolValue>(KEY("hot_corner:ripple"), "the hot corner sends a ripple across the screen from the corner, bending what is under it", true));
     addKey(makeShared<CBoolValue>(KEY("gestures:keep_swipe"),
                                   "a 3/4-finger swipe keeps going after fingers lift, as long as one finger that started it is down (reads the touchpad's own touches)",
                                   true));

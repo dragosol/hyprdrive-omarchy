@@ -196,6 +196,8 @@ Item {
     case "dockOn": return kb("plugin:hyprdrive:dock:enabled")
     case "mountsOn": return kb("plugin:hyprdrive:dock:enabled") && kb("plugin:hyprdrive:dock:show_mounts")
     case "springOn": return kb("plugin:hyprdrive:drag:spring_dock") || kb("plugin:hyprdrive:drag:spring_edges")
+    case "hotCornerOn": return kb("plugin:hyprdrive:hot_corner:enabled")
+    case "swapOn": return kb("plugin:hyprdrive:drag:hold_to_swap")
     case "isolateOvApplies": return !kb("plugin:hyprdrive:dock:isolate_workspaces")
     case "roomApplies": return kb("plugin:hyprdrive:dock:enabled") && !kb("plugin:hyprdrive:dock:autohide")
     case "motionOn": return kn("plugin:hyprdrive:anim_scale") > 0.001

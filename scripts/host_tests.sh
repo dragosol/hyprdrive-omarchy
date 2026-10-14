@@ -50,9 +50,11 @@ run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
 run mount_sort_test scripts/mount_sort_test.cpp
 run gvfs_mount_test scripts/gvfs_mount_test.cpp
 run mosaic_pack_test scripts/mosaic_pack_test.cpp
+run motion_spacing_test scripts/motion_spacing_test.cpp
 run icon_overrides_test scripts/icon_overrides_test.cpp
 run dock_drop_test scripts/dock_drop_test.cpp
 run finger_swipe_test scripts/finger_swipe_test.cpp
+run hot_corner_test scripts/hot_corner_test.cpp
 # shellcheck disable=SC2046
 run builtin_icons_test scripts/builtin_icons_test.cpp BuiltinIcons.cpp $(pkg-config --cflags --libs librsvg-2.0)
 # shellcheck disable=SC2046

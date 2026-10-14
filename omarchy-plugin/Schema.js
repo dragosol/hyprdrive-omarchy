@@ -34,7 +34,21 @@ var sections = [
         { type: "toggle", key: P + "mission_control", label: "Mission Control grid",
           desc: "Lay the current desktop out as a grid. Off shows scrolling columns." },
         { type: "toggle", key: P + "strip", label: "Desktop strip",
-          desc: "Live thumbnails of every desktop along the top." }
+          desc: "Live thumbnails of every desktop along the top." },
+        { type: "toggle", key: P + "hot_corner:enabled", label: "Hot corner",
+          desc: "Rest the pointer in a screen corner to open the overview, and again to close it, without touching the keyboard." },
+        { type: "choice", key: P + "hot_corner:corner", label: "Corner", when: "hotCornerOn",
+          desc: "Only a corner at the outside edge of your screens counts. The top left is also Omarchy's menu button: a click there still opens the menu." },
+        { type: "slider", key: P + "hot_corner:delay_ms", label: "Rest time", min: 0, max: 1000, step: 50, unit: "ms", when: "hotCornerOn",
+          desc: "How long the pointer rests in the corner before the overview opens." },
+        { type: "toggle", key: P + "hot_corner:ripple", label: "Ripple", when: "hotCornerOn",
+          desc: "A ripple runs out from the corner across the screen, bending what is under it like water." }
+      ]},
+      { title: "Rearranging", rows: [
+        { type: "toggle", key: P + "drag:hold_to_swap", label: "Hold to swap",
+          desc: "Drag a window over another one, in the grid or the desktop strip, and hold it there. Both dim and Swap appears: let go and they trade places." },
+        { type: "slider", key: P + "drag:hold_to_swap_ms", label: "Hold time", min: 500, max: 4000, step: 100, unit: "ms", when: "swapOn",
+          desc: "How long to hold before letting go swaps the two." }
       ]},
       { title: "Layout", rows: [
         { type: "slider", key: P + "scale", label: "Overview size", min: 0.4, max: 0.9, step: 0.01, fmt: "percent",

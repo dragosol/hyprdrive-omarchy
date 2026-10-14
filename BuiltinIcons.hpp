@@ -14,6 +14,8 @@ namespace ScrollOverview::BuiltinIcons {
     // "hyprdrive-trash-<empty|full>-<light|dark|clear>-<white|color>".
     inline constexpr std::string_view TRASH_PREFIX = "hyprdrive-trash-";
     inline constexpr std::string_view STACK_EMPTY = "hyprdrive-stack-empty";
+    // Hold to swap's mark, drawn beside the "Swap" label in the overview.
+    inline constexpr std::string_view SWAP        = "hyprdrive-swap";
 
     // The SVG source for `name`, with #ACCENT replaced by `accentHex`
     // ("#rrggbb"). Empty for an unknown name.

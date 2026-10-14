@@ -32,6 +32,7 @@
 #include <array>
 
 #include "Config.hpp"
+#include "MotionSpacing.hpp"
 #include "OverviewPassElement.hpp"
 
 #include <hyprland/src/Compositor.hpp>
@@ -79,7 +80,16 @@ namespace ScrollOverview::FlightBlur {
         // `drawn` is the box it is about to composite, `cur` the geometry that box
         // was built around; the previous box is the same box, placed and scaled the
         // way `prev` relates to `cur`.
-        SMotionBlurData motionFor(const CBox& drawn, const CBox& prev, const CBox& cur, int n) {
+        //
+        // EVERY smear goes through here, and here it is held to MotionSpacing's
+        // rule: copies never more than 2 device px apart, on any edge -- more
+        // samples for a long motion, a shorter trail past the shader's 64. `n`
+        // is the configured count (now the minimum), `maxN` a cost ceiling,
+        // `scale` the monitor's (the rule is in device px).
+        SMotionBlurData motionFor(const CBox& drawn, const CBox& prevIn, const CBox& cur, int n, float scale, int maxN = MotionSpacing::MAX_SAMPLES) {
+            const auto PLAN = MotionSpacing::plan(MotionSpacing::SBox{prevIn.x, prevIn.y, prevIn.w, prevIn.h}, MotionSpacing::SBox{cur.x, cur.y, cur.w, cur.h}, scale, n, maxN);
+            const CBox prev{PLAN.previous.x, PLAN.previous.y, PLAN.previous.w, PLAN.previous.h};
+
             const Vector2D RELPOS = drawn.pos() - cur.pos();
             const Vector2D SCALE  = prev.size() / cur.size();
 
@@ -87,7 +97,7 @@ namespace ScrollOverview::FlightBlur {
             mb.enabled  = true;
             mb.previous = CBox{prev.pos() + RELPOS * SCALE, drawn.size() * SCALE};
             mb.current  = drawn;
-            mb.samples  = n;
+            mb.samples  = PLAN.samples;
             return mb;
         }
 
@@ -104,13 +114,15 @@ namespace ScrollOverview::FlightBlur {
             void amendTransformedRenderData(const CBox& currentBox, SMotionBlurData* data) override {
                 if (!data || !m_armed || m_samples < 2 || !valid(m_prev) || !valid(m_cur))
                     return;
-                *data = motionFor(currentBox, m_prev, m_cur, m_samples);
+                *data = motionFor(currentBox, m_prev, m_cur, m_samples, m_scale, m_maxSamples);
             }
 
             // monitor-local LOGICAL, like the currentBox the renderer passes
             CBox            m_prev, m_cur;
             bool            m_armed   = false;
-            int             m_samples = 0;
+            int             m_samples    = 0;
+            int             m_maxSamples = MotionSpacing::MAX_SAMPLES;
+            float           m_scale      = 1.F; // the monitor's, for the spacing rule
             Time::steady_tp m_fedAt   = {};
         };
 
@@ -325,7 +337,7 @@ namespace ScrollOverview::FlightBlur {
             .currentBox = drawn,
             .blurBox    = box.copy().round(),
             .blur       = false, // see queueFrost: never Hyprland's combined blur
-            .motionBlur = motionFor(drawn, PREV, CUR, N),
+            .motionBlur = motionFor(drawn, PREV, CUR, N, SCALE),
         }));
         return true;
     }
@@ -349,6 +361,8 @@ namespace ScrollOverview::FlightBlur {
         t->m_cur          = logical(box, SCALE);
         t->m_armed        = moved(prevBox, box);
         t->m_samples      = samples();
+        t->m_maxSamples   = MotionSpacing::MAX_SAMPLES;
+        t->m_scale        = SCALE;
         t->m_fedAt        = Time::steadyNow();
 
         // The smear reaches back to where the window was: repaint that too.
@@ -623,8 +637,11 @@ namespace ScrollOverview::FlightBlur {
                 t->m_cur     = NOWBOX;
                 t->m_armed   = true;
                 // A swipe moves every window of two desktops at once, each
-                // drawn offscreen: fewer samples keep it at frame rate.
-                t->m_samples = SWIPED ? std::min(N, 8) : N;
+                // drawn offscreen: a lower ceiling keeps it at frame rate. Under
+                // the spacing rule a ceiling only shortens the trail.
+                t->m_samples    = SWIPED ? std::min(N, 8) : N;
+                t->m_maxSamples = SWIPED ? 16 : MotionSpacing::MAX_SAMPLES;
+                t->m_scale      = monitor->m_scale;
                 t->m_fedAt   = NOW;
 
                 CBox reach{std::min(PREV.x, NOWBOX.x), std::min(PREV.y, NOWBOX.y), 0, 0};

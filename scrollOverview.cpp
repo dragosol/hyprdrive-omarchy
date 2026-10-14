@@ -16,6 +16,7 @@
 #include "Compat.hpp"
 #include "Scratchpad.hpp"
 #include "Placement.hpp"
+#include "BuiltinIcons.hpp"
 #include "WorkspacePlan.hpp"
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/config/shared/workspace/WorkspaceRuleManager.hpp>
@@ -2403,6 +2404,287 @@ void CScrollOverview::clearDragPending() {
     drag.originalVisualBox       = CBox{};
     drag.originalOverviewBox     = CBox{};
     drag.originalOverviewHitbox  = CBox{};
+    drag.swapCandidate.reset();
+    drag.swapTargetBox           = CBox{};
+    drag.swapArmed               = false;
+}
+
+// ============================================================ HOLD TO SWAP
+// (user, 2026-10-13, asked for on r/omarchy). Rearranging was taken out of the
+// overview in 1.9.2 (8068af5) because a drop that swapped by accident is worse
+// than none; the hold is what makes it deliberate. A plain drop still only moves
+// a window between desktops (DropDecision.hpp).
+
+namespace {
+    constexpr const char* KEY_HOLD_TO_SWAP    = "plugin:hyprdrive:drag:hold_to_swap";
+    constexpr const char* KEY_HOLD_TO_SWAP_MS = "plugin:hyprdrive:drag:hold_to_swap_ms";
+    constexpr float       SWAP_DIM_A          = 0.62F;
+
+    // A zero, negative or non-finite box handed to a pass element aborts the
+    // compositor (Hyprland's RASSERTs), so every box drawn below asks first.
+    bool swapDrawable(const CBox& b) {
+        return std::isfinite(b.x) && std::isfinite(b.y) && std::isfinite(b.w) && std::isfinite(b.h) && b.w >= 2 && b.h >= 2;
+    }
+
+    // Two windows trade places only when the trade means the same thing for
+    // both: both tiled (their layout slots) or both floating (their spots).
+    // Fullscreen, pinned and special-desktop (scratchpad) windows stay put.
+    bool swappable(const PHLWINDOW& w) {
+        return w && Desktop::View::validMapped(w) && w->m_workspace && !w->m_workspace->m_isSpecialWorkspace && !w->m_pinned &&
+            !Fullscreen::controller()->isFullscreen(w) && w->layoutTarget();
+    }
+}
+
+PHLWINDOW CScrollOverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
+    const auto MONITOR = pMonitor.lock();
+    const auto DRAGGED = getOverviewWindowToShow(drag.activeWindow.lock());
+    if (!MONITOR || !DRAGGED || ScrollOverview::Dock::pillContains(MONITOR, point) || scratchpadCellContains(point))
+        return nullptr;
+
+    PHLWINDOW hit;
+    CBox      hitBox;
+
+    // The strip first: its band floats over the grid's tiles (the drop path
+    // says the same). On a cell but not on one of its minis is no target.
+    if (overviewStripLogicalHeight(MONITOR) > 0.F) {
+        CBox mini;
+        if (const auto W = windowAtStripPoint(point, &mini)) {
+            hit    = W;
+            hitBox = mini;
+        } else if (workspaceAtStripPoint(point) || altCellAt(point))
+            return nullptr;
+    }
+
+    // Then the grid, as workspaceAtOverviewDropPoint walks it: floating over
+    // tiled, topmost first, never the window being dragged.
+    if (!hit) {
+        const auto ACTIVEIDX = activeWorkspaceIndex();
+        const auto PITCH     = getWorkspaceRenderedPitch(MONITOR, scale->value(), layout);
+        for (size_t i = 0; i < images.size() && !hit; ++i) {
+            const auto& wimg = images[i];
+            if (!wimg || !wimg->pWorkspace)
+                continue;
+            const auto OFFSET = workspaceOverviewOffset(i, ACTIVEIDX, PITCH);
+            for (const bool floating : {true, false}) {
+                for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend() && !hit; ++it) {
+                    const auto W = getOverviewWindowToShow(it->lock());
+                    if (!shouldShowOverviewWindow(W) || W == DRAGGED || W->m_isFloating != floating)
+                        continue;
+                    const auto BOX = getOverviewDragWindowBox(W, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout);
+                    if (BOX.containsPoint(point)) {
+                        hit    = W;
+                        hitBox = BOX;
+                    }
+                }
+                if (hit)
+                    break;
+            }
+        }
+    }
+
+    if (!hit || hit == DRAGGED || !swappable(hit) || !swappable(DRAGGED) || hit->m_isFloating != DRAGGED->m_isFloating)
+        return nullptr;
+    if (targetBox)
+        *targetBox = hitBox;
+    return hit;
+}
+
+// Per FRAME, not per motion: a pointer resting on the target sends no motion,
+// and the hold has to complete under a still hand.
+void CScrollOverview::updateSwapHold() {
+    if (!drag.activeWindow || !ScrollOverview::Config::getValue<bool>(KEY_HOLD_TO_SWAP)) {
+        drag.swapCandidate.reset();
+        drag.swapTargetBox = CBox{};
+        drag.swapArmed     = false;
+        return;
+    }
+
+    CBox       box;
+    const auto CANDIDATE = swapCandidateAt(lastMousePosLocal, &box);
+    const auto NOW       = Time::steadyNow();
+    if (CANDIDATE != drag.swapCandidate.lock()) {
+        drag.swapCandidate = CANDIDATE;
+        drag.swapSince     = NOW;
+        drag.swapArmed     = false;
+    }
+    drag.swapTargetBox = CANDIDATE ? box : CBox{};
+    if (!CANDIDATE)
+        return;
+
+    const int HOLDMS = std::clamp<int>(ScrollOverview::Config::getValue<int>(KEY_HOLD_TO_SWAP_MS), 300, 5000);
+    if (!drag.swapArmed && SearchLetters::msSince(NOW, drag.swapSince) >= sc<float>(HOLDMS)) {
+        drag.swapArmed   = true;
+        drag.swapArmedAt = NOW;
+    }
+
+    // Keep the frames coming until the hold has completed and the label has
+    // finished popping in; after that a still pointer costs nothing.
+    if (!drag.swapArmed || SearchLetters::msSince(NOW, drag.swapArmedAt) < SearchLetters::ENTRANCE_MS) {
+        damage();
+        requestInputFrame();
+    }
+}
+
+namespace {
+    // The window's own corner radius, scaled to the box it is drawn into here.
+    int swapRound(const PHLWINDOW& w, const CBox& box, const PHLMONITOR& monitor) {
+        const double REALW = std::max(1.0, sc<double>(w->m_realSize->value().x) * monitor->m_scale);
+        const double R     = sc<double>(ScrollOverview::Config::themeRounding()) * monitor->m_scale * (box.w / REALW);
+        return sc<int>(std::round(std::clamp(R, 0.0, std::min(box.w, box.h) / 2.0)));
+    }
+
+    // Dimmed in the theme's own background colour: dark themes darken, and the
+    // label (theme foreground) reads on it in light themes too.
+    void swapDim(const CBox& box, int round, float a) {
+        if (!swapDrawable(box) || a < 0.01F)
+            return;
+        CRectPassElement::SRectData r;
+        r.box           = box;
+        r.color         = ScrollOverview::Config::dockBackgroundColor().modifyA(SWAP_DIM_A * a);
+        r.round         = round;
+        r.roundingPower = ScrollOverview::Config::themeRoundingPower();
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(r));
+    }
+}
+
+void CScrollOverview::renderSwapTargetDim(PHLMONITOR monitor) {
+    const auto TARGET = drag.swapCandidate.lock();
+    if (!monitor || !drag.swapArmed || !TARGET)
+        return;
+    const float A = SearchLetters::entrancePose(SearchLetters::msSince(Time::steadyNow(), drag.swapArmedAt)).opacity;
+    swapDim(drag.swapTargetBox, swapRound(TARGET, drag.swapTargetBox, monitor), A);
+}
+
+// After the dragged window is drawn: its dim, then the label on it -- the
+// window under the hand is where the eye is.
+void CScrollOverview::renderSwapLabel(PHLMONITOR monitor) {
+    const auto DRAGGED = getOverviewWindowToShow(drag.activeWindow.lock());
+    if (!monitor || !drag.swapArmed || !drag.swapCandidate.lock() || !DRAGGED)
+        return;
+
+    // The proxy's box exactly as renderDraggedWindow draws it.
+    const auto GLOBALBOX = draggedWindowGlobalBox();
+    if (GLOBALBOX.empty())
+        return;
+    auto box = CBox{(GLOBALBOX.pos() - monitor->m_position) * monitor->m_scale, GLOBALBOX.size() * monitor->m_scale};
+    box.round();
+
+    const float MS   = SearchLetters::msSince(Time::steadyNow(), drag.swapArmedAt);
+    const auto  POSE = SearchLetters::entrancePose(MS);
+    swapDim(box, swapRound(DRAGGED, box, monitor), POSE.opacity);
+
+    // The detent number's entrance (SearchLetters::entrancePose, OutBack):
+    // icon and word scaled together about their shared centre.
+    const float SCALE = sc<float>(monitor->m_scale);
+    const int   SIZE  = sc<int>(std::round(std::clamp(sc<float>(box.h) * 0.10F, 14.F * SCALE, 40.F * SCALE)));
+    const auto  TEXT  = OverviewRender::text("Swap", ScrollOverview::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
+    const auto  ICON  = OverviewRender::appIcon(std::string(ScrollOverview::BuiltinIcons::SWAP));
+    if (!TEXT || !TEXT->ok())
+        return;
+
+    const float ICONPX = ICON && ICON->ok() ? sc<float>(SIZE) * 1.25F : 0.F;
+    const float GAP    = ICONPX > 0.F ? sc<float>(SIZE) * 0.4F : 0.F;
+    const float TW     = sc<float>(TEXT->m_size.x);
+    const float TH     = sc<float>(TEXT->m_size.y);
+    const float GROUPW = ICONPX + GAP + TW;
+
+    const double CX = box.x + box.w / 2.0;
+    const double CY = box.y + box.h / 2.0 + sc<double>(POSE.y) * SCALE;
+    const float  K  = POSE.scale;
+    const double LEFT = CX - GROUPW * K / 2.0;
+
+    if (ICONPX > 0.F) {
+        CTexPassElement::SRenderData icon;
+        icon.tex = ICON;
+        icon.box = CBox{std::round(LEFT), std::round(CY - ICONPX * K / 2.0), ICONPX * K, ICONPX * K};
+        icon.a   = POSE.opacity;
+        if (swapDrawable(icon.box))
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(icon)));
+    }
+
+    CTexPassElement::SRenderData label;
+    label.tex = TEXT;
+    label.box = CBox{std::round(LEFT + (ICONPX + GAP) * K), std::round(CY - TH * K / 2.0), TW * K, TH * K};
+    label.a   = POSE.opacity;
+    if (swapDrawable(label.box))
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(label)));
+}
+
+bool CScrollOverview::commitSwap(const PHLWINDOW& a, const PHLWINDOW& b) {
+    const auto TA  = a ? a->layoutTarget() : nullptr;
+    const auto TB  = b ? b->layoutTarget() : nullptr;
+    const auto WSA = a ? a->m_workspace : PHLWORKSPACE{};
+    const auto WSB = b ? b->m_workspace : PHLWORKSPACE{};
+    if (!TA || !TB || !WSA || !WSB || !g_layoutManager)
+        return false;
+
+    // Moving a window can change a monitor's active desktop; the swap must not.
+    std::vector<std::pair<PHLMONITORREF, PHLWORKSPACEREF>> actives;
+    for (const auto& M : State::monitorState()->monitors())
+        if (M)
+            actives.emplace_back(M, M->m_activeWorkspace);
+    const auto RESTORE = [&] {
+        for (const auto& [MREF, WSREF] : actives) {
+            const auto M = MREF.lock();
+            const auto W = WSREF.lock();
+            if (M && W && M->m_activeWorkspace != W)
+                M->changeWorkspace(W, false, true, true);
+        }
+    };
+
+    TA->damageEntire();
+    TB->damageEntire();
+
+    if (!a->m_isFloating) {
+        if (WSA == WSB)
+            g_layoutManager->switchTargets(TA, TB, true);
+        else {
+            // Across desktops: bring A over, trade slots there (A takes B's), and
+            // send B back to file where A was, as an arrival is filed.
+            Desktop::globalWindowController()->moveWindowToWorkspace(a, WSB);
+            RESTORE();
+            g_layoutManager->switchTargets(TA, TB, true);
+            Desktop::globalWindowController()->moveWindowToWorkspace(b, WSA);
+            RESTORE();
+            ScrollOverview::Placement::retileAsNew(b, ScrollOverview::Placement::takeDragAnchor());
+        }
+    } else {
+        // Floating: each keeps its size and takes the other's centre.
+        const CBox BOXA{a->m_realPosition->goal(), a->m_realSize->goal()};
+        const CBox BOXB{b->m_realPosition->goal(), b->m_realSize->goal()};
+        if (WSA != WSB) {
+            Desktop::globalWindowController()->moveWindowToWorkspace(a, WSB);
+            RESTORE();
+            Desktop::globalWindowController()->moveWindowToWorkspace(b, WSA);
+            RESTORE();
+        }
+        auto NEWA = CBox{BOXB.middle() - BOXA.size() / 2.0, BOXA.size()};
+        auto NEWB = CBox{BOXA.middle() - BOXB.size() / 2.0, BOXB.size()};
+        NEWA      = clampBoxToWorkspace(NEWA, WSB, WSB->m_monitor.lock(), a->getRealBorderSize());
+        NEWB      = clampBoxToWorkspace(NEWB, WSA, WSA->m_monitor.lock(), b->getRealBorderSize());
+        TA->setPositionGlobal(NEWA);
+        TB->setPositionGlobal(NEWB);
+    }
+
+    TA->warpPositionSize();
+    TB->warpPositionSize();
+    TA->damageEntire();
+    TB->damageEntire();
+    WSA->updateWindows();
+    if (WSB != WSA)
+        WSB->updateWindows();
+    ScrollOverview::Dock::noteRetiled(a);
+    ScrollOverview::Dock::noteRetiled(b);
+    RESTORE();
+
+    clearDragPending();
+    for (const auto& overview : scrollOverviews()) {
+        if (auto* const OTHER = overview ? dynamic_cast<CScrollOverview*>(overview.get()) : nullptr) {
+            OTHER->rebuildPending = true;
+            OTHER->damage();
+        }
+    }
+    return true;
 }
 
 void CScrollOverview::updateScrollingPan() {
@@ -2913,6 +3195,16 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
 // stage, so the two early exits are the same ladder the final one is rather
 // than a second copy of it.
 void CScrollOverview::endWindowDrag() {
+    // A completed hold, let go on the same window it was held over: swap. Asked
+    // BEFORE the grid closes the dragged window's gap below, or the tiles under
+    // the pointer would shift out from under it at the last moment.
+    if (drag.swapArmed && ScrollOverview::Config::getValue<bool>(KEY_HOLD_TO_SWAP)) {
+        const auto DRAGGED = getOverviewWindowToShow(drag.activeWindow.lock());
+        const auto OTHER   = swapCandidateAt(lastMousePosLocal, nullptr);
+        if (DRAGGED && OTHER && OTHER == drag.swapCandidate.lock() && commitSwap(DRAGGED, OTHER))
+            return;
+    }
+
     // Before anything below reads a slot: the D5 return seed wants this window's
     // slot in the FULL grid, not the gap it has been leaving open.
     grid().dragExcluded = nullptr;
@@ -9977,7 +10269,10 @@ void CScrollOverview::render() {
         OverviewRender::flushPass(MONITOR);
     }
 
+    updateSwapHold();
+    renderSwapTargetDim(MONITOR);
     renderDraggedWindow(MONITOR, ACTIVEIDX, PITCH, SCALE, NOW);
+    renderSwapLabel(MONITOR);
 
     // TOP layers (the bar) here, under the dock. OVERLAY waits until after the
     // dock and the captions -- see the end of this function.

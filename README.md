@@ -69,12 +69,24 @@ your Omarchy theme instead of shipping one of its own.
   ![A Downloads stack fanning out, with a Space preview](https://hyprdrive.shastasia.com/readme/stacks.gif)
 
 **Mosaic** (experimental): a third layout beside Dwindle and Scrolling, after
-GNOME's planned Mosaic. Windows keep their natural size and gather in a centred
-cluster that re-arranges itself as windows open and close; when they no longer
-fit, the desktop tiles them, and it goes back to the mosaic once they fit again.
+GNOME's planned Mosaic. Windows keep their own size and gather in a cluster in
+the middle of the screen, every window leaning toward the centre. Opening a
+window never resizes the others: only the newcomer may come in smaller. When
+the windows no longer fit, the desktop tiles them dwindle-style (a new window
+splits the focused one), and it goes back to the mosaic -- every window at the
+size it had -- once they fit again, by closing windows or shrinking one.
 Turn it on in the panel's Mosaic section, then Super+L cycles Dwindle ->
-Scrolling -> Mosaic. Drag a window's corner to resize it, and an app closed at
-a size you like reopens at that size. Best on large displays.
+Scrolling -> Mosaic, and Super+arrows move the focus between mosaic windows.
+Drag a window's corner to resize it: the others hold still while you drag,
+and the window grows only as far as an arrangement can fit everyone at their
+size -- push past that and the desktop darkens; let go there to tile. A window
+that opens floating joins the mosaic (dialogs stay afloat), and an app closed
+at a size you like reopens at that size. Best on large displays.
+
+**Hot corner** (off by default; panel -> Overview): rest the pointer in a screen
+corner to open the overview, and again to close it, with an optional ripple.
+**Hold to swap** (panel -> Overview): in the overview, drag a window over another
+and hold it there; let go and the two trade places.
 
 **Dock icons** (settings panel -> Icons): give any app on the dock a different
 icon. Pick an app, then search your icon theme, folders of your own (a

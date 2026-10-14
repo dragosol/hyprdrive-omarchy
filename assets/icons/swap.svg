@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- hyprdrive's swap mark (hold to swap, 2026-10-13). Original artwork: two
+       opposed arrows, the upper one right, the lower one left. #ACCENT is
+       replaced with the theme accent when the texture is built. -->
+  <g fill="none" stroke="#ACCENT" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M44 92 H204"/>
+    <path d="M162 50 L206 92 L162 134"/>
+    <path d="M212 164 H52"/>
+    <path d="M94 122 L50 164 L94 206"/>
+  </g>
+</svg>
