@@ -7014,8 +7014,14 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         return std::min(L.rounding, sc<int>(std::round(std::min(box.w, box.h) / 2.0)));
     };
 
-    const int PILLROUND  = roundFor(PILL);
-    const int BADGEROUND = roundFor(BADGE);
+    const int PILLROUND = roundFor(PILL);
+    // The badge sits INSIDE the pill, so its corners are the pill's, inset:
+    // the pill's radius less the gap between them, which keeps the two curves
+    // parallel (user, 2026-10-14: a custom Hyprland rounding left the badge
+    // rounder than the pill around it). At the default -- a fully round pill --
+    // this is still a circle, so nothing changes there.
+    const float INSET      = std::max(0.0, std::min(BADGE.x - PILL.x, BADGE.y - PILL.y));
+    const int   BADGEROUND = std::clamp(sc<int>(std::round(PILLROUND - INSET)), 0, sc<int>(std::round(std::min(BADGE.w, BADGE.h) / 2.0)));
     const auto ACCENT    = ScrollOverview::Config::highlightColor();
 
     if (DRAWPILL)
