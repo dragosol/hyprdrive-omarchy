@@ -124,7 +124,37 @@ namespace ScrollOverview::FlightBlur {
             int             m_maxSamples = MotionSpacing::MAX_SAMPLES;
             float           m_scale      = 1.F; // the monitor's, for the spacing rule
             Time::steady_tp m_fedAt   = {};
+            // What the last smear covered, GLOBAL logical (user, 2026-10-14:
+            // "leftovers from the motion blur glitching in and out of
+            // existence"). The next frame's damage -- or the one after the
+            // smear stops -- has to include it, or the trail stays painted in
+            // the buffers it was drawn into and flickers as they rotate.
+            CBox            m_trail;
+            bool            m_hasTrail = false;
         };
+
+        // Damage `reach` (global logical) AND whatever this window's smear
+        // covered last frame, then remember `reach` as the smear's cover.
+        void damageTrail(CFlightBlurTransformer* t, const CBox& reach) {
+            if (!t)
+                return;
+            g_pHyprRenderer->damageBox(reach.copy());
+            if (t->m_hasTrail)
+                g_pHyprRenderer->damageBox(t->m_trail.copy());
+            t->m_trail    = reach;
+            t->m_hasTrail = true;
+        }
+
+        // The smear stops: no trail this frame, so repaint where the last one was.
+        void disarm(CFlightBlurTransformer* t) {
+            if (!t)
+                return;
+            t->m_armed = false;
+            if (t->m_hasTrail) {
+                g_pHyprRenderer->damageBox(t->m_trail.copy());
+                t->m_hasTrail = false;
+            }
+        }
 
         // Nobody fed it for this long: the motion is over, take it off (the
         // window would otherwise keep rendering through an offscreen buffer).
@@ -206,6 +236,9 @@ namespace ScrollOverview::FlightBlur {
         }
 
         void detach(const PHLWINDOW& window) {
+            for (const auto& T : window->m_transformers)
+                if (auto* F = dynamic_cast<CFlightBlurTransformer*>(T.get()))
+                    disarm(F);
             std::erase_if(window->m_transformers, [](const auto& t) { return dynamic_cast<CFlightBlurTransformer*>(t.get()) != nullptr; });
             holdHyprlandBlur(window, false);
         }
@@ -350,7 +383,7 @@ namespace ScrollOverview::FlightBlur {
         auto*      t    = transformerOf(window);
         if (!WANT) {
             if (t)
-                t->m_armed = false;
+                disarm(t);
             return;
         }
         if (!t)
@@ -370,7 +403,10 @@ namespace ScrollOverview::FlightBlur {
         reach      = CBox{std::min(reach.x, t->m_cur.x), std::min(reach.y, t->m_cur.y), 0, 0};
         reach.w    = std::max(t->m_prev.x + t->m_prev.w, t->m_cur.x + t->m_cur.w) - reach.x;
         reach.h    = std::max(t->m_prev.y + t->m_prev.h, t->m_cur.y + t->m_cur.h) - reach.y;
-        g_pHyprRenderer->damageBox(reach.expand(MARGIN).translate(monitor->m_position));
+        if (t->m_armed)
+            damageTrail(t, reach.expand(MARGIN).translate(monitor->m_position));
+        else
+            disarm(t);
     }
 
     void sweep(const std::function<bool(const PHLWINDOW&)>& stillFlying) {
@@ -384,7 +420,7 @@ namespace ScrollOverview::FlightBlur {
             const float AGE = std::chrono::duration<float, std::milli>(NOW - T->m_fedAt).count();
             // Not fed this frame: no smear from here on, whatever it held.
             if (AGE > 20.F)
-                T->m_armed = false;
+                disarm(T);
             if (AGE > STALE_MS)
                 detach(window);
         }
@@ -393,7 +429,7 @@ namespace ScrollOverview::FlightBlur {
     void reset(const PHLWINDOW& window) {
         if (window)
             if (auto* T = transformerOf(window))
-                T->m_armed = false;
+                disarm(T);
     }
 
     namespace {
@@ -484,7 +520,7 @@ namespace ScrollOverview::FlightBlur {
             for (const auto& e : g_lastLayoutBox)
                 if (const auto W = e.window.lock())
                     if (auto* t = transformerOf(W))
-                        t->m_armed = false;
+                        disarm(t);
             g_lastLayoutBox.clear();
         }
         s_wasSwiping         = SWIPING;
@@ -563,7 +599,7 @@ namespace ScrollOverview::FlightBlur {
                         // window (skip) feeds its own transformer: leave it.
                         if (!(skip && skip(window)))
                             if (auto* t = transformerOf(window))
-                                t->m_armed = false;
+                                disarm(t);
                     }
                     continue;
                 }
@@ -585,7 +621,7 @@ namespace ScrollOverview::FlightBlur {
                 // stayed streaked across the screen after it had stopped).
                 const auto DISARM = [&] {
                     if (auto* t = transformerOf(window))
-                        t->m_armed = false;
+                        disarm(t);
                 };
                 if (!valid(RAWPREV) || !valid(NOWBOX) || !moved(RAWPREV, NOWBOX)) {
                     DISARM();
@@ -647,7 +683,7 @@ namespace ScrollOverview::FlightBlur {
                 CBox reach{std::min(PREV.x, NOWBOX.x), std::min(PREV.y, NOWBOX.y), 0, 0};
                 reach.w = std::max(PREV.x + PREV.w, NOWBOX.x + NOWBOX.w) - reach.x;
                 reach.h = std::max(PREV.y + PREV.h, NOWBOX.y + NOWBOX.h) - reach.y;
-                g_pHyprRenderer->damageBox(reach.expand(MARGIN).translate(monitor->m_position));
+                damageTrail(t, reach.expand(MARGIN).translate(monitor->m_position));
             }
         } else
             g_lastLayoutBox.clear();
