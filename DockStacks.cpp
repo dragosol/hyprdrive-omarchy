@@ -1865,7 +1865,7 @@ namespace ScrollOverview::Stacks {
     // the textures its fan or pane will need -- themed icons and thumbnails,
     // a few per frame -- so the click opens onto a folder that is already
     // loaded instead of stalling its first frames on the decodes.
-    void warm(const std::string& stackPath) {
+    void warm(const std::string& stackPath, float scale) {
         static std::string                     path;
         static uint64_t                        gen = 0;
         static std::vector<StackModel::SEntry> todo;
@@ -1890,9 +1890,11 @@ namespace ScrollOverview::Stacks {
             todo = std::move(L.entries);
             std::ranges::reverse(todo); // popped from the back, first entries first
         }
+        // At the size the fan's rows ask for (FANPX there, a plain row).
+        const int FANPX = sc<int>(std::round(FAN_ICON * std::max(scale, 0.01F) * HOVER_SCALE));
         for (int n = 0; n < 3 && !todo.empty(); ++n) {
-            iconTexture(todo.back(), 64);
-            OverviewRender::appIcon(themedIcon(todo.back().icon));
+            iconTexture(todo.back(), FANPX, true);
+            OverviewRender::appIcon(themedIcon(todo.back().icon), false, true, FANPX);
             todo.pop_back();
         }
     }
@@ -2572,7 +2574,7 @@ namespace ScrollOverview::Stacks {
             if (!g_itemDrag || !g_itemDrag->live)
                 return;
             const float SZ = GHOST_SIZE * SCALE;
-            drawTex(OverviewRender::appIcon(themedIcon(g_itemDrag->icon)), CBox{std::round(MOUSE.x - SZ / 2.0), std::round(MOUSE.y - SZ / 2.0), std::round(SZ), std::round(SZ)},
+            drawTex(OverviewRender::appIcon(themedIcon(g_itemDrag->icon), false, false, SZ), CBox{std::round(MOUSE.x - SZ / 2.0), std::round(MOUSE.y - SZ / 2.0), std::round(SZ), std::round(SZ)},
                     Dock::DRAG_GHOST_ALPHA);
         };
 
@@ -2675,7 +2677,7 @@ namespace ScrollOverview::Stacks {
                 const float ICON = GRID_ICON * SCALE * (PREV ? 1.15F : 1.F);
                 CBox        ib{std::round(cell.x + (cell.width - ICON) / 2.0), std::round(cell.y + 8.F * SCALE), std::round(ICON), std::round(ICON)};
                 const auto TEX = R.vis >= 0 && R.vis < sc<int>(P.visible.size()) ? iconTexture(P.entries[P.visible[sc<size_t>(R.vis)]], sc<int>(std::round(ICON))) :
-                                                                                  OverviewRender::appIcon(themedIcon(R.icon));
+                                                                                  OverviewRender::appIcon(themedIcon(R.icon), false, false, ICON);
                 if (TEX && TEX->ok() && drawableBox(ib)) {
                     CTexPassElement::SRenderData d;
                     d.tex     = TEX;
@@ -2848,6 +2850,11 @@ namespace ScrollOverview::Stacks {
 
             const float KT   = PREV ? 1.15F : 1.F; // the preview's enlargement (the size text is rasterised at)
             const float KS   = KT * HB;              // ... and the hover blow-up
+            // The texture size (IconSize.hpp): the row at full hover blow-up,
+            // fixed per row kind -- ICON itself animates with the hover and the
+            // flight, and a size per frame would be a decode per frame. At rest
+            // GL_LINEAR then minifies ~1.1x, hovered not at all.
+            const int   FANPX = sc<int>(std::round(FAN_ICON * SCALE * KT * HOVER_SCALE));
             const float K    = KS * R.k;             // ... times the row's flight scale
 
             // THE ROW TURNS AS ONE PIECE about its icon's centre -- the pivot the
@@ -2928,15 +2935,15 @@ namespace ScrollOverview::Stacks {
                 // throughout, because it never stops being on screen.
                 const CBox& P0 = FROMPILE->box;
                 CBox        fly{P0.x + (ib.x - P0.x) * E, P0.y + (ib.y - P0.y) * E, P0.width + (ib.width - P0.width) * E, P0.height + (ib.height - P0.height) * E};
-                const auto FLYTEX = iconTexture(FROMPILE->entry, sc<int>(std::round(FAN_ICON * SCALE * KS)), true);
+                const auto FLYTEX = iconTexture(FROMPILE->entry, FANPX, true);
                 drawTex(FLYTEX, OverviewRender::padBox(fly, FLYTEX), 1.F - E * (1.F - ICONA), FROMPILE->rot + (ICONROT - FROMPILE->rot) * E);
             } else
             {
                 // Padded, so its turned edge is filtered, not stair-stepped. A
                 // file's real preview when it has one (2026-09-24).
                 const bool HASENTRY = R.vis >= 0 && sc<size_t>(R.vis) < g_popup->visible.size() && g_popup->visible[sc<size_t>(R.vis)] < g_popup->entries.size();
-                const auto ICONTEX  = HASENTRY ? iconTexture(g_popup->entries[g_popup->visible[sc<size_t>(R.vis)]], sc<int>(std::round(ICON)), true) :
-                                                 OverviewRender::appIcon(themedIcon(R.icon), false, true);
+                const auto ICONTEX  = HASENTRY ? iconTexture(g_popup->entries[g_popup->visible[sc<size_t>(R.vis)]], FANPX, true) :
+                                                 OverviewRender::appIcon(themedIcon(R.icon), false, true, FANPX);
                 drawTex(ICONTEX, OverviewRender::padBox(ib, ICONTEX), ICONA, ICONROT);
             }
         }

@@ -227,7 +227,7 @@ namespace ScrollOverview::Stacks {
     // Browser downloads in flight in this stack's folder (dock stacks, 2026-09-24).
     size_t downloadsIn(const std::string& stackPath);
     // While the pointer rests on a stack's cell: build what its popup will draw.
-    void warm(const std::string& stackPath);
+    void warm(const std::string& stackPath, float scale); // scale: the monitor the fan will open on
     // Move `paths` to the Trash off the compositor thread, remembering whose
     // they were: the stack bounces when it lands, or shakes with the error.
     void trashFrom(const std::string& stackPath, std::vector<std::string> paths);

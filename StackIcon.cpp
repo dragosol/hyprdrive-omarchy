@@ -11,6 +11,7 @@
 #include "LauncherEntry.hpp"
 #include "Config.hpp"
 #include "OverviewRender.hpp"
+#include "IconSize.hpp"
 #include "StackReader.hpp"
 
 #include <gio/gio.h>
@@ -66,8 +67,11 @@ namespace ScrollOverview::Stacks {
     // frame, into a ~96 MB texture). Cached thumbnails are <= 256 px, and the
     // lookup (uri + md5 + two stats) is remembered per path + mtime, so the
     // render path does it once per file, not once per frame.
+    // `px`: the size it is drawn at, device px -- a thumbnail (<= 256 px) and
+    // a raster app icon are resampled to about that (IconSize.hpp), so a 256 px
+    // preview in a dock-sized pile is not left to GL_LINEAR to minify.
     SP<Render::ITexture> iconTexture(const StackModel::SEntry& e, int px, bool padded) {
-        (void)px; // textures are drawn scaled; one size (the thumbnail's own) per file
+        const int BUCKET = OverviewRender::IconSize::bucket(px);
         if (!e.dir && (e.kind.starts_with("image/") || e.kind.starts_with("video/") || e.kind == "application/pdf")) {
             // path|mtime -> thumbnail ("" = none yet). A "none" is asked again
             // once Thumbs has generated something (its generation moved).
@@ -84,10 +88,10 @@ namespace ScrollOverview::Stacks {
                 IT = thumbFor.insert_or_assign(KEY, SMemo{Thumbs::lookup(e.path, e.kind), Thumbs::generation()}).first;
             }
             if (!IT->second.thumb.empty())
-                if (auto tex = OverviewRender::imageFile(IT->second.thumb, 256, true, padded); tex)
+                if (auto tex = OverviewRender::imageFile(IT->second.thumb, BUCKET > 0 ? BUCKET : 256, true, padded); tex)
                     return tex;
         }
-        return OverviewRender::appIcon(themedIcon(e.icon), false, padded);
+        return OverviewRender::appIcon(themedIcon(e.icon), false, padded, px);
     }
 
     // The pile's four newest files, per folder, recomputed only when the reader
@@ -212,6 +216,10 @@ namespace ScrollOverview::Stacks {
             return true; // a cell still animating in from nothing: nothing to draw yet
 
         const float SC  = std::max(monitor->m_scale, 0.01F);
+        // Textures are asked for at the RESTING cell's size (Dock::restingIconPx),
+        // not this box's -- the box grows in, lerps and lifts, and a size per
+        // frame would be a decode per frame. The fractions are the boxes below.
+        const double REST = Dock::restingIconPx(monitor) > 0.0 ? Dock::restingIconPx(monitor) : iconBox.width;
         const auto  add = [&](const SP<Render::ITexture>& tex, CBox box, float rot, float a) {
             if (!tex || !tex->ok() || !drawableBox(box))
                 return;
@@ -225,11 +233,11 @@ namespace ScrollOverview::Stacks {
         const auto L = StackReader::status(S->path);
         // A FOLDER THAT IS GONE: dimmed, and the tooltip says why (tooltipSuffix).
         if (L.ready && L.missing) {
-            add(OverviewRender::appIcon(themedIcon(S->icon)), iconBox, 0.F, alpha * 0.35F);
+            add(OverviewRender::appIcon(themedIcon(S->icon), false, false, REST), iconBox, 0.F, alpha * 0.35F);
             return true;
         }
         if (S->display == StackModel::EDisplay::Folder) {
-            add(OverviewRender::appIcon(themedIcon(S->icon)), iconBox, 0.F, alpha);
+            add(OverviewRender::appIcon(themedIcon(S->icon), false, false, REST), iconBox, 0.F, alpha);
             return true;
         }
 
@@ -258,17 +266,17 @@ namespace ScrollOverview::Stacks {
             if (Config::getValue<bool>("plugin:hyprdrive:dock:builtin_icons")) {
                 CBox tray = outline;
                 tray.expand(-outline.width * 0.04);
-                add(OverviewRender::appIcon(std::string(BuiltinIcons::STACK_EMPTY)), tray, 0.F, alpha);
+                add(OverviewRender::appIcon(std::string(BuiltinIcons::STACK_EMPTY), false, false, REST * 0.88 * 0.92), tray, 0.F, alpha);
                 const double S2 = tray.width * 0.30;
-                add(OverviewRender::appIcon(themedIcon(S->icon)), CBox{tray.x + (tray.width - S2) / 2.0, tray.y + tray.height * 0.705 - S2 / 2.0, S2, S2}, 0.F, alpha);
+                add(OverviewRender::appIcon(themedIcon(S->icon), false, false, REST * 0.88 * 0.92 * 0.30), CBox{tray.x + (tray.width - S2) / 2.0, tray.y + tray.height * 0.705 - S2 / 2.0, S2, S2}, 0.F, alpha);
                 return true;
             }
             CBox inner = outline;
             inner.expand(-outline.width * 0.18);
-            add(OverviewRender::appIcon(themedIcon(S->icon)), inner, 0.F, alpha * 0.85F);
+            add(OverviewRender::appIcon(themedIcon(S->icon), false, false, REST * 0.88 * 0.64), inner, 0.F, alpha * 0.85F);
             return true;
         }
-        const int PX = sc<int>(std::round(iconBox.width));
+        const int PX = sc<int>(std::round(REST));
         for (const auto& P : PILEITEMS)
             // Padded: the pile's papers are turned, and a hard texture edge
             // would stair-step (2026-09-24).

@@ -6780,6 +6780,33 @@ const char* frameReason(PHLMONITOR monitor) {
     return needsFramesReason(monitor, LAYOUT, TALLY);
 }
 
+// THE SIZE AN ICON TEXTURE IS ASKED FOR (IconSize.hpp, 2026-10-15): the
+// RESTING cell on this monitor, device px -- every cell of a pill is the same
+// size. Not the box being drawn: that one grows in on spawn, lerps through a
+// re-arrange and blows up on launch, and asking for each of those sizes would
+// decode a texture per frame. The hover lean (1.03) is inside IconSize's
+// headroom; the transient zooms are drawn from the resting texture.
+double restingIconPx(PHLMONITOR monitor) {
+    const auto& BASE = baseLayout(monitor);
+    if (!BASE.items.empty())
+        return BASE.items.front().iconBox.width;
+    return BASE.showApps.width;
+}
+
+// What the icon warmer decodes ahead for the dock: each item's icon at the
+// size its resting cell is drawn at on each monitor (the px every draw below
+// passes appIcon).
+std::vector<std::pair<std::string, double>> iconWarmList() {
+    std::vector<std::pair<std::string, double>> out;
+    for (const auto& MON : State::monitorState()->monitors()) {
+        const double PX = restingIconPx(MON);
+        for (const auto& ITEM : baseLayout(MON).items)
+            if (!ITEM.icon.empty() && !ITEM.scratchpad && PX > 0.0)
+                out.emplace_back(ITEM.icon, PX);
+    }
+    return out;
+}
+
 // The hop's drawing: each urgent app's icon, at its RESTING x, rising out of the
 // bottom edge by the hop's lift. Only ever called with the dock fully away.
 void renderUrgentHop(PHLMONITOR monitor) {
@@ -6803,7 +6830,7 @@ void renderUrgentHop(PHLMONITOR monitor) {
 
     const float EDGE = sc<float>(monitor->m_size.y * monitor->m_scale); // monitor-local render px
     for (const SItem* ITEM : urgent) {
-        const auto TEX = OverviewRender::appIcon(ITEM->icon);
+        const auto TEX = OverviewRender::appIcon(ITEM->icon, false, false, restingIconPx(monitor));
         if (!TEX || !TEX->ok())
             continue;
         const CBox& IB = ITEM->iconBox;
@@ -6842,7 +6869,7 @@ void renderStackPeek(PHLMONITOR monitor) {
             continue;
         const CBox  AT{IB.x, EDGE - UP, IB.width, IB.height};
         if (!Stacks::drawCell(monitor, ITEM, AT, 1.F, DockTilt::SPose{}))
-            if (const auto TEX = OverviewRender::appIcon(ITEM.icon); TEX && TEX->ok() && Stacks::drawableBox(AT)) {
+            if (const auto TEX = OverviewRender::appIcon(ITEM.icon, false, false, restingIconPx(monitor)); TEX && TEX->ok() && Stacks::drawableBox(AT)) {
                 CTexPassElement::SRenderData d;
                 d.tex = TEX;
                 d.box = AT;
@@ -7007,13 +7034,14 @@ void render(PHLMONITOR monitor) {
     const CHyprColor DOTCOLOR = ScrollOverview::Config::dockIndicatorColor();
     const bool       DANCE    = Config::getValue<bool>(KEY_DANCE_URGENT);
     const bool       BADGES   = badgesEnabled();
+    const double     RESTPX   = restingIconPx(monitor); // the texture size every icon below asks for
 
     for (const auto& ITEM : LAYOUT.items) {
         // Whitened for the SCRATCHPAD, for the same reason the user asked for it
         // on Show Applications (2026-08-06, below): the only icon that suits it
         // is symbolic -- near-black artwork on a dark frosted pill, beside a row
         // of full-colour app icons. Every other item here brings its own colour.
-        if (const auto TEX = OverviewRender::appIcon(ITEM.icon, ITEM.scratchpad); TEX) {
+        if (const auto TEX = OverviewRender::appIcon(ITEM.icon, ITEM.scratchpad, false, RESTPX); TEX && TEX->ok()) {
             CTexPassElement::SRenderData data;
             data.tex = TEX;
             data.box = ITEM.iconBox;
@@ -7078,7 +7106,7 @@ void render(PHLMONITOR monitor) {
             const auto  POSE     = DockTilt::pose(monitor->m_id, PRESSKEY, pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, PRESSKEY),
                                                   pressAt(monitor->m_id, PRESSKEY));
             if (ITEM.stack && ITEM.stackDir && !ITEM.placeholder && pointerIn(ITEM.iconBox, MOUSE, monitor->m_scale))
-                Stacks::warm(ITEM.stackPath);
+                Stacks::warm(ITEM.stackPath, monitor->m_scale);
             if (!(ITEM.stack && Stacks::drawCell(monitor, ITEM, data.box, std::clamp(ITEM.appear, 0.F, 1.F), POSE)))
                 DockTilt::queue(TEX, data.box, std::clamp(ITEM.appear, 0.F, 1.F), POSE);
         }
@@ -7113,8 +7141,8 @@ void render(PHLMONITOR monitor) {
             const float T = std::clamp(ScrollOverview::Config::animElapsedMs(EXIT.since) / EXIT_MS, 0.F, 1.F);
             if (T >= 1.F)
                 continue;
-            const auto TEX = OverviewRender::appIcon(EXIT.item.icon, EXIT.item.scratchpad);
-            if (!TEX)
+            const auto TEX = OverviewRender::appIcon(EXIT.item.icon, EXIT.item.scratchpad, false, RESTPX);
+            if (!TEX || !TEX->ok())
                 continue;
             const float U = 1.F - T;
             CTexPassElement::SRenderData data;
@@ -7135,7 +7163,7 @@ void render(PHLMONITOR monitor) {
         // ...white on a DARK dock only: on a light theme the white dots vanished
         // into the plate (user, 2026-09-29), and the artwork's own near-black
         // is the readable one there.
-        if (const auto TEX = OverviewRender::appIcon(Config::getValue<std::string>(KEY_SHOW_APPS_ICON), !Config::isLightTheme()); TEX) {
+        if (const auto TEX = OverviewRender::appIcon(Config::getValue<std::string>(KEY_SHOW_APPS_ICON), !Config::isLightTheme(), false, RESTPX); TEX && TEX->ok()) {
             DockTilt::queue(TEX, LAYOUT.showApps, 1.F,
                             DockTilt::pose(monitor->m_id, "show-apps", pointerIn(LAYOUT.showApps, MOUSE, monitor->m_scale), pressDepth(monitor->m_id, "show-apps"),
                                            pressAt(monitor->m_id, "show-apps")));
@@ -7151,7 +7179,7 @@ void render(PHLMONITOR monitor) {
     //
     // No frost: this is an icon clone, exactly as the launch zoom is, not a
     // plate. The dock's glass is the surface it comes off and goes back to.
-    if (const auto TEX = ghostShowing() && g_dockDrag.drag->monitor == monitor->m_id ? OverviewRender::appIcon(g_dockDrag.drag->icon) : nullptr; TEX) {
+    if (const auto TEX = ghostShowing() && g_dockDrag.drag->monitor == monitor->m_id ? OverviewRender::appIcon(g_dockDrag.drag->icon, false, false, RESTPX) : nullptr; TEX && TEX->ok()) {
         CTexPassElement::SRenderData data;
         data.tex = TEX;
         data.box = ghostBoxAt(monitor, g_dockDrag.drag->home, g_dockDrag.drag->grab, g_dockDrag.drag->at);
@@ -7162,7 +7190,7 @@ void render(PHLMONITOR monitor) {
     if (g_dockDrag.ghostHome && g_dockDrag.ghostHome->monitor == monitor->m_id) {
         const float E = houseEase(false, std::clamp(elapsedMs(g_dockDrag.ghostHome->startedAt) / GHOST_HOME_MS, 0.F, 1.F));
 
-        if (const auto TEX = OverviewRender::appIcon(g_dockDrag.ghostHome->icon); TEX) {
+        if (const auto TEX = OverviewRender::appIcon(g_dockDrag.ghostHome->icon, false, false, RESTPX); TEX && TEX->ok()) {
             CTexPassElement::SRenderData data;
             data.tex = TEX;
             data.box = lerpBox(g_dockDrag.ghostHome->from, g_dockDrag.ghostHome->home, E).round();
@@ -7178,8 +7206,8 @@ void render(PHLMONITOR monitor) {
     for (const auto& ZOOM : g_flight.launchZooms) {
         if (ZOOM.monitor != MONITOR_INVALID && ZOOM.monitor != monitor->m_id)
             continue;
-        const auto TEX = OverviewRender::appIcon(ZOOM.icon);
-        if (!TEX)
+        const auto TEX = OverviewRender::appIcon(ZOOM.icon, false, false, RESTPX);
+        if (!TEX || !TEX->ok())
             continue;
 
         const float LT    = std::clamp(elapsedMs(ZOOM.startedAt) / LAUNCH_ZOOM_MS, 0.F, 1.F);
@@ -7295,6 +7323,10 @@ void render(PHLMONITOR monitor) {
     // refresh rate, the pill's rectangle would do" -- is answered by
     // dockDamageRegion, which is that conversion.
     if (needsFrames(monitor, LAYOUT, TALLY))
+        pumpFrame(monitor, dockDamageRegion(monitor, LAYOUT));
+    // An icon drawn from a stand-in size while its own waits for the decode
+    // budget (a size slider being dragged): one more frame decodes the next few.
+    else if (OverviewRender::takeAppIconsPending())
         pumpFrame(monitor, dockDamageRegion(monitor, LAYOUT));
 }
 

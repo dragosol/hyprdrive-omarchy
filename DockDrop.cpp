@@ -542,7 +542,7 @@ namespace ScrollOverview::DockDrop {
         const float SZ    = 48.F * S;
         if (LOCAL.x < -SZ || LOCAL.y < -SZ || LOCAL.x > monitor->m_size.x * S + SZ || LOCAL.y > monitor->m_size.y * S + SZ)
             return;
-        const auto TEX = OverviewRender::appIcon(g_outIcon);
+        const auto TEX = OverviewRender::appIcon(g_outIcon, false, false, SZ);
         if (!TEX || !TEX->ok())
             return;
         CTexPassElement::SRenderData d;

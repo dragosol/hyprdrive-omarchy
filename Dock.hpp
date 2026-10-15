@@ -120,6 +120,12 @@ bool    onMonitor(PHLMONITOR monitor);
 
 // Pure geometry, so a test rig can assert proportions without a frame.
 SLayout layout(PHLMONITOR monitor);
+// The dock's icons and the device-px size each monitor's resting cell draws
+// them at -- for OverviewRender's icon warmer (IconSize.hpp).
+std::vector<std::pair<std::string, double>> iconWarmList();
+// The device-px size of a RESTING dock cell on `monitor` (0 with no dock
+// there): the size dock icon textures are asked for, whatever box animates.
+double restingIconPx(PHLMONITOR monitor);
 void    render(PHLMONITOR monitor);
 
 // X26. Is a monitor-local RENDER px point inside the pill? The overview's drop

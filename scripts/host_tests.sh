@@ -10,6 +10,8 @@
 #                     clamps and box predicates.
 #   search_letters_test  SearchLetters -- Serpantinum Input.qml bounce eases,
 #                     UTF-8 split, prefix/suffix diff, animator state.
+#   icon_size_test    IconSize.hpp: icon texture sizes (the drawn size,
+#                     never upscaled) and a downscale that filters.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -61,5 +63,7 @@ run builtin_icons_test scripts/builtin_icons_test.cpp BuiltinIcons.cpp $(pkg-con
 # shellcheck disable=SC2046
 run stack_reader_test scripts/stack_reader_test.cpp StackReader.cpp StackModel.cpp $(pkg-config --cflags --libs gio-2.0)
 run omarchy_search_test scripts/omarchy_search_test.cpp OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
+# shellcheck disable=SC2046
+run icon_size_test scripts/icon_size_test.cpp $(pkg-config --cflags --libs cairo)
 
 exit $fail

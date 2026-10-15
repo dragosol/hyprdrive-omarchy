@@ -38,7 +38,16 @@ void                 clearFrameChromeBlur();
 // `padded`: the same pixels inside a TEX_PAD transparent border -- for anything
 // drawn ROTATED, whose hard quad edge would otherwise stair-step (2026-09-24);
 // draw it into padBox(box, tex) so the artwork keeps its size.
-SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false, bool padded = false);
+// `px`: the size it is DRAWN at, in device pixels, when the caller knows it
+// and it holds still (the dock's resting cell): the texture is then resampled
+// to exactly that size (IconSize.hpp) instead of being minified by GL_LINEAR,
+// which stair-steps it. 0 (the default) = the unsized texture: 64 px for an
+// SVG, a raster at its own size.
+SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite = false, bool padded = false, double px = 0.0);
+// True (and cleared) when appIcon drew a held neighbouring size of an icon
+// while its new size waits for the decode budget: the caller asks for another
+// frame so the exact one lands.
+bool takeAppIconsPending();
 
 // THE ICON WARMER (user, 2026-09-30: the first open and the first keystrokes
 // lagged, then got snappy). Decoding an icon costs ~1-3 ms, and the first

@@ -16,6 +16,8 @@
 #include <format>
 #include <hyprgraphics/image/Image.hpp>
 #include "AppSearch.hpp"
+#include "Dock.hpp"
+#include "IconSize.hpp"
 #include "BuiltinIcons.hpp"
 #include "Config.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
@@ -34,6 +36,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace OverviewRender {
 
@@ -156,11 +159,22 @@ void captureFrameChromeBlur(PHLMONITOR monitor) {
 }
 
 
-// Decode size for app icons. SVG rasterises at whatever size it is asked for,
-// so this is picked once, generously, and scaled down when drawn -- the row
-// height changes with the card transform and re-decoding per frame would be
-// absurd.
+// Decode size for app icons asked for WITHOUT a size (the overview's rows and
+// tiles). SVG rasterises at whatever size it is asked for, so this is picked
+// once, generously, and scaled down when drawn -- the row height changes with
+// the card transform and re-decoding per frame would be absurd. A raster file
+// ignores it and arrives at its own size.
+//
+// A caller that knows the size it draws at (the dock, the stacks) passes it
+// instead: see IconSize.hpp -- the texture is then resampled to exactly that
+// size, because GL_LINEAR with no mipmaps aliases anything drawn much smaller
+// than it is.
 static constexpr int OVERVIEW_APP_ICON_PX = 64;
+
+// How many SIZED textures of one icon are kept: a dock per monitor scale and
+// the stacks' popup sizes in steady use; a dock size slider dragged walks
+// through more, and the least recently drawn goes.
+static constexpr size_t APP_ICON_SIZES_KEPT = 4;
 
 // Icon name -> texture, built once. NULL entries are cached too: an icon that
 // failed to resolve must not be re-searched on every single frame.
@@ -176,8 +190,22 @@ struct SAppIcon {
     SP<Render::ITexture> texture;
     std::string          path;
     uint64_t             gen = 0;
+    std::string          base;        // the key without the size: name + tint + pad
+    int                  bucket  = 0; // IconSize::bucket of the draw, 0 = unsized
+    uint64_t             lastUse = 0; // g_appIconUse when last drawn
 };
 static std::unordered_map<std::string, SAppIcon> g_overviewAppIcons;
+static uint64_t                                  g_appIconUse = 0;
+
+// The tinted and untinted textures are different pixels, so they are
+// different cache entries, and so is every size. \x01 \x02 \x03 cannot appear
+// in an icon name.
+static std::string appIconBaseKey(const std::string& iconName, bool tintWhite, bool padded) {
+    return (tintWhite ? iconName + "\x01white" : iconName) + (padded ? "\x03pad" : "");
+}
+static std::string appIconKey(const std::string& base, int bucket) {
+    return bucket > 0 ? base + "\x02" + std::to_string(bucket) : base;
+}
 
 static std::string resolveAppIconPath(const std::string& iconName) {
     if (iconName.starts_with('@')) {
@@ -188,9 +216,9 @@ static std::string resolveAppIconPath(const std::string& iconName) {
     return AppSearch::resolveIconPath(iconName);
 }
 
-// True when `iconName` (untinted, unpadded) is decoded and still current.
-static bool appIconWarm(const std::string& iconName) {
-    const auto IT = g_overviewAppIcons.find(iconName);
+// True when `iconName` (untinted, unpadded, at `px`) is decoded and still current.
+static bool appIconWarm(const std::string& iconName, double px) {
+    const auto IT = g_overviewAppIcons.find(appIconKey(iconName, IconSize::bucket(px)));
     if (IT == g_overviewAppIcons.end())
         return false;
     const auto GEN = AppSearch::iconIndexGeneration();
@@ -255,7 +283,15 @@ SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted, b
     Hyprgraphics::CImage image(path, {sc<double>(px), sc<double>(px)});
     if (image.success()) {
         if (const auto SURFACE = image.cairoSurface(); SURFACE && SURFACE->cairo()) {
-            auto* const CAIRO = SURFACE->cairo();
+            // A raster ignores the size it is asked for: resample it to fit
+            // `px` (IconSize.hpp), so GL_LINEAR is not left minifying it.
+            cairo_surface_flush(SURFACE->cairo());
+            auto* const SMALL = IconSize::downscale(SURFACE->cairo(), px);
+            auto        freeSmall = Hyprutils::Utils::CScopeGuard([SMALL] {
+                if (SMALL)
+                    cairo_surface_destroy(SMALL);
+            });
+            auto* const CAIRO = SMALL ? SMALL : SURFACE->cairo();
             cairo_surface_flush(CAIRO);
             auto* const    DATA   = cairo_image_surface_get_data(CAIRO);
             const int      W      = cairo_image_surface_get_width(CAIRO);
@@ -284,7 +320,7 @@ static SP<Render::ITexture> builtinIcon(const std::string& name, int px) {
     const auto KEY = name + "\x01" + std::to_string(px) + "\x01" + HEX;
     if (const auto IT = g_builtinIcons.find(KEY); IT != g_builtinIcons.end())
         return IT->second;
-    if (g_builtinIcons.size() > 32)
+    if (g_builtinIcons.size() > 64)
         g_builtinIcons.clear();
 
     SP<Render::ITexture> texture;
@@ -357,7 +393,11 @@ SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& col
 
 namespace {
     wl_event_source*         g_warmTimer = nullptr;
-    std::vector<std::string> g_warmQueue;
+    struct SWarmIcon {
+        std::string name;
+        double      px = 0.0; // the draw size it is warmed for; 0 = unsized
+    };
+    std::vector<SWarmIcon>   g_warmQueue;
     uint64_t                 g_warmInvGen = 0;
     constexpr int            WARM_TICK_MS = 25;
 
@@ -383,9 +423,9 @@ namespace {
     void refillWarmQueue() {
         g_warmQueue.clear();
         std::unordered_set<std::string> seen;
-        const auto push = [&](const std::string& name) {
-            if (!name.empty() && seen.insert(name).second)
-                g_warmQueue.push_back(name);
+        const auto push = [&](const std::string& name, double px = 0.0) {
+            if (!name.empty() && seen.insert(appIconKey(name, IconSize::bucket(px))).second)
+                g_warmQueue.push_back({name, px});
         };
         // Popped from the back: push in REVERSE priority.
         for (const auto& E : AppSearch::inventory())
@@ -401,6 +441,10 @@ namespace {
         for (const auto& W : Desktop::windowState()->windows())
             if (W && W->m_isMapped)
                 push(AppSearch::iconForClass(AppSearch::identityClass(W->m_class, W->m_title)));
+        // The dock's icons at the size each monitor draws them (an autohidden
+        // dock's first slide-in decoded them on its opening frames otherwise).
+        for (const auto& [NAME, PX] : ScrollOverview::Dock::iconWarmList())
+            push(NAME, PX);
     }
 
     // THE FIRST KEYSTROKE'S LABELS. Once the icons are in, the same timer
@@ -471,7 +515,7 @@ namespace {
             g_warmInvGen = GEN;
             refillWarmQueue();
         }
-        while (!g_warmQueue.empty() && appIconWarm(g_warmQueue.back()))
+        while (!g_warmQueue.empty() && appIconWarm(g_warmQueue.back().name, g_warmQueue.back().px))
             g_warmQueue.pop_back();
         if (g_warmQueue.empty()) {
             if (const auto KEY = warmTextsKey(); KEY != g_warmTextsFor) {
@@ -497,7 +541,7 @@ namespace {
         }
         if (Render::GL::g_pHyprOpenGL)
             Render::GL::g_pHyprOpenGL->makeEGLCurrent();
-        appIcon(g_warmQueue.back());
+        appIcon(g_warmQueue.back().name, false, false, g_warmQueue.back().px);
         g_warmQueue.pop_back();
         wl_event_source_timer_update(g_warmTimer, WARM_TICK_MS);
         return 0;
@@ -521,27 +565,80 @@ void stopIconWarmer() {
     g_warmTextsFor.clear();
 }
 
-SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool padded) {
+// Drop the least recently drawn SIZED textures of `base` past
+// APP_ICON_SIZES_KEPT. The unsized one (the overview's) is never dropped here.
+static void evictAppIconSizes(const std::string& base) {
+    std::vector<decltype(g_overviewAppIcons)::iterator> sized;
+    for (auto it = g_overviewAppIcons.begin(); it != g_overviewAppIcons.end(); ++it)
+        if (it->second.bucket > 0 && it->second.base == base)
+            sized.push_back(it);
+    if (sized.size() <= APP_ICON_SIZES_KEPT)
+        return;
+    std::ranges::sort(sized, [](const auto& a, const auto& b) { return a->second.lastUse < b->second.lastUse; });
+    for (size_t i = 0; i < sized.size() - APP_ICON_SIZES_KEPT; ++i)
+        g_overviewAppIcons.erase(sized[i]);
+}
+
+// A NEW SIZE of an icon that is already held at another one -- a dock size
+// slider being dragged, a pill re-fitting to one more app -- would otherwise
+// decode every icon of the dock inside one frame, per pixel of the drag. So
+// those decodes get ~4 ms per ~16 ms; past that the nearest size held is drawn
+// for now and appIconsPending() asks the dock for another frame. A size with
+// nothing to stand in for it is always decoded at once: nothing ever blinks out.
+static constexpr float APP_ICON_RESIZE_BUDGET_MS = 4.F;
+static auto            g_resizeWindowStart       = std::chrono::steady_clock::now();
+static float           g_resizeSpentMs           = 0.F;
+static bool            g_appIconsPending         = false;
+
+bool takeAppIconsPending() {
+    return std::exchange(g_appIconsPending, false);
+}
+
+static SP<Render::ITexture> nearestHeldSize(const std::string& base, int bucket) {
+    SP<Render::ITexture> best;
+    int                  bestDist = 0;
+    for (const auto& [K, E] : g_overviewAppIcons)
+        if (E.bucket > 0 && E.base == base && E.texture && E.texture->ok() && (!best || std::abs(E.bucket - bucket) < bestDist)) {
+            best     = E.texture;
+            bestDist = std::abs(E.bucket - bucket);
+        }
+    return best;
+}
+
+SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool padded, double px) {
     if (iconName.empty())
         return nullptr;
+    const int BUCKET = IconSize::bucket(px);
     if (iconName.starts_with(ScrollOverview::BuiltinIcons::PREFIX))
-        return builtinIcon(iconName, 192);
+        return builtinIcon(iconName, BUCKET > 0 ? BUCKET : 192);
 
-    // The tinted and untinted textures are different pixels, so they are
-    // different cache entries. \x01 cannot appear in an icon name.
-    const std::string KEY = (tintWhite ? iconName + "\x01white" : iconName) + (padded ? "\x03pad" : "");
+    const std::string BASE = appIconBaseKey(iconName, tintWhite, padded);
+    const std::string KEY  = appIconKey(BASE, BUCKET);
 
     // What a NAME resolves to changes when the icon index is rebuilt (an icon
     // installed after the first lookup). See SAppIcon: re-resolve, and keep
     // the texture when the file is the same.
     const auto GEN = AppSearch::iconIndexGeneration();
     if (const auto IT = g_overviewAppIcons.find(KEY); IT != g_overviewAppIcons.end()) {
+        IT->second.lastUse = ++g_appIconUse;
         if (IT->second.gen == GEN)
             return IT->second.texture;
         if (resolveAppIconPath(iconName) == IT->second.path) {
             IT->second.gen = GEN;
             return IT->second.texture;
         }
+    }
+
+    if (BUCKET > 0) {
+        if (const auto NOW = std::chrono::steady_clock::now(); NOW - g_resizeWindowStart > std::chrono::milliseconds(16)) {
+            g_resizeWindowStart = NOW;
+            g_resizeSpentMs     = 0.F;
+        }
+        if (g_resizeSpentMs > APP_ICON_RESIZE_BUDGET_MS)
+            if (auto standIn = nearestHeldSize(BASE, BUCKET)) {
+                g_appIconsPending = true;
+                return standIn;
+            }
     }
 
     SP<Render::ITexture> texture;
@@ -560,13 +657,27 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
         const auto T1 = Prof::clock::now();
         Prof::icoResolveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(T1 - T0).count();
 
-        Hyprgraphics::CImage image(PATH, {OVERVIEW_APP_ICON_PX, OVERVIEW_APP_ICON_PX});
+        // An SVG rasterises at the size asked; a raster (a Flatpak's 256 px
+        // PNG, say) ignores it and is resampled below.
+        const double         DECODEPX = BUCKET > 0 ? BUCKET : OVERVIEW_APP_ICON_PX;
+        Hyprgraphics::CImage image(PATH, {DECODEPX, DECODEPX});
+        if (image.success() && BUCKET > 0)
+            if (const auto SURFACE = image.cairoSurface(); SURFACE && SURFACE->cairo())
+                cairo_surface_flush(SURFACE->cairo());
+        // Sized: a raster bigger than the draw is resampled to it with a real
+        // filter (IconSize.hpp) -- drawn as it is, GL_LINEAR minified a 256 px
+        // PNG ~4.7x into a 54 px dock cell and stair-stepped every edge.
+        cairo_surface_t* const SMALL     = image.success() && BUCKET > 0 && image.cairoSurface() ? IconSize::downscale(image.cairoSurface()->cairo(), BUCKET) : nullptr;
+        auto                   freeSmall = Hyprutils::Utils::CScopeGuard([SMALL] {
+            if (SMALL)
+                cairo_surface_destroy(SMALL);
+        });
         const auto T2 = Prof::clock::now();
         Prof::icoDecodeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(T2 - T1).count();
         UP0 = T2;
         if (image.success()) {
             if (const auto SURFACE = image.cairoSurface(); SURFACE && SURFACE->cairo()) {
-                auto* const CAIRO = SURFACE->cairo();
+                auto* const CAIRO = SMALL ? SMALL : SURFACE->cairo();
                 cairo_surface_flush(CAIRO);
 
                 auto* const   DATA   = cairo_image_surface_get_data(CAIRO);
@@ -604,7 +715,11 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
 
     Prof::icoUploadNs += std::chrono::duration_cast<std::chrono::nanoseconds>(Prof::clock::now() - UP0).count();
 
-    g_overviewAppIcons[KEY] = SAppIcon{.texture = texture, .path = resolved, .gen = GEN};
+    g_overviewAppIcons[KEY] = SAppIcon{.texture = texture, .path = resolved, .gen = GEN, .base = BASE, .bucket = BUCKET, .lastUse = ++g_appIconUse};
+    if (BUCKET > 0) {
+        evictAppIconSizes(BASE);
+        g_resizeSpentMs += std::chrono::duration<float, std::milli>(Prof::clock::now() - T0).count();
+    }
     return texture;
 }
 
