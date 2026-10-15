@@ -167,9 +167,47 @@ Item {
       var m = metaFor(key)
       if (m && m.group === sec.group) next[key] = defaults[key]
     }
+    // The Keybinds section's own switches come back with the next dump.
+    if (sec.group === "keybinds")
+      for (var pk in next) if (pk.indexOf("bind:") === 0) delete next[pk]
     pending = next
     if (sec.group === "gestures") { gestureDraft = null; gestureDirty = false; gestureIndex = 0 }
     showToast(sec.title + " restored to defaults")
+  }
+
+  // ------------------------------------------------------------- keybinds
+  // A Keybinds row is on through a plugin key (`key`) or one of hdpanel's own
+  // bind switches (`bind`, panel.json); what it is bound to comes from the
+  // dump's `keybinds`, which hdpanel reads from hyprctl binds -- so a chord
+  // someone else took shows as not bound.
+  function liveKeybind(id) {
+    var list = hd.keybinds || []
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
+    return null
+  }
+  function keybindOn(row) {
+    if (row.key) return kb(row.key)
+    var p = pending["bind:" + row.bind]
+    if (p !== undefined) return p
+    return Model.asBool(hd.binds ? hd.binds[row.bind] : false)
+  }
+  function keybindBound(row) {
+    var l = liveKeybind(row.id)
+    return !!(l && l.bound)
+  }
+  function keybindChord(row) {
+    var l = liveKeybind(row.id)
+    return l && l.bound ? Model.prettyChords(l.chords) : "Not bound"
+  }
+  function toggleKeybind(row) {
+    var next = !keybindOn(row)
+    if (row.key) {
+      if (next && row.confirm) askConfirm(row.confirm, function() { setKey(row.key, true) })
+      else setKey(row.key, next)
+      return
+    }
+    remember("bind:" + row.bind, next)
+    runCtl(["bind-set", row.bind, next ? "on" : "off"], true)
   }
 
   function metaFor(key) {
@@ -203,6 +241,8 @@ Item {
     case "motionOn": return kn("plugin:hyprdrive:anim_scale") > 0.001
     case "blurOn": return kb("plugin:hyprdrive:motion_blur:enabled")
     case "mosaicOn": return kb("plugin:hyprdrive:mosaic:enabled")
+    case "compositorAnimOn": return kb("animations:enabled")
+    case "desktopSlideOn": return kb("animations:enabled") && kb("animations:workspaces")
     default: return true
     }
   }
@@ -908,6 +948,7 @@ Item {
         case "speed": return speedControl
         case "motion": return motionControl
         case "blur": return blurControl
+        case "keybind": return keybindControl
         }
         return null
       }
@@ -970,6 +1011,52 @@ Item {
       value: String(root.k(row.key))
       live: parent ? parent.live : true
       onPicked: function(v) { root.setKey(row.key, v) }
+    }
+  }
+
+  // One shortcut: [modifier picker] [live chord] [switch].
+  Component {
+    id: keybindControl
+    Row {
+      id: kbRow
+      spacing: Style.space(10)
+      property var row: parent ? parent.row : ({})
+      property bool rowLive: parent ? parent.live : true
+      readonly property bool on: root.keybindOn(row)
+      DropButton {
+        visible: !!kbRow.row.modsKey
+        implicitWidth: Style.space(140)
+        anchors.verticalCenter: parent.verticalCenter
+        options: kbRow.row.modsKey ? (root.metaOptions[kbRow.row.modsKey] || []) : []
+        value: kbRow.row.modsKey ? String(root.k(kbRow.row.modsKey)) : ""
+        live: kbRow.rowLive && kbRow.on
+        onPicked: function(v) { root.setKey(kbRow.row.modsKey, v) }
+      }
+      Rectangle {
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.max(Style.space(58), chordText.implicitWidth + Style.space(16))
+        height: Style.space(24)
+        radius: Style.space(7)
+        color: root.raised
+        border.width: 1
+        border.color: root.hairline
+        opacity: kbRow.rowLive ? 1 : 0.4
+        Text {
+          id: chordText
+          textFormat: Text.PlainText
+          anchors.centerIn: parent
+          text: root.keybindChord(kbRow.row)
+          color: root.keybindBound(kbRow.row) ? root.fg : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+      Switch {
+        anchors.verticalCenter: parent.verticalCenter
+        checked: kbRow.on
+        live: kbRow.rowLive
+        onToggled: root.toggleKeybind(kbRow.row)
+      }
     }
   }
 
@@ -1827,7 +1914,10 @@ Item {
                 required property int index
                 readonly property bool active: root.query === "" && root.section === modelData.id
                 width: navCol.width
-                height: Style.space(38)
+                // Nine sections on a short screen: the rows give up height
+                // (down to 28) before the list runs under Send feedback.
+                height: Math.max(Style.space(28), Math.min(Style.space(38),
+                        Math.floor((feedbackRow.y - Style.space(8) - nav.y) / Math.max(1, navRep.count)) - Style.space(2)))
                 opacity: root.isOpen ? 1 : 0
                 transform: Translate {
                   x: root.isOpen ? 0 : -Style.space(14)

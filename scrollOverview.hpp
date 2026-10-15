@@ -241,6 +241,11 @@ class CScrollOverview : public IOverview {
     void         performPrimaryClickAction() override;
     bool         moveSelection(const std::string& direction) override;
     bool         windowDispatcherAction(const std::string& action) override;
+    // hyprdrive:desktop next|prev with the overview up (DesktopSwitch.cpp):
+    // the focused desktop card one step, the way the overview's own wheel does.
+    void         stepDesktopCard(bool next) {
+        moveViewportWorkspace(next);
+    }
 
   private:
     void   ensureTrailingWorkspace();

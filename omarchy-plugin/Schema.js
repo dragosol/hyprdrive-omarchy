@@ -15,6 +15,10 @@
 //   gestures -- the trackpad map editor
 //   power    -- AC / battery profiles
 //   icons    -- per-app dock icons (bin/hdicons)
+//   keybind  -- one hyprdrive shortcut: its live chord (hdpanel dump's
+//               `keybinds`, read from hyprctl binds), an on/off -- a plugin
+//               `key`, or one of hdpanel's own `bind` switches -- and, with
+//               `modsKey`, a modifier picker
 //
 // `when` names a condition (HyprdrivePanel.qml, rowEnabled) under which the
 // row applies; otherwise it is drawn dimmed and does not take input.
@@ -146,6 +150,14 @@ var sections = [
         { type: "toggle", key: "animations:enabled", label: "Compositor animations",
           desc: "Hyprland's own window and workspace animations." }
       ]},
+      { title: "Desktops", rows: [
+        { type: "toggle", key: "animations:workspaces", label: "Slide between desktops", when: "compositorAnimOn",
+          desc: "Hyprland's own desktop-change animation. Omarchy ships it off; the two switches below only act while it is on." },
+        { type: "toggle", key: P + "animation:desktop_keyboard", label: "Animate desktop changes from keys", when: "desktopSlideOn",
+          desc: "Super+1…0, Super+Tab, Super+scroll and moving a window to a desktop slide there. Off, they switch at once." },
+        { type: "toggle", key: P + "animation:desktop_focus", label: "Animate desktop changes when focus moves", when: "desktopSlideOn",
+          desc: "An app, a dock icon or a notification bringing up a window on another desktop slides there. Off, it switches at once." }
+      ]},
       { title: "Curve", rows: [
         { type: "curve", key: P + "animation:curve", label: "Animation curve", when: "motionOn",
           desc: "Shapes every hyprdrive animation except the dock stacks." }
@@ -249,6 +261,36 @@ var sections = [
           } },
         { type: "toggle", key: P + "mosaic:default", label: "Make Mosaic the default", when: "mosaicOn",
           desc: "New desktops, and any you have not set with Super+L, start in Mosaic. Off restores the previous default." }
+      ]}
+    ]
+  },
+  {
+    // After Mosaic, so Alt+1..8 keep their sections; this one is Alt+9.
+    id: "keybinds", title: "Keybinds", icon: "\uf11c", group: "keybinds",
+    subtitle: "Hyprdrive's shortcuts, as they are bound right now.",
+    cards: [
+      { title: "Overview and windows", rows: [
+        { type: "keybind", id: "overview", key: P + "tap_super", label: "Overview",
+          desc: "Tap Super on its own, with no other key, to open or close the overview." },
+        { type: "keybind", id: "minimize", bind: "minimize", label: "Minimize",
+          desc: "Super+H minimizes the focused window into the dock. Takes Super+H from anything else bound to it." }
+      ]},
+      { title: "Desktops", rows: [
+        { type: "keybind", id: "scroll_desktops", key: P + "binds:scroll_desktops", modsKey: P + "binds:scroll_desktops_mods", label: "Scroll through desktops",
+          desc: "Hold the modifier and turn the wheel: one desktop per notch, empty ones included, from 1 up to 10 or your highest. Replaces Omarchy's Super+scroll, which skips empty desktops." },
+        { type: "keybind", id: "dock_hotkeys", key: P + "dock:hot_keys", label: "Dock hotkeys",
+          desc: "Super+1…0 open or focus the dock's first ten apps instead of switching to desktops 1…10.",
+          confirm: {
+            title: "Use Super+1…0 for the dock?",
+            body: "Super+1…0 will open the dock's apps instead of switching desktops. Turning this off gives them back to desktop switching.",
+            allow: "Allow", glyph: "\uf11c"
+          } }
+      ]},
+      { title: "Mosaic", rows: [
+        { type: "keybind", id: "mosaic_cycle", bind: "mosaic_cycle", label: "Layout cycle", when: "mosaicOn",
+          desc: "Super+L cycles Dwindle → Scrolling → Mosaic. Off, Super+L stays Omarchy's two-way toggle. Needs Mosaic on." },
+        { type: "keybind", id: "mosaic_focus", bind: "mosaic_focus", label: "Mosaic-aware focus", when: "mosaicOn",
+          desc: "Super+arrows move focus by position on a Mosaic desktop, and as before everywhere else. Needs Mosaic on." }
       ]}
     ]
   }

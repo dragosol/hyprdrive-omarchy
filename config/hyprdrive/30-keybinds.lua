@@ -14,7 +14,7 @@
 -- is not a chord, so the two do not fight.
 --
 -- SUPER+1..0 stay Omarchy workspace focus. This fork does not rebind them to
--- dock slots.
+-- dock slots (the panel's Keybinds section can, with dock:hot_keys).
 
 -- While the overview is open the plugin enters this submap (it does so only
 -- because these binds exist). Inside it the global SUPER+mouse:272 window.drag
@@ -38,5 +38,31 @@ if hyprdrive_loaded() then
     else
         hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
         hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down" })
+    end
+
+    -- Super+scroll walks the desktops by NUMBER, the empty ones included
+    -- (1 .. max(10, highest), no wrap), one desktop per wheel notch -- in place
+    -- of Omarchy's Super+scroll, which skips the empty ones (e+1 / e-1). A
+    -- second bind of a chord does not replace the first (both would fire), so
+    -- Omarchy's goes first, as Mosaic does with Super+L. The actions are built
+    -- BEFORE anything is unbound: a plugin that cannot make them leaves
+    -- Omarchy's binds alone. Off: plugin:hyprdrive:binds:scroll_desktops =
+    -- false through the settings panel, whose 40-panel.lua then owns this bind
+    -- (marked "hyprdrive:binds owned") and this default steps aside.
+    local panel = io.open(dest .. "/40-panel.lua", "r")
+    local panel_owns_binds = false
+    if panel then
+        panel_owns_binds = (panel:read("a") or ""):find("hyprdrive:binds owned", 1, true) ~= nil
+        panel:close()
+    end
+    if not panel_owns_binds then
+        local ok_next, desktop_next = pcall(hl.plugin.hyprdrive.desktop, "next")
+        local ok_prev, desktop_prev = pcall(hl.plugin.hyprdrive.desktop, "prev")
+        if ok_next and ok_prev then
+            hl.unbind("SUPER + mouse_down")
+            hl.unbind("SUPER + mouse_up")
+            hl.bind("SUPER + mouse_down", desktop_next, { description = "Next desktop (empty ones too)" })
+            hl.bind("SUPER + mouse_up", desktop_prev, { description = "Previous desktop (empty ones too)" })
+        end
     end
 end

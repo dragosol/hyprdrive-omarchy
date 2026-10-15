@@ -24,6 +24,7 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 
 #include "Dock.hpp"
+#include "DesktopSwitch.hpp"
 #include "Motion.hpp"
 #include "ConfigureHold.hpp"
 
@@ -2817,6 +2818,10 @@ void restoreDockSeat() {
 void activateWindow(const PHLWINDOW& window) {
     if (!window)
         return;
+
+    // A desktop change from here is FOCUS moving (animation:desktop_focus),
+    // unless a bind is running it -- Super+1..0 with dock:hot_keys.
+    DesktopSwitch::CFocusScope focusChange;
 
     if (Minimize::isMinimized(window)) {
         Minimize::showOriginalWorkspace(window);

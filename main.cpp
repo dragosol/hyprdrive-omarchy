@@ -85,6 +85,7 @@ using namespace Hyprutils::String;
 #include "Minimize.hpp"
 #include "PluginVersion.hpp"
 #include "scrollOverview.hpp"
+#include "DesktopSwitch.hpp"
 #include "SearchSession.hpp"
 #include "OverviewGesture.hpp"
 #include "OverviewRender.hpp"
@@ -2403,6 +2404,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // The "mosaic" layout (Mosaic.hpp). Registered whether or not the panel has
     // enabled it: a desktop whose saved layout is mosaic must find it at login.
     ScrollOverview::Mosaic::registerLayout(SCROLLOVERVIEW_HANDLE);
+    // Super+scroll's dispatcher and its wheel filter, and the desktop-change
+    // animation switches (DesktopSwitch.hpp). Reads keys: after registerConfig().
+    ScrollOverview::DesktopSwitch::init();
     // The animation:curve preset onto Hyprland's named house beziers -- only
     // now that the key exists (Config.hpp: an earlier read aborts Hyprland).
     ScrollOverview::Motion::sync();
@@ -2482,6 +2486,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // destroys our algorithm objects -- while their code is still mapped.
     ScrollOverview::Mosaic::shutdown();
     ScrollOverview::Mosaic::unregisterLayout(SCROLLOVERVIEW_HANDLE);
+    ScrollOverview::DesktopSwitch::shutdown();
     ScrollOverview::KeyboardCat::shutdown(); // ffmpeg killed, its reader joined, before the code goes
     stopSearchRepeat();
     if (g_searchRepeatTimer) {

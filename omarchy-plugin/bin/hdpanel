@@ -4,6 +4,8 @@
 Live preview is `hyprctl keyword`. Durable writes land in
 ~/.config/hypr/hyprdrive/40-panel.lua (keys) and 35-gestures.lua (gestures).
 AC/battery profiles live in ~/.local/state/hyprdrive/panel.json.
+The Keybinds section's binds (Super+scroll, minimize, dock hotkeys, Mosaic's
+Super+L and arrows) are written to 40-panel.lua too; a change to one reloads.
 """
 from __future__ import annotations
 
@@ -70,6 +72,14 @@ BLUR_SITES = [
     ("drag", 1.0, "constant"),
     ("stack_pane", 1.0, "early"),
 ]
+# Super+scroll's modifiers (binds:scroll_desktops_mods). Super + Alt + scroll is
+# Omarchy's group cycling, so it is not offered.
+SCROLL_MODS = [
+    {"value": "SUPER", "label": "Super"},
+    {"value": "SUPER + SHIFT", "label": "Super + Shift"},
+    {"value": "SUPER + CTRL", "label": "Super + Ctrl"},
+    {"value": "CTRL + ALT", "label": "Ctrl + Alt"},
+]
 
 
 def _k(key, kind, group, default, **extra):
@@ -129,6 +139,10 @@ KEY_META = [
     _k(PLUGIN + "dock:blur_passes", "int", "dock", -1, min=-1, max=8),
     # Animation
     _k("animations:enabled", "bool", "animation", True),
+    # Hyprland's `workspaces` animation leaf, which Omarchy's looknfeel.lua
+    # turns off. Not an option hyprctl getoption knows: read from
+    # `hyprctl animations` and written as an hl.animation leaf (WORKSPACE_SLIDE).
+    _k("animations:workspaces", "bool", "animation", False),
     _k(PLUGIN + "anim_scale", "float", "animation", 1.0, min=0, max=10),
     _k(PLUGIN + "animation:curve", "enum", "animation", "hyprdrive", options=CURVES),
     _k(PLUGIN + "open_speed", "float", "animation", 2.6, min=0.5, max=8),
@@ -136,6 +150,8 @@ KEY_META = [
     _k(PLUGIN + "dock:minimize_ms", "int", "animation", 400, min=0, max=1200),
     _k(PLUGIN + "dock:autohide_ms", "int", "animation", 200, min=0, max=800),
     _k(PLUGIN + "mission_control_reflow_ms", "int", "animation", 300, min=0, max=1000),
+    _k(PLUGIN + "animation:desktop_keyboard", "bool", "animation", True),
+    _k(PLUGIN + "animation:desktop_focus", "bool", "animation", True),
     # Motion blur
     _k(PLUGIN + "motion_blur:enabled", "bool", "blur", True),
     _k(PLUGIN + "layout_motion_blur", "int", "blur", 16, min=0, max=32),
@@ -157,11 +173,34 @@ KEY_META = [
     # profiles: see PROFILE_SKIP.
     _k(PLUGIN + "mosaic:enabled", "bool", "mosaic", False),
     _k(PLUGIN + "mosaic:default", "bool", "mosaic", False),
+    # Keybinds. Kept out of AC/battery profiles like Mosaic: a charger must not
+    # rebind keys.
+    _k(PLUGIN + "binds:scroll_desktops", "bool", "keybinds", True),
+    _k(PLUGIN + "binds:scroll_desktops_mods", "enum", "keybinds", "SUPER", options=SCROLL_MODS),
+    _k(PLUGIN + "dock:hot_keys", "bool", "keybinds", False),
 ]
 
 # Groups a power profile neither saves nor applies. Mosaic rebinds Super+L and
 # can change the default layout; plugging in the charger must not do either.
-PROFILE_SKIP = {"mosaic"}
+# The Keybinds section's switches all rebind keys.
+PROFILE_SKIP = {"mosaic", "keybinds"}
+
+SCROLL_ON = PLUGIN + "binds:scroll_desktops"
+SCROLL_MODS_KEY = PLUGIN + "binds:scroll_desktops_mods"
+HOT_KEYS = PLUGIN + "dock:hot_keys"
+TAP_SUPER = PLUGIN + "tap_super"
+
+# The Keybinds section's own switches: binds that have no plugin key, kept in
+# panel.json under "binds" and written to 40-panel.lua. id -> default.
+BIND_SWITCHES = {
+    "minimize": False,      # Super+H minimizes the focused window into the dock
+    "mosaic_cycle": True,   # with Mosaic on: Super+L cycles three layouts
+    "mosaic_focus": True,   # with Mosaic on: Super+arrows move focus by position
+}
+MINIMIZE_CHORD = "SUPER + H"
+# What 30-keybinds.lua looks for: present, the panel owns the Super+scroll bind
+# and the shipped default steps aside.
+BINDS_OWNED = "-- hyprdrive:binds owned"
 
 MOSAIC_ON = PLUGIN + "mosaic:enabled"
 MOSAIC_DEFAULT = PLUGIN + "mosaic:default"
@@ -318,6 +357,30 @@ def anim_leaf_lua(leaf, enabled, speed=None, curve=None, style=None):
     return "hl.animation({ %s })" % ", ".join(fields)
 
 
+# "Slide between desktops": the leaf as it is turned on. Omarchy ships it off and
+# names no curve for it; these are its windows/layers family's.
+WORKSPACE_SLIDE = ("workspaces", 4.0, "easeOutQuint", "slide")
+SLIDE_KEY = "animations:workspaces"
+
+
+def workspace_slide_lua(on):
+    leaf, speed, curve, style = WORKSPACE_SLIDE
+    return anim_leaf_lua(leaf, on, speed, curve, style)
+
+
+def workspace_slide_live():
+    """The workspaces leaf's live state, or None."""
+    try:
+        out = json.loads(hyprctl("animations", "-j") or "[]")
+    except ValueError:
+        return None
+    for group in out if isinstance(out, list) else []:
+        for a in group if isinstance(group, list) else []:
+            if isinstance(a, dict) and a.get("name") == "workspaces":
+                return bool(a.get("enabled"))
+    return None
+
+
 # Extra leaves Omarchy does not override; disable them explicitly so they
 # cannot keep animating via inherit-as-true (internalEnabled -1).
 DISABLE_EXTRA_LEAVES = ("windowsMove",)
@@ -339,10 +402,13 @@ def compositor_anim_lua(enabled, restore_leaves):
 def apply_live_many(pairs):
     """Omarchy uses the Lua config parser; hyprctl keyword is a no-op. eval hl.config."""
     anim = None
+    slide = None
     rest = []
     for key, value in pairs:
         if key == "animations:enabled":
             anim = bool(value)
+        elif key == SLIDE_KEY:
+            slide = bool(value)
         else:
             rest.append((key, value))
     if rest:
@@ -354,6 +420,13 @@ def apply_live_many(pairs):
     if anim is not None:
         # Live on must restore leaves because looknfeel.lua is not re-run.
         if not eval_lua(compositor_anim_lua(anim, restore_leaves=True)):
+            return False
+        if anim and slide is None:
+            # The restore put Omarchy's leaves back, workspaces off among
+            # them; a slide the panel owns goes back on.
+            slide = bool(load_store().get("keys", {}).get(SLIDE_KEY, False)) or None
+    if slide is not None:
+        if not eval_lua(workspace_slide_lua(slide)):
             return False
     return True
 
@@ -478,6 +551,7 @@ def compose_fragment(machine, existing_path):
 def write_panel_fragment(store):
     keys = dict(store.get("keys", {}))
     anim = keys.pop("animations:enabled", None)
+    slide = keys.pop(SLIDE_KEY, None)
     body = [
         "-- hyprdrive fragment 40-panel -- Omarchy settings panel.",
         "-- MACHINE-OWNED above the raw-snippet marker.",
@@ -492,16 +566,20 @@ def write_panel_fragment(store):
                 body.append(anim_leaf_lua(leaf, False))
             for leaf in DISABLE_EXTRA_LEAVES:
                 body.append(anim_leaf_lua(leaf, False))
+    # "Slide between desktops", after looknfeel.lua's disable (fragments load
+    # later) and outside the guard like the leaves above: it is Hyprland's.
+    if slide is not None and anim is not False:
+        body.append(workspace_slide_lua(bool(slide)))
     tree = {}
     for k, v in keys.items():
         nest_set(tree, k, v)
     mosaic = mosaic_lua(store)
-    if tree or mosaic:
-        body.append("if hyprdrive_loaded() then")
-        if tree:
-            body.append("    hl.config(%s)" % emit_table(tree, 4))
-        body.extend("    " + line if line else "" for line in mosaic)
-        body.append("end")
+    binds = keybinds_lua(store)
+    body.append("if hyprdrive_loaded() then")
+    if tree:
+        body.append("    hl.config(%s)" % emit_table(tree, 4))
+    body.extend("    " + line if line else "" for line in mosaic + binds)
+    body.append("end")
     body.append("")
     FRAGDIR.mkdir(parents=True, exist_ok=True)
     path = FRAGDIR / PANEL_FRAG
@@ -529,8 +607,9 @@ def mosaic_state(store):
 
 def mosaic_lua(store):
     on, default = mosaic_state(store)
+    switches = bind_switches(store)
     lines = []
-    if on:
+    if on and switches["mosaic_cycle"]:
         lines += [
             "",
             "-- Mosaic: Super+L cycles dwindle -> scrolling -> mosaic. A second bind",
@@ -541,6 +620,9 @@ def mosaic_lua(store):
             "hl.unbind(%s)" % lua_lit("SUPER + L"),
             "hl.bind(%s, hl.dsp.exec_cmd(%s), { description = %s })" % (
                 lua_lit("SUPER + L"), lua_lit(shlex.quote(str(LAYOUT_CYCLE))), lua_lit("Cycle workspace layout")),
+        ]
+    if on and switches["mosaic_focus"]:
+        lines += [
             "",
             "-- Mosaic: Super+arrows move focus by position on a mosaic desktop (its",
             "-- bunched windows rarely share the edges Hyprland's movefocus looks",
@@ -559,6 +641,148 @@ def mosaic_lua(store):
             "hl.config({ general = { layout = 'mosaic' } })",
         ]
     return lines
+
+
+# ---------------------------------------------------------------- Keybinds
+#
+# The Keybinds section. Every bind it owns is written here, inside
+# hyprdrive_loaded() so a missing plugin binds nothing and unbinds nothing, and
+# each action is BUILT before its chord is unbound: if the plugin cannot make
+# it, the chord keeps whatever Omarchy bound there. A bind is parse-time, so a
+# change reloads (keybinds_after_write); turning one off is its absence, and
+# the reload gives the chord back to Omarchy.
+
+def bind_switches(store):
+    owned = store.get("binds") or {}
+    return {k: bool(owned.get(k, d)) for k, d in BIND_SWITCHES.items()}
+
+
+def keys_or_default(store, key):
+    meta = next(m for m in KEY_META if m["key"] == key)
+    return store.get("keys", {}).get(key, meta["default"])
+
+
+def keybinds_state(store):
+    """Everything 40-panel.lua's binds depend on, to know when to reload."""
+    return (
+        bool(keys_or_default(store, SCROLL_ON)),
+        str(keys_or_default(store, SCROLL_MODS_KEY)),
+        bool(keys_or_default(store, HOT_KEYS)),
+        tuple(sorted(bind_switches(store).items())),
+    )
+
+
+def guarded_binds(binds):
+    """[(chord, action_lua, description)] -> Lua that binds all of them, or none.
+
+    The actions are made first (hl.plugin.hyprdrive.* raises when the plugin's
+    dispatcher is missing); only when every one exists are the chords unbound
+    -- a second bind of a chord does not replace the first -- and bound."""
+    lines = ["do"]
+    for i, (_, action, _) in enumerate(binds):
+        lines.append("    local ok%d, a%d = pcall(function() return %s end)" % (i, i, action))
+    lines.append("    if %s then" % " and ".join("ok%d" % i for i in range(len(binds))))
+    for chord, _, _ in binds:
+        lines.append("        hl.unbind(%s)" % lua_lit(chord))
+    for i, (chord, _, desc) in enumerate(binds):
+        lines.append("        hl.bind(%s, a%d, { description = %s })" % (lua_lit(chord), i, lua_lit(desc)))
+    lines.append("    end")
+    lines.append("end")
+    return lines
+
+
+def keybinds_lua(store):
+    switches = bind_switches(store)
+    scroll_on, mods, hot_keys, _ = keybinds_state(store)
+    lines = [
+        "",
+        BINDS_OWNED + " -- the Keybinds section's binds. 30-keybinds.lua's Super+scroll",
+        "-- default steps aside while this line is here.",
+    ]
+    if scroll_on:
+        lines += [
+            "",
+            "-- Super+scroll: one desktop per notch, by number, empty ones included.",
+        ] + guarded_binds([
+            ("%s + mouse_down" % mods, "hl.plugin.hyprdrive.desktop('next')", "Next desktop (empty ones too)"),
+            ("%s + mouse_up" % mods, "hl.plugin.hyprdrive.desktop('prev')", "Previous desktop (empty ones too)"),
+        ])
+    if switches["minimize"]:
+        lines += [
+            "",
+            "-- Minimize the focused window into the dock.",
+        ] + guarded_binds([(MINIMIZE_CHORD, "hl.plugin.hyprdrive.minimize('window')", "Minimize window")])
+    if hot_keys:
+        lines += [
+            "",
+            "-- Dock hotkeys: Super+1..0 open or focus the dock's first ten apps,",
+            "-- instead of switching to desktops 1..10.",
+        ] + guarded_binds([
+            ("SUPER + code:%d" % (n + 9), "hl.plugin.hyprdrive.hotkey('%d')" % n, "Dock app %d" % n)
+            for n in range(1, 11)
+        ])
+    return lines
+
+
+def keybinds_after_write(store, before, reloaded):
+    if not reloaded and keybinds_state(store) != before:
+        hyprctl("reload")
+
+
+def live_binds():
+    """hyprctl binds -j, or [] -- the Keybinds rows read what is REALLY bound."""
+    try:
+        out = json.loads(hyprctl("binds", "-j") or "[]")
+    except ValueError:
+        return []
+    return out if isinstance(out, list) else []
+
+
+MODBITS = [(64, "SUPER"), (1, "SHIFT"), (4, "CTRL"), (8, "ALT")]
+
+
+def chord_of(b):
+    mods = [name for bit, name in MODBITS if int(b.get("modmask", 0)) & bit]
+    key = str(b.get("key") or "")
+    return " + ".join(mods + [key])
+
+
+def keybind_rows(store, live):
+    """One entry per Keybinds row: whether it is on, what it is bound to now.
+
+    `bound` comes from hyprctl binds: a hyprdrive bind is recognised by the
+    description this file (or 30-keybinds.lua) gave it, so a chord that the
+    user or Omarchy rebound shows as not bound rather than lying."""
+    binds = live_binds()
+    switches = bind_switches(store)
+
+    def find(desc, key=None, mods=None):
+        return [chord_of(b) for b in binds if b.get("description") == desc and not b.get("submap")
+                and (key is None or str(b.get("key", "")).lower() == key.lower())
+                and (mods is None or int(b.get("modmask", 0)) == mods)]
+
+    mosaic_on = bool(live.get(MOSAIC_ON, keys_or_default(store, MOSAIC_ON)))
+    scroll_mods = str(live.get(SCROLL_MODS_KEY, keys_or_default(store, SCROLL_MODS_KEY)))
+    rows = []
+    rows.append({"id": "overview", "enabled": bool(live.get(TAP_SUPER, True)), "chords": ["SUPER"] if live.get(TAP_SUPER, True) else []})
+    rows.append({"id": "minimize", "enabled": switches["minimize"], "chords": find("Minimize window")})
+    rows.append({"id": "mosaic_cycle", "enabled": switches["mosaic_cycle"], "active": mosaic_on,
+                 "chords": find("Cycle workspace layout", "L", 64)})
+    # Mosaic's focus binds carry Omarchy's own descriptions (the keybindings
+    # menu reads the same either way), so they are told apart by being ours:
+    # bound only while the switch and Mosaic are on.
+    arrows = [c for d in ("left", "right", "up", "down") for c in find("Focus on %s window" % d, d, 64)]
+    rows.append({"id": "mosaic_focus", "enabled": switches["mosaic_focus"], "active": mosaic_on,
+                 "chords": arrows if (mosaic_on and switches["mosaic_focus"]) else []})
+    # hyprctl binds reports a code:N bind with an empty key and keycode 0
+    # (Omarchy's own Super+1..0 too), so the number comes from our description.
+    hot = ["SUPER + %d" % (n % 10) for n in range(1, 11) if find("Dock app %d" % n)]
+    rows.append({"id": "dock_hotkeys", "enabled": bool(live.get(HOT_KEYS, False)), "chords": hot})
+    scroll = find("Next desktop (empty ones too)") + find("Previous desktop (empty ones too)")
+    rows.append({"id": "scroll_desktops", "enabled": bool(live.get(SCROLL_ON, True)), "mods": scroll_mods, "chords": scroll})
+    for r in rows:
+        r["bound"] = bool(r["chords"])
+    return rows
 
 
 def revert_mosaic_workspaces(fallback, chosen_too):
@@ -636,12 +860,16 @@ def mosaic_after_write(store, before):
         eval_lua("hl.config({ general = { layout = %s } })" % lua_lit(prev))
 
 
-def commit_store(store, before):
-    """Save the store and 40-panel.lua, with Mosaic's side effects around it."""
+def commit_store(store, before, binds_before=None):
+    """Save the store and 40-panel.lua, with Mosaic's side effects around it,
+    and a reload when a bind changed (binds are parse-time)."""
+    if binds_before is None:
+        binds_before = keybinds_state(store)
     mosaic_before_write(store, before)
     save_store(store)
     write_panel_fragment(store)
     mosaic_after_write(store, before)
+    keybinds_after_write(store, binds_before, reloaded=mosaic_state(store) != before)
 
 
 def lua_direction(direction):
@@ -773,6 +1001,9 @@ def live_keys():
             v = getoption(meta["key"])
             if v is not None:
                 out[meta["key"]] = v
+    slide = workspace_slide_live()
+    if slide is not None:
+        out[SLIDE_KEY] = slide
     return out
 
 
@@ -838,6 +1069,8 @@ def dump():
         "roundedRadius": store.get("roundedRadius", 24),
         "onBattery": on_battery(),
         "meta": meta,
+        "binds": bind_switches(store),
+        "keybinds": keybind_rows(store, live),
         "actions": ACTIONS,
         "directions": DIRECTIONS,
     }
@@ -870,12 +1103,13 @@ def set_keys(pairs, preview=False):
     if preview:
         return coerced
     before = mosaic_state(store)
+    binds_before = keybinds_state(store)
     store.setdefault("keys", {})
     for key, value in coerced:
         store["keys"][key] = value
         if key == PLUGIN + "dock:corner_radius" and int(value) > 0:
             store["roundedRadius"] = int(value)
-    commit_store(store, before)
+    commit_store(store, before, binds_before)
     return coerced
 
 
@@ -909,10 +1143,11 @@ def reset_keys(store, group):
     pairs = [(m["key"], coerce(m, default_of(m))) for m in metas]
     apply_live_many(pairs)
     before = mosaic_state(store)
+    binds_before = keybinds_state(store)
     owned = store.setdefault("keys", {})
     for key, _ in pairs:
         owned.pop(key, None)
-    commit_store(store, before)
+    commit_store(store, before, binds_before)
 
 
 def cmd_reset(args):
@@ -944,13 +1179,31 @@ def cmd_reset(args):
         raise SystemExit("hdpanel: live reset failed")
     store = load_store()
     before = mosaic_state(store)
+    binds_before = keybinds_state(store)
     owned = store.setdefault("keys", {})
     for key, _ in pairs:
         owned.pop(key, None)
     if group == "dock":
         store["roundedRadius"] = 24
-    commit_store(store, before)
+    if group == "keybinds":
+        store.pop("binds", None)
+    commit_store(store, before, binds_before)
     print(json.dumps({"ok": True, "group": group, "keys": {k: v for k, v in pairs}}))
+    return 0
+
+
+def cmd_bind_set(args):
+    """bind-set ID on|off: one of the Keybinds section's own switches (the
+    binds with no plugin key: BIND_SWITCHES)."""
+    if len(args) != 2 or args[0] not in BIND_SWITCHES:
+        raise SystemExit("hdpanel: bind-set %s on|off" % "|".join(BIND_SWITCHES))
+    on = coerce({"kind": "bool"}, args[1])
+    store = load_store()
+    before = mosaic_state(store)
+    binds_before = keybinds_state(store)
+    store.setdefault("binds", {})[args[0]] = on
+    commit_store(store, before, binds_before)
+    print(json.dumps({"ok": True, "bind": args[0], "on": on}))
     return 0
 
 
@@ -1055,7 +1308,7 @@ def cmd_profile_mode(args):
 
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
-        print("hdpanel dump|set|preview|reset GROUP|gestures-set|profile-save|profile-apply|profile-mode")
+        print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|gestures-set|profile-save|profile-apply|profile-mode")
         return 0
     cmd = argv[1]
     args = argv[2:]
@@ -1069,6 +1322,7 @@ def main(argv):
         "profile-mode": cmd_profile_mode,
         "reset": cmd_reset,
         "profile-auto": cmd_profile_auto,
+        "bind-set": cmd_bind_set,
     }.get(cmd)
     if not fn:
         raise SystemExit("hdpanel: unknown command %s" % cmd)

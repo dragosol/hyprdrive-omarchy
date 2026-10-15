@@ -88,3 +88,29 @@ function argPlaceholder(action) {
     if (action === "keys") return "CTRL+T   or   Print   or   SUPER+SHIFT+S"
     return ""
 }
+
+// A Keybinds row's live chords (hdpanel dump `keybinds[].chords`, hyprctl's
+// spelling: "SUPER + SHIFT + mouse_down") the way the panel shows them:
+// "Super + Shift + Scroll". The wheel's two directions, the four arrows and
+// the ten number keys each read as one chord.
+var MOD_NAMES = { SUPER: "Super", SHIFT: "Shift", CTRL: "Ctrl", ALT: "Alt" }
+
+function prettyChords(chords) {
+    if (!chords || !chords.length) return ""
+    var out = []
+    for (var i = 0; i < chords.length; i++) {
+        var parts = String(chords[i]).split(" + ")
+        var key = parts.pop()
+        var mods = []
+        for (var j = 0; j < parts.length; j++) mods.push(MOD_NAMES[parts[j]] || parts[j])
+        var lower = key.toLowerCase()
+        if (MOD_NAMES[key]) key = MOD_NAMES[key] + " tap" // the overview's lone Super
+        else if (lower === "mouse_down" || lower === "mouse_up") key = "Scroll"
+        else if (lower === "left" || lower === "right" || lower === "up" || lower === "down") key = "Arrows"
+        else if (/^[0-9]$/.test(key) && chords.length > 1) key = "1…0"
+        else if (key.length === 1) key = key.toUpperCase()
+        var text = mods.concat([key]).join(" + ")
+        if (out.indexOf(text) < 0) out.push(text)
+    }
+    return out.join(", ")
+}

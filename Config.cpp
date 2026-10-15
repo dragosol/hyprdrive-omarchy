@@ -186,6 +186,16 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "focus"); },
         },
         {
+            // DesktopSwitch.cpp: one desktop by number, empty ones included
+            // (Super+scroll).
+            .name            = "desktop",
+            .argPattern      = std::regex{"^(next|prev)$"},
+            .typeArgError    = "expected a string argument",
+            .invalidArgError = "expected one of: next, prev",
+            .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "desktop"); },
+            .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "desktop"); },
+        },
+        {
             .name            = "window",
             .argPattern      = std::regex{"^(select|close|click)$"},
             .typeArgError    = "expected a string argument",
@@ -728,6 +738,25 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CStringValue>(KEY("animation:curve"),
                                     "the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum (its window curve), serpantinum_glide, serpantinum_soft, serpantinum_intro, serpantinum_pop, swift, springy, linear",
                                     Hyprlang::STRING{"hyprdrive"}));
+    // DESKTOP CHANGES, BY CAUSE (DesktopSwitch.hpp, user 2026-10-15). They
+    // gate Hyprland's own workspaces animation, per switch: off, a desktop
+    // change of that kind lands in one frame and the other kind still slides.
+    // Omarchy ships the workspaces animation disabled; then both are moot.
+    addKey(makeShared<CBoolValue>(KEY("animation:desktop_keyboard"),
+                                  "animate desktop changes a key or scroll bind makes (Super+1..0, Super+Tab, Super+scroll, move window to a desktop); false = instant. Gates Hyprland's workspaces animation, so nothing to do while that is off",
+                                  true));
+    addKey(makeShared<CBoolValue>(KEY("animation:desktop_focus"),
+                                  "animate desktop changes made by focus moving to a window on another desktop (app activation, a dock or notification click, focuswindow); false = instant",
+                                  true));
+    // SUPER+SCROLL (DesktopSwitch.hpp). The bind itself is the fragments'
+    // (30-keybinds.lua, or 40-panel.lua once the panel owns it); these say
+    // whether it exists and on which modifiers, and the wheel filter that makes
+    // it one desktop per notch follows them.
+    addKey(makeShared<CBoolValue>(KEY("binds:scroll_desktops"),
+                                  "<mods> + wheel steps through desktops by number, empty ones included (1 .. max(10, highest); no wrap), one per notch; replaces Omarchy's Super+scroll",
+                                  true));
+    addKey(makeShared<CStringValue>(KEY("binds:scroll_desktops_mods"), "modifiers for binds:scroll_desktops, as a bind spells them (SUPER, SUPER + SHIFT, ...)",
+                                    Hyprlang::STRING{"SUPER"}));
     // MOTION BLUR, PER ANIMATION (user, 2026-09-30). Each site smears a share
     // of its frame-to-frame motion (strength, 0..1; 0 = that site off) shaped
     // over the animation by `fade`: early (full at the start, gone by the
