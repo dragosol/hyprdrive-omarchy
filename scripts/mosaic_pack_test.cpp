@@ -167,6 +167,96 @@ int main() {
         expect(limitFor(THREE, 1, 50, 50, LAPTOP, GAP, 120).w == 120, "never below the minimum side");
     }
 
+    // THE WAY BACK FROM THE TILES (2026-10-15). The headless repro: kitty
+    // 900x600, calculator 380x636, text editor 595x442 and a Chrome window
+    // shrunk in the tiles to 604x374 fit 1900x1060 as [three] + [one]; the
+    // balanced splits alone ([2]+[2] 1088 high, [1]+[2]+[1]) said no, so the
+    // desktop stayed tiled.
+    {
+        const SRect              FHD{0, 0, 1900, 1060};
+        const std::vector<SRect> FOUR = {{0, 0, 900, 600}, {0, 0, 380, 636}, {0, 0, 595, 442}, {0, 0, 604, 374}};
+        const auto               M    = mosaic(FOUR, FHD, GAP);
+        bool                     ok   = M.has_value();
+        for (size_t i = 0; ok && i < FOUR.size(); ++i)
+            ok = (*M)[i].w == FOUR[i].w && (*M)[i].h == FOUR[i].h && inside((*M)[i], FHD);
+        expect(ok && gapsKept(*M, GAP), "four windows that fit only as 3+1 come back as a mosaic, sizes kept");
+        // Still too big: still nothing.
+        auto big = FOUR;
+        big[3]   = SRect{0, 0, 1100, 750};
+        expect(!mosaic(big, FHD, GAP), "the 1100x750 window that sent it to the tiles still does not fit");
+    }
+    // fittingRows is EXACT for the order: it finds a split exactly when one of
+    // the 2^(n-1) consecutive splits fits (brute force, deterministic sizes).
+    {
+        unsigned seed = 12345;
+        const auto RND = [&](int lo, int hi) {
+            seed = seed * 1103515245u + 12345u;
+            return lo + static_cast<int>((seed >> 8) % static_cast<unsigned>(hi - lo + 1));
+        };
+        int agree = 0, total = 0, found = 0;
+        for (int t = 0; t < 400; ++t) {
+            const size_t       N = static_cast<size_t>(RND(1, 8));
+            std::vector<SRect> s;
+            for (size_t i = 0; i < N; ++i)
+                s.push_back(SRect{0, 0, static_cast<double>(RND(150, 900)), static_cast<double>(RND(120, 700))});
+            bool brute = false;
+            for (unsigned mask = 0; mask < (1u << (N - 1)) && !brute; ++mask) {
+                double bw = 0, bh = 0, w = 0, h = 0;
+                for (size_t i = 0; i < N; ++i) {
+                    w += s[i].w + (w > 0 ? GAP : 0);
+                    h = std::max(h, s[i].h);
+                    if (i + 1 == N || (mask >> i & 1u)) {
+                        bw = std::max(bw, w);
+                        bh += h + (bh > 0 ? GAP : 0);
+                        w = h = 0;
+                    }
+                }
+                brute = bw <= AREA.w && bh <= AREA.h;
+            }
+            const auto ROWS = fittingRows(s, AREA, GAP);
+            ++total;
+            agree += brute == !ROWS.empty();
+            found += brute;
+            // ...and mosaic() agrees: it fits exactly when some split does.
+            if (brute != mosaic(s, AREA, GAP).has_value())
+                --agree;
+        }
+        expect(agree == total && found > 20 && found < total, "the fit check is exact for the windows' order");
+    }
+    // A WINDOW'S OWN MOSAIC SIZE WINS (2026-10-15). Super+L to dwindle and back
+    // rebuilt the mosaic from every window's CURRENT size -- its dwindle tile
+    // -- and three windows that had fitted came back tiled for good.
+    {
+        const SRect              FHD{0, 0, 1900, 1060};
+        const std::vector<SSize> PURE  = {{900, 600}, {380, 636}, {595, 442}};
+        const std::vector<SSize> TILES = {{941, 1056}, {941, 616}, {941, 521}};
+        std::vector<SRect>       before, after;
+        for (size_t i = 0; i < PURE.size(); ++i) {
+            SNaturalInputs in{.desired = TILES[i], .fallback = {1140, 636}, .fresh = true};
+            before.push_back({0, 0, chooseNatural(in, 120).size.w, chooseNatural(in, 120).size.h});
+            in.kept      = PURE[i];
+            const auto N = chooseNatural(in, 120);
+            expect(N.kept && N.size.w == PURE[i].w && N.size.h == PURE[i].h, "a kept size wins over the current tile");
+            after.push_back({0, 0, N.size.w, N.size.h});
+        }
+        expect(!mosaic(before, FHD, GAP) && mosaic(after, FHD, GAP), "the toggle comes back as the mosaic it left, not stuck in the tiles");
+
+        SNaturalInputs in{.app = SSize{700, 500}, .desired = SSize{800, 600}, .floating = {640, 480}, .fallback = {1140, 636}, .fresh = true};
+        expect(chooseNatural(in, 120).size.w == 700 && !chooseNatural(in, 120).kept, "an app's closing size beats the client's own");
+        in.kept = SSize{900, 600};
+        expect(chooseNatural(in, 120).size.w == 900, "the window's own beats its app's");
+        in.kept = SSize{50, 600};
+        expect(chooseNatural(in, 120).size.w == 700, "a kept size under the minimum is ignored");
+        in.kept.reset();
+        in.app.reset();
+        expect(chooseNatural(in, 120).size.w == 800, "a new window: the client's own size");
+        in.fresh = false;
+        expect(chooseNatural(in, 120).size.w == 640, "moved in: its floating size over its old tile");
+        in.floating = {};
+        in.desired.reset();
+        expect(chooseNatural(in, 120).size.w == 1140, "nothing: the fallback");
+    }
+
     std::printf("mosaic_pack_test: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;
 }

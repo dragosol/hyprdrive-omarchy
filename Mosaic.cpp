@@ -106,6 +106,76 @@ namespace ScrollOverview::Mosaic {
                 return {};
             return !w->m_initialClass.empty() ? w->m_initialClass : w->m_class;
         }
+
+        // A WINDOW'S MOSAIC SIZE, for as long as the window lives (user,
+        // 2026-10-15: "when I toggle out of mosaic into dwindle ... windows
+        // remember their sizes during pure mosaic"). The layout's own list
+        // dies with it: Super+L to dwindle destroys this desktop's mosaic, and
+        // the one Super+L builds again was handed every window at its DWINDLE
+        // tile (desiredGeometry() is the window's current size) -- 941x1056,
+        // 941x616, 941x521 for three windows that had been 900x600, 380x636 and
+        // 595x442 -- which no longer fit, so it came back tiled and stayed so.
+        // The same held for a window moved to another desktop and back. Kept
+        // per WINDOW (a weak reference: a closed window's entry lapses, and a
+        // new window at a reused address is not mistaken for it), outside every
+        // layout instance, and written whenever a mosaic lays its desktop out.
+        //
+        // One exception, the old rule: a window that was FLOATED and resized
+        // there (Super+V, a new size, Super+V) comes back at its floating size.
+        // Hyprland rewrites the floating size on every workspace move, so a
+        // changed one alone proves nothing: it counts only when the window
+        // really floated since it left (the window.floating event) and its
+        // floating size moved from what it was when it left. A Super+drag move
+        // floats the window too, but at one size throughout, so it keeps its own.
+        struct SKept {
+            PHLWINDOWREF window;
+            Vector2D     size;
+            Vector2D     floatAtLeave;      // its floating size when it left a mosaic
+            bool         floatedSince = false;
+        };
+        std::vector<SKept> g_windowSizes;
+
+        SKept* keptOf(const PHLWINDOW& w) {
+            for (auto& e : g_windowSizes)
+                if (e.window && e.window.lock() == w)
+                    return &e;
+            return nullptr;
+        }
+
+        void rememberWindow(const PHLWINDOW& w, const Vector2D& size) {
+            if (!w)
+                return;
+            std::erase_if(g_windowSizes, [](const SKept& e) { return !e.window; });
+            if (auto* e = keptOf(w)) {
+                e->size         = size;
+                e->floatedSince = false;
+                return;
+            }
+            g_windowSizes.push_back({.window = w, .size = size});
+        }
+
+        void leftMosaic(const SP<Layout::ITarget>& t) {
+            if (auto* e = keptOf(t ? t->window() : PHLWINDOW{})) {
+                e->floatAtLeave = t->lastFloatingSize();
+                e->floatedSince = false;
+            }
+        }
+
+        void onFloating(const PHLWINDOW& w) {
+            if (w && w->m_isFloating)
+                if (auto* e = keptOf(w))
+                    e->floatedSince = true;
+        }
+
+        std::optional<Vector2D> rememberedWindow(const SP<Layout::ITarget>& t) {
+            const auto* e = keptOf(t ? t->window() : PHLWINDOW{});
+            if (!e)
+                return std::nullopt;
+            const auto F = t->lastFloatingSize();
+            if (e->floatedSince && (std::abs(F.x - e->floatAtLeave.x) > 2 || std::abs(F.y - e->floatAtLeave.y) > 2))
+                return std::nullopt; // floated and resized there: its floating size decides
+            return e->size;
+        }
     }
 
     // One window of the layout, in arrival order (the order the rows read).
@@ -121,7 +191,7 @@ namespace ScrollOverview::Mosaic {
 
     // TRACE, for the next odd recording: `touch /tmp/hyprdrive-mosaic.on` and
     // every resize step and arrangement decision lands in /tmp/hyprdrive-mosaic.log.
-    static void trace(const std::string& line) {
+    static bool traceOn() {
         static bool                                  on      = false;
         static std::chrono::steady_clock::time_point checked = {};
         const auto                                   NOW     = std::chrono::steady_clock::now();
@@ -130,7 +200,10 @@ namespace ScrollOverview::Mosaic {
             std::error_code ec;
             on      = std::filesystem::exists("/tmp/hyprdrive-mosaic.on", ec);
         }
-        if (!on)
+        return on;
+    }
+    static void trace(const std::string& line) {
+        if (!traceOn())
             return;
         if (std::ofstream f("/tmp/hyprdrive-mosaic.log", std::ios::app); f)
             f << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() % 100000000 << ' ' << line << '\n';
@@ -167,15 +240,23 @@ namespace ScrollOverview::Mosaic {
 
         void newTarget(SP<Layout::ITarget> target) override {
             m_tiledHold = false;
-            arrive(target, naturalFor(target, true));
+            arriveWithNatural(target, true);
             recalculate();
         }
 
         void movedTarget(SP<Layout::ITarget> target, std::optional<Vector2D> focalPoint = std::nullopt) override {
             (void)focalPoint;
             if (indexOf(target) < 0)
-                arrive(target, naturalFor(target, false));
+                arriveWithNatural(target, false);
             recalculate();
+        }
+
+        // A window this session already gave a mosaic size comes back at that
+        // size, never shrunk as a newcomer: it is not new, and shrinking it
+        // here would overwrite the size it is meant to keep.
+        void arriveWithNatural(const SP<Layout::ITarget>& target, bool fresh) {
+            const auto N = naturalFor(target, fresh);
+            arrive(target, Vector2D{N.size.w, N.size.h}, !N.kept);
         }
 
         // A WINDOW ARRIVES (user, 2026-10-14: "opening new windows ... seems to
@@ -184,10 +265,11 @@ namespace ScrollOverview::Mosaic {
         // there changes size. The NEWCOMER may come in smaller -- down to half
         // its own size, in 5% steps -- to fit beside them; if it still does not
         // fit, it keeps its size and the desktop tiles.
-        void arrive(const SP<Layout::ITarget>& target, Vector2D want) {
+        void arrive(const SP<Layout::ITarget>& target, Vector2D want, bool mayShrink) {
             m_entries.push_back({target, want, ++m_nextId});
+            trace(std::format("arrive {} want={}x{}{}", appOf(target ? target->window() : PHLWINDOW{}), want.x, want.y, mayShrink ? "" : " (kept)"));
             const auto AREA = area();
-            if (!AREA || fits())
+            if (!mayShrink || !AREA || fits())
                 return;
             auto& n = m_entries.back().natural;
             for (double s = 0.95; s >= 0.5 - 1e-9; s -= 0.05) {
@@ -218,6 +300,7 @@ namespace ScrollOverview::Mosaic {
                 m_resize.reset();
             }
             m_tiledHold = false;
+            leftMosaic(target);
             std::erase_if(m_entries, [&](const SMosaicEntry& e) { return !e.target || e.target.lock() == target; });
             recalculate();
         }
@@ -323,6 +406,10 @@ namespace ScrollOverview::Mosaic {
         void recalculate(Layout::eRecalculateReason reason = Layout::RECALCULATE_REASON_UNKNOWN) override {
             (void)reason;
             std::erase_if(m_entries, [](const SMosaicEntry& e) { return !e.target; });
+            // Every window's mosaic size outlives this layout (g_windowSizes).
+            for (const auto& E : m_entries)
+                if (const auto T = E.target.lock())
+                    rememberWindow(T->window(), E.natural);
             if (m_entries.empty() || !m_parent || !m_parent->space())
                 return;
 
@@ -355,6 +442,7 @@ namespace ScrollOverview::Mosaic {
             // After a resize pushed past its limit the desktop stays tiled until
             // a window arrives or leaves (m_tiledHold).
             const auto PLACED = m_tiledHold ? std::nullopt : MosaicPack::mosaic(sizes, AREAR, innerGap());
+            traceEntries(PLACED ? "mosaic" : "tiles");
             if (PLACED) {
                 m_asMosaic = true;
                 // Back in the mosaic: the next time the tiles take over they
@@ -485,6 +573,19 @@ namespace ScrollOverview::Mosaic {
         bool                      m_tiledHold = false; // a resize went past its limit: tiles until the mosaic fits unshrunk
         MosaicPack::CDwindleTree  m_tree;              // the tiles; empty while the mosaic stands
         long long                 m_nextId = 0;
+
+        // TRACE: every window's mosaic size at each arrangement decision.
+        void traceEntries(const char* what) const {
+            if (!traceOn())
+                return;
+            std::string line = std::format("arrange {} hold={} area={}x{} n={}", what, m_tiledHold, area() ? area()->w : 0.0, area() ? area()->h : 0.0, m_entries.size());
+            for (const auto& E : m_entries) {
+                const auto T = E.target.lock();
+                const auto W = T ? T->window() : PHLWINDOW{};
+                line += std::format(" [{} {:x} natural={}x{}]", appOf(W), (uintptr_t)W.get(), E.natural.x, E.natural.y);
+            }
+            trace(line);
+        }
 
         // The tree follows the windows. Empty (the tiles just took over from
         // the mosaic): a balanced tree of everyone, in mosaic order. Otherwise
@@ -658,32 +759,30 @@ namespace ScrollOverview::Mosaic {
             return GAPS ? sc<double>(GAPS->m_left + GAPS->m_right) : 10.0;
         }
 
-        // THE SIZE A WINDOW KEEPS, decided once, when it arrives. desiredGeometry()
-        // is the window's CURRENT size, so it is only the client's own choice the
+        // THE SIZE A WINDOW KEEPS, decided once, when it arrives
+        // (MosaicPack::chooseNatural has the order). desiredGeometry() is the
+        // window's CURRENT size, so it is only the client's own choice the
         // moment a NEW window maps; one moving in from another layout carries
-        // that layout's tile, so its remembered floating size wins when it has
-        // one. Neither: three fifths of the desktop.
-        Vector2D naturalFor(const SP<Layout::ITarget>& t, bool fresh) const {
+        // that layout's tile -- which is why a window this session already
+        // sized in a mosaic keeps that size first. Nothing: three fifths of the
+        // desktop.
+        MosaicPack::SNatural naturalFor(const SP<Layout::ITarget>& t, bool fresh) const {
             CBox AREA{0, 0, 1280, 720};
             if (m_parent && m_parent->space())
                 AREA = m_parent->space()->workArea();
-            const Vector2D FALLBACK{std::round(AREA.w * 0.6), std::round(AREA.h * 0.6)};
-            if (!t)
-                return FALLBACK;
-
-            const auto valid = [](const Vector2D& v) { return v.x >= MIN_SIDE && v.y >= MIN_SIDE; };
-            // The size this app had when it last closed in a mosaic wins.
-            loadSizes();
-            if (const auto IT = g_sizes.find(appOf(t->window())); IT != g_sizes.end() && valid(IT->second))
-                return IT->second;
-            const auto FLOAT = t->lastFloatingSize();
-            if (!fresh && valid(FLOAT))
-                return FLOAT;
-            if (const auto D = t->desiredGeometry(); D && valid(D->size))
-                return D->size;
-            if (valid(FLOAT))
-                return FLOAT;
-            return FALLBACK;
+            const auto SZ = [](const Vector2D& v) { return MosaicPack::SSize{v.x, v.y}; };
+            MosaicPack::SNaturalInputs in{.fallback = {std::round(AREA.w * 0.6), std::round(AREA.h * 0.6)}, .fresh = fresh};
+            if (t) {
+                if (const auto KEPT = rememberedWindow(t))
+                    in.kept = SZ(*KEPT);
+                loadSizes();
+                if (const auto IT = g_sizes.find(appOf(t->window())); IT != g_sizes.end())
+                    in.app = SZ(IT->second);
+                in.floating = SZ(t->lastFloatingSize());
+                if (const auto D = t->desiredGeometry(); D)
+                    in.desired = SZ(D->size);
+            }
+            return MosaicPack::chooseNatural(in, MIN_SIDE);
         }
     };
 
@@ -901,6 +1000,7 @@ namespace ScrollOverview::Mosaic {
     // afloat: anything with a parent window (a transient, an X11 child), a
     // modal, an override-redirect popup, a pinned or fullscreen window.
     static CHyprSignalListener g_openLateHook;
+    static CHyprSignalListener g_floatingHook; // g_windowSizes: a window floated
 
     static bool onMosaicWorkspace(const PHLWORKSPACE& ws) {
         return ws && std::ranges::any_of(g_instances, [&](const CMosaicAlgorithm* a) { return a->workspace() == ws; });
@@ -922,10 +1022,12 @@ namespace ScrollOverview::Mosaic {
         // doLater: a deferred call still queued when the plugin unloads jumps
         // into unmapped code (the unload SEGVs, 2026-09).
         g_openLateHook = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW w) { adoptFloating(w); });
+        g_floatingHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW w) { onFloating(w); });
     }
 
     void unregisterLayout(HANDLE handle) {
         g_openLateHook.reset();
+        g_floatingHook.reset();
         HyprlandAPI::removeAlgo(handle, "mosaic");
     }
 }

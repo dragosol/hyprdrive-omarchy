@@ -64,6 +64,74 @@ namespace ScrollOverview::MosaicPack {
         return out;
     }
 
+    // THE FIT, EXACTLY (2026-10-15). splitRows() tries ONE split per row count,
+    // balanced by width, and missed arrangements that do fit: kitty 900x600,
+    // calculator 380x636, text editor 595x442 and a 604x374 window fit as
+    // [three in a row] + [one] in 1900x1060, but the balanced splits were
+    // [2]+[2] (1088 high) and [1]+[2]+[1] -- so a desktop whose windows had been
+    // shrunk back to fitting stayed in the tiles. This is the fallback when
+    // none of the balanced splits fits: for every row count, the consecutive
+    // split (the windows keep their order) with the LEAST total height whose
+    // rows all fit the width -- a dynamic programme, so it is exact for that
+    // order -- and of those the most compact for the screen's shape, scored as
+    // mosaic() scores. Empty: no split in this order fits.
+    inline std::vector<std::vector<size_t>> fittingRows(const std::vector<SRect>& sizes, const SRect& area, double gap) {
+        const size_t N   = sizes.size();
+        const double INF = std::numeric_limits<double>::infinity();
+        if (N == 0)
+            return {};
+        // width[i][j], height[i][j]: windows i..j-1 as one row.
+        std::vector<std::vector<double>> rowW(N + 1, std::vector<double>(N + 1, INF)), rowH(N + 1, std::vector<double>(N + 1, 0.0));
+        for (size_t i = 0; i < N; ++i) {
+            double w = 0, h = 0;
+            for (size_t j = i + 1; j <= N; ++j) {
+                w += sizes[j - 1].w + (j - 1 > i ? gap : 0);
+                h = std::max(h, sizes[j - 1].h);
+                rowW[i][j] = w;
+                rowH[i][j] = h;
+            }
+        }
+        // best[k][j]: least summed row height for the first j windows in k rows.
+        std::vector<std::vector<double>> best(N + 1, std::vector<double>(N + 1, INF));
+        std::vector<std::vector<size_t>> from(N + 1, std::vector<size_t>(N + 1, 0));
+        best[0][0] = 0;
+        for (size_t k = 1; k <= N; ++k)
+            for (size_t j = k; j <= N; ++j)
+                for (size_t i = k - 1; i < j; ++i) {
+                    if (best[k - 1][i] == INF || rowW[i][j] > area.w)
+                        continue;
+                    const double H = best[k - 1][i] + rowH[i][j];
+                    if (H < best[k][j]) {
+                        best[k][j] = H;
+                        from[k][j] = i;
+                    }
+                }
+        double                           bestScore = INF;
+        std::vector<std::vector<size_t>> out;
+        for (size_t k = 1; k <= N; ++k) {
+            if (best[k][N] == INF)
+                continue;
+            const double BH = best[k][N] + gap * sc_double(k - 1);
+            if (BH > area.h)
+                continue;
+            std::vector<std::vector<size_t>> rows(k);
+            double                           bw = 0;
+            for (size_t r = k, j = N; r > 0; --r) {
+                const size_t I = from[r][j];
+                for (size_t m = I; m < j; ++m)
+                    rows[r - 1].push_back(m);
+                bw = std::max(bw, rowW[I][j]);
+                j  = I;
+            }
+            const double SCORE = std::max(bw / area.w, BH / area.h);
+            if (SCORE < bestScore - 1e-9) {
+                bestScore = SCORE;
+                out       = std::move(rows);
+            }
+        }
+        return out;
+    }
+
     // THE MOSAIC, or nothing when the windows do not fit at their own sizes.
     // Rows, each centred, the stack of rows centred, one theme gap between
     // neighbours; the row count is the one that makes the cluster most compact
@@ -103,6 +171,8 @@ namespace ScrollOverview::MosaicPack {
             }
         }
         if (best.empty())
+            best = fittingRows(sizes, area, gap);
+        if (best.empty())
             return std::nullopt;
 
         std::vector<double> rowW(best.size()), rowH(best.size());
@@ -130,6 +200,47 @@ namespace ScrollOverview::MosaicPack {
             y += rowH[r] + gap;
         }
         return out;
+    }
+
+    // THE SIZE A WINDOW ARRIVES WITH, in order of precedence (Mosaic.cpp feeds
+    // it; the sources are Hyprland's):
+    //   kept     -- this window's own mosaic size from earlier in the session
+    //               (2026-10-15: a desktop toggled to dwindle and back, or a
+    //               window moved away and back, is the SAME window, and comes
+    //               back at its mosaic size, not at the tile it just left);
+    //   app      -- the size its app last closed at in a mosaic (mosaic-sizes);
+    //   floating -- moved in (not fresh): its remembered floating size;
+    //   desired  -- the client's own size: its choice when it is NEW, but
+    //               only its current tile once it has been laid out elsewhere;
+    //   floating -- (fresh) still better than nothing;
+    //   fallback.
+    // A size counts only with both sides >= minSide. `kept` is reported so the
+    // caller never shrinks such a window as a newcomer.
+    struct SSize {
+        double w = 0, h = 0;
+    };
+    struct SNaturalInputs {
+        std::optional<SSize> kept, app, desired;
+        SSize                floating, fallback;
+        bool                 fresh = true;
+    };
+    struct SNatural {
+        SSize size;
+        bool  kept = false;
+    };
+    inline SNatural chooseNatural(const SNaturalInputs& in, double minSide) {
+        const auto VALID = [&](const std::optional<SSize>& s) { return s && s->w >= minSide && s->h >= minSide; };
+        if (VALID(in.kept))
+            return {*in.kept, true};
+        if (VALID(in.app))
+            return {*in.app, false};
+        if (!in.fresh && VALID(in.floating))
+            return {in.floating, false};
+        if (VALID(in.desired))
+            return {*in.desired, false};
+        if (VALID(in.floating))
+            return {in.floating, false};
+        return {in.fallback, false};
     }
 
     // THE TILES: A DWINDLE TREE (user, 2026-10-14: "dwindle hybrid mode does not
