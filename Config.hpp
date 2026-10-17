@@ -176,9 +176,12 @@ std::string   getGestureDetentSound();
 //   themeRounding()         decoration:rounding (0 is squared, and is valid)
 //   themeRoundingPower()    decoration:rounding_power
 //   dockIndicatorColor()    dock:indicator_color, else highlightColor()
-//   dockBackgroundColor()   dock:background_color, else Omarchy terminal
-//                           background (colors.toml), else misc:background_color
-//                           opacity -1 = unfocused default-opacity (0.85)
+//   dockBackgroundColor()   the terminal's glass: dock:background_color, else
+//                           Ghostty's background (its config + includes +
+//                           theme), else Omarchy colors.toml, else
+//                           misc:background_color; opacity: dock:background_opacity,
+//                           else Ghostty's background-opacity, else 0.85 x
+//                           decoration:inactive_opacity
 //   themeFontFamily()       misc:font_family if pinned, else Omarchy
 //                           fontconfig monospace (omarchy font set)
 //   dockCornerRadius()      dock:corner_radius (default 24; the pill is not a window)
@@ -215,6 +218,9 @@ CHyprColor    themeUrgent();
 // reloads Hyprland and the reload listener calls this first. The poll only
 // covers a file edited underneath a theme that is already current.
 void          invalidateThemeCache();
+// The number invalidateThemeCache() bumps, for a cache that lives outside
+// Config.cpp (BorderFade's `border` curve) to re-read on the same reload.
+uint64_t      themeGeneration();
 
 // A hash over the LIVE values of every plugin:hyprdrive:dock: key. Taken on
 // config.preReload and again on config.reloaded, it answers the only question

@@ -676,9 +676,10 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
             if (!scrollStepAllowed(e.timeMs))
                 return;
 
-            if (ACTION == ScrollOverview::Config::EScrollAction::WORKSPACE)
+            if (ACTION == ScrollOverview::Config::EScrollAction::WORKSPACE) {
+                wheelPanAt = Time::steadyNow();
                 moveViewportWorkspace(e.delta > 0);
-            else
+            } else
                 moveScrollingColumnSelection(e.delta > 0);
 
             return;

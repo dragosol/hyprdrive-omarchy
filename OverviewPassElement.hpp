@@ -17,6 +17,12 @@ class COverviewBlurPassElement : public IPassElement {
         // live. FlightBlur's moving windows use it so a window frosts the same
         // moving as standing still.
         bool  hyprlandCache = false;
+        // Paint only inside this box (render px); empty = the whole shape. The
+        // dock's preview panel draws one band per row of a stepped plate.
+        CBox  clip;
+        // Paint exactly this region (render px) instead of the rounded box: the
+        // dock's preview panel, whose outline is one organic shape.
+        CRegion shape;
 
         // X29. The dock's frost is the reference's, not the desktop's. The blur
         // runs inside draw(), long after whoever queued this element returned, so

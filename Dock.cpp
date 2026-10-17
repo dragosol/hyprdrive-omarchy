@@ -23,6 +23,11 @@
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 
+#include "PreviewGrid.hpp"
+#include "BorderFade.hpp"
+#include <cairo/cairo.h>
+#include <hyprland/src/render/pass/TexPassElement.hpp>
+#include <hyprland/src/render/gl/GLTexture.hpp>
 #include "Dock.hpp"
 #include "DesktopSwitch.hpp"
 #include "Motion.hpp"
@@ -227,7 +232,9 @@ constexpr float  PANEL_SLIDE_MS = 160.F; // travel from one icon to the next
 constexpr float  PANEL_GRACE_MS = 180.F;
 // ponytail: past this the cells are too narrow to read anyway. Scroll or a
 // second row if an app with a dozen windows ever needs them all.
-constexpr size_t PANEL_MAX      = 6;
+constexpr size_t PANEL_MAX      = 64; // a guard on draw cost only: past half the screen the previews wrap into rows (PreviewGrid)
+constexpr float  PANEL_ROW_SHARE = 0.5F; // a row of previews wraps past this share of the monitor's width
+constexpr float  PANEL_MAX_H_SHARE = 0.6F; // rows taller than this share of the monitor's height shrink their cells
 
 // X31 RUNNING INDICATOR. `running-indicator-style` is DEFAULT in the reference,
 // and DEFAULT is not a Dash to Dock drawing at all: appIconIndicators.js's
@@ -2212,7 +2219,8 @@ CBox hoverBox(const CBox& iconBox, float scale) {
 // decoration:blur:* still applies when the dock keys are -1 (X71). Sampling
 // m_blurFB here was wrong for the desktop path (no behind-chrome pre-blur
 // exists) and broke once the shared draw path was rewritten.
-static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alpha) {
+static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alpha, const CBox& clip = {}, const CRegion* shape = nullptr, bool currentPass = false,
+                           float roundingPower = 2.F) {
     if (!Stacks::drawableBox(box) || alpha <= 0.F) // box.empty() lets a NEGATIVE box through
         return;
 
@@ -2225,9 +2233,12 @@ static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, fl
     COverviewBlurPassElement::SData blur;
     blur.box            = box;
     blur.rounding       = rounding;
-    blur.roundingPower  = 2.F;
+    blur.roundingPower  = roundingPower;
     blur.alpha          = alpha;
     blur.xray           = false; // live dual-kawase of whatever is behind the pill
+    blur.clip           = clip;
+    if (shape)
+        blur.shape = shape->copy();
     // -1 on these keys means leave decoration:blur:* alone (X71).
     blur.blurSize       = Config::getValue<int>(KEY_BLUR_SIZE);
     blur.blurPasses     = Config::getValue<int>(KEY_BLUR_PASSES);
@@ -2235,7 +2246,10 @@ static void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, fl
     blur.blurNoise      = Config::getValue<float>(KEY_BLUR_NOISE);
     blur.blurContrast   = Config::getValue<float>(KEY_BLUR_CONTR);
     blur.blurVibrancy   = Config::getValue<float>(KEY_BLUR_VIBR);
-    g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(blur));
+    if (currentPass)
+        g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(blur));
+    else
+        g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(blur));
 }
 
 std::vector<PHLWINDOW> itemWindows(const SItem& item);
@@ -2584,6 +2598,21 @@ std::string tooltipSubject(const SItem& item) {
 // (sliding to the next icon), not when the same window's title ticks -- a
 // streaming Grok/browser title used to punch the plate back to zero alpha
 // every update.
+// The hovered app's window labels (renderWindowPeek) name windows ON the
+// desktop, so they go under the dock's own chrome: drawn before the hover
+// panel, on the tooltip's fade (user, 2026-10-16: the panel "glitches when I
+// open overview" -- the labels sat on top of its previews, went off the moment
+// the overview opened and came back as it closed). renderTooltip, later in the
+// frame, sets what they label; they follow it a frame behind, inside its fade.
+static void renderTooltipPeek(PHLMONITOR monitor) {
+    if (g_tip.name.empty() || g_tip.peek.empty() || g_tip.monitor != monitor->m_id)
+        return;
+    const float T = std::clamp(elapsedMs(g_tip.since) / (g_tip.out ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS), 0.F, 1.F);
+    if (g_tip.out && T >= 1.F)
+        return;
+    renderWindowPeek(monitor, g_tip.out ? 1.F - houseEase(false, T) : houseEase(true, T));
+}
+
 void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& NAME, float bottomY = 0.F, const std::string& subject = {},
                    const std::vector<PHLWINDOW>& peek = {}) {
     const bool LIVE = !subject.empty() || !NAME.empty();
@@ -2635,8 +2664,6 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
 
     // Entrances decelerate, exits accelerate: the house rule, both directions.
     const float ALPHA = g_tip.out ? 1.F - houseEase(false, T) : houseEase(true, T);
-
-    renderWindowPeek(monitor, ALPHA);
 
     // The frames this fade needs are asked for by needsFrames(), which reads the
     // same g_tip clock this line does. A pointer resting on an icon emits no
@@ -3081,6 +3108,26 @@ WORKSPACEID nearestEmptyWorkspaceID(const PHLMONITOR& monitor, WORKSPACEID from)
 // moves it AND follows it, so the user lands on the new desktop with it
 // focused, the way Open in Empty Workspace lands them beside the app it
 // launched.
+// MOVE TO THIS WORKSPACE (user, 2026-10-15): the window joins the desktop the
+// dock's monitor is showing, and is focused there. Off a scratchpad or another
+// desktop alike; the menu only offers it when the window is elsewhere.
+void moveToThisWorkspace(PHLMONITOR monitor, const PHLWINDOW& WINDOW) {
+    if (!monitor || !WINDOW)
+        return;
+    const auto TARGET = monitor->m_activeWorkspace;
+    if (!TARGET || TARGET->m_isSpecialWorkspace || WINDOW->m_workspace == TARGET)
+        return;
+    // Off the minimize stash first, for moveToEmptyWorkspace's reason.
+    if (Minimize::isMinimized(WINDOW))
+        Minimize::restore(WINDOW);
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+        OVERVIEW->close();
+    (void)::Config::Actions::moveToWorkspace(TARGET, true, WINDOW);
+    activateWindow(WINDOW);
+    if (g_dockSeatHeld)
+        stealDockSeat();
+}
+
 void moveToEmptyWorkspace(PHLMONITOR monitor, const PHLWINDOW& WINDOW) {
     if (!monitor || !WINDOW)
         return;
@@ -3372,6 +3419,9 @@ enum class ERow : uint8_t {
     // user, 2026-10-13: the same two, onto the scratchpad.
     OpenScratchpad,
     MoveScratchpad,
+    // user, 2026-10-15: "move to this workspace (only visible when window is
+    // not in current workspace)".
+    MoveHere,
     MinimizeAll,
     RestoreAll,
     ForceQuit,
@@ -3528,6 +3578,11 @@ void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WIN
         if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
             where += " \u00b7 current";
         rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
+        // Onto the desktop this monitor is showing -- only for a window that is
+        // somewhere else (another desktop or a scratchpad). A minimized one is
+        // left to Show, which brings it back where it came from.
+        if (ACTIVEID != WORKSPACE_INVALID && on != ACTIVEID && !Minimize::isMinimized(WINDOW))
+            rows.emplace_back(SRow{.kind = ERow::MoveHere, .label = "Move to This Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
         // Its own Move to Empty Workspace, right under it and indented, so which
         // window it moves is never a question (user, 2026-10-08). The menu has
         // no submenus to put it in; an indented row is the flat menu's way of
@@ -3969,6 +4024,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;
 
         case ERow::MoveEmptyWorkspace: moveToEmptyWorkspace(monitor, row.window.lock()); return;
+
+        case ERow::MoveHere: moveToThisWorkspace(monitor, row.window.lock()); return;
 
         case ERow::OpenScratchpad: launchInScratchpad(monitor, item); return;
 
@@ -5615,6 +5672,10 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
 
     if (Flight::anyOn(monitor))
         return "flight";
+    // The pill's and the preview rings' border fade (BorderFade.hpp): a
+    // pointer resting on the pill emits no motion to repaint it.
+    if (BorderFade::animatingOn(monitor))
+        return "border-fade";
     if (panelNeedsFramesOn(monitor))
         return "hover-panel";
     if (!g_flight.bounces.empty())
@@ -5783,22 +5844,26 @@ CHyprColor accentColor() {
     return ScrollOverview::Config::themeForeground();
 }
 
-void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha) {
+void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha, const CBox& clip, float roundingPower, bool currentPass) {
     // Every caller (the dock, the stacks' fan/pane/field, the menu) comes
     // through here: a zero or negative box would RASSERT in Hyprland's renderer
     // and take the compositor down (review 2026-09-24: the pane's search field
     // on its first frame, with a small dock icon).
     if (!Stacks::drawableBox(box) || alpha <= 0.F)
         return;
-    queueDockFrost(monitor, box, rounding, alpha);
+    queueDockFrost(monitor, box, rounding, alpha, clip, nullptr, currentPass, roundingPower);
 
     const auto                  TINT = background();
     CRectPassElement::SRectData bg;
     bg.box           = box;
     bg.color         = CHyprColor{TINT.r, TINT.g, TINT.b, TINT.a * alpha};
     bg.round         = rounding;
-    bg.roundingPower = 2.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+    bg.roundingPower = roundingPower;
+    bg.clipBox       = clip;
+    if (currentPass)
+        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(bg));
+    else
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
 }
 
 void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::optional<CBox> startBox) {
@@ -6053,7 +6118,33 @@ struct SPanel {
     bool            out       = false;
     bool            leaving   = false;               // inside the grace period
     Time::steady_tp leftAt    = Time::steadyNow();
+    // The plate's fade, on its own clock (user, 2026-10-16: the preview
+    // panel's padding "glitching on overview reveal/close"). It used to ride
+    // the move clock above, and every retarget restarts that clock: the dock
+    // moving under an overview reveal or close retargets the panel every
+    // frame, so the plate sat at alpha 0 -- previews with no plate under them.
+    // In on the entrance, out on the dismissal, from wherever it was; a slide
+    // leaves it alone.
+    float           fadeFrom  = 0.F;
+    float           fadeTo    = 1.F;
+    Time::steady_tp fadeSince = Time::steadyNow();
+    float           fadeMs    = PANEL_IN_MS;
 };
+
+// Entrances decelerate, exits accelerate (the house rule), from wherever the
+// fade was when it turned.
+static float panelAlpha(const SPanel& panel) {
+    const float T = std::clamp(elapsedMs(panel.fadeSince) / std::max(1.F, panel.fadeMs), 0.F, 1.F);
+    const float E = houseEase(panel.fadeTo > panel.fadeFrom, T);
+    return panel.fadeFrom + ((panel.fadeTo - panel.fadeFrom) * E);
+}
+
+static void panelFade(SPanel& panel, float to, float ms, const Time::steady_tp& now) {
+    panel.fadeFrom  = panelAlpha(panel);
+    panel.fadeTo    = to;
+    panel.fadeSince = now;
+    panel.fadeMs    = ms;
+}
 
 // How far a parked window's preview is darkened, and the label's point size.
 // The dim is deep enough to read as "not here" against the live thumbnails
@@ -6146,17 +6237,45 @@ std::vector<PHLWINDOW> panelWindows(const std::string& wmClass, const std::strin
     return out;
 }
 
-// One cell per window, side by side, each keeping its window's aspect.
+// The panel's rows (PreviewGrid): the cells at the settled height, a row
+// wrapping past PANEL_ROW_SHARE of the monitor's width, split evenly. Both the
+// settled box and every drawn frame ask this, so they agree on the rows.
+struct SPanelRows {
+    std::vector<size_t> counts; // cells per row, top first
+    float               cellH = 0.F;
+    float               width = 0.F; // the widest row at cellH
+};
+SPanelRows panelRows(PHLMONITOR monitor, const std::vector<PHLWINDOW>& windows) {
+    const float        SCALE = std::max(monitor->m_scale, 0.01F);
+    const float        GAP   = PANEL_CELL_GAP * SCALE;
+    float              cellH = PANEL_CELL_H * SCALE;
+    std::vector<float> widths;
+    widths.reserve(windows.size());
+    for (const auto& W : windows)
+        widths.push_back(cellH * previewAspect(W));
+    SPanelRows out;
+    out.counts = ScrollOverview::PreviewGrid::rows(widths, GAP, PANEL_ROW_SHARE * sc<float>(monitor->m_size.x) * SCALE);
+    // Too many rows for the screen: every cell shrinks alike.
+    const float ROWS  = sc<float>(out.counts.size());
+    const float MAXH  = PANEL_MAX_H_SHARE * sc<float>(monitor->m_size.y) * SCALE - 2.F * PANEL_PAD * SCALE - GAP * std::max(0.F, ROWS - 1.F);
+    const float SHRINK = ROWS > 0.F ? std::clamp(MAXH / (ROWS * cellH), 0.1F, 1.F) : 1.F;
+    cellH *= SHRINK;
+    for (auto& w : widths)
+        w *= SHRINK;
+    out.cellH = cellH;
+    out.width = ScrollOverview::PreviewGrid::widest(widths, out.counts, GAP);
+    return out;
+}
+
+// One cell per window, each keeping its window's aspect, in rows past half
+// the screen's width (panelRows).
 CBox panelTarget(PHLMONITOR monitor, const SLayout& layout, const std::vector<PHLWINDOW>& windows, const CBox& anchor) {
     const float SCALE = std::max(monitor->m_scale, 0.01F);
-    const float CELLH = PANEL_CELL_H * SCALE;
+    const auto  ROWS  = panelRows(monitor, windows);
+    const float NROWS = sc<float>(std::max<size_t>(1, ROWS.counts.size()));
 
-    float content = 0.F;
-    for (size_t i = 0; i < windows.size(); ++i)
-        content += CELLH * previewAspect(windows[i]) + (i ? PANEL_CELL_GAP * SCALE : 0.F);
-
-    const float WIDTH  = std::round(content + 2.F * PANEL_PAD * SCALE);
-    const float HEIGHT = std::round(CELLH + 2.F * PANEL_PAD * SCALE);
+    const float WIDTH  = std::round(ROWS.width + 2.F * PANEL_PAD * SCALE);
+    const float HEIGHT = std::round(NROWS * ROWS.cellH + (NROWS - 1.F) * PANEL_CELL_GAP * SCALE + 2.F * PANEL_PAD * SCALE);
     const float CX     = sc<float>(anchor.x) + sc<float>(anchor.width) / 2.F;
 
     // Clamped to the monitor: an icon near either end would otherwise push half
@@ -6171,6 +6290,184 @@ CBox panelTarget(PHLMONITOR monitor, const SLayout& layout, const std::vector<PH
 // A 1px sliver on the dock's TOP edge, centred on the icon. The panel grows
 // from here instead of from the icon box itself, so the lerp never paints
 // live window thumbnails over the rest of the pill.
+// THE ORGANIC PLATE (user, 2026-10-16: "you need to have reverse rounding so
+// that it integrates beautifully into further rows, doesn't look organic at
+// all"). The bands of a multi-row panel (one per row, its row's width) as ONE
+// outline: convex corners where the outline turns outward, a concave fillet
+// where it steps in or out between rows, so a narrower row flows into a wider
+// one. Hyprland's rect and blur passes round outward only, so the outline is
+// drawn with cairo: the tint as a texture, the frost through the same shape as
+// a region. Built while the panel is changing (the rise), cached once it
+// settles.
+struct SPanelBand {
+    double x0, x1, y0, y1; // render px
+};
+struct SOrganicPlate {
+    std::string          key;
+    SP<Render::ITexture> tex;
+    CRegion              region;
+    CBox                 box;
+};
+static SOrganicPlate g_organicPlate;
+
+// A quarter of Hyprland's corner: |x|^p + |y|^p = r^p about (cx, cy), the
+// shape its rounding shader cuts with decoration:rounding_power p (2 = a
+// circle). From angle a0 to a1 either way round, as cairo_arc /
+// cairo_arc_negative would, so the outline is concentric with the previews'
+// own corners whatever the power.
+static void cornerArc(cairo_t* cr, double cx, double cy, double r, double a0, double a1, double p) {
+    if (r <= 0.0) {
+        cairo_line_to(cr, cx, cy);
+        return;
+    }
+    const double E     = 2.0 / std::max(p, 0.1);
+    const auto   CURVE = [E](double v) { return std::copysign(std::pow(std::abs(v), E), v); };
+    constexpr int SEGMENTS = 32;
+    for (int i = 0; i <= SEGMENTS; ++i) {
+        const double T = a0 + ((a1 - a0) * i / SEGMENTS);
+        cairo_line_to(cr, cx + (r * CURVE(std::cos(T))), cy + (r * CURVE(std::sin(T))));
+    }
+}
+
+static void organicPath(cairo_t* cr, const std::vector<SPanelBand>& b, double R, double P, double ox, double oy) {
+    const size_t N   = b.size();
+    const auto   W   = [&](size_t k) { return b[k].x1 - b[k].x0; };
+    const auto   H   = [&](size_t k) { return b[k].y1 - b[k].y0; };
+    const auto   CVX = [&](size_t k) { return std::max(0.0, std::min({R, W(k) / 2.0, H(k) / 2.0})); };
+    const double PI  = 3.14159265358979323846;
+    // A step of `d` px between rows k and k+1: convex corner c, concave curve f.
+    // Both are the plate's own radius (user, 2026-10-16: "the inverted curve
+    // ... should always be the same radius as the regular curve padding"),
+    // except where the step has no runway for both: the outer corner keeps R
+    // (it is concentric with the preview under it) and the inverted curve takes
+    // what is left. renderHoverPreview merges rows whose step cannot hold the
+    // outer corner at all.
+    const auto STEP = [&](size_t k, double d, double& f, double& c) {
+        const double ROOM = std::min(H(k), H(k + 1)) / 2.0;
+        c                 = std::max(0.0, std::min({R, d, ROOM}));
+        f                 = std::max(0.0, std::min({R, d - c, ROOM}));
+    };
+
+    // top edge, left to right
+    const double R0 = CVX(0);
+    cairo_move_to(cr, b[0].x0 + R0 - ox, b[0].y0 - oy);
+    cornerArc(cr, b[0].x1 - R0 - ox, b[0].y0 + R0 - oy, R0, -PI / 2, 0, P);
+    // right side, top to bottom
+    for (size_t k = 0; k + 1 < N; ++k) {
+        const double Y = b[k].y1 - oy, X = b[k].x1 - ox, NX = b[k + 1].x1 - ox;
+        double       f = 0, c = 0;
+        if (NX > X + 0.5) { // the next row is wider: fillet out, then its corner
+            STEP(k, NX - X, f, c);
+            cornerArc(cr, X + f, Y - f, f, PI, PI / 2, P);
+            cornerArc(cr, NX - c, Y + c, c, -PI / 2, 0, P);
+        } else if (NX < X - 0.5) { // narrower: this row's corner, then fillet in
+            STEP(k, X - NX, f, c);
+            cornerArc(cr, X - c, Y - c, c, 0, PI / 2, P);
+            cornerArc(cr, NX + f, Y + f, f, 3 * PI / 2, PI, P);
+        } else
+            cairo_line_to(cr, X, Y);
+    }
+    // bottom edge, right to left
+    const double RL = CVX(N - 1);
+    cornerArc(cr, b[N - 1].x1 - RL - ox, b[N - 1].y1 - RL - oy, RL, 0, PI / 2, P);
+    cornerArc(cr, b[N - 1].x0 + RL - ox, b[N - 1].y1 - RL - oy, RL, PI / 2, PI, P);
+    // left side, bottom to top
+    for (size_t k = N - 1; k > 0; --k) {
+        const double Y = b[k].y0 - oy, X = b[k].x0 - ox, PX = b[k - 1].x0 - ox;
+        double       f = 0, c = 0;
+        if (PX < X - 0.5) { // the row above is wider: fillet out, then its corner
+            STEP(k - 1, X - PX, f, c);
+            cornerArc(cr, X - f, Y + f, f, 0, -PI / 2, P);
+            cornerArc(cr, PX + c, Y - c, c, PI / 2, PI, P);
+        } else if (PX > X + 0.5) { // narrower: this row's corner, then fillet in
+            STEP(k - 1, PX - X, f, c);
+            cornerArc(cr, X + c, Y + c, c, PI, 3 * PI / 2, P);
+            cornerArc(cr, PX - f, Y - f, f, PI / 2, 0, P);
+        } else
+            cairo_line_to(cr, X, Y);
+    }
+    cornerArc(cr, b[0].x0 + R0 - ox, b[0].y0 + R0 - oy, R0, PI, 3 * PI / 2, P);
+    cairo_close_path(cr);
+}
+
+// Draws the plate: frost through the outline's region, then the tint texture.
+static void organicPlate(PHLMONITOR monitor, const std::vector<SPanelBand>& bands, double R, double power, float alpha) {
+    if (bands.empty() || alpha <= 0.F)
+        return;
+    double x0 = bands[0].x0, x1 = bands[0].x1;
+    for (const auto& B : bands) {
+        x0 = std::min(x0, B.x0);
+        x1 = std::max(x1, B.x1);
+    }
+    const double y0 = bands.front().y0, y1 = bands.back().y1;
+    const int    W = sc<int>(std::ceil(x1 - x0)), H = sc<int>(std::ceil(y1 - y0));
+    if (W < 2 || H < 2)
+        return;
+    const auto TINT = background();
+
+    std::string key = std::format("{:.0f}|{:.2f}{:.3f}{:.3f}{:.3f}", R, power, TINT.r, TINT.g, TINT.b);
+    for (const auto& B : bands)
+        key += std::format("|{:.0f},{:.0f},{:.0f},{:.0f}", B.x0, B.x1, B.y0, B.y1);
+
+    if (g_organicPlate.key != key || !g_organicPlate.tex) {
+        cairo_surface_t* const SURF = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
+        cairo_t* const         CR   = cairo_create(SURF);
+        cairo_set_antialias(CR, CAIRO_ANTIALIAS_BEST);
+        organicPath(CR, bands, R, power, x0, y0);
+        cairo_set_source_rgba(CR, TINT.r, TINT.g, TINT.b, 1.0);
+        cairo_fill(CR);
+        cairo_surface_flush(SURF);
+
+        // The frost's region: the outline's pixels, one rect per run of rows
+        // that cover the same span.
+        CRegion            region;
+        const auto*        DATA   = cairo_image_surface_get_data(SURF);
+        const int          STRIDE = cairo_image_surface_get_stride(SURF);
+        int                runY = 0, runA = -1, runB = -1;
+        const auto FLUSH = [&](int yEnd) {
+            if (runA >= 0 && runB > runA && yEnd > runY)
+                region.add(CBox{x0 + runA, y0 + runY, sc<double>(runB - runA), sc<double>(yEnd - runY)});
+        };
+        for (int y = 0; y < H; ++y) {
+            const auto* ROW = reinterpret_cast<const uint32_t*>(DATA + (sc<ptrdiff_t>(y) * STRIDE));
+            int         a = 0, bEnd = W;
+            while (a < W && (ROW[a] >> 24) < 128)
+                ++a;
+            while (bEnd > a && (ROW[bEnd - 1] >> 24) < 128)
+                --bEnd;
+            if (a >= bEnd)
+                a = bEnd = -1;
+            if (a != runA || bEnd != runB) {
+                FLUSH(y);
+                runY = y, runA = a, runB = bEnd;
+            }
+        }
+        FLUSH(H);
+
+        g_organicPlate.tex    = makeShared<Render::GL::CGLTexture>(DRM_FORMAT_ARGB8888, cairo_image_surface_get_data(SURF), sc<uint32_t>(STRIDE),
+                                                                   Vector2D{sc<double>(W), sc<double>(H)});
+        g_organicPlate.region = std::move(region);
+        g_organicPlate.box    = CBox{x0, y0, sc<double>(W), sc<double>(H)};
+        g_organicPlate.key    = key;
+        cairo_destroy(CR);
+        cairo_surface_destroy(SURF);
+    }
+
+    // X13/X29/X86: the same frost as every dock plate, painted through the outline.
+    // Frost and tint both go to the CURRENT pass, the one the previews go to
+    // (user, 2026-10-16, a recording: while the overview opened the plate came
+    // apart from its previews -- the scaling desktop windows covered it). Under
+    // the overview's motion-blur pass (FlightBlur::drawBlurred) the frost is
+    // lifted out ahead of the smeared content as every frosted plate is.
+    queueDockFrost(monitor, g_organicPlate.box, 0, alpha, {}, &g_organicPlate.region, true);
+
+    CTexPassElement::SRenderData d;
+    d.tex = g_organicPlate.tex;
+    d.box = g_organicPlate.box;
+    d.a   = TINT.a * alpha;
+    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+}
+
 CBox panelRiseOrigin(const SLayout& layout, const CBox& anchor) {
     CBox origin = anchor;
     origin.height = 1;
@@ -6192,7 +6489,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         if (!g_hover.panel) {
             // Rises off the dock's top edge, decelerating into place. Growing
             // from the icon box itself painted the live thumbnails over the pill.
-            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .scratchpadName = scratchpadName, .monitor = monitor->m_id, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true};
+            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .scratchpadName = scratchpadName, .monitor = monitor->m_id, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true, .fadeSince = now};
         } else {
             g_hover.panel->leaving = false;
             g_hover.panel->wmClass = wmClass;
@@ -6205,6 +6502,8 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             // panel following the pointer rather than two panels swapping.
             if (g_hover.panel->out || !sameBox(g_hover.panel->target, TARGET)) {
                 const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
+                if (g_hover.panel->out)
+                    panelFade(*g_hover.panel, 1.F, PANEL_IN_MS, now);
 
                 g_hover.panel->from      = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
                 g_hover.panel->target    = TARGET;
@@ -6231,6 +6530,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             g_hover.panel->target    = panelRiseOrigin(layout, g_hover.panel->anchor);
             g_hover.panel->moveSince = now;
             g_hover.panel->moveMs    = PANEL_OUT_MS;
+            panelFade(*g_hover.panel, 0.F, PANEL_OUT_MS, now);
             g_hover.panel->decel     = false;
             g_hover.panel->out       = true;
             g_hover.panel->leaving   = false;
@@ -6271,7 +6571,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
 
     // The plate fades with the growth so the frost does not slam on at full
     // strength over the icon it is still the size of.
-    const float ALPHA   = g_hover.panel->out ? 1.F - houseEase(false, T) : houseEase(true, T);
+    const float ALPHA   = panelAlpha(*g_hover.panel);
     // CONCENTRIC CORNERS (user, 2026-09-30: "rounding on the app preview only
     // goes so far... an upper limit of 24px outer border radius with an inner
     // border radius to match on the actual window preview"). The plate follows
@@ -6284,24 +6584,110 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     const float INNERL  = std::clamp(std::min(sc<float>(ScrollOverview::Config::themeRounding()), OUTERL - PANEL_PAD), 0.F, OUTERL);
     const int   ROUNDED = sc<int>(std::round(OUTERL * SCALE));
 
-    // X13/X29/X86: panel frost shares overview chrome blur when Super is open.
-    frostedPlate(monitor, DRAWN, ROUNDED, ALPHA);
 
     // Cells are laid out inside the box that is actually on screen this frame,
     // not inside the settled one -- otherwise the contents would overflow the
     // plate for the whole of the entrance.
-    const float PAD   = PANEL_PAD * SCALE;
-    const float CELLH = sc<float>(DRAWN.height) - 2.F * PAD;
-    const float GAPS  = PANEL_CELL_GAP * SCALE * sc<float>(windows.size() - 1);
-    const float AVAIL = sc<float>(DRAWN.width) - 2.F * PAD - GAPS;
-    if (CELLH < 1.F || AVAIL < 1.F) {
+    // Rows (panelRows), scaled to the box that is on screen this frame: the
+    // settled cell height times however much of the settled plate is drawn,
+    // the smaller of width and height, so the cells never overflow the plate.
+    const float PAD     = PANEL_PAD * SCALE;
+    const float CGAP    = PANEL_CELL_GAP * SCALE;
+    const auto  ROWS    = panelRows(monitor, windows);
+    const float NROWS   = sc<float>(std::max<size_t>(1, ROWS.counts.size()));
+    const float SETTLEDH = NROWS * ROWS.cellH + (NROWS - 1.F) * CGAP;
+    const float FITH    = (sc<float>(DRAWN.height) - 2.F * PAD) / std::max(SETTLEDH, 1.F);
+    const float FITW    = (sc<float>(DRAWN.width) - 2.F * PAD) / std::max(ROWS.width, 1.F);
+    const float FIT     = std::min(FITH, FITW);
+    const float CELLH   = ROWS.cellH * FIT;
+    if (CELLH < 1.F || FIT <= 0.F) {
         forgetPanelGeometry();
         return;
     }
 
-    float sum = 0.F;
-    for (const auto& WINDOW : windows)
-        sum += previewAspect(WINDOW);
+    // THE PLATE WRAPS THE ROWS (user, 2026-10-16: "can we have multi-row dock
+    // live preview pane correctly wrap around the windows"). One band per row,
+    // each its row's width plus the padding, centred like the row -- a shorter
+    // row steps in instead of leaving empty glass at its ends. The bands meet
+    // half-way across the gap between rows and are drawn as ONE organic
+    // outline (organicPlate): convex where it turns out, a concave fillet where
+    // it steps between rows. Rows of one width share a band. The widest band
+    // is the drawn plate's width, so the rise still grows one shape.
+    {
+        std::vector<float> rowW;
+        size_t             first = 0;
+        for (const size_t C : ROWS.counts) {
+            float w = 0.F;
+            for (size_t i = first; i < first + C && i < windows.size(); ++i)
+                w += CELLH * previewAspect(windows[i]) + (i > first ? CGAP * FIT : 0.F);
+            rowW.push_back(w);
+            first += C;
+        }
+        if (rowW.empty())
+            rowW.push_back(0.F);
+        const float WIDEST = *std::ranges::max_element(rowW);
+        const float STEP   = CELLH + CGAP * FIT;
+        const float TOP    = sc<float>(DRAWN.y) + (sc<float>(DRAWN.height) - (NROWS * CELLH + (NROWS - 1.F) * CGAP * FIT)) / 2.F;
+
+        // WHERE TWO ROWS' BANDS MEET (user, 2026-10-16: "the dock preview
+        // multi-row strip does not have consistent padding"). Half-way across
+        // the gap left the wider row's EXPOSED edge -- the part of it that
+        // sticks out past the other row -- only half a gap from its previews.
+        // The join goes where that exposed edge keeps the full padding: a row
+        // wider than the one above starts PAD above its own previews, a row
+        // wider than the one below ends PAD below them. Equal rows: mid-gap.
+        // Rows whose widths differ by less than ONE corner radius per side share
+        // one band (the wider): that step cannot hold the outer corner, which is
+        // concentric with the previews' corners (user, 2026-10-16: "it doesn't
+        // curve around and respect the curvature of the live preview"). Any
+        // wider step gets that corner at full radius and its inverted curve as
+        // much of the radius as the rest of the step leaves (organicPath).
+        std::vector<double> bandW(rowW.size());
+        for (size_t k = 0; k < rowW.size(); ++k)
+            bandW[k] = std::round(sc<float>(DRAWN.width) - (WIDEST - rowW[k]));
+        std::vector<std::pair<size_t, size_t>> groups; // first..last row
+        for (size_t k = 0; k < rowW.size(); ++k) {
+            if (!groups.empty()) {
+                auto&        g  = groups.back();
+                const double GW = *std::max_element(bandW.begin() + sc<std::ptrdiff_t>(g.first), bandW.begin() + sc<std::ptrdiff_t>(g.second) + 1);
+                if (std::abs(bandW[k] - GW) < 2.0 * ROUNDED) {
+                    g.second = k;
+                    continue;
+                }
+            }
+            groups.emplace_back(k, k);
+        }
+        const auto GROUPW = [&](const std::pair<size_t, size_t>& g) {
+            return *std::max_element(bandW.begin() + sc<std::ptrdiff_t>(g.first), bandW.begin() + sc<std::ptrdiff_t>(g.second) + 1);
+        };
+        const auto JOIN = [&](size_t gi) { // between group gi and gi+1
+            const size_t K      = groups[gi].second; // last row above the join
+            const double BOTTOM = TOP + sc<float>(K) * STEP + CELLH, NEXTTOP = TOP + sc<float>(K + 1) * STEP;
+            const double ABOVE = GROUPW(groups[gi]), BELOW = GROUPW(groups[gi + 1]);
+            double       y     = (BOTTOM + NEXTTOP) / 2.0;
+            if (BELOW > ABOVE + 0.5)
+                y = NEXTTOP - PAD;
+            else if (BELOW < ABOVE - 0.5)
+                y = BOTTOM + PAD;
+            return std::round(std::clamp(y, BOTTOM, NEXTTOP));
+        };
+        std::vector<SPanelBand> bands;
+        for (size_t gi = 0; gi < groups.size(); ++gi) {
+            const double W  = GROUPW(groups[gi]);
+            const double X0 = std::round(sc<float>(DRAWN.x) + (sc<float>(DRAWN.width) - W) / 2.0);
+            const double Y0 = gi == 0 ? DRAWN.y : JOIN(gi - 1);
+            const double Y1 = gi + 1 == groups.size() ? DRAWN.y + DRAWN.height : JOIN(gi);
+            bands.push_back({X0, X0 + W, Y0, Y1});
+        }
+        // X13/X29/X86: panel frost shares overview chrome blur when Super is open.
+        // The corners are Hyprland's rounding_power, as the previews' are, and
+        // the plate goes to the pass they go to.
+        const float POWER = ScrollOverview::Config::themeRoundingPower();
+        if (bands.size() == 1)
+            frostedPlate(monitor, DRAWN, ROUNDED, ALPHA, {}, POWER, true);
+        else
+            organicPlate(monitor, bands, ROUNDED, POWER, ALPHA);
+    }
 
     // Y1/Y2. Published for the pointer, which is why it is the DRAWN plate and
     // the DRAWN cells rather than the settled ones. Stretch the hit box down
@@ -6320,11 +6706,24 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     const auto  ACCENT     = ScrollOverview::Config::highlightColor();
     const float ROUNDPWR   = ScrollOverview::Config::themeRoundingPower();
 
-    float x = sc<float>(DRAWN.x) + PAD;
+    const float BLOCKH = NROWS * CELLH + (NROWS - 1.F) * CGAP * FIT;
+    float       y      = sc<float>(DRAWN.y) + (sc<float>(DRAWN.height) - BLOCKH) / 2.F;
+    size_t      row = 0, inRow = 0;
+    float       x = 0.F;
     for (const auto& WINDOW : windows) {
-        const float WIDTH = AVAIL * previewAspect(WINDOW) / std::max(sum, 0.01F);
+        if (inRow == 0) {
+            // A row starts: centred across the plate.
+            float  rowW  = 0.F;
+            size_t first = 0;
+            for (size_t k = 0; k < row; ++k)
+                first += ROWS.counts[k];
+            for (size_t i = first; i < first + ROWS.counts[row] && i < windows.size(); ++i)
+                rowW += CELLH * previewAspect(windows[i]) + (i > first ? CGAP * FIT : 0.F);
+            x = sc<float>(DRAWN.x) + (sc<float>(DRAWN.width) - rowW) / 2.F;
+        }
+        const float WIDTH = CELLH * previewAspect(WINDOW);
 
-        CBox cell{std::round(x), std::round(sc<float>(DRAWN.y) + PAD), std::round(WIDTH), std::round(CELLH)};
+        CBox cell{std::round(x), std::round(y), std::round(WIDTH), std::round(CELLH)};
         // Never past half the cell (a very short or narrow preview).
         const int INNER = std::clamp(sc<int>(std::round(INNERL * SCALE)), 0, std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
         renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false, INNER);
@@ -6342,7 +6741,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             dim.color         = CHyprColor{0.F, 0.F, 0.F, PANEL_PARKED_DIM * ALPHA};
             dim.round         = DIMROUND;
             dim.roundingPower = ROUNDPWR;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(dim));
+            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(dim));
 
             // Deliberately NOT a theme colour, and that is the whole point of
             // the label: it is read over a DARKENED thumbnail, and a dark
@@ -6356,25 +6755,33 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
                                  std::round(sc<float>(cell.y) + (sc<float>(cell.height) - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x),
                                  sc<float>(TEX->m_size.y)};
                 label.a   = ALPHA;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(label));
+                g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(label));
             }
         }
 
         // Theme inactive_border is often fully transparent (Omarchy border_size
         // 0), which is why Gemini's ring was queued and still invisible. Same
         // accent the pill uses, thinner when the cell is not hovered.
+        // The step between the two fades on Hyprland's `border` animation, as
+        // a window's border does when it takes focus (BorderFade.hpp).
         const bool IS_HOVERED = !g_hover.panel->out && cell.containsPoint(MOUSE);
         const int  ROUND      = INNER;
         CBorderPassElement::SBorderData border;
         border.box = cell.copy().round();
-        border.grad1.reset(ACCENT.modifyA(IS_HOVERED ? ALPHA : ALPHA * 0.55F));
+        border.grad1.reset(BorderFade::color(monitor, BorderFade::key(WINDOW.get(), (sc<uint64_t>(monitor->m_id) << 8) | 0xD0), IS_HOVERED, ACCENT.modifyA(ALPHA * 0.55F),
+                                             ACCENT.modifyA(ALPHA)));
         border.a             = 1.F;
         border.borderSize    = BORDERSIZE;
         border.round         = ROUND;
         border.roundingPower = ROUNDPWR;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+        g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
 
-        x += WIDTH + PANEL_CELL_GAP * SCALE;
+        x += WIDTH + CGAP * FIT;
+        if (++inRow >= ROWS.counts[row] && row + 1 < ROWS.counts.size()) {
+            inRow = 0;
+            ++row;
+            y += CELLH + CGAP * FIT;
+        }
     }
 }
 
@@ -6750,6 +7157,25 @@ float bounceLift(const std::string& wmClass, float iconHeight) {
 // Y7. Zero at the top of the bottom-30% band and one at the pill, continuous
 // between. Uses the pill as laid out THIS frame, so a dock still sliding out
 // glows against where it actually is rather than where it will settle.
+float dragGlow(PHLMONITOR monitor, const SLayout& layout, const Vector2D& mouse);
+
+// THE DOCK IS "FOCUSED" -- its outline lit -- while the pointer is on the pill
+// (or the margin under it, or the reveal edge: what autohide counts as on it),
+// or the dock is being used past its pill: its menu, its hover previews, an
+// open stack, a drag of one of its icons or files, a window dragged at it.
+// `mouse` is monitor-local render px (MOUSELOCAL).
+static bool dockInUse(PHLMONITOR monitor, const SLayout& layout, const Vector2D& mouse) {
+    if (layout.pill.empty())
+        return false;
+    CBox reach = layout.pill;
+    reach.height += EDGE_MARGIN * monitor->m_scale;
+    const auto BOX    = monitor->logicalBox();
+    const auto POINT  = g_pInputManager->getMouseCoordsInternal();
+    const bool ATEDGE = BOX.containsPoint(POINT) && POINT.y >= BOX.y + BOX.h - REVEAL_BAND;
+    return reach.containsPoint(mouse) || ATEDGE || menuOpen() || panelHoldsDock(monitor) || Stacks::holdsDock(monitor) || dragging() || DockDrop::draggingOut() ||
+        dragGlow(monitor, layout, mouse) > 0.001F;
+}
+
 float dragGlow(PHLMONITOR monitor, const SLayout& layout, const Vector2D& mouse) {
     if (!g_flight.windowDragActive || layout.pill.empty())
         return 0.F;
@@ -6911,6 +7337,8 @@ void render(PHLMONITOR monitor) {
     const bool HASHOVER    = HOVEREDITEM != LAYOUT.items.end();
     const bool HOVERAPPS   = !LAYOUT.showApps.empty() && hoverBox(LAYOUT.showApps, monitor->m_scale).containsPoint(MOUSE);
 
+    renderTooltipPeek(monitor);
+
     // Hover previews BEFORE the pill. Live window thumbnails that leak downward
     // used to paint over the icons (flushPass composites them on top of the
     // already-queued pill). The panel still sits above the dock; the pill
@@ -6977,15 +7405,19 @@ void render(PHLMONITOR monitor) {
     // skipped when decoration:blur:enabled is off, matching Omarchy windows.
     frostedPlate(monitor, LAYOUT.pill, LAYOUT.rounding, 1.F);
 
-    // Same outline the workspace cards use: theme accent, Hyprland border
-    // weight, floored at 1 so a theme with border_size 0 still frames the pill.
+    // Hyprland border weight, floored at 1 so a theme with border_size 0 still
+    // frames the pill. Coloured like a window's border (user, 2026-10-16): the
+    // resting (inactive) colour until the pointer is on the dock or using it,
+    // then the accent, faded between on Hyprland's `border` animation
+    // (BorderFade.hpp) -- in the overview and on the desktop alike.
     {
         const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
-        const auto ACCENT     = ScrollOverview::Config::highlightColor();
+        const auto COLOR      = BorderFade::color(monitor, BorderFade::key("dock-pill", sc<uint64_t>(monitor->m_id)), dockInUse(monitor, LAYOUT, MOUSELOCAL),
+                                                  ScrollOverview::Config::restingBorderColor(), ScrollOverview::Config::highlightColor().modifyA(1.F));
 
         CBorderPassElement::SBorderData border;
         border.box           = LAYOUT.pill.copy().round();
-        border.grad1.reset(ACCENT.modifyA(1.F));
+        border.grad1.reset(COLOR);
         border.a             = 1.F;
         border.borderSize    = BORDERSIZE;
         border.round         = LAYOUT.rounding;

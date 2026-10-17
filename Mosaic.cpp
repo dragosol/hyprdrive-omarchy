@@ -126,12 +126,14 @@ namespace ScrollOverview::Mosaic {
         // changed one alone proves nothing: it counts only when the window
         // really floated since it left (the window.floating event) and its
         // floating size moved from what it was when it left. A Super+drag move
-        // floats the window too, but at one size throughout, so it keeps its own.
+        // floats the window too; that float is not counted (onFloating), so a
+        // dragged window keeps its own size even if its client resized itself.
         struct SKept {
             PHLWINDOWREF window;
             Vector2D     size;
             Vector2D     floatAtLeave;      // its floating size when it left a mosaic
             bool         floatedSince = false;
+            bool         trusted      = true; // MosaicPack::SNatural::trusted
         };
         std::vector<SKept> g_windowSizes;
 
@@ -142,16 +144,21 @@ namespace ScrollOverview::Mosaic {
             return nullptr;
         }
 
-        void rememberWindow(const PHLWINDOW& w, const Vector2D& size) {
+        void rememberWindow(const PHLWINDOW& w, const Vector2D& size, bool trusted = true) {
             if (!w)
                 return;
             std::erase_if(g_windowSizes, [](const SKept& e) { return !e.window; });
             if (auto* e = keptOf(w)) {
                 e->size         = size;
                 e->floatedSince = false;
+                e->trusted      = trusted;
                 return;
             }
-            g_windowSizes.push_back({.window = w, .size = size});
+            g_windowSizes.push_back({.window = w, .size = size, .trusted = trusted});
+        }
+        bool keptTrusted(const PHLWINDOW& w) {
+            const auto* e = keptOf(w);
+            return !e || e->trusted;
         }
 
         void leftMosaic(const SP<Layout::ITarget>& t) {
@@ -162,9 +169,68 @@ namespace ScrollOverview::Mosaic {
         }
 
         void onFloating(const PHLWINDOW& w) {
-            if (w && w->m_isFloating)
-                if (auto* e = keptOf(w))
-                    e->floatedSince = true;
+            if (!w || !w->m_isFloating)
+                return;
+            // A Super+drag floats the window for the drag: that is not the
+            // user floating it (user, 2026-10-15, fedora: dragging Steam --
+            // an X11 client that resizes itself when floated -- came back at
+            // 490x308, its kept 511x926 thrown away as "floated and resized").
+            if (g_layoutManager)
+                if (const auto DRAGGED = g_layoutManager->dragController()->target(); DRAGGED && DRAGGED->window() == w)
+                    return;
+            if (auto* e = keptOf(w))
+                e->floatedSince = true;
+        }
+
+        // ACROSS A PLUGIN RELOAD (user, 2026-10-15: after a reload desktop 1
+        // went to the tiles and never came back). Unloading hands every desktop
+        // to dwindle, and a reloaded plugin starts with no kept sizes, so each
+        // window re-arrived at its DWINDLE TILE as its own size (Pear Messages:
+        // 1903x2094, full height) and the mosaic could never fit again. The
+        // kept sizes now go to a file in XDG_RUNTIME_DIR on unload, stamped
+        // with this Hyprland's instance, and come back on load before any
+        // window re-arrives. Window addresses hold across a plugin reload.
+        std::string keptPath() {
+            const char* RT = std::getenv("XDG_RUNTIME_DIR");
+            return std::string(RT && *RT ? RT : "/tmp") + "/hyprdrive-mosaic-kept";
+        }
+        std::string keptStamp() {
+            const char* SIG = std::getenv("HYPRLAND_INSTANCE_SIGNATURE");
+            return SIG ? SIG : "";
+        }
+        void saveKept() {
+            std::ofstream f(keptPath(), std::ios::trunc);
+            if (!f)
+                return;
+            f << keptStamp() << '\n';
+            for (const auto& e : g_windowSizes)
+                if (const auto W = e.window.lock())
+                    f << std::format("{:x} {} {} {}\n", (uintptr_t)W.get(), e.size.x, e.size.y, e.trusted ? 1 : 0);
+        }
+        void loadKept() {
+            const auto     PATH = keptPath();
+            std::ifstream  f(PATH);
+            std::string    stamp;
+            if (!f || !std::getline(f, stamp) || stamp != keptStamp() || stamp.empty())
+                return;
+            std::unordered_map<uintptr_t, std::pair<Vector2D, bool>> saved;
+            std::string                                              line;
+            while (std::getline(f, line)) {
+                std::istringstream in(line);
+                std::string        addr;
+                double             w = 0, h = 0;
+                int                trusted = 1;
+                if (in >> addr >> w >> h) {
+                    in >> trusted;
+                    saved[std::stoull(addr, nullptr, 16)] = {Vector2D{w, h}, trusted != 0};
+                }
+            }
+            for (const auto& W : Desktop::windowState()->windows())
+                if (W)
+                    if (const auto IT = saved.find((uintptr_t)W.get()); IT != saved.end())
+                        rememberWindow(W, IT->second.first, IT->second.second);
+            std::error_code ec;
+            std::filesystem::remove(PATH, ec);
         }
 
         std::optional<Vector2D> rememberedWindow(const SP<Layout::ITarget>& t) {
@@ -187,6 +253,7 @@ namespace ScrollOverview::Mosaic {
         // 2026-10-14: "coming out of the tiling hybrid mode, windows need to
         // assume the shape and size they were at pre-tiling").
         long long           id = 0;
+        bool                trusted = true; // may become its app's size on close
     };
 
     // TRACE, for the next odd recording: `touch /tmp/hyprdrive-mosaic.on` and
@@ -237,50 +304,73 @@ namespace ScrollOverview::Mosaic {
                     return E.natural;
             return std::nullopt;
         }
+        bool trustedOf(const PHLWINDOW& w) const {
+            for (const auto& E : m_entries)
+                if (const auto T = E.target.lock(); T && T->window() == w)
+                    return E.trusted;
+            return false;
+        }
 
         void newTarget(SP<Layout::ITarget> target) override {
+            m_dragHold.reset();
             m_tiledHold = false;
+            forgetArrangement();
             arriveWithNatural(target, true);
+            placeDropped(target, std::nullopt);
             recalculate();
         }
 
         void movedTarget(SP<Layout::ITarget> target, std::optional<Vector2D> focalPoint = std::nullopt) override {
-            (void)focalPoint;
-            if (indexOf(target) < 0)
+            m_dragHold.reset();
+            if (indexOf(target) < 0) {
+                forgetArrangement();
                 arriveWithNatural(target, false);
+                placeDropped(target, focalPoint);
+            }
             recalculate();
         }
 
+        // DROP TO REARRANGE (MosaicPack::PackHint). A Super+drag floats the
+        // window for the drag; letting go hands it back here, at the end of
+        // the order. When it came back from a drag (or with a focal point), the
+        // point it was let go at goes to pack() as the hint: the window lands
+        // on that side of the cluster (or at the point, dropped inside it),
+        // still one tight cluster. The order itself is not touched -- the
+        // packer is any-order.
+        void placeDropped(const SP<Layout::ITarget>& target, std::optional<Vector2D> focalPoint) {
+            if (!focalPoint && !(g_layoutManager && g_layoutManager->dragController()->wasDraggingWindow()))
+                return;
+            const int I = indexOf(target);
+            if (I < 0 || m_entries.size() < 2)
+                return;
+            const auto AREA = area();
+            if (!AREA)
+                return;
+            const Vector2D AT = focalPoint.value_or(g_pInputManager->getMouseCoordsInternal());
+            trace(std::format("drop {} at {}x{}", appOf(target->window()), AT.x, AT.y));
+            m_dropAt = SDropAt{target, AT};
+        }
+
         // A window this session already gave a mosaic size comes back at that
-        // size, never shrunk as a newcomer: it is not new, and shrinking it
+        // size, as it was: it is not new, and resizing it
         // here would overwrite the size it is meant to keep.
         void arriveWithNatural(const SP<Layout::ITarget>& target, bool fresh) {
             const auto N = naturalFor(target, fresh);
-            arrive(target, Vector2D{N.size.w, N.size.h}, !N.kept);
+            arrive(target, Vector2D{N.size.w, N.size.h}, N.trusted);
         }
 
         // A WINDOW ARRIVES (user, 2026-10-14: "opening new windows ... seems to
         // continue shrinking mosaic windows ... I said this should never
         // happen. Existing windows should not be resized"). Nobody already
-        // there changes size. The NEWCOMER may come in smaller -- down to half
-        // its own size, in 5% steps -- to fit beside them; if it still does not
-        // fit, it keeps its size and the desktop tiles.
-        void arrive(const SP<Layout::ITarget>& target, Vector2D want, bool mayShrink) {
-            m_entries.push_back({target, want, ++m_nextId});
-            trace(std::format("arrive {} want={}x{}{}", appOf(target ? target->window() : PHLWINDOW{}), want.x, want.y, mayShrink ? "" : " (kept)"));
-            const auto AREA = area();
-            if (!mayShrink || !AREA || fits())
-                return;
-            auto& n = m_entries.back().natural;
-            for (double s = 0.95; s >= 0.5 - 1e-9; s -= 0.05) {
-                n = Vector2D{std::max(MIN_SIDE, std::round(want.x * s)), std::max(MIN_SIDE, std::round(want.y * s))};
-                if (fits()) {
-                    trace(std::format("arrive shrunk newcomer to {}x{} ({:.2f})", n.x, n.y, s));
-                    return;
-                }
-            }
-            n = want;
-            trace("arrive: no fit even at half size -> tiles");
+        // there changes size -- and NEITHER DOES THE NEWCOMER (user,
+        // 2026-10-15: "it should never spawn a window smaller than my default
+        // - at that point it should go into dwindle"; it used to come in down
+        // to half its size to fit). It keeps its size; if it does not fit, the
+        // desktop tiles. The eased margin and any-order rows/columns
+        // (MosaicPack) are what keep the tiles from coming too easily.
+        void arrive(const SP<Layout::ITarget>& target, Vector2D want, bool trusted = true) {
+            m_entries.push_back({target, want, ++m_nextId, trusted});
+            trace(std::format("arrive {} want={}x{}{}", appOf(target ? target->window() : PHLWINDOW{}), want.x, want.y, fits() ? "" : " -> tiles"));
         }
 
         // Does everyone fit as a mosaic at their own sizes?
@@ -291,7 +381,7 @@ namespace ScrollOverview::Mosaic {
             std::vector<MosaicPack::SRect> sizes;
             for (const auto& E : m_entries)
                 sizes.push_back({0, 0, E.natural.x, E.natural.y});
-            return MosaicPack::mosaic(sizes, MosaicPack::SRect{AREA->x, AREA->y, AREA->w, AREA->h}, innerGap()).has_value();
+            return MosaicPack::fitsEased(sizes, MosaicPack::SRect{AREA->x, AREA->y, AREA->w, AREA->h}, looseArea(), innerGap());
         }
 
         void removeTarget(SP<Layout::ITarget> target) override {
@@ -300,9 +390,35 @@ namespace ScrollOverview::Mosaic {
                 m_resize.reset();
             }
             m_tiledHold = false;
+            forgetArrangement();
             leftMosaic(target);
             std::erase_if(m_entries, [&](const SMosaicEntry& e) { return !e.target || e.target.lock() == target; });
+            // Pulled out by a drag: the others hold still until it is let go.
+            if (target && g_layoutManager && g_layoutManager->dragController()->target() == target) {
+                m_dragHold = target;
+                return;
+            }
             recalculate();
+        }
+
+        // The drag that pulled a window out is over (or took it to another
+        // desktop): the cluster may close up now.
+        bool holdingFor() const {
+            return !m_dragHold.expired();
+        }
+        void releaseDragHold() {
+            if (m_dragHold.expired())
+                return;
+            m_dragHold.reset();
+            recalculate();
+        }
+        // Still in the air over this desktop?
+        bool dragHoldLive() const {
+            const auto T = m_dragHold.lock();
+            if (!T || !g_layoutManager || g_layoutManager->dragController()->target() != T)
+                return false;
+            const auto W = T->window();
+            return W && W->m_workspace && W->m_workspace == workspace();
         }
 
         // A RESIZE in the mosaic (user, 2026-10-14: "if I resize a window beyond
@@ -346,7 +462,11 @@ namespace ScrollOverview::Mosaic {
                 const Vector2D P = g_pInputManager->getMouseCoordsInternal() + m_resize->grabOffset;
                 const CBox&    S = m_resize->start;
                 const double   AX = Layout::edgeLeft(corner) ? S.x + S.w : S.x, AY = Layout::edgeTop(corner) ? S.y + S.h : S.y;
-                m_resize->requested = Vector2D{std::max(MIN_SIDE, Layout::edgeLeft(corner) ? AX - P.x : P.x - AX), std::max(MIN_SIDE, Layout::edgeTop(corner) ? AY - P.y : P.y - AY)};
+                // An EDGE (user, 2026-10-15) moves one side only: the other
+                // axis stays at its size.
+                const bool     HORIZ = corner & (Layout::CORNER_LEFT | Layout::CORNER_RIGHT), VERT = corner & (Layout::CORNER_TOP | Layout::CORNER_BOTTOM);
+                m_resize->requested  = Vector2D{HORIZ ? std::max(MIN_SIDE, Layout::edgeLeft(corner) ? AX - P.x : P.x - AX) : S.w,
+                                               VERT ? std::max(MIN_SIDE, Layout::edgeTop(corner) ? AY - P.y : P.y - AY) : S.h};
             }
             stepResize();
             // A keyboard resize is one step: settle at once.
@@ -371,10 +491,17 @@ namespace ScrollOverview::Mosaic {
             const int I = indexOf(SESSION.target.lock());
             if (SESSION.tiled) {
                 // A tile let go: its dwindle split moves to the size it was
-                // dragged to, and that is its mosaic size too. If everyone now
-                // fits, the mosaic comes back -- the way out of the tiles.
+                // dragged to. Its mosaic size may only SHRINK toward it, per
+                // side (user, 2026-10-15: "mosaic ... wont leave tiled mode" --
+                // tiles are big, so taking the tile's size as the mosaic size
+                // made Zen 1911x1209 and the desktop could never fit again).
+                // Shrinking a tile is the way out of the tiles; growing one no
+                // longer locks the desktop in them.
                 if (I >= 0) {
-                    m_entries[sc<size_t>(I)].natural = SESSION.shown;
+                    auto& n = m_entries[sc<size_t>(I)].natural;
+                    n       = Vector2D{std::max(MIN_SIDE, std::min(n.x, SESSION.shown.x)), std::max(MIN_SIDE, std::min(n.y, SESSION.shown.y))};
+                    // A tile's size is the tiles', not the app's.
+                    m_entries[sc<size_t>(I)].trusted = false;
                     if (const auto AREA = area())
                         m_tree.resize(m_entries[sc<size_t>(I)].id, SESSION.shown.x, SESSION.shown.y, MosaicPack::SRect{AREA->x, AREA->y, AREA->w, AREA->h});
                 }
@@ -393,6 +520,8 @@ namespace ScrollOverview::Mosaic {
                     // The mosaic keeps the size the window had when the tiles
                     // took over -- its limit -- so it comes back exactly so.
                     m_entries[sc<size_t>(I)].natural = SESSION.shown;
+                    // The user sized it in the mosaic: that is its size now.
+                    m_entries[sc<size_t>(I)].trusted = true;
                     // Past the limit: tiles, until shrinking a tile (or a window
                     // leaving or arriving) lets the mosaic fit again.
                     if (SESSION.past)
@@ -409,7 +538,7 @@ namespace ScrollOverview::Mosaic {
             // Every window's mosaic size outlives this layout (g_windowSizes).
             for (const auto& E : m_entries)
                 if (const auto T = E.target.lock())
-                    rememberWindow(T->window(), E.natural);
+                    rememberWindow(T->window(), E.natural, E.trusted);
             if (m_entries.empty() || !m_parent || !m_parent->space())
                 return;
 
@@ -420,6 +549,10 @@ namespace ScrollOverview::Mosaic {
                 m_defaultFullscreenHandler->syncTargetSizeAndPosition();
                 return;
             }
+
+            // A window in the air (the drag hold): everyone stays put.
+            if (dragHoldLive())
+                return;
 
             // Mid-resize, the frozen arrangement stands, whatever asked.
             if (m_resize) {
@@ -441,7 +574,15 @@ namespace ScrollOverview::Mosaic {
             m_asMosaic = false;
             // After a resize pushed past its limit the desktop stays tiled until
             // a window arrives or leaves (m_tiledHold).
-            const auto PLACED = m_tiledHold ? std::nullopt : MosaicPack::mosaic(sizes, AREAR, innerGap());
+            std::optional<MosaicPack::PackHint> hint;
+            if (m_dropAt)
+                if (const int I = indexOf(m_dropAt->target.lock()); I >= 0)
+                    hint = MosaicPack::PackHint{.idx = sc<size_t>(I), .x = m_dropAt->at.x, .y = m_dropAt->at.y};
+            // m_entries stays in ARRIVAL order. pack() is any-order but not
+            // order-blind (ties), so the same list in the same order is the same
+            // cluster on every pass; re-sorting it by what came back (the old
+            // regrouped order) made a different cluster in 139 of 348 bench sets.
+            auto PLACED = m_tiledHold ? std::nullopt : MosaicPack::packEased(sizes, AREAR, looseArea(), innerGap(), hint ? &*hint : nullptr);
             traceEntries(PLACED ? "mosaic" : "tiles");
             if (PLACED) {
                 m_asMosaic = true;
@@ -498,6 +639,52 @@ namespace ScrollOverview::Mosaic {
             return AREA;
         }
 
+        // THE EASED MARGIN (MosaicPack::packEased): the area with each
+        // screen-edge margin eased from gaps_out down to gaps_in, tried only
+        // when the windows do not fit area(). The dock's band stays out of
+        // bounds: a bottom edge area() pulled up above the pill is not eased.
+        std::optional<MosaicPack::SRect> looseArea() const {
+            const auto AREA = area();
+            if (!AREA || !m_parent || !m_parent->space())
+                return std::nullopt;
+            static auto PGAPSOUT = CConfigValue<::Config::IComplexConfigValue>("general:gaps_out");
+            static auto PGAPSIN  = CConfigValue<::Config::IComplexConfigValue>("general:gaps_in");
+            const auto* OUT      = sc<::Config::CCssGapData*>(PGAPSOUT.ptr());
+            const auto* IN       = sc<::Config::CCssGapData*>(PGAPSIN.ptr());
+            if (!OUT || !IN)
+                return std::nullopt;
+            const auto   EASE = [](int64_t out, int64_t in) { return sc<double>(std::max<int64_t>(0, out - in)); };
+            const double L = EASE(OUT->m_left, IN->m_left), R = EASE(OUT->m_right, IN->m_right), T = EASE(OUT->m_top, IN->m_top);
+            const CBox   WORK     = m_parent->space()->workArea();
+            const bool   PILLCUT  = AREA->y + AREA->h < WORK.y + WORK.h - 0.5;
+            const double B        = PILLCUT ? 0.0 : EASE(OUT->m_bottom, IN->m_bottom);
+            if (L + R + T + B < 0.5)
+                return std::nullopt;
+            return MosaicPack::SRect{AREA->x - L, AREA->y - T, AREA->w + L + R, AREA->h + T + B};
+        }
+
+        // Two windows trade places: their slots in the order (the mosaic) AND
+        // their cells in the tiles. A cell is a leaf of the dwindle tree,
+        // keyed by the entry's id, so the ids stay where they were and the
+        // windows -- with their own sizes -- move between them; swapping whole
+        // entries carried each window's cell along and the tiles never moved.
+        void tradePlaces(size_t a, size_t b) {
+            if (a == b || a >= m_entries.size() || b >= m_entries.size())
+                return;
+            // THE MOSAIC is any-order: the order no longer IS the arrangement,
+            // so a swap is the moved window -- the focused one of the two --
+            // dropped where the other one stands (PackHint): it lands there,
+            // the cluster stays one tight bunch.
+            const auto             TA = m_entries[a].target.lock(), TB = m_entries[b].target.lock();
+            const auto             FOCUS = Desktop::focusState()->window();
+            std::optional<SDropAt> swapDrop;
+            if (m_asMosaic && TA && TB)
+                swapDrop = FOCUS && TB->window() == FOCUS ? SDropAt{TB, TA->position().middle()} : SDropAt{TA, TB->position().middle()};
+            std::swap(m_entries[a], m_entries[b]);
+            std::swap(m_entries[a].id, m_entries[b].id);
+            m_dropAt = swapDrop;
+        }
+
         SP<Layout::ITarget> getNextCandidate(SP<Layout::ITarget> old) override {
             if (m_entries.empty())
                 return nullptr;
@@ -510,7 +697,7 @@ namespace ScrollOverview::Mosaic {
         void swapTargets(SP<Layout::ITarget> a, SP<Layout::ITarget> b) override {
             const int IA = indexOf(a), IB = indexOf(b);
             if (IA >= 0 && IB >= 0)
-                std::swap(m_entries[sc<size_t>(IA)], m_entries[sc<size_t>(IB)]);
+                tradePlaces(sc<size_t>(IA), sc<size_t>(IB));
             recalculate();
         }
 
@@ -544,7 +731,7 @@ namespace ScrollOverview::Mosaic {
                 }
             }
             if (best >= 0) {
-                std::swap(m_entries[sc<size_t>(I)], m_entries[sc<size_t>(best)]);
+                tradePlaces(sc<size_t>(I), sc<size_t>(best));
                 recalculate();
                 return;
             }
@@ -571,6 +758,25 @@ namespace ScrollOverview::Mosaic {
         std::vector<SMosaicEntry> m_entries;
         bool                      m_asMosaic  = false; // the last arrangement was the mosaic, not its tiles
         bool                      m_tiledHold = false; // a resize went past its limit: tiles until the mosaic fits unshrunk
+        // THE USER'S ARRANGEMENT (2026-10-16): a drop (or a swap) put a window
+        // where it is -- it keeps to that point (MosaicPack::PackHint) until a
+        // window arrives or leaves; then the mosaic regroups tight.
+        struct SDropAt {
+            WP<Layout::ITarget> target;
+            Vector2D            at; // global logical, where it was let go
+        };
+        std::optional<SDropAt>    m_dropAt;
+        // THE DRAG HOLD (user, 2026-10-16: "when I start dragging a window to
+        // move it around in the cluster, you should wait to rearrange other
+        // windows until I drop the window or it moves to another desktop"). A
+        // Super+drag floats the window out of the layout; while it is in the
+        // air the others stay exactly where they are. It ends when the window
+        // comes back (newTarget/movedTarget: the drop), lands on another
+        // desktop, or the drag is over (Mosaic::onMove asks, releaseDragHold).
+        WP<Layout::ITarget>       m_dragHold;
+        void                      forgetArrangement() {
+            m_dropAt.reset();
+        }
         MosaicPack::CDwindleTree  m_tree;              // the tiles; empty while the mosaic stands
         long long                 m_nextId = 0;
 
@@ -592,11 +798,22 @@ namespace ScrollOverview::Mosaic {
         // a window gone is removed (its sibling takes the space) and a window
         // new to the tiles splits the FOCUSED window's tile, as in dwindle.
         void syncTree() {
+            // Tiles sized like the mosaic (CDwindleTree::buildWeighted): each
+            // window weighs its mosaic area.
+            const auto WEIGHT = [this](long long id) {
+                for (const auto& E : m_entries)
+                    if (E.id == id)
+                        return E.natural.x * E.natural.y;
+                return 0.0;
+            };
             if (m_tree.empty()) {
                 std::vector<long long> ids;
-                for (const auto& E : m_entries)
+                std::vector<double>    weights;
+                for (const auto& E : m_entries) {
                     ids.push_back(E.id);
-                m_tree.buildBalanced(ids);
+                    weights.push_back(E.natural.x * E.natural.y);
+                }
+                m_tree.buildWeighted(ids, weights);
                 return;
             }
             for (const auto ID : m_tree.ids())
@@ -611,7 +828,7 @@ namespace ScrollOverview::Mosaic {
                 if (!m_tree.has(E.id)) {
                     // The window that just arrived holds the focus by now; split
                     // the one focused before it, or the newest tile.
-                    m_tree.insert(E.id, focusedId == E.id ? -1 : focusedId);
+                    m_tree.insert(E.id, focusedId == E.id ? -1 : focusedId, WEIGHT);
                 }
         }
 
@@ -691,7 +908,7 @@ namespace ScrollOverview::Mosaic {
                 applyResize();
                 return;
             }
-            const auto LIMIT = MosaicPack::limitFor(sizes, idx, m_resize->requested.x, m_resize->requested.y, AREAR, innerGap(), MIN_SIDE);
+            const auto LIMIT = MosaicPack::limitFor(sizes, idx, m_resize->requested.x, m_resize->requested.y, AREAR, innerGap(), MIN_SIDE, looseArea());
             m_resize->shown  = Vector2D{LIMIT.w, LIMIT.h};
             const bool PAST  = !LIMIT.reached && (m_resize->requested.x > LIMIT.w + PUSH_PAST || m_resize->requested.y > LIMIT.h + PUSH_PAST);
             trace(std::format("step n={} start={}x{} requested={}x{} limit={}x{} reached={} past={} area={}x{}", sizes.size(), m_resize->start.w, m_resize->start.h,
@@ -773,8 +990,10 @@ namespace ScrollOverview::Mosaic {
             const auto SZ = [](const Vector2D& v) { return MosaicPack::SSize{v.x, v.y}; };
             MosaicPack::SNaturalInputs in{.fallback = {std::round(AREA.w * 0.6), std::round(AREA.h * 0.6)}, .fresh = fresh};
             if (t) {
-                if (const auto KEPT = rememberedWindow(t))
-                    in.kept = SZ(*KEPT);
+                if (const auto KEPT = rememberedWindow(t)) {
+                    in.kept        = SZ(*KEPT);
+                    in.keptTrusted = keptTrusted(t->window());
+                }
                 loadSizes();
                 if (const auto IT = g_sizes.find(appOf(t->window())); IT != g_sizes.end())
                     in.app = SZ(IT->second);
@@ -810,8 +1029,12 @@ namespace ScrollOverview::Mosaic {
             return w && std::ranges::any_of(g_instances, [&](const CMosaicAlgorithm* a) { return a->holds(w); });
         }
 
-        // The corner of `w` under `p`, or CORNER_NONE.
-        Layout::eRectCorner cornerAt(const PHLWINDOW& w, const Vector2D& p) {
+        // The corner -- or EDGE -- of `w` under `p`, or CORNER_NONE. EDGES (user,
+        // 2026-10-15: "drag edges to resize in mosaic ... it only works on
+        // corners and not on top/bottom edges"): a side reaches out into the
+        // gap like a corner, but INSIDE the window only with Super held, so an
+        // app's own top row (a browser's tabs) keeps its clicks.
+        Layout::eRectCorner cornerAt(const PHLWINDOW& w, const Vector2D& p, bool superHeld) {
             static auto PBORDER = CConfigValue<::Config::INTEGER>("general:border_size");
             static auto PEXTEND = CConfigValue<::Config::INTEGER>("general:extend_border_grab_area");
             const double OUT    = std::max<double>(8.0, sc<double>(*PBORDER + *PEXTEND));
@@ -828,6 +1051,16 @@ namespace ScrollOverview::Mosaic {
                 return Layout::CORNER_BOTTOMLEFT;
             if (BOTTOM && RIGHT)
                 return Layout::CORNER_BOTTOMRIGHT;
+            const double IN    = superHeld ? INNER : 0.0;
+            const bool   SPANX = p.x >= B.x && p.x <= B.x + B.w, SPANY = p.y >= B.y && p.y <= B.y + B.h;
+            if (SPANX && p.y >= B.y - OUT && p.y <= B.y + IN)
+                return Layout::CORNER_TOP;
+            if (SPANX && p.y >= B.y + B.h - IN && p.y <= B.y + B.h + OUT)
+                return Layout::CORNER_BOTTOM;
+            if (SPANY && p.x >= B.x - OUT && p.x <= B.x + IN)
+                return Layout::CORNER_LEFT;
+            if (SPANY && p.x >= B.x + B.w - IN && p.x <= B.x + B.w + OUT)
+                return Layout::CORNER_RIGHT;
             return Layout::CORNER_NONE;
         }
 
@@ -836,6 +1069,10 @@ namespace ScrollOverview::Mosaic {
                 case Layout::CORNER_TOPLEFT: return "nw-resize";
                 case Layout::CORNER_TOPRIGHT: return "ne-resize";
                 case Layout::CORNER_BOTTOMLEFT: return "sw-resize";
+                case Layout::CORNER_TOP: return "n-resize";
+                case Layout::CORNER_BOTTOM: return "s-resize";
+                case Layout::CORNER_LEFT: return "w-resize";
+                case Layout::CORNER_RIGHT: return "e-resize";
                 default: return "se-resize";
             }
         }
@@ -852,7 +1089,7 @@ namespace ScrollOverview::Mosaic {
                 // Without Super only a TILED window of a mosaic desktop has corners.
                 if (!superHeld && (w->layoutTarget()->floating() || !onMosaic(w)))
                     return Layout::CORNER_NONE;
-                return cornerAt(w, p);
+                return cornerAt(w, p, superHeld);
             };
             if (const auto F = Desktop::focusState()->window(); F)
                 if (const auto C = TRY(F); C != Layout::CORNER_NONE)
@@ -911,6 +1148,11 @@ namespace ScrollOverview::Mosaic {
     void onMove(bool blocked) {
         if (std::ranges::any_of(g_instances, [](const CMosaicAlgorithm* a) { return a->resizing(); }))
             checkResizeEnded();
+        // A drag hold whose window was let go elsewhere, or carried to another
+        // desktop: close up now.
+        for (auto* A : g_instances)
+            if (A->holdingFor() && !A->dragHoldLive())
+                A->releaseDragHold();
         const bool DRAGGING = g_layoutManager && g_layoutManager->dragController()->target();
         Layout::eRectCorner corner = Layout::CORNER_NONE;
         if (!blocked && !DRAGGING) {
@@ -942,7 +1184,9 @@ namespace ScrollOverview::Mosaic {
             return;
         for (const auto* A : g_instances)
             if (A->holds(w)) {
-                if (A->arrangedAsMosaic())
+                // Only a size the app or the user chose (SNatural::trusted):
+                // never a tile or a size inherited from another layout.
+                if (A->arrangedAsMosaic() && A->trustedOf(w))
                     if (const auto N = A->naturalOf(w))
                         saveSize(APP, *N);
                 return;
@@ -959,35 +1203,66 @@ namespace ScrollOverview::Mosaic {
     // direction and closest across it; anywhere else -- or with nothing that
     // way -- exactly Hyprland's movefocus, so dwindle and scrolling (and the
     // move to the next monitor at the edge) are unchanged.
-    static SDispatchResult onFocusDispatcher(std::string arg) {
+    static Math::eDirection dirOf(const std::string& arg) {
         const char C = arg.empty() ? 'l' : arg[0];
-        const auto DIR = C == 'r' ? Math::DIRECTION_RIGHT : C == 'u' ? Math::DIRECTION_UP : C == 'd' ? Math::DIRECTION_DOWN : Math::DIRECTION_LEFT;
-        const auto FOCUSED = Desktop::focusState()->window();
-        if (FOCUSED && onMosaic(FOCUSED) && FOCUSED->m_workspace) {
-            const Vector2D D  = DIR == Math::DIRECTION_RIGHT ? Vector2D{1, 0} : DIR == Math::DIRECTION_LEFT ? Vector2D{-1, 0} : DIR == Math::DIRECTION_UP ? Vector2D{0, -1} : Vector2D{0, 1};
-            const auto     C0 = FOCUSED->middle();
-            PHLWINDOW      best;
-            double         bestScore = 1e18;
-            for (const auto& W : Desktop::windowState()->windows()) {
-                if (!W || W == FOCUSED || !W->m_isMapped || W->isHidden() || W->m_workspace != FOCUSED->m_workspace || !onMosaic(W))
-                    continue;
-                const auto   V     = W->middle() - C0;
-                const double ALONG = V.x * D.x + V.y * D.y;
-                if (ALONG <= 1.0)
-                    continue;
-                const double ACROSS = std::abs(V.x * D.y - V.y * D.x);
-                const double SCORE  = ALONG + 2.0 * ACROSS;
-                if (SCORE < bestScore) {
-                    bestScore = SCORE;
-                    best      = W;
-                }
-            }
-            if (best) {
-                (void)::Config::Actions::focus(best);
-                return {};
+        return C == 'r' ? Math::DIRECTION_RIGHT : C == 'u' ? Math::DIRECTION_UP : C == 'd' ? Math::DIRECTION_DOWN : Math::DIRECTION_LEFT;
+    }
+
+    // The window that way from `from` on its mosaic desktop: its centre lies
+    // that way, nearest along the direction and closest across it. Null off a
+    // mosaic desktop, or with nothing that way.
+    static PHLWINDOW mosaicNeighbour(const PHLWINDOW& from, Math::eDirection dir) {
+        if (!from || !onMosaic(from) || !from->m_workspace)
+            return nullptr;
+        const Vector2D D  = dir == Math::DIRECTION_RIGHT ? Vector2D{1, 0} : dir == Math::DIRECTION_LEFT ? Vector2D{-1, 0} : dir == Math::DIRECTION_UP ? Vector2D{0, -1} : Vector2D{0, 1};
+        const auto     C0 = from->middle();
+        PHLWINDOW      best;
+        double         bestScore = 1e18;
+        for (const auto& W : Desktop::windowState()->windows()) {
+            if (!W || W == from || !W->m_isMapped || W->isHidden() || W->m_workspace != from->m_workspace || !onMosaic(W))
+                continue;
+            const auto   V     = W->middle() - C0;
+            const double ALONG = V.x * D.x + V.y * D.y;
+            if (ALONG <= 1.0)
+                continue;
+            const double ACROSS = std::abs(V.x * D.y - V.y * D.x);
+            const double SCORE  = ALONG + 2.0 * ACROSS;
+            if (SCORE < bestScore) {
+                bestScore = SCORE;
+                best      = W;
             }
         }
+        return best;
+    }
+
+    static SDispatchResult onFocusDispatcher(std::string arg) {
+        const auto DIR = dirOf(arg);
+        if (const auto BEST = mosaicNeighbour(Desktop::focusState()->window(), DIR)) {
+            (void)::Config::Actions::focus(BEST);
+            return {};
+        }
         (void)::Config::Actions::moveFocus(DIR);
+        return {};
+    }
+
+    // SWAP BY DIRECTION (user, 2026-10-16: "I also need windows to be switchable
+    // with keyboard commands like in pure dwindle, while in mosaic").
+    // hl.plugin.hyprdrive.swap("l"|"r"|"u"|"d"), bound to Super+Shift+arrows
+    // with the focus binds: Hyprland's swapwindow looks for the window across a
+    // shared edge, as movefocus does, and finds none in a bunched cluster. On a
+    // mosaic desktop the focused window trades places with the window focus
+    // would move to (Hyprland's own swap, so the layout's swapTargets: the
+    // focused window is dropped where the other stood -- MosaicPack::PackHint
+    // -- still one cluster with no holes);
+    // anywhere else, exactly Hyprland's swapwindow.
+    static SDispatchResult onSwapDispatcher(std::string arg) {
+        const auto DIR     = dirOf(arg);
+        const auto FOCUSED = Desktop::focusState()->window();
+        if (const auto BEST = mosaicNeighbour(FOCUSED, DIR)) {
+            (void)::Config::Actions::swapWith(BEST, FOCUSED);
+            return {};
+        }
+        (void)::Config::Actions::swapInDirection(DIR);
         return {};
     }
 
@@ -1016,8 +1291,11 @@ namespace ScrollOverview::Mosaic {
     }
 
     void registerLayout(HANDLE handle) {
+        // Before the algo exists: windows re-arrive inside addTiledAlgo.
+        loadKept();
         HyprlandAPI::addTiledAlgo(handle, "mosaic", &typeid(CMosaicAlgorithm), [] { return makeUnique<CMosaicAlgorithm>(); });
         ScrollOverview::Config::registerDispatcher("focus", onFocusDispatcher);
+        ScrollOverview::Config::registerDispatcher("swap", onSwapDispatcher);
         // After the window's rules are in (openLate). Directly, never a
         // doLater: a deferred call still queued when the plugin unloads jumps
         // into unmapped code (the unload SEGVs, 2026-09).
@@ -1028,6 +1306,8 @@ namespace ScrollOverview::Mosaic {
     void unregisterLayout(HANDLE handle) {
         g_openLateHook.reset();
         g_floatingHook.reset();
+        // Before the algo goes: removing it hands the desktops to dwindle.
+        saveKept();
         HyprlandAPI::removeAlgo(handle, "mosaic");
     }
 }

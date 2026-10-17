@@ -179,9 +179,13 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
         return {};
 
     const CBox BOX = data.box;
-    CRegion    paintDamage = roundedRectRegion(BOX, data.rounding, data.roundingPower);
+    CRegion    paintDamage = !data.shape.empty() ? data.shape.copy() : roundedRectRegion(BOX, data.rounding, data.roundingPower);
     if (paintDamage.empty())
         paintDamage = CRegion{BOX.copy().round()};
+    if (data.clip.w > 0 && data.clip.h > 0)
+        paintDamage.intersect(data.clip);
+    if (paintDamage.empty())
+        return {};
 
     g_pHyprRenderer->pushMonitorTransformEnabled(true);
     auto restoreXform = Hyprutils::Utils::CScopeGuard([] { g_pHyprRenderer->popMonitorTransformEnabled(); });

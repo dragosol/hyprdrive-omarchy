@@ -12,6 +12,7 @@
 #include "SearchLetters.hpp"
 #include "KeyboardCat.hpp"
 #include "Motion.hpp"
+#include "BorderFade.hpp"
 
 #include "Compat.hpp"
 #include "Scratchpad.hpp"
@@ -222,6 +223,15 @@ CScrollOverview::~CScrollOverview() {
         MONITOR->m_blurFBDirty = true;
 }
 
+// Is the bind running right now a mouse WHEEL bind (Super+scroll and the
+// like: Hyprland names the wheel's notches mouse_up / _down / _left / _right)?
+static bool currentBindIsWheel() {
+    if (!g_pKeybindManager || !g_pKeybindManager->m_currentKeybind)
+        return false;
+    const auto& KEY = g_pKeybindManager->m_currentKeybind->key;
+    return KEY == "mouse_up" || KEY == "mouse_down" || KEY == "mouse_left" || KEY == "mouse_right";
+}
+
 CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
     pMonitor                     = PMONITOR;
@@ -381,6 +391,19 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     windowFullscreenHook = Event::bus()->m_events.window.fullscreen.listen([this](PHLWINDOW a0) { onWindowFullscreen(a0); });
     workspaceCreatedHook = Event::bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF a0) { onWorkspaceLifecycle(a0); });
     workspaceRemovedHook = Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF a0) { onWorkspaceLifecycle(a0); });
+    // KEYBOARD DESKTOP SWITCH, ANY KEY (user, 2026-10-15: "motion blur isn't
+    // working at all for some of the intended purposes ... in native only").
+    // The keyboard blur only knew the arrow walk (popKeyboardBadge); a desktop
+    // switched by a BIND with the overview up -- Super+1..0 (native borrows
+    // the user's chords into the overview's submap), Super+Tab, a
+    // hyprdrive:desktop key -- panned the cards sharp. The switch itself runs
+    // inside the bind (changeWorkspace emits workspace.active synchronously),
+    // so the bind is still current here; onWorkspaceChange pans the cards on
+    // the next frame and KEYPAN reads this.
+    workspaceActiveHook = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE workspace) {
+        if (workspace && !workspace->m_isSpecialWorkspace && workspace->m_monitor == pMonitor && g_pKeybindManager && g_pKeybindManager->m_currentKeybind)
+            (currentBindIsWheel() ? wheelPanAt : keyPanAt) = Time::steadyNow();
+    });
     activateSubmapIfConfigured();
     // The submap only owns the KEYBOARD if it actually binds keys. Gating this
     // on the submap merely existing left arrows, Tab and Return with no handler
@@ -3283,6 +3306,11 @@ void CScrollOverview::endWindowResize() {
     damage();
 }
 
+void CScrollOverview::stepDesktopCard(bool next) {
+    (currentBindIsWheel() ? wheelPanAt : keyPanAt) = Time::steadyNow();
+    moveViewportWorkspace(next);
+}
+
 void CScrollOverview::moveViewportWorkspace(bool up) {
     if (images.empty())
         return;
@@ -5055,8 +5083,10 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         // And the grid panning to another desktop from the KEYBOARD (user,
         // 2026-09-30), at the same 0.25 -- a trackpad pan follows the fingers
         // and stays sharp.
-        const bool KEYPAN  = viewOffset->isBeingAnimated() && keyBadgeBornAt.time_since_epoch().count() != 0 &&
-            SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) < 1000.F;
+        const auto KEYRECENT = [](const Time::steady_tp& at) { return at.time_since_epoch().count() != 0 && SearchLetters::msSince(Time::steadyNow(), at) < 1000.F; };
+        // The wheel's own site when the wheel moved it last.
+        const bool WHEELLAST = KEYRECENT(wheelPanAt) && wheelPanAt >= keyPanAt && wheelPanAt >= keyBadgeBornAt;
+        const bool KEYPAN    = viewOffset->isBeingAnimated() && (KEYRECENT(keyBadgeBornAt) || KEYRECENT(keyPanAt) || KEYRECENT(wheelPanAt));
         // And the open/close zoom when it PLAYS (a keypress) rather than
         // following the fingers (user, 2026-09-30: "works on the trackpad
         // toggle but not on keypress"), with the half-duration fade.
@@ -5076,7 +5106,7 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
             // accelerates, so its speed is at the end -- its progress is
             // mirrored, or the fade would be over before the tiles got going.
             const auto  SITE = ZOOMING ? ScrollOverview::FlightBlur::ESite::OVERVIEW :
-                    KEYPAN            ? ScrollOverview::FlightBlur::ESite::DESKTOP_SWITCH :
+                    KEYPAN            ? (WHEELLAST ? ScrollOverview::FlightBlur::ESite::WHEEL_PAN : ScrollOverview::FlightBlur::ESite::DESKTOP_SWITCH) :
                                         ScrollOverview::FlightBlur::ESite::SEARCH_TILES;
             const float PROG = ZOOMING ? (closing ? 1.F - scale->getPercent() : scale->getPercent()) : 0.F;
             const CBox  HALF = ScrollOverview::FlightBlur::shape(SITE, P, windowBox, PROG);
@@ -5800,7 +5830,8 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
                                                      layout);
         const int  PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PLATE.x))));
         const int  PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
-        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE));
+        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE),
+                                   ScrollOverview::BorderFade::key("strip-alt", (sc<uint64_t>(monitor->m_id) << 16) ^ (OTHERMON ? sc<uint64_t>(OTHERMON->m_id) : 0xFFFF)));
 
         const float MINIRENDERSCALE = renderScale * sc<float>(FIRSTCELL.height) / std::max(1.F, sc<float>(OTHERMON->m_size.y) * monitor->m_scale);
 
@@ -5851,14 +5882,17 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
             // A drop target lights like one; the source desktop of the drag does not.
             const bool HOT = HOVER && HOVER->overview == OTHER && HOVER->workspaceIdx == j &&
                 (!DRAGGED || WIMG->pWorkspace != dragContext->drag.originalWorkspace.lock());
-            if (HOT) {
-                renderStripCellRect(CELL, ScrollOverview::Config::highlightColor().modifyA(0.22F * FADE), ATLEFT, ATRIGHT, STYLE);
-                renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
-            }
+            // Tint and outline fade in and out on Hyprland's `border` animation,
+            // as a window's border does when it takes focus (BorderFade.hpp).
+            const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 40) ^ (sc<uint64_t>(OTHERMON->m_id) << 32) ^ sc<uint64_t>(sc<uint32_t>(WIMG->pWorkspace->m_id));
+            const float    HOTMIX  = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-alt-hot", CELLKEY), HOT);
+            if (HOTMIX > 0.F)
+                renderStripCellRect(CELL, ScrollOverview::Config::highlightColor().modifyA(0.22F * FADE * HOTMIX), ATLEFT, ATRIGHT, STYLE);
 
             // That monitor's active desktop, marked the way its own strip marks it.
-            if (OTHERMON->m_activeWorkspace && WIMG->pWorkspace->m_id == OTHERMON->m_activeWorkspace->m_id)
-                renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
+            const bool ACTIVE = OTHERMON->m_activeWorkspace && WIMG->pWorkspace->m_id == OTHERMON->m_activeWorkspace->m_id;
+            renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE,
+                                  ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-alt-ring", CELLKEY), HOT || ACTIVE));
         }
 
         // Which monitor this is, over its plate, the scratchpad label's plate
@@ -5889,7 +5923,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     if (PLATE.width > 1) {
         const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(CELL.x) - sc<float>(PLATE.x))));
         const int PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
-        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE));
+        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE), ScrollOverview::BorderFade::key("strip-scratchpad", sc<uint64_t>(monitor->m_id)));
     }
 
     // From here down the cell is built in the SAME order renderStripCell builds
@@ -6207,7 +6241,7 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
                 // Lit only while the pointer is on it or Tab has the keyboard
                 // in it; otherwise the resting tile border (user, 2026-09-27).
                 const bool LIT = (g_search.nav.zone == EOverviewNavZone::Desktop && activeScrollOverview().get() == this) || pointerOnChrome(PANEL);
-                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true, LIT);
+                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true, LIT, ScrollOverview::BorderFade::key("strip-desktops", sc<uint64_t>(monitor->m_id)));
             }
         }
     }
@@ -6266,7 +6300,11 @@ void CScrollOverview::renderStripCellRect(const CBox& cell, const CHyprColor& co
     // highlight and the tile ring now all read general:col.active_border, so a
     // theme switch moves them together. The 2026-08-03 white is superseded
     // here deliberately; do not restore it as a regression fix.
-void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool largeLeft, bool largeRight, const SStripStyle& STYLE) const {
+// `mix` is the cell's BorderFade: a cell at rest has no outline, so its fade is
+// the outline's alpha.
+void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool largeLeft, bool largeRight, const SStripStyle& STYLE, float mix) const {
+    if (mix <= 0.F)
+        return;
     const auto OUTLINE = ScrollOverview::Config::highlightColor();
     const int  BORDER  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
     // Inset by the full stroke width: renderBorder centres nothing, it grows
@@ -6282,7 +6320,7 @@ void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell
         .roundRight    = std::max(0, (largeRight ? STYLE.round : STYLE.innerRound) - BORDER),
         .roundingPower = STYLE.power,
         .borderSize    = BORDER,
-        .a             = STYLE.fade,
+        .a             = STYLE.fade * mix,
     }));
 }
 
@@ -6348,18 +6386,16 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
         ScrollOverview::Dock::pumpRetiled(WINDOW, monitor, now);
     }
 
-    if (hovered) {
+    // Tint and outline fade in and out on Hyprland's `border` animation, as a
+    // window's border does when it takes focus (BorderFade.hpp).
+    const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 32) ^ sc<uint64_t>(sc<uint32_t>(wimg->pWorkspace->m_id));
+    if (const float HOVERMIX = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-hover", CELLKEY), hovered); HOVERMIX > 0.F) {
         // X4: the hover tint is themed, from the same general:col.active_border
         // that DropIndicator already reads. White is only the fallback for a
         // theme that defines no gradient.
         const auto ACCENT = ScrollOverview::Config::highlightColor();
 
-        renderStripCellRect(CELL, ACCENT.modifyA(0.22F * FADE), ATLEFT, ATRIGHT, STYLE);
-
-        // X3 delta 3: the reference borders the hovered cell as well as
-        // tinting it. Drawn after the tint and after the minis, so the drop
-        // target reads as a target even over a cell full of previews.
-        renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
+        renderStripCellRect(CELL, ACCENT.modifyA(0.22F * FADE * HOVERMIX), ATLEFT, ATRIGHT, STYLE);
     }
 
     // X3: the reference marks the focused desktop with a 2px accent border
@@ -6377,9 +6413,11 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // ring and the badge use, so all three move together.
     const bool ISACTIVE = trackpadDetentActive ? workspaceIdx == trackpadDetentWorkspace :
                                                  (monitor->m_activeWorkspace && wimg->pWorkspace->m_id == monitor->m_activeWorkspace->m_id);
-    if (ISACTIVE) {
-        renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE);
-    }
+    // X3 delta 3: the reference borders the hovered cell as well as tinting
+    // it. One outline for both: drawn after the tint and after the minis, so
+    // the drop target reads as a target even over a cell full of previews.
+    renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE,
+                          ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-ring", CELLKEY), hovered || ISACTIVE));
 }
 
 namespace {
@@ -7290,6 +7328,13 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 // above, so the pixels and the hit boxes cannot drift apart.
 // `part`: 0 everything, 1 the pill only, 2 the results body only (the pane's
 // entrance/exit is motion-blurred on its own, the pill stays sharp).
+// The output being drawn: drawSearch is handed a layout, not a monitor, and its
+// border fades are per output (two monitors, two search pills).
+static uint64_t renderMonitorId() {
+    const auto MON = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    return MON ? sc<uint64_t>(MON->m_id) : 0xFFFF;
+}
+
 static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part = 0) {
     if (!L.drawable)
         return;
@@ -7317,7 +7362,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
     const auto ACCENT    = ScrollOverview::Config::highlightColor();
 
     if (DRAWPILL)
-        OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit);
+        OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit, ScrollOverview::BorderFade::key("search-pill", renderMonitorId()));
 
     CRectPassElement::SRectData badgeBg;
     badgeBg.box           = BADGE;
@@ -7350,7 +7395,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
 
     if (DRAWBODY) {
     if (L.containerBox.width > 1.F) {
-        OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true, resultsLit);
+        OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true, resultsLit, ScrollOverview::BorderFade::key("search-results", renderMonitorId()));
 
         for (const auto& divBox : L.dividers) {
             CRectPassElement::SRectData div;
@@ -8808,6 +8853,9 @@ bool CScrollOverview::needsIdleRepaint() const {
     if (TileChrome::animatingOn(pMonitor.lock()))
         return true;
 
+    if (ScrollOverview::BorderFade::animatingOn(pMonitor.lock()))
+        return true;
+
     // THE TWO HAND-TIMED ANIMATIONS OF THE SEARCH FIELD (user, 2026-09-19: the
     // letters "freeze mid-frame ... once I get past a certain number").
     //
@@ -9804,6 +9852,12 @@ void CScrollOverview::onPreRender() {
     // full strength, then vanished (user, 2026-09-24: "same fading out as the
     // grid"). It joins the pacer too, while it fades.
     if (stripTipAnimating())
+        gridSetReflowActive(pMonitor.lock());
+
+    // The border fade (BorderFade.hpp) rings -- tiles, plates, strip cells,
+    // the dock pill -- on the same pacer, for the same reason: wall-clock
+    // eases, and plain damage is throttled while an overview is open.
+    if (ScrollOverview::BorderFade::animatingOn(pMonitor.lock()))
         gridSetReflowActive(pMonitor.lock());
 
     if (gridTakeReflowActive(pMonitor.lock())) {

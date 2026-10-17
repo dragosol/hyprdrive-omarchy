@@ -385,7 +385,11 @@ void revealNow(PHLMONITOR monitor);
 // decoration:blur:enabled is off, matching Omarchy windows; the tint on top is
 // the dock's background colour, and `alpha` is multiplied into both.
 CHyprColor accentColor(); // Hyprland's active border colour (the theme accent)
-void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha);
+// roundingPower: Hyprland's decoration:rounding_power for a plate that must be
+// concentric with window corners (the hover panel); 2 = circular. currentPass:
+// queue into the pass the window previews go to (OverviewWindow uses
+// currentPass()), so the plate never comes apart from them under a nested pass.
+void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha, const CBox& clip = {}, float roundingPower = 2.F, bool currentPass = false);
 
 // A dragged icon is drawn as a translucent CLONE -- the original is still in its
 // cell, and the copy under the pointer says so. ONE token because there are two

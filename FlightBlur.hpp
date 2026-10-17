@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace Render {
@@ -53,6 +54,8 @@ namespace ScrollOverview::FlightBlur {
         SEARCH_PANE,    // the search results pane growing / shrinking
         DRAG,           // the overview's drag proxy resizing
         STACK_PANE,     // a dock stack's grid pane opening / closing
+        DESKTOP_SLIDE,  // Hyprland's desktop slide outside the overview (a bind, Super+scroll, a dock click)
+        WHEEL_PAN,      // switching desktops in the overview by mouse wheel / Super+scroll
     };
     struct SSite {
         const char* name;
@@ -72,6 +75,9 @@ namespace ScrollOverview::FlightBlur {
         {"search_pane", "search results pane", 0.5F, "early"},
         {"drag", "overview drag resize", 1.F, "constant"},
         {"stack_pane", "dock stack grid pane", 1.F, "early"},
+        // (user, 2026-10-16: "yes with an option" -- both; strength 0 = off.)
+        {"desktop_slide", "desktop switch slide outside the overview", 0.5F, "early"},
+        {"wheel_pan", "overview wheel desktop switch", 0.25F, "constant"},
     };
 
     // `site`'s share of the motion prev -> cur at `progress` (0..1 through the
@@ -80,7 +86,9 @@ namespace ScrollOverview::FlightBlur {
     float amount(ESite site, float progress);
 
     // prev pulled toward cur so the blur covers amount(site, progress) of the
-    // motion; returns cur (no smear) when that is ~0.
+    // motion; returns cur (no smear) when that is ~0. The motion is a 60 Hz
+    // frame's worth on any monitor: above 60 Hz the trail reaches back past
+    // prev by the frame-rate ratio (the shutter, FlightBlur.cpp).
     CBox shape(ESite site, const CBox& prev, const CBox& cur, float progress);
 
     // dock:minimize_motion_blur, clamped; below 2 means off.
@@ -115,6 +123,13 @@ namespace ScrollOverview::FlightBlur {
 
     // PLUGIN_EXIT: no window may keep an object whose code is being unloaded.
     void detachAll();
+
+    // `hyprdrive:debug motion` appends this: per site, how often its motion
+    // asked for a smear (shape), how often the setting left one, and how often
+    // a smear was really handed to the renderer -- a site that asks and never
+    // draws is the "blur does nothing" bug class, readable without a
+    // recording. `reset` zeroes the counts (each read starts a new window).
+    std::string debugReport(bool reset);
     // The frost behind a window our transformer is on (FlightBlur.cpp,
     // onPreWindow): init after registerConfig(), shutdown in PLUGIN_EXIT.
     void init();

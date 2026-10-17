@@ -1,5 +1,6 @@
 #include "Window.hpp"
 #include "FlightBlur.hpp"
+#include "BorderFade.hpp"
 #include <chrono>
 #include <algorithm>
 #include <cmath>
@@ -845,10 +846,15 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
     if (!monitor || !window || (!window->m_isMapped))
         return;
 
+    // The ring fades between the window's own border and the highlight on
+    // Hyprland's `border` animation, the way the window's border fades when it
+    // takes focus (BorderFade.hpp). Per window per output.
+    const float MIX = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key(window.get(), sc<uint64_t>(monitor->m_id) + 1), selected);
+
     // X61. A SELECTED tile draws a ring even where the theme asks for no border
     // at all -- with border_size 0 the keyboard selection would otherwise be
     // invisible, which is the defect, not a styling preference.
-    if (metrics.borderSize <= 0.F && !selected)
+    if (metrics.borderSize <= 0.F && MIX <= 0.F)
         return;
 
     auto grad = window->m_realBorderColor;
@@ -882,7 +888,7 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
     // which is what makes it match a real Hyprland border in the overview.
     // The floor of 1 stays: with general:border_size 0 there is no border to
     // match, and a selection has to be visible anyway.
-    if (selected) {
+    if (MIX >= 1.F) {
         // X56: the bright highlight key, not the border accent -- see
         // Config::highlightColor for why those are not the same colour here.
         const auto ACCENT = ScrollOverview::Config::highlightColor();
@@ -890,6 +896,23 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
         data.a            = 1.F;
         data.borderSize   = std::max(1.F, metrics.borderSize);
         data.hasGrad2     = false;
+        g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
+        return;
+    }
+
+    // Mid-fade: the window's border as it is now (its own focus fade settled),
+    // blended into the highlight by the shader's grad1 -> grad2 lerp; weight
+    // and alpha move with it. With border_size 0 there is no resting ring, so
+    // it fades in from nothing.
+    if (MIX > 0.F) {
+        ::Config::CGradientValueData lit;
+        lit.reset(ScrollOverview::Config::highlightColor().modifyA(1.F));
+        data.hasGrad2   = true;
+        data.grad1      = grad;
+        data.grad2      = lit;
+        data.lerp       = MIX;
+        data.a          = metrics.borderSize <= 0.F ? MIX : metrics.targetOpacity + ((1.F - metrics.targetOpacity) * MIX);
+        data.borderSize = std::max(1.F, metrics.borderSize);
         g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
         return;
     }

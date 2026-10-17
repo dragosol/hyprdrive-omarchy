@@ -18,7 +18,10 @@
 //   keybind  -- one hyprdrive shortcut: its live chord (hdpanel dump's
 //               `keybinds`, read from hyprctl binds), an on/off -- a plugin
 //               `key`, or one of hdpanel's own `bind` switches -- and, with
-//               `modsKey`, a modifier picker
+//               `modsKey`, a modifier picker (its last entry, Custom..., captures
+//               the modifiers held while the wheel turns). `chordEdit`: the
+//               chord chip is a button -- click it, press the new keys
+//               (hdpanel bind-set ID CHORD); rows without it are fixed
 //
 // `when` names a condition (HyprdrivePanel.qml, rowEnabled) under which the
 // row applies; otherwise it is drawn dimmed and does not take input.
@@ -68,7 +71,7 @@ var sections = [
         { type: "toggle", key: P + "search:dictionary", label: "Dictionary",
           desc: "Type “define” and a word to look it up on Wiktionary." },
         { type: "toggle", key: P + "search:translate", label: "Translate",
-          desc: "Type “tr” and some text to translate it (needs a LibreTranslate endpoint)." }
+          desc: "Type “tr” and some text to translate it (the free MyMemory service, or your own LibreTranslate server)." }
       ]},
       { title: "Easter egg", rows: [
         { type: "toggle", key: P + "search:easter_egg", label: "Easter egg",
@@ -194,8 +197,12 @@ var sections = [
       ]},
       { title: "Desktops", rows: [
         { type: "blur", when: "blurOn", site: "swipe", label: "Trackpad swipe", clock: false },
+        { type: "blur", when: "blurOn", site: "desktop_slide", label: "Desktop switch", clock: true,
+          desc: "Switching desktops outside the overview: a key, Super+scroll, a dock click." },
         { type: "blur", when: "blurOn", site: "desktop_switch", label: "Keyboard switch", clock: false,
-          desc: "Switching desktops by keyboard in the overview." }
+          desc: "Switching desktops by keyboard in the overview." },
+        { type: "blur", when: "blurOn", site: "wheel_pan", label: "Wheel switch", clock: false,
+          desc: "Switching desktops with the mouse wheel or Super+scroll in the overview." }
       ]},
       { title: "Overview", rows: [
         { type: "blur", when: "blurOn", site: "overview", label: "Open & close", clock: true,
@@ -267,13 +274,13 @@ var sections = [
   {
     // After Mosaic, so Alt+1..8 keep their sections; this one is Alt+9.
     id: "keybinds", title: "Keybinds", icon: "\uf11c", group: "keybinds",
-    subtitle: "Hyprdrive's shortcuts, as they are bound right now.",
+    subtitle: "Hyprdrive's shortcuts, as they are bound right now. Click a key with a pencil to change it.",
     cards: [
       { title: "Overview and windows", rows: [
         { type: "keybind", id: "overview", key: P + "tap_super", label: "Overview",
           desc: "Tap Super on its own, with no other key, to open or close the overview." },
-        { type: "keybind", id: "minimize", bind: "minimize", label: "Minimize",
-          desc: "Super+H minimizes the focused window into the dock. Takes Super+H from anything else bound to it." }
+        { type: "keybind", id: "minimize", bind: "minimize", label: "Minimize", chordEdit: true,
+          desc: "Minimizes the focused window into the dock. Takes its key (Super+H unless you change it) from anything else bound to it." }
       ]},
       { title: "Desktops", rows: [
         { type: "keybind", id: "scroll_desktops", key: P + "binds:scroll_desktops", modsKey: P + "binds:scroll_desktops_mods", label: "Scroll through desktops",
@@ -287,10 +294,10 @@ var sections = [
           } }
       ]},
       { title: "Mosaic", rows: [
-        { type: "keybind", id: "mosaic_cycle", bind: "mosaic_cycle", label: "Layout cycle", when: "mosaicOn",
-          desc: "Super+L cycles Dwindle → Scrolling → Mosaic. Off, Super+L stays Omarchy's two-way toggle. Needs Mosaic on." },
-        { type: "keybind", id: "mosaic_focus", bind: "mosaic_focus", label: "Mosaic-aware focus", when: "mosaicOn",
-          desc: "Super+arrows move focus by position on a Mosaic desktop, and as before everywhere else. Needs Mosaic on." }
+        { type: "keybind", id: "mosaic_cycle", bind: "mosaic_cycle", label: "Layout cycle", when: "mosaicOn", chordEdit: true,
+          desc: "Its key (Super+L unless you change it) cycles Dwindle → Scrolling → Mosaic. Off, Super+L stays Omarchy's two-way toggle. Needs Mosaic on." },
+        { type: "keybind", id: "mosaic_focus", bind: "mosaic_focus", label: "Mosaic-aware focus and swap", when: "mosaicOn",
+          desc: "Super+arrows move focus and Super+Shift+arrows swap windows by position on a Mosaic desktop, and work as before everywhere else. Needs Mosaic on." }
       ]}
     ]
   }

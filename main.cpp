@@ -77,6 +77,7 @@ using namespace Hyprutils::String;
 #include "FlightBlur.hpp"
 #include "Motion.hpp"
 #include "ConfigureHold.hpp"
+#include "SizeAck.hpp"
 #include "DockRoom.hpp"
 #include "Scratchpad.hpp"
 #include <hyprland/src/layout/target/Target.hpp>
@@ -97,6 +98,7 @@ using namespace Hyprutils::String;
 #include "Spring.hpp"
 #include "HotCorner.hpp"
 #include "Ripple.hpp"
+#include "BorderFade.hpp"
 
 // Methods
 static CFunctionHook* g_pScrollRenderWorkspaceHook = nullptr;
@@ -195,6 +197,12 @@ static void hkSendWindowSize(void* thisptr, bool force) {
     if (ScrollOverview::ConfigureHold::intercept(sc<Desktop::View::CWindow*>(thisptr), force))
         return;
     rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(thisptr, force);
+}
+
+// SizeAck.hpp: Hyprland's CWindow::onAck, minus its bug. Never calls the original.
+static CFunctionHook* g_pOnAckHook = nullptr;
+static void           hkOnAck(void* thisptr, uint32_t serial) {
+    ScrollOverview::SizeAck::onAck(sc<Desktop::View::CWindow*>(thisptr), serial);
 }
 
 // DockRoom.hpp: tiled windows make room for a dock that does not hide.
@@ -1631,6 +1639,13 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
     // `motion`: which animation:curve preset the engine is ACTUALLY using, and
     // the three curves at t = 0.25 / 0.5 -- a preset that reads as the house
     // one here is not reaching the animations.
+    if (TOPIC == "glass") {
+        const auto C = ScrollOverview::Config::dockBackgroundColor();
+        return {.success = false, .error = std::format("hyprdrive glass: tint #{:02x}{:02x}{:02x} alpha {:.3f}", sc<int>(std::round(C.r * 255)), sc<int>(std::round(C.g * 255)),
+                                                       sc<int>(std::round(C.b * 255)), C.a)};
+    }
+    if (TOPIC == "windows")
+        return {.success = false, .error = ScrollOverview::SizeAck::report()};
     if (TOPIC == "motion") {
         using ScrollOverview::Motion::ERole;
         const auto E = [](ERole r, float t) { return ScrollOverview::Motion::ease(r, t); };
@@ -1638,7 +1653,10 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
                 .error   = std::format("hyprdrive motion: house={} decel(.25)={:.3f} decel(.5)={:.3f} accel(.5)={:.3f} pop(.5)={:.3f} | blur minimize {:.3f}@.25 swipe {:.3f}@.25",
                                        ScrollOverview::Motion::housePreset(), E(ERole::DECEL, 0.25F), E(ERole::DECEL, 0.5F), E(ERole::ACCEL, 0.5F), E(ERole::POP, 0.5F),
                                        ScrollOverview::FlightBlur::amount(ScrollOverview::FlightBlur::ESite::MINIMIZE, 0.25F),
-                                       ScrollOverview::FlightBlur::amount(ScrollOverview::FlightBlur::ESite::SWIPE, 0.25F))};
+                                       ScrollOverview::FlightBlur::amount(ScrollOverview::FlightBlur::ESite::SWIPE, 0.25F)) +
+                       // Per blur site since the last `motion` read (which resets them):
+                       // asked / smeared / drawn, trail length, shutter (FlightBlur.hpp).
+                       " || " + ScrollOverview::FlightBlur::debugReport(true)};
     }
     // `mem`: what hyprdrive holds on the GPU, as far as it can count it.
     if (TOPIC == "mem") {
@@ -2024,6 +2042,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (g_pSendWindowSizeHook)
             rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(window, force);
     });
+    g_pOnAckHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("onAck", {"CWindow::onAck("}), rc<void*>(hkOnAck));
+    g_pOnAckHook->hook();
 
     CursorShape::init();
     OpenProf::init();
@@ -2488,6 +2508,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     ScrollOverview::Mosaic::unregisterLayout(SCROLLOVERVIEW_HANDLE);
     ScrollOverview::DesktopSwitch::shutdown();
     ScrollOverview::KeyboardCat::shutdown(); // ffmpeg killed, its reader joined, before the code goes
+    ScrollOverview::BorderFade::clear(); // drops its hold on Hyprland's `border` bezier
     stopSearchRepeat();
     if (g_searchRepeatTimer) {
         wl_event_source_remove(g_searchRepeatTimer);

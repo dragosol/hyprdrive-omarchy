@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <array>
@@ -166,7 +167,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|scratchpad|type|type \\S+|activate \\S+|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|type|type \\S+|activate \\S+|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
             .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | press <keycode> | ripple [x y]",
@@ -184,6 +185,15 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected one of: l, r, u, d",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "focus"); },
             .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "focus"); },
+        },
+        {
+            // Mosaic.cpp: swap by direction, mosaic-aware (Super+Shift+arrows).
+            .name            = "swap",
+            .argPattern      = std::regex{"^(l|r|u|d|left|right|up|down)$"},
+            .typeArgError    = "expected a string argument",
+            .invalidArgError = "expected one of: l, r, u, d",
+            .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "swap"); },
+            .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "swap"); },
         },
         {
             // DesktopSwitch.cpp: one desktop by number, empty ones included
@@ -972,6 +982,10 @@ void invalidateThemeCache() {
     ++g_themeGeneration;
 }
 
+uint64_t themeGeneration() {
+    return g_themeGeneration;
+}
+
 // Omarchy writes the active palette into colors.toml on `omarchy theme set`
 // and reloads Hyprland. Cached on mtime so a frame does not reopen the file,
 // and the mtime itself behind THEME_POLL_MS so a frame does not stat it either.
@@ -1339,21 +1353,165 @@ static float omarchyWindowOpacity() {
     return std::clamp(STOCK * INACTIVE, 0.F, 1.F);
 }
 
+// THE TERMINAL'S GLASS (user, 2026-10-16: the dock, search, results and strip
+// should be the same glass as Ghostty -- the blur was already Hyprland's, the
+// tint over it was not: 0.85 over the theme's darkest shade, where the terminal
+// is its background-opacity over its own background). Read from Ghostty's
+// config: `config` / `config.ghostty` in its config dir, every `config-file`
+// it includes (relative to the including file; a leading ? is optional), and a
+// `theme` for the background when none is set outright. Later lines win. Only
+// what Ghostty SETS is taken: no background-opacity line means no opinion.
+//
+// Re-read on the theme generation (a config reload), and otherwise at most
+// every THEME_POLL_MS when a file it read changed -- a theme switch that only
+// rewrites Ghostty's theme file (fedora's Serpantinum sync) is seen too.
+struct SGhosttyGlass {
+    std::optional<uint32_t> background; // 0xRRGGBB
+    std::optional<float>    opacity;
+};
+
+static std::optional<uint32_t> ghosttyHex(std::string v) {
+    if (!v.empty() && v.front() == '#')
+        v.erase(0, 1);
+    if (v.size() != 6 || !std::ranges::all_of(v, [](char c) { return std::isxdigit(sc<unsigned char>(c)) != 0; }))
+        return std::nullopt;
+    return sc<uint32_t>(std::stoul(v, nullptr, 16));
+}
+
+static std::string ghosttyUnquote(std::string v) {
+    while (!v.empty() && std::isspace(sc<unsigned char>(v.back())))
+        v.pop_back();
+    if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front())
+        v = v.substr(1, v.size() - 2);
+    return v;
+}
+
+static std::string ghosttyPath(std::string v, const std::filesystem::path& base) {
+    if (!v.empty() && v.front() == '~')
+        if (const char* home = std::getenv("HOME"); home && *home)
+            v = std::string{home} + v.substr(1);
+    std::filesystem::path p{v};
+    return (p.is_absolute() ? p : base / p).string();
+}
+
+static void ghosttyRead(const std::string& path, int depth, SGhosttyGlass& out, std::optional<std::string>& theme, std::vector<std::pair<std::string, time_t>>& seen) {
+    struct stat st {};
+    if (depth > 6 || stat(path.c_str(), &st) != 0)
+        return;
+    seen.emplace_back(path, st.st_mtime);
+    std::ifstream in{path};
+    if (!in)
+        return;
+    std::vector<std::string> includes;
+    std::string              line;
+    while (std::getline(in, line)) {
+        const auto EQ = line.find('=');
+        if (EQ == std::string::npos)
+            continue;
+        std::string key = line.substr(0, EQ);
+        std::erase_if(key, [](char c) { return std::isspace(sc<unsigned char>(c)) != 0; });
+        if (key.empty() || key.front() == '#')
+            continue;
+        std::string val = line.substr(EQ + 1);
+        val.erase(0, std::min(val.find_first_not_of(" \t"), val.size()));
+        val = ghosttyUnquote(val);
+        if (key == "background") {
+            if (const auto HEX = ghosttyHex(val))
+                out.background = HEX;
+        } else if (key == "background-opacity") {
+            try {
+                out.opacity = std::clamp(std::stof(val), 0.F, 1.F);
+            } catch (...) {}
+        } else if (key == "theme")
+            theme = val;
+        else if (key == "config-file") {
+            if (!val.empty() && val.front() == '?')
+                val = ghosttyUnquote(val.substr(1));
+            includes.push_back(ghosttyPath(val, std::filesystem::path{path}.parent_path()));
+        }
+    }
+    // Ghostty loads a file's config-file includes after the file itself.
+    for (const auto& INC : includes)
+        ghosttyRead(INC, depth + 1, out, theme, seen);
+}
+
+static const SGhosttyGlass& ghosttyGlass() {
+    static SGhosttyGlass                               cached;
+    static std::vector<std::pair<std::string, time_t>> files; // what the last parse read, with mtimes
+    static Time::steady_tp                             checkedAt{};
+    static uint64_t                                    seenGeneration = 0;
+
+    const auto NOW = Time::steadyNow();
+    if (seenGeneration == g_themeGeneration && std::chrono::duration<float, std::milli>(NOW - checkedAt).count() < THEME_POLL_MS)
+        return cached;
+    const bool RELOADED = seenGeneration != g_themeGeneration;
+    checkedAt           = NOW;
+    seenGeneration      = g_themeGeneration;
+
+    if (!RELOADED && !files.empty() && std::ranges::all_of(files, [](const auto& f) {
+            struct stat st {};
+            return stat(f.first.c_str(), &st) == 0 && st.st_mtime == f.second;
+        }))
+        return cached;
+
+    const char* const CFG  = std::getenv("XDG_CONFIG_HOME");
+    const char* const HOME = std::getenv("HOME");
+    const std::filesystem::path DIR = (CFG && *CFG) ? std::filesystem::path{CFG} / "ghostty" :
+                                      (HOME && *HOME) ? std::filesystem::path{HOME} / ".config/ghostty" :
+                                                        std::filesystem::path{};
+    cached = {};
+    files.clear();
+    if (DIR.empty())
+        return cached;
+
+    std::optional<std::string> theme;
+    for (const char* NAME : {"config", "config.ghostty"})
+        ghosttyRead((DIR / NAME).string(), 0, cached, theme, files);
+
+    // A theme gives the background only where the config does not.
+    if (!cached.background && theme && !theme->empty()) {
+        // "light:A,dark:B": the dark one (the chrome is a dark-glass surface).
+        std::string name = *theme;
+        if (const auto DARK = name.find("dark:"); DARK != std::string::npos) {
+            name = name.substr(DARK + 5);
+            name = name.substr(0, name.find(','));
+        }
+        SGhosttyGlass                                      themed;
+        std::optional<std::string>                         ignored;
+        const std::filesystem::path                        P{name};
+        for (const auto& CAND : P.is_absolute() ? std::vector<std::string>{name} :
+                                                  std::vector<std::string>{(DIR / "themes" / name).string(), "/usr/share/ghostty/themes/" + name}) {
+            if (std::filesystem::exists(CAND)) {
+                ghosttyRead(CAND, 0, themed, ignored, files);
+                break;
+            }
+        }
+        cached.background = themed.background;
+    }
+    return cached;
+}
+
 CHyprColor dockBackgroundColor() {
     static auto& OPACITYVAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:dock:background_opacity");
     static auto& COLORVAL   = valueRef<Hyprlang::INT>("plugin:hyprdrive:dock:background_color");
     static auto& FALLBACK   = valueRef<Hyprlang::INT>("misc:background_color");
 
+    const auto& GLASS = ghosttyGlass();
+
     float OPACITY = sc<float>(*OPACITYVAL);
-    if (OPACITY < 0.F)
-        OPACITY = omarchyWindowOpacity();
-    else
+    if (OPACITY >= 0.F)
         OPACITY = std::clamp(OPACITY, 0.F, 1.F);
+    else if (GLASS.opacity)
+        OPACITY = *GLASS.opacity; // the terminal's glass
+    else
+        OPACITY = omarchyWindowOpacity();
 
     const uint32_t ARGB = sc<uint32_t>(*COLORVAL);
     uint32_t       RGB  = ARGB;
     if ((ARGB >> 24) == 0) {
-        if (const auto THEME = omarchyThemeBackgroundRgb())
+        if (GLASS.background)
+            RGB = *GLASS.background; // the terminal's background
+        else if (const auto THEME = omarchyThemeBackgroundRgb())
             RGB = *THEME;
         else
             RGB = sc<uint32_t>(*FALLBACK);

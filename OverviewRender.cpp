@@ -20,6 +20,7 @@
 #include "IconSize.hpp"
 #include "BuiltinIcons.hpp"
 #include "Config.hpp"
+#include "BorderFade.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
 #include "globals.hpp"
@@ -108,9 +109,9 @@ void captureFrameChromeBlur(PHLMONITOR monitor) {
     g_chromeBlurFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
 
     CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
-    // X99. Strip + search-result chrome is ONE pass weaker than window frost.
-    // This private FB is only sampled by those surfaces (pill/dock are live at
-    // full decoration:blur:passes). Kawase a=1 still; only pass count drops.
+    // X99. This private FB is only sampled by the strip and the search-result
+    // chrome (the pill and the dock blur live). It used to run one pass weaker
+    // than window frost; Y12 below took that out.
     // Y12 (user, 2026-08-06): "remove the -1 passes". X99 dual-kawased this
     // capture at `max(1, passes - 1)` so the strip and the result cards would
     // read one step softer than the windows. The user wants chrome frost to be
@@ -1021,13 +1022,14 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     // usePrecomputedBlur means "sample frameChromeBlur()" (overview), not
     // Hyprland xray/m_blurFB (desktop wallpaper). See X88.
     data.xray          = usePrecomputedBlur;
-    // X99: strip/results pass decoration:blur:passes-1 here so live fallback
-    // matches the weaker capture (sample path ignores this; capture bakes it).
+    // The live fallback's pass count. Callers pass decoration:blur:passes --
+    // Y12 removed X99's -1 -- so it matches the capture (the sample path
+    // ignores this; the capture bakes its own).
     data.blurPasses    = blurPasses;
     g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(data));
 }
 
-void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit) {
+void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit, uint64_t fadeKey) {
     if (box.empty() || alpha <= 0.F)
         return;
 
@@ -1045,7 +1047,9 @@ void themePlate(const CBox& box, int rounding, float roundingPower, float alpha,
     const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
     CBorderPassElement::SBorderData border;
     border.box           = box.copy().round();
-    border.grad1.reset(lit ? ScrollOverview::Config::highlightColor().modifyA(1.F) : ScrollOverview::Config::restingBorderColor());
+    const auto LIT     = ScrollOverview::Config::highlightColor().modifyA(1.F);
+    const auto RESTING = ScrollOverview::Config::restingBorderColor();
+    border.grad1.reset(fadeKey ? ScrollOverview::BorderFade::color(g_pHyprRenderer->m_renderData.pMonitor.lock(), fadeKey, lit, RESTING, LIT) : lit ? LIT : RESTING);
     border.a             = alpha;
     border.borderSize    = BORDERSIZE;
     border.round         = rounding;

@@ -18,7 +18,9 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
 // is on). Rounding is the caller's -- themeRounding for these surfaces, the
 // Dash-to-Dock 24 stays on the dock itself.
 // lit = the accent ring (hovered / keyboard on it); otherwise the resting tile border.
-void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit = true);
+// fadeKey (BorderFade::key) = fade between the two on Hyprland's `border`
+// animation, as a window's border does when it takes focus; 0 = snap.
+void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit = true, uint64_t fadeKey = 0);
 
 // X92. Stable dual-kawase of the overview main FB for strip/result chrome.
 // blurMainFramebuffer() returns a TEMPORARY texture that window live-blurs
