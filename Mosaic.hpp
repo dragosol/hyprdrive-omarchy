@@ -74,4 +74,6 @@ namespace ScrollOverview::Mosaic {
     // Super is held and the pointer moves -- any desktop, the zoomed-out
     // canvas included -- as mosaic:zoom_labels asks.
     void renderZoomLabels(PHLMONITOR monitor);
+    // A title mid-fade: Dock::needsFramesReason asks for its frames.
+    bool labelsAnimating();
 }

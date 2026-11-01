@@ -4,6 +4,7 @@
 #include "MosaicCanvas.hpp"
 #include "MosaicDrive.hpp"
 #include "Motion.hpp"
+#include "globals.hpp"
 #include "IOverview.hpp"
 #include "Dock.hpp"
 #include "OverviewRender.hpp"
@@ -1512,19 +1513,25 @@ namespace ScrollOverview::Mosaic {
         // ... to show labels on either no window, hovered windows, or all
         // windows"). The overview's caption pill at the bottom of each window
         // as it is drawn (its real box IS the zoomed one, drawAt; mid-glide
-        // too), fading in over the second half of the zoom.
-        void drawZoomLabels(const PHLMONITOR& monitor, bool all, const PHLWINDOW& hovered) {
-            if (!m_zoomed || m_zoomZ <= 0.5)
+        // too). The windows that want one go into `out`; renderZoomLabels
+        // fades each, under the zoom's own fade (zoomLabelAlpha).
+        void zoomLabelWindows(bool all, const PHLWINDOW& hovered, std::vector<PHLWINDOW>& out) const {
+            if (zoomLabelAlpha() <= 0.F)
                 return;
-            const float ALPHA = std::clamp(sc<float>((m_zoomZ - 0.5) / 0.5), 0.F, 1.F);
-            const auto  DRAG  = m_zDragMoved ? m_zDrag.lock() : PHLWINDOW{};
+            const auto DRAG = m_zDragMoved ? m_zDrag.lock() : PHLWINDOW{};
             for (const auto& WT : m_canvasWho) {
                 const auto T = WT.lock();
                 const auto W = T ? T->window() : nullptr;
                 if (!W || W == DRAG || (!all && W != hovered))
                     continue;
-                drawWindowLabel(monitor, W, ALPHA);
+                out.push_back(W);
             }
+        }
+        // Fading in over the second half of the zoom.
+        float zoomLabelAlpha() const {
+            if (!m_zoomed || m_zoomZ <= 0.5)
+                return 0.F;
+            return std::clamp(sc<float>((m_zoomZ - 0.5) / 0.5), 0.F, 1.F);
         }
         bool zoomed() const {
             return m_zoomed;
@@ -2777,6 +2784,35 @@ namespace ScrollOverview::Mosaic {
         constexpr double  SUPER_SLOP = 32.0;
         PHLWINDOWREF      g_labelHover; // the window whose title the hover shows (mosaic:zoom_labels)
         bool              g_superLabels = false; // Super held and the pointer moved: titles up
+
+        // THE TITLES FADE (user, 2026-11-01: "those labels should adopt the
+        // same fade in/out animations as the rest of the labels in
+        // hyprdrive"): the dock tooltip's clock and curves (Dock.cpp
+        // TOOLTIP_FADE_MS / _OUT_MS, houseEase), one per window. A title wanted
+        // again mid-exit turns around from the alpha it had, no dip to zero.
+        constexpr float LABEL_FADE_MS     = 150.F;
+        constexpr float LABEL_FADE_OUT_MS = 110.F; // exits ~25% quicker, house rule
+        struct SLabelFade {
+            PHLWINDOWREF                          window;
+            std::chrono::steady_clock::time_point since;
+            float                                 from = 0.F; // the alpha the fade started at
+            bool                                  out  = false;
+        };
+        std::vector<SLabelFade> g_labelFades;
+
+        float labelFadeProgress(const SLabelFade& f) {
+            const float MS = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - f.since).count();
+            return std::clamp(MS / (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS), 0.F, 1.F);
+        }
+        float labelFadeAlpha(const SLabelFade& f) {
+            const float P = labelFadeProgress(f);
+            return f.out ? f.from * (1.F - houseEase(false, P)) : f.from + (1.F - f.from) * houseEase(true, P);
+        }
+        void labelFadeTo(SLabelFade& f, bool out) {
+            f.from  = labelFadeAlpha(f);
+            f.out   = out;
+            f.since = std::chrono::steady_clock::now();
+        }
     }
 
     // A SCREEN PICKER IS UP (user, 2026-10-27: "fix taking screenshots while
@@ -2803,6 +2839,12 @@ namespace ScrollOverview::Mosaic {
             return;
         g_superLabels = false;
         g_labelHover.reset();
+        // Their exits start now, not at the next frame drawn without the
+        // overview: one that opens on this release must not leave a stale
+        // title to fade out when it closes.
+        for (auto& f : g_labelFades)
+            if (!f.out)
+                labelFadeTo(f, true);
         for (const auto& M : State::monitorState()->monitors())
             if (M)
                 g_pHyprRenderer->damageMonitor(M);
@@ -2843,39 +2885,78 @@ namespace ScrollOverview::Mosaic {
     }
 
     void renderZoomLabels(PHLMONITOR monitor) {
-        if (!monitor || !g_superLabels || g_super == ESuper::IDLE || g_super == ESuper::SPENT || openScrollOverviewForMonitor(monitor))
+        if (!monitor)
             return;
-        const auto MODE = ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:mosaic:zoom_labels");
-        if (MODE != "hover" && MODE != "all")
-            return;
-        // Looked up fresh, not g_labelHover (that only asks for the redraws):
-        // a desktop switch under a still pointer changes the window under it.
-        auto*          A      = liveZoomed();
-        const auto     WS     = A ? A->workspace() : nullptr;
-        const bool     ZOOMED = WS && monitor->m_activeWorkspace == WS && !monitor->m_activeSpecialWorkspace;
-        const Vector2D P      = g_pInputManager->getMouseCoordsInternal();
-        const auto     HOVER  = ZOOMED ? A->zoomedWindowAt(P) :
-                                         Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
-        if (MODE == "hover" && !HOVER)
-            return;
-        // The zoomed-out canvas: on the zoomed boxes, fading in with the zoom.
-        if (ZOOMED) {
-            A->drawZoomLabels(monitor, MODE == "all", HOVER);
-            return;
+        auto*      A      = liveZoomed();
+        const auto WS     = A ? A->workspace() : nullptr;
+        const bool ZOOMED = WS && monitor->m_activeWorkspace == WS && !monitor->m_activeSpecialWorkspace;
+        const auto SHOWN  = monitor->m_activeSpecialWorkspace ? monitor->m_activeSpecialWorkspace : monitor->m_activeWorkspace;
+
+        // The windows that want a title this frame. None once Super is let go:
+        // the titles still up fade out below.
+        std::vector<PHLWINDOW> want;
+        const auto             MODE = ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:mosaic:zoom_labels");
+        if (g_superLabels && g_super != ESuper::IDLE && g_super != ESuper::SPENT && !openScrollOverviewForMonitor(monitor) && (MODE == "hover" || MODE == "all")) {
+            // Looked up fresh, not g_labelHover (that only asks for the redraws):
+            // a desktop switch under a still pointer changes the window under it.
+            const Vector2D P     = g_pInputManager->getMouseCoordsInternal();
+            const auto     HOVER = ZOOMED ? A->zoomedWindowAt(P) :
+                                            Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+            // The zoomed-out canvas: on the zoomed boxes.
+            if (ZOOMED)
+                A->zoomLabelWindows(MODE == "all", HOVER, want);
+            // Any other desktop, any layout: the windows where they are. Under a
+            // fullscreen window only it and what floats over it are seen.
+            else if (SHOWN) {
+                const auto FS = Fullscreen::controller()->getFullscreenWindow(SHOWN);
+                for (const auto& W : Desktop::windowState()->windows()) {
+                    if (!W || !W->m_isMapped || W->isHidden() || W->m_workspace != SHOWN || (FS && W != FS && !W->m_isFloating))
+                        continue;
+                    if (MODE == "hover" && W != HOVER)
+                        continue;
+                    want.push_back(W);
+                }
+            }
         }
-        // Any other desktop, any layout: the windows where they are. Under a
-        // fullscreen window only it and what floats over it are seen.
-        const auto SHOWN = monitor->m_activeSpecialWorkspace ? monitor->m_activeSpecialWorkspace : monitor->m_activeWorkspace;
-        if (!SHOWN)
-            return;
-        const auto FS = Fullscreen::controller()->getFullscreenWindow(SHOWN);
-        for (const auto& W : Desktop::windowState()->windows()) {
-            if (!W || !W->m_isMapped || W->isHidden() || W->m_workspace != SHOWN || (FS && W != FS && !W->m_isFloating))
-                continue;
-            if (MODE == "hover" && W != HOVER)
-                continue;
-            drawWindowLabel(monitor, W, 1.F);
+
+        // Each title in or out on its own fade. Only this monitor's windows:
+        // another monitor's render decides theirs.
+        std::erase_if(g_labelFades, [](const SLabelFade& f) { return !f.window.lock() || (f.out && labelFadeProgress(f) >= 1.F); });
+        for (const auto& W : want) {
+            auto it = std::ranges::find_if(g_labelFades, [&](const SLabelFade& f) { return f.window.lock() == W; });
+            if (it == g_labelFades.end())
+                g_labelFades.push_back({.window = W, .since = std::chrono::steady_clock::now()});
+            else if (it->out)
+                labelFadeTo(*it, false);
         }
+        for (auto& f : g_labelFades) {
+            const auto W = f.window.lock();
+            if (!f.out && W->m_monitor == monitor && std::ranges::find(want, W) == want.end())
+                labelFadeTo(f, true);
+        }
+
+        for (const auto& f : g_labelFades) {
+            const auto W = f.window.lock();
+            if (W->m_monitor != monitor || !W->m_isMapped)
+                continue;
+            // On the zoomed canvas under the zoom's own fade; elsewhere only a
+            // window on the desktop shown, as it is.
+            const bool ONZOOM = ZOOMED && A->holds(W);
+            if (!ONZOOM && (W->isHidden() || W->m_workspace != SHOWN))
+                continue;
+            const float ALPHA = labelFadeAlpha(f) * (ONZOOM ? A->zoomLabelAlpha() : 1.F);
+            if (ALPHA > 0.005F)
+                drawWindowLabel(monitor, W, ALPHA);
+        }
+    }
+
+    // One frame past the end too, so the last one drawn is the settled alpha
+    // (CScrollOverview::stripTipAnimating).
+    bool labelsAnimating() {
+        const auto NOW = std::chrono::steady_clock::now();
+        return std::ranges::any_of(g_labelFades, [&](const SLabelFade& f) {
+            return f.window.lock() && std::chrono::duration<float, std::milli>(NOW - f.since).count() < (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS) + 16.F;
+        });
     }
 
     PHLWINDOW zoomCarried() {
@@ -3554,6 +3635,7 @@ namespace ScrollOverview::Mosaic {
             A->endZoomNow();
         g_superCanvas    = nullptr;
         g_super          = ESuper::IDLE;
+        g_labelFades.clear();
         g_zoomPressing   = false;
         g_swallowRelease = false;
         g_edgePush       = {};

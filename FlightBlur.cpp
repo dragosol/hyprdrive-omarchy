@@ -663,7 +663,11 @@ namespace ScrollOverview::FlightBlur {
                 const auto& WS        = window->m_workspace;
                 // A special workspace hiding is still drawn while it fades or
                 // slides out (the scratchpad closing).
+                // A desktop switched AWAY from is drawn while its offset slides it
+                // out, as Hyprland's shouldRenderWindow has it: it is moving too
+                // (user, 2026-11-01: only the arriving desktop was smeared).
                 const bool  SHOWN     = WS->isVisible() || WS->m_forceRendering ||
+                    (!WS->m_isSpecialWorkspace && WS->m_monitor == monitor && WS->m_renderOffset->isBeingAnimated()) ||
                     (WS->m_isSpecialWorkspace && WS->m_alpha->value() > 0.01F && (WS->m_alpha->isBeingAnimated() || WS->m_renderOffset->isBeingAnimated()));
                 const auto  IT        = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.window.lock() == window; });
                 const auto& WSOFFSET  = WS->m_renderOffset;
