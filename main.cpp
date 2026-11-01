@@ -1,5 +1,7 @@
 #define WLR_USE_UNSTABLE
 
+#include "FullscreenGuard.hpp"
+#include "XGeometry.hpp"
 #include "OpenProf.hpp"
 #include "FramePacing.hpp"
 #include <unistd.h>
@@ -199,6 +201,15 @@ static void hkSendWindowSize(void* thisptr, bool force) {
     rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(thisptr, force);
 }
 
+// Mosaic.hpp hideDuringSlide: a canvas window off its view stays off the
+// desktop slide.
+static CFunctionHook* g_pShouldRenderWindowHook = nullptr;
+static bool           hkShouldRenderWindow(void* thisptr, PHLWINDOW window, PHLMONITOR monitor) {
+    if (ScrollOverview::Mosaic::hideDuringSlide(window, monitor))
+        return false;
+    return rc<bool (*)(void*, PHLWINDOW, PHLMONITOR)>(g_pShouldRenderWindowHook->m_original)(thisptr, window, monitor);
+}
+
 // SizeAck.hpp: Hyprland's CWindow::onAck, minus its bug. Never calls the original.
 static CFunctionHook* g_pOnAckHook = nullptr;
 static void           hkOnAck(void* thisptr, uint32_t serial) {
@@ -219,8 +230,12 @@ static void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e) {
     // the held drag with the sum of every finger.
     if (ScrollOverview::FingerSwipe::swallowMotion(e))
         return;
+    const Vector2D BEFORE = g_pInputManager->getMouseCoordsInternal();
     rc<origOnMouseMoved>(g_pScrollMouseMovedHook->m_original)(thisptr, e);
+    ScrollOverview::Mosaic::onPointerDelta(e.delta, g_pInputManager->getMouseCoordsInternal() - BEFORE);
     ScrollOverview::Dock::feedPointerMotion(e.delta);
+    ScrollOverview::XGeometry::check();
+    ScrollOverview::FullscreenGuard::resumePointerLock();
 }
 
 static void hkScheduleFrame(void* thisptr, Aquamarine::IOutput::scheduleFrameReason reason) {
@@ -593,13 +608,16 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
         Prof::pending = true;
     }
 
-    // X54. Search providers are D-Bus activated and go cold again after well
-    // under a minute of idle, so without this the first keystroke waits on a
-    // GTK app starting: median settle 1085ms cold vs 342ms warmed (9 samples
-    // each, 45s idle between). Launching them here overlaps the open animation
-    // and the reach for the keyboard. Costs a respawn per open-after-idle;
-    // that is the price of the results being up when the user looks at them.
-    SearchProviders::warm();
+    // X54, reversed. Search providers are D-Bus activated and go cold again
+    // after well under a minute of idle. Warming them here (StartServiceByName
+    // on every provider) cut a cold first search from ~1085ms to ~342ms, but
+    // it cold-started Nautilus, GNOME Software, gvfs, the portal and Sushi on
+    // EVERY open -- most of which never search -- and did it during the open
+    // animation. On a 16 GB laptop under memory pressure each of those GTK
+    // starts allocates GPU buffers through compaction and stalled the
+    // compositor 0.3-1.4 s (measured 2026-10-23). The first keystroke's own
+    // GetInitialResultSet auto-starts a cold provider instead: app rows are
+    // in-memory and stay instant, provider rows land when the provider is up.
     OmarchySearch::init();
 
     for (const auto& monitor : MONITORS) {
@@ -1075,6 +1093,12 @@ static CHyprSignalListener g_pScrollCameraMovedHook;
 static CHyprSignalListener g_pClickPreReloadHook;
 static bool                g_tapSuperCandidate = false;
 static uint32_t            g_tapSuperPressedAt = 0;
+// Mosaic.cpp: Super held down to pan an infinite canvas was not a tap.
+namespace ScrollOverview {
+    void cancelSuperTap() {
+        g_tapSuperCandidate = false;
+    }
+}
 static bool                g_tapShiftCandidate = false;
 static uint32_t            g_tapShiftPressedAt = 0;
 // Release time of the last completed SHIFT tap; 0 = no pair in flight.
@@ -1098,6 +1122,13 @@ static void                registerRawKeyHooks() {
                 g_heldGuardKeys.insert(event.keycode);
             else
                 g_heldGuardKeys.erase(event.keycode);
+        }
+
+        // The zoomed-out canvas: the user's screenshot key (Print) shoots it,
+        // though Super is held for the zoom (Mosaic::onZoomKey).
+        if (ScrollOverview::Mosaic::onZoomKey(event.keycode, PRESSED, event.timeMs)) {
+            info.cancelled = true;
+            return;
         }
 
         // A REAL KEY BREAKS EVERY TAP IN FLIGHT -- and it has to be recorded
@@ -1277,6 +1308,10 @@ static void                registerRawKeyHooks() {
             return;
         }
 
+        // The infinite canvas's Super gesture (Mosaic.hpp): armed on the press,
+        // over on the release -- zoomed out, the release zooms back in.
+        ScrollOverview::Mosaic::onSuperKey(PRESSED);
+
         if (PRESSED) {
             g_tapSuperCandidate = true;
             g_tapSuperPressedAt = event.timeMs;
@@ -1388,14 +1423,30 @@ static std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount,
         return g_pTrackpadGestures->addGesture(std::move(gesture), fingerCount, direction, modMask, deltaScale, disableInhibit);
     };
 
-    if (action == "unset")
+    // The desktop swipe's Super twin (below) goes with it.
+    const bool SUPERTWIN = modMask == 0 && (direction == TRACKPAD_GESTURE_DIR_HORIZONTAL || direction == TRACKPAD_GESTURE_DIR_SWIPE);
+
+    if (action == "unset") {
+        if (SUPERTWIN)
+            (void)g_pTrackpadGestures->removeGesture(fingerCount, TRACKPAD_GESTURE_DIR_HORIZONTAL, HL_MODIFIER_META, deltaScale, disableInhibit);
         return g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+    }
 
     if (action == "overview")
         return add(makeUnique<COverviewGesture>(direction));
 
-    if (action == "workspace")
-        return add(makeUnique<COverviewWorkspaceGesture>());
+    if (action == "workspace") {
+        const auto RES = add(makeUnique<COverviewWorkspaceGesture>());
+        // SUPER TOO (user, 2026-11-01: "I want for super+3 finger swipe to ALSO
+        // do that ... when I'm zoomed out in infinite canvas" -- the zoomed-out
+        // canvas is Super held, and Hyprland matches a gesture's modifiers
+        // exactly). The same swipe with Super down switches desktops too,
+        // unless the config binds that one itself (then this add is refused).
+        if (RES && SUPERTWIN)
+            (void)g_pTrackpadGestures->addGesture(makeUnique<COverviewWorkspaceGesture>(), fingerCount, TRACKPAD_GESTURE_DIR_HORIZONTAL, HL_MODIFIER_META, deltaScale,
+                                                  disableInhibit);
+        return RES;
+    }
 
     if (action == "workspace_all")
         return add(makeUnique<COverviewWorkspaceGesture>(true));
@@ -1605,6 +1656,28 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
             return {.success = false, .error = std::format("hyprdrive:debug activate: no dock item for class {}", CLASS)};
         return {};
     }
+    // `tile <class>`: where that app's window is drawn in the focused
+    // monitor's open overview (monitor-local render px), so a test clicks it
+    // with a real pointer instead of guessing at a screenshot.
+    if (TOPIC == "tile") {
+        const std::string CLASS   = data.size() > 1 ? std::string{data[1]} : std::string{};
+        const auto        MONITOR = Desktop::focusState()->monitor();
+        const auto        OV      = MONITOR ? openScrollOverviewForMonitor(MONITOR) : nullptr;
+        if (!OV)
+            return {.success = false, .error = "hyprdrive:debug tile: no open overview"};
+        for (const auto& W : Desktop::windowState()->windows()) {
+            if (!W || !W->m_isMapped || W->m_class != CLASS)
+                continue;
+            const auto B = OV->tileBox(W);
+            if (B.width < 1 || B.height < 1)
+                continue;
+            return {.success = false, .error = std::format("tile {} {} {} {} {}", CLASS, sc<int>(B.x), sc<int>(B.y), sc<int>(B.width), sc<int>(B.height))};
+        }
+        return {.success = false, .error = std::format("hyprdrive:debug tile: no tile for class {}", CLASS)};
+    }
+    // `xgeom`: XGeometry's view of the focused window right now.
+    if (TOPIC == "xgeom")
+        return {.success = false, .error = "xgeom " + ScrollOverview::XGeometry::status()};
     // `ripple [x y]`: the hot corner's ripple on the focused monitor, from its
     // top-left corner or from global logical (x, y) -- the rig has no pointer
     // that can reach a corner.
@@ -1817,9 +1890,11 @@ static SDispatchResult onGestureDispatcher(std::string arg) {
 // the minimize engine is driven and tested until its icons can call it.
 static SDispatchResult onMinimizeDispatcher(std::string arg) {
     if (arg == "restore") {
+        // Nothing minimized is nothing to do, not an error: a bind's error is
+        // Lua's "runtime error" toast.
         const auto MINIMIZED = ScrollOverview::Minimize::minimized();
         if (MINIMIZED.empty())
-            return {.success = false, .error = "nothing is minimized"};
+            return {};
 
         // X54: back out through the DOCK, so it flies from its icon instead of
         // reappearing. The dock owns the animation because it owns the target.
@@ -1827,11 +1902,31 @@ static SDispatchResult onMinimizeDispatcher(std::string arg) {
         return {};
     }
 
-    const auto WINDOW = Desktop::focusState()->window();
-    if (!WINDOW)
-        return {.success = false, .error = "no focused window"};
+    // SUPER+H AGAIN (r/omarchy, 2026-10-24: "if I press Super+H again while in
+    // the same workspace, I get a runtime error in Lua. It would be fantastic if
+    // we could restore a minimized window to its original position using
+    // Win+H"). With no window of this desktop focused -- the one just minimized
+    // took the focus with it -- the same chord brings back the window most
+    // recently minimized FROM this desktop, flying out of the dock to where it
+    // was. Windows minimized from other desktops stay in the dock, and with
+    // nothing to minimize or restore the press does nothing, quietly: the old
+    // "no focused window" error was the Lua runtime error.
+    const auto MONITOR = Desktop::focusState()->monitor();
+    const auto WINDOW  = Desktop::focusState()->window();
+    if (WINDOW && WINDOW->m_workspace && !ScrollOverview::Minimize::isStash(WINDOW->m_workspace)) {
+        ScrollOverview::Dock::minimizeWithFlight(MONITOR, WINDOW);
+        return {};
+    }
 
-    ScrollOverview::Dock::minimizeWithFlight(Desktop::focusState()->monitor(), WINDOW);
+    const auto HERE = MONITOR ? (MONITOR->m_activeSpecialWorkspace ? MONITOR->m_activeSpecialWorkspace : MONITOR->m_activeWorkspace) : PHLWORKSPACE{};
+    if (!HERE)
+        return {};
+    const auto MINIMIZED = ScrollOverview::Minimize::minimized();
+    for (auto it = MINIMIZED.rbegin(); it != MINIMIZED.rend(); ++it)
+        if (*it && ScrollOverview::Minimize::originalWorkspace(*it) == HERE->m_id) {
+            ScrollOverview::Dock::restoreWithFlight(MONITOR, *it);
+            return {};
+        }
     return {};
 }
 
@@ -2044,6 +2139,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     });
     g_pOnAckHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("onAck", {"CWindow::onAck("}), rc<void*>(hkOnAck));
     g_pOnAckHook->hook();
+    g_pShouldRenderWindowHook = HyprlandAPI::createFunctionHook(
+        SCROLLOVERVIEW_HANDLE,
+        findFnOrThrow("shouldRenderWindow", {"shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)"}),
+        rc<void*>(hkShouldRenderWindow));
+    g_pShouldRenderWindowHook->hook();
 
     CursorShape::init();
     OpenProf::init();
@@ -2100,7 +2200,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // gate reads off one. The plugin's own mutators -- setHidden for a flight,
     // minimize/restore, the search query -- bump at their own call sites, since
     // no event announces them.
-    g_pMembOpenHook  = Event::bus()->m_events.window.open.listen([](PHLWINDOW) { Membership::bump("window.open"); });
+    g_pMembOpenHook  = Event::bus()->m_events.window.open.listen([](PHLWINDOW w) {
+        Membership::bump("window.open");
+        ScrollOverview::Dock::onWindowOpen(w);
+    });
     g_pMembLateHook  = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW) { Membership::bump("window.openLate"); });
     g_pMembCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
         Membership::bump("window.close");
@@ -2188,6 +2291,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::Stacks::onPointerMove();
         // Mosaic's corner resize: the resize cursor over a grabbable corner.
         ScrollOverview::Mosaic::onMove(!HIT || ScrollOverview::Dock::occupiesPointer(HIT->first, HIT->second) || g_pSessionLockManager->isSessionLocked());
+        // The zoomed-out canvas (Mosaic::zoomOwnsPointer): no window under the
+        // pointer's full-size place gets the motion or focus, and the arrow
+        // (no client's text cursor) while it lasts.
+        if (ScrollOverview::Mosaic::zoomOwnsPointer()) {
+            info.cancelled = true;
+            setDockCursor(true);
+            return;
+        }
 
         if (!HIT) {
             ScrollOverview::Dock::releasePointerFocus();
@@ -2357,6 +2468,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // the flag if the overview closed while one was in flight.
         ScrollOverview::Dock::setWindowDragActive(false);
 
+        ScrollOverview::Mosaic::renderZoomLabels(MONITOR);
         ScrollOverview::Dock::render(MONITOR);
         // A file dragged out of a fan: its icon under the pointer, over the dock.
         ScrollOverview::DockDrop::renderGhost(MONITOR);
@@ -2427,6 +2539,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Super+scroll's dispatcher and its wheel filter, and the desktop-change
     // animation switches (DesktopSwitch.hpp). Reads keys: after registerConfig().
     ScrollOverview::DesktopSwitch::init();
+    ScrollOverview::XGeometry::installStateRequestFix();
+    ScrollOverview::FullscreenGuard::installFocusHook();
     // The animation:curve preset onto Hyprland's named house beziers -- only
     // now that the key exists (Config.hpp: an earlier read aborts Hyprland).
     ScrollOverview::Motion::sync();
@@ -2507,6 +2621,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     ScrollOverview::Mosaic::shutdown();
     ScrollOverview::Mosaic::unregisterLayout(SCROLLOVERVIEW_HANDLE);
     ScrollOverview::DesktopSwitch::shutdown();
+    ScrollOverview::XGeometry::shutdown();
     ScrollOverview::KeyboardCat::shutdown(); // ffmpeg killed, its reader joined, before the code goes
     ScrollOverview::BorderFade::clear(); // drops its hold on Hyprland's `border` bezier
     stopSearchRepeat();

@@ -5,6 +5,7 @@
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
+#include "Mosaic.hpp"
 #include "FlightBlur.hpp"
 #include "OpenProf.hpp"
 #include "FramePacing.hpp"
@@ -1102,6 +1103,13 @@ void CScrollOverview::updateWorkspaceOverflow() {
         if (!img || !img->pWorkspace)
             continue;
 
+        // A Mosaic desktop on its infinite canvas: windows past the screen's
+        // edge are the canvas out of view, not a desktop hanging over its
+        // neighbours -- room made for them was an empty gap between desktops
+        // (user, 2026-10-29).
+        if (ScrollOverview::Mosaic::canvasBox(img->pWorkspace))
+            continue;
+
         for (const auto& windowRef : img->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
             if (!shouldShowOverviewWindow(window) || window->m_isFloating)
@@ -1265,10 +1273,11 @@ bool CScrollOverview::selectAndClose(const PHLWINDOW& window) {
 
     if (workspaceIdx >= images.size()) {
         closeOnWindow = window;
-        for (const auto& overview : scrollOverviews()) {
-            if (overview && overview.get() != this)
-                overview->close();
-        }
+        if (!pickKeepsFocus())
+            for (const auto& overview : scrollOverviews()) {
+                if (overview && overview.get() != this)
+                    overview->close();
+            }
         close();
         return true;
     }
@@ -1276,10 +1285,11 @@ bool CScrollOverview::selectAndClose(const PHLWINDOW& window) {
     if (!selectOverviewWindow(window, workspaceIdx, true))
         return false;
 
-    for (const auto& overview : scrollOverviews()) {
-        if (overview && overview.get() != this)
-            overview->close();
-    }
+    if (!pickKeepsFocus())
+        for (const auto& overview : scrollOverviews()) {
+            if (overview && overview.get() != this)
+                overview->close();
+        }
     close();
     return true;
 }
@@ -1825,10 +1835,13 @@ void CScrollOverview::performPrimaryClickAction() {
             return;
 
         HIT->overview->focusOverviewWorkspace(HIT->workspace, HIT->workspaceIdx);
-        for (const auto& overview : scrollOverviews()) {
-            if (overview && overview.get() != HIT->overview)
-                overview->close();
-        }
+        // focus_follows_pick: HIT's own close() takes the others down first,
+        // so it keeps the final word on focus.
+        if (!pickKeepsFocus())
+            for (const auto& overview : scrollOverviews()) {
+                if (overview && overview.get() != HIT->overview)
+                    overview->close();
+            }
         HIT->overview->close();
         return;
     }
@@ -2244,8 +2257,16 @@ void CScrollOverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOri
     drag.recentreChangedAt = Time::steadyNow();
 
     // Last, after refreshDragOriginalOverviewBoxes() above has read the boxes it
-    // needs out of the full grid.
-    grid().dragExcluded = WINDOW.get();
+    // needs out of the full grid. With hold to swap on, a drag that starts in
+    // the main grid keeps its slot while it stays there: closing the gap slid
+    // the other tiles out from under the pointer, so the window a drag was
+    // aimed at was never the one held over (user, 2026-10-27: hold to swap
+    // should "work between existing windows in the same workspace and in ANY
+    // desktop mode" -- a canvas desktop's tiles reflowed and re-scaled). The
+    // gap closes once the drag heads for the strip, the dock or another
+    // desktop (updateWindowDrag), as it did before.
+    if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:drag:hold_to_swap") || drag.miniOver)
+        grid().dragExcluded = WINDOW.get();
     TileChrome::setHovered(PHLWINDOW{});
 
     updateWindowDrag();
@@ -2313,6 +2334,10 @@ void CScrollOverview::updateWindowDrag() {
         drag.miniOver      = OVERFOREIGN;
         drag.miniChangedAt = Time::steadyNow();
     }
+    // Leaving its own desktop's tiles: now the survivors close the gap (the
+    // slot kept for hold to swap, beginWindowDrag).
+    if (drag.miniOver && !grid().dragExcluded)
+        grid().dragExcluded = drag.activeWindow.lock().get();
 
     // X3 delta 6. Any drop target, own workspace included -- the reference's
     // "tiles" DropArea spans the whole main area (WindowTiles.qml:444-452).
@@ -6076,6 +6101,19 @@ CBox CScrollOverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITO
     const auto  GEOM   = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
 
     const auto WORKSPACE = window->m_workspace;
+
+    // A Mosaic desktop on its infinite canvas: the whole canvas, with the
+    // screen it pans across, zoomed out into the cell at one scale and centred
+    // -- every window on it shows, as the tape's minis do for a scrolling one.
+    if (const auto CANVAS = ScrollOverview::Mosaic::canvasBox(WORKSPACE)) {
+        const CBox   MON{monitor->m_position, monitor->m_size};
+        const double X0 = std::min(CANVAS->x, MON.x), Y0 = std::min(CANVAS->y, MON.y);
+        const double W  = std::max(CANVAS->x + CANVAS->w, MON.x + MON.w) - X0, H = std::max(CANVAS->y + CANVAS->h, MON.y + MON.h) - Y0;
+        const double S  = std::min(cell.width / std::max(1.0, W), cell.height / std::max(1.0, H));
+        const double OX = cell.x + (cell.width - W * S) / 2.0, OY = cell.y + (cell.height - H * S) / 2.0;
+        return CBox{OX + (GEOM.x - X0) * S, OY + (GEOM.y - Y0) * S, GEOM.w * S, GEOM.h * S};
+    }
+
     const float SPAN_RATIO = workspaceScrollingSpanRatio(WORKSPACE, monitor);
 
     if (SPAN_RATIO > 1.0F) {
@@ -9582,6 +9620,11 @@ void CScrollOverview::close() {
     // -- runs last and has the final word. The static guard stops each of them
     // turning round and closing the rest again.
     static bool s_closingAll = false;
+    // focus_follows_pick: closed by another monitor's overview, which holds
+    // the user's pick, so this one must not move focus on its way out. Each
+    // used to focus its own selected window, and the pointer followed focus
+    // onto the wrong monitor (PR #2, 2026-10-19).
+    const bool  BYSTANDER    = s_closingAll && pickKeepsFocus();
     if (!s_closingAll) {
         s_closingAll      = true;
         const auto OTHERS = scrollOverviews(); // a copy: closing can unregister
@@ -9710,7 +9753,8 @@ void CScrollOverview::close() {
             if (FINALWORKSPACE != pMonitor->m_activeWorkspace)
                 pMonitor->changeWorkspace(FINALWORKSPACE, false, true, true);
 
-            Desktop::focusState()->fullWindowFocus(closeOnWindow.lock(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+            if (!BYSTANDER)
+                Desktop::focusState()->fullWindowFocus(closeOnWindow.lock(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
             startedOn                = FINALWORKSPACE;
             viewportCurrentWorkspace = targetIdx;
@@ -9743,6 +9787,21 @@ void CScrollOverview::close() {
 
         if (SELECTEDWORKSPACE && SELECTEDWORKSPACE != pMonitor->m_activeWorkspace)
             pMonitor->changeWorkspace(SELECTEDWORKSPACE, false, true, true);
+
+        // focus_follows_pick, a desktop picked off its windows: with the other
+        // overviews no longer grabbing focus, changeWorkspace(noFocus) would
+        // leave it on the desktop just left. Focus goes to the desktop picked:
+        // its last window, or this monitor with nothing focused when empty.
+        if (pickKeepsFocus() && !BYSTANDER && focusSyncedFromWorkspaceID != WORKSPACE_INVALID && SELECTEDWORKSPACE &&
+            SELECTEDWORKSPACE == pMonitor->m_activeWorkspace) {
+            const auto LAST = getOverviewWindowToShow(SELECTEDWORKSPACE->getLastFocusedWindow());
+            if (LAST && LAST->m_workspace == SELECTEDWORKSPACE && shouldShowOverviewWindow(LAST))
+                Desktop::focusState()->fullWindowFocus(LAST, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+            else {
+                Desktop::focusState()->rawMonitorFocus(pMonitor.lock());
+                Desktop::focusState()->fullWindowFocus(nullptr, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+            }
+        }
     } else if (closeOnWindow == Desktop::focusState()->window() && closeOnWindow->m_workspace == pMonitor->m_activeWorkspace) {
         if (focusSyncedFromWorkspaceID != WORKSPACE_INVALID) {
             const auto ACTIVEIDX   = activeWorkspaceIndex();
@@ -9763,7 +9822,8 @@ void CScrollOverview::close() {
         if (closeOnWindow->m_workspace != pMonitor->m_activeWorkspace)
             pMonitor->changeWorkspace(closeOnWindow->m_workspace, false, true, true);
 
-        Desktop::focusState()->fullWindowFocus(closeOnWindow.lock(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        if (!BYSTANDER)
+            Desktop::focusState()->fullWindowFocus(closeOnWindow.lock(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
         const auto ACTIVEIDX = activeWorkspaceIndex();
         const auto FINALPITCH = getWorkspaceLogicalPitch(pMonitor.lock(), 1.F, layout);

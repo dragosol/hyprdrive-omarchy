@@ -28,6 +28,7 @@
 #undef protected
 #undef private
 #include "FlightBlur.hpp"
+#include "Mosaic.hpp"
 #include <string_view>
 #include <array>
 
@@ -683,7 +684,12 @@ namespace ScrollOverview::FlightBlur {
                 const bool  RESIZING  = window->sizeAnimation()->isBeingAnimated();
                 const bool  MOVING    = window->positionAnimation()->isBeingAnimated();
                 const bool  MODEFLIP  = justFlippedMode(window, NOW);
-                if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || MODEFLIP || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
+                // The infinite canvas moving its view (a pan, the Super zoom, a
+                // swipe): every window moves together every frame, by hand --
+                // smearing each of them was ghost copies and dropped frames
+                // (user, 2026-10-26: "panning is buggy as hell").
+                const bool CANVAS = Mosaic::canvasMotion(window);
+                if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || MODEFLIP || CANVAS || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
                     if (IT != g_lastLayoutBox.end()) {
                         g_lastLayoutBox.erase(IT);
                         // It WAS smeared last frame: take that smear off now,

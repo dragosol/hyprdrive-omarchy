@@ -50,6 +50,10 @@ namespace ScrollOverview::ConfigureHold {
                 g_sender(WINDOW.get(), h.force);
     }
 
+    bool held() {
+        return g_depth > 0;
+    }
+
     CHold::CHold() {
         ++g_depth;
     }

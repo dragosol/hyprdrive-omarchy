@@ -44,9 +44,10 @@ namespace SearchProviders {
     // flight, returns immediately. Empty query clears.
     void query(const std::string& text);
 
-    // Launches every provider's D-Bus service without searching. Call at
-    // overview open: providers go cold after under a minute of idle, so
-    // otherwise the first keystroke pays ~700ms of app startup.
+    // Launches every provider's D-Bus service without searching. NOT called
+    // at overview open any more (X54, reversed, in main.cpp): that cold-started
+    // GTK apps on every open, during the animation. The first keystroke's
+    // query starts a cold provider itself; the SP_BENCH test still uses this.
     void warm();
 
     // Snapshot of whatever has answered so far for the newest query, ordered by

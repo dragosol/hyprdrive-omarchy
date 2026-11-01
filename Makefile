@@ -16,7 +16,7 @@ PKGS := pixman-1 libdrm hyprland pangocairo libinput libudev wayland-server \
 
 CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build \
             $(shell pkg-config --cflags $(PKGS))
-LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0)
+LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0 xcb)
 
 ifeq ($(CXX),g++)
     CXXFLAGS += -fno-gnu-unique
@@ -65,6 +65,7 @@ check: hyprdrive.so
 	python3 scripts/manifest_check.py
 	python3 scripts/private_modes_test.py
 	python3 scripts/hdicons_test.py
+	python3 scripts/update_cli_test.py
 	python3 scripts/keybind_editor_test.py
 
 PREFIX ?= $(HOME)/.local

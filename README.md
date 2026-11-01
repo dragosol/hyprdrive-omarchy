@@ -83,6 +83,27 @@ size -- push past that and the desktop darkens; let go there to tile. A window
 that opens floating joins the mosaic (dialogs stay afloat), and an app closed
 at a size you like reopens at that size. Best on large displays.
 
+**Infinite canvas** (off by default; panel -> Mosaic): instead of tiling when
+the windows no longer fit, they keep their sizes and spill past the screen,
+still one tight mosaic cluster, onto a canvas you pan across. Turning it off
+puts the desktop straight back in the mosaic (or its tiles). Focusing a window
+off screen, or clicking one, pans it into view on its own curve (the house curve
+by default, no bounce; panel -> Animation), centred, keeping the window you came from and a sliver of its
+neighbours in view where there is room; the pointer moves with the canvas, so it
+stays on the same window. All directions (the default) grows the canvas down
+as well as across; Horizontal is one strip: swipe sideways
+with three fingers, or Super+scroll, to pan, and past the first or last window
+the same gesture switches desktops. Holding Super and moving the pointer
+either zooms out to every window (the default) or pans (All directions: its
+place on the screen is your place on the canvas). Zoomed out, hovering a window
+focuses it and letting go of Super zooms back in on it. Zoomed out, drag a
+window to move it, drag its corner or edge or right-drag anywhere on it to
+resize it, and your screenshot key (Print, or a trackpad press bound to it)
+shoots the zoomed-out view. With that choice,
+hovering a window on the canvas also pans it into view.
+Super+drag drops a window where you let go; push against the screen's edge while
+dragging to pan. The overview's desktop strip shows the whole canvas zoomed out.
+
 **Hot corner** (off by default; panel -> Overview): rest the pointer in a screen
 corner to open the overview, and again to close it, with an optional ripple.
 **Hold to swap** (panel -> Overview): in the overview, drag a window over another
@@ -188,6 +209,16 @@ hyprctl configerrors
 
 ### Update to the latest release
 
+`hyprdrive update` does all of this for you. It says which version the
+marketplace approved and whether a newer one is still waiting for approval, and
+asks before changing anything: `hyprdrive update --approved` installs the
+approved version, `hyprdrive update --github` the newest release without
+waiting. The settings panel shows **Update available!** beside the version when
+there is one. Click it for the same choices; it can copy the command for the
+approved version or install the newest one in your terminal.
+
+By hand:
+
 ```bash
 cd ~/Projects/hyprdrive-omarchy
 git fetch --tags
@@ -266,8 +297,9 @@ failed.
 
 ## Network use
 
-Hyprdrive makes **no network requests by default.** Three features go online,
-and each is off until you turn it on. The two search tools send what you type to
+Apart from the settings panel's **update check** (below), Hyprdrive makes **no
+network requests by default.** Three features go online, and each is off until
+you turn it on. The two search tools send what you type to
 a third party:
 
 | key | sends | to |
@@ -292,6 +324,16 @@ text is never sent. Previews of the matching logos load from the same CDN,
 which can therefore see which logos were shown. Picking one downloads that one
 SVG or PNG, refused if it is not a picture or an SVG points outside itself.
 Nothing about your apps is sent. The collection is CC BY 4.0.
+
+**The update check.** While the settings panel is open, at most once every 6
+hours, `hyprdrive update --check` asks GitHub which release is newest
+(`api.github.com/repos/dragosol/hyprdrive-omarchy/releases/latest`) and which
+version the marketplace approved or is reviewing (a search of
+`omacom/omarchy-plugin-marketplace`'s issues for this repository). It sends
+nothing about you or your machine, follows no redirects, waits at most 6
+seconds and caps each answer's size. `hyprdrive update --never-check` turns it
+off; `hyprdrive update --allow-check` turns it back on. Installing an update
+also runs `git fetch` on your checkout.
 
 ## Configuration
 

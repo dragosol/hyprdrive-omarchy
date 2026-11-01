@@ -46,6 +46,15 @@ MOUNT_SORTS = [
     {"value": "smart", "label": "Smart (One, Two, Three)"},
     {"value": "fstab", "label": "As in fstab"},
 ]
+CANVAS_DIRECTIONS = [
+    {"value": "horizontal", "label": "Horizontal"},
+    {"value": "all", "label": "All directions"},
+]
+ZOOM_LABELS = [
+    {"value": "none", "label": "None"},
+    {"value": "hover", "label": "Hovered window"},
+    {"value": "all", "label": "All windows"},
+]
 HOT_CORNERS = [
     {"value": "top-left", "label": "Top left"},
     {"value": "top-right", "label": "Top right"},
@@ -107,6 +116,7 @@ KEY_META = [
     _k(PLUGIN + "search:dictionary", "bool", "overview", False),
     _k(PLUGIN + "search:translate", "bool", "overview", False),
     _k(PLUGIN + "search:easter_egg", "bool", "overview", True),
+    _k(PLUGIN + "focus_follows_pick", "bool", "overview", False),
     _k(PLUGIN + "hot_corner:enabled", "bool", "overview", False),
     _k(PLUGIN + "hot_corner:corner", "enum", "overview", "top-left", options=HOT_CORNERS),
     _k(PLUGIN + "hot_corner:delay_ms", "int", "overview", 150, min=0, max=1000),
@@ -152,6 +162,9 @@ KEY_META = [
     _k(PLUGIN + "open_speed", "float", "animation", 2.6, min=0.5, max=8),
     _k(PLUGIN + "close_speed", "float", "animation", 1.9, min=0.5, max=8),
     _k(PLUGIN + "dock:minimize_ms", "int", "animation", 400, min=0, max=1200),
+    # The infinite canvas's pans and zoom (Mosaic.cpp canvasEase).
+    _k(PLUGIN + "animation:canvas_curve", "enum", "animation", "hyprdrive", options=CURVES),
+    _k(PLUGIN + "animation:canvas_pan_ms", "int", "animation", 420, min=0, max=2000),
     _k(PLUGIN + "dock:autohide_ms", "int", "animation", 200, min=0, max=800),
     _k(PLUGIN + "mission_control_reflow_ms", "int", "animation", 300, min=0, max=1000),
     _k(PLUGIN + "animation:desktop_keyboard", "bool", "animation", True),
@@ -177,6 +190,9 @@ KEY_META = [
     # profiles: see PROFILE_SKIP.
     _k(PLUGIN + "mosaic:enabled", "bool", "mosaic", False),
     _k(PLUGIN + "mosaic:default", "bool", "mosaic", False),
+    _k(PLUGIN + "mosaic:infinite_canvas", "bool", "mosaic", False),
+    _k(PLUGIN + "mosaic:canvas_directions", "enum", "mosaic", "all", options=CANVAS_DIRECTIONS),
+    _k(PLUGIN + "mosaic:zoom_labels", "enum", "mosaic", "hover", options=ZOOM_LABELS),
     # Keybinds. Kept out of AC/battery profiles like Mosaic: a charger must not
     # rebind keys.
     _k(PLUGIN + "binds:scroll_desktops", "bool", "keybinds", True),
@@ -455,10 +471,21 @@ def on_battery():
     return False
 
 
+# Keys the panel no longer offers. A store that still holds one drops it, so
+# 40-panel.lua stops writing it the next time it is saved.
+RETIRED_KEYS = (PLUGIN + "mosaic:canvas_super_move",)
+
+
 def load_store():
     if STORE.exists():
         try:
-            return json.loads(STORE.read_text())
+            store = json.loads(STORE.read_text())
+            for key in RETIRED_KEYS:
+                store.get("keys", {}).pop(key, None)
+                for profile in store.get("profiles", {}).values():
+                    if isinstance(profile, dict):
+                        profile.pop(key, None)
+            return store
         except ValueError:
             pass
     return {

@@ -10,10 +10,13 @@
 -- GNOME Sushi / Nautilus Previewer -- SPACE over a dock stack item, and
 -- Nautilus's own spacebar, both open this window. Float and centre it; leave
 -- opacity and blur to Omarchy's window rules so a preview is not the one
--- surface that ignores the theme.
+-- surface that ignores the theme. The `hyprdrive-float` tag keeps it out of a
+-- Mosaic desktop: a passing preview, not a member that re-packs the rest.
+-- (Tag any other app the same way to keep it floating over a mosaic.)
 o.window({ class = [[^(org\.gnome\.NautilusPreviewer)$]] }, {
     float = true,
     center = true,
+    tag = "+hyprdrive-float",
 })
 
 -- Restate default-opacity after plugin load so mapped windows keep a rule.

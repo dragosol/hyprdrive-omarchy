@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "DesktopStepModel.hpp"
 #include "IOverview.hpp"
+#include "Mosaic.hpp"
 #include "globals.hpp"
 #include "scrollOverview.hpp"
 
@@ -111,6 +112,7 @@ namespace ScrollOverview::DesktopSwitch {
             const auto ACTIVE = monitor->m_activeWorkspace;
             if (!ACTIVE)
                 return {.success = false, .error = "no active desktop"};
+
 
             int highest = 0;
             for (const auto& REF : State::workspaceState()->workspaces()) {

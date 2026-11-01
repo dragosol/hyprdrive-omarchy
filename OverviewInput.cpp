@@ -1005,10 +1005,11 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                             closeOnWindow = W;
                             g_search.nav.pendingFocus.reset();
                         }
-                        for (const auto& overview : scrollOverviews()) {
-                            if (overview && overview.get() != this)
-                                overview->close();
-                        }
+                        if (!pickKeepsFocus())
+                            for (const auto& overview : scrollOverviews()) {
+                                if (overview && overview.get() != this)
+                                    overview->close();
+                            }
                         close();
                         break;
                     }
@@ -1023,10 +1024,11 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
                 if (const auto TARGET = closeOnWindow.lock()) {
                     selectAndClose(TARGET);
                 } else {
-                    for (const auto& overview : scrollOverviews()) {
-                        if (overview && overview.get() != this)
-                            overview->close();
-                    }
+                    if (!pickKeepsFocus())
+                        for (const auto& overview : scrollOverviews()) {
+                            if (overview && overview.get() != this)
+                                overview->close();
+                        }
                     close();
                 }
                 break;

@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import importlib.util
 from importlib.machinery import SourceFileLoader
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -40,7 +41,10 @@ os.environ["XDG_STATE_HOME"] = str(tmp / "state")
 os.environ["HYPRDRIVE_FRAGMENTS"] = str(tmp / "frag")
 os.environ["XDG_RUNTIME_DIR"] = str(tmp / "run")
 os.environ["HYPRLAND_INSTANCE_SIGNATURE"] = "none"
-hd = SourceFileLoader("hdpanel_kb", str(ROOT / "omarchy-plugin" / "bin" / "hdpanel")).load_module()
+# load_module() is gone in newer Pythons: spec + exec_module instead.
+_loader = SourceFileLoader("hdpanel_kb", str(ROOT / "omarchy-plugin" / "bin" / "hdpanel"))
+hd = importlib.util.module_from_spec(importlib.util.spec_from_loader("hdpanel_kb", _loader))
+_loader.exec_module(hd)
 
 # A fake compositor: hyprctl answers from these, and records what it is told.
 BINDS = []

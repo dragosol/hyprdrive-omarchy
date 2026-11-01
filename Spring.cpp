@@ -1,9 +1,11 @@
+#include <optional>
 #include "Spring.hpp"
 
 #include "Config.hpp"
 #include "Dock.hpp"
 #include "DockDrop.hpp"
 #include "IOverview.hpp"
+#include "Mosaic.hpp"
 
 #include <cairo/cairo.h>
 #include <cmath>
@@ -110,8 +112,10 @@ namespace ScrollOverview::Spring {
             return DockDrop::dndInProgress();
         }
 
+        // A zoomed-out canvas drag counts: it is handed to Hyprland when the
+        // hold completes (Mosaic::handZoomDragOff).
         bool dragging() {
-            return fileDrag() || draggedWindow();
+            return fileDrag() || draggedWindow() || Mosaic::zoomCarried();
         }
 
         bool swipeInFlight() {
@@ -159,19 +163,30 @@ namespace ScrollOverview::Spring {
             return std::max<int64_t>(1, Config::getValue<Hyprlang::INT>("gestures:workspace_swipe_distance"));
         }
 
-        // Is there a desktop that way? Right: always (Hyprland's swipe opens a
-        // new one past the last). Left: one of this monitor's with a lower id --
-        // the swipe's own m-1.
+        // Is there a desktop that way? The NEXT ONE BY NUMBER, empty or not
+        // (user, 2026-10-30: "it should go to next actual desktop not next
+        // populated desktop"): the swipe runs with workspace_swipe_use_r (r+1 /
+        // r-1, forced around it below), so right always is, left while above 1.
         bool canGo(const PHLMONITOR& monitor, int dir) {
             const auto CURRENT = monitor->m_activeWorkspace;
             if (!CURRENT || monitor->m_activeSpecialWorkspace)
                 return false;
-            if (dir > 0)
-                return true;
-            for (const auto& W : State::workspaceState()->workspaces())
-                if (const auto WS = W.lock(); WS && !WS->m_isSpecialWorkspace && WS->m_id > 0 && WS->m_id < CURRENT->m_id && WS->m_monitor.lock() == monitor)
-                    return true;
-            return false;
+            return dir > 0 || CURRENT->m_id > 1;
+        }
+
+        // gestures:workspace_swipe_use_r for the length of the spring's swipe:
+        // Hyprland reads it when the swipe begins and again where it lands.
+        std::optional<int> g_prevUseR;
+        void               forceUseR() {
+            if (!g_prevUseR) {
+                g_prevUseR = Config::getValue<Hyprlang::INT>("gestures:workspace_swipe_use_r");
+                Config::setValue("gestures:workspace_swipe_use_r", 1);
+            }
+        }
+        void restoreUseR() {
+            if (g_prevUseR)
+                Config::setValue("gestures:workspace_swipe_use_r", *g_prevUseR);
+            g_prevUseR.reset();
         }
 
         void setDelta(double d) {
@@ -185,9 +200,12 @@ namespace ScrollOverview::Spring {
             // The swipe engine works on the FOCUSED monitor.
             if (Desktop::focusState()->monitor() != monitor)
                 Desktop::focusState()->rawMonitorFocus(monitor);
+            forceUseR();
             g_pUnifiedWorkspaceSwipe->begin();
-            if (!g_pUnifiedWorkspaceSwipe->isGestureInProgress())
+            if (!g_pUnifiedWorkspaceSwipe->isGestureInProgress()) {
+                restoreUseR();
                 return false;
+            }
             g_swipe = SSwipe{monitor, dir, EPhase::Peek, Time::steadyNow()};
             syncPin();
             return true;
@@ -209,6 +227,7 @@ namespace ScrollOverview::Spring {
                 return;
             if (!g_pUnifiedWorkspaceSwipe || !g_pUnifiedWorkspaceSwipe->isGestureInProgress() || !g_swipe->monitor) {
                 g_swipe.reset();
+                restoreUseR();
                 return;
             }
             if (g_swipe->phase == EPhase::Commit) {
@@ -217,6 +236,7 @@ namespace ScrollOverview::Spring {
                 setDelta(g_swipe->from + (g_swipe->dir * swipeDistance() - g_swipe->from) * E);
                 if (P >= 1.F) {
                     g_pUnifiedWorkspaceSwipe->end(); // the whole distance: it commits
+                    restoreUseR();
                     g_swipe.reset();
                     g_edge = {}; // still at the edge: the next hold starts from zero
                 }
@@ -226,6 +246,7 @@ namespace ScrollOverview::Spring {
                 setDelta(g_swipe->from * (1.0 - E));
                 if (P >= 1.F) {
                     g_pUnifiedWorkspaceSwipe->end(); // under 2 units: it reverts in place
+                    restoreUseR();
                     g_swipe.reset();
                 }
             }
@@ -389,8 +410,11 @@ namespace ScrollOverview::Spring {
                     if (g_swipe && g_swipe->phase == EPhase::Peek) {
                         const double P = smoothstep((T - GRACE_MS) / std::max(1.F, DELAY - GRACE_MS));
                         setDelta(dir * PEEK * swipeDistance() * P);
-                        if (T >= DELAY)
+                        if (T >= DELAY) {
+                            if (!draggedWindow() && Mosaic::zoomCarried())
+                                Mosaic::handZoomDragOff();
                             toPhase(EPhase::Commit);
+                        }
                     }
                     damageLine(monitor);
                     fast = true;
@@ -477,6 +501,7 @@ namespace ScrollOverview::Spring {
             g_pUnifiedWorkspaceSwipe->update(0); // unloading mid-hold: back where it was
             g_pUnifiedWorkspaceSwipe->end();
         }
+        restoreUseR();
         g_swipe.reset();
         unpin();
         Dock::springReset();

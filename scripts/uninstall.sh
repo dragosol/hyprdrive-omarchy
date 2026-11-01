@@ -25,6 +25,10 @@ HYPRLAND_LUA=$CONFIG/hypr/hyprland.lua
 PANEL=$CONFIG/omarchy/plugins/dragos.hyprdrive
 
 if [ -d "$LIBDIR" ]; then rm -rf "$LIBDIR"; echo "removed $LIBDIR"; fi
+# `hyprdrive update`'s link -- only ours (it points into a Hyprdrive panel).
+if [ -L "$HOME/.local/bin/hyprdrive" ] && readlink "$HOME/.local/bin/hyprdrive" | grep -q 'hyprdrive'; then
+    rm -f "$HOME/.local/bin/hyprdrive"; echo "removed $HOME/.local/bin/hyprdrive"
+fi
 
 if [ -d "$FRAGS" ]; then
     BACKUP="$FRAGS.removed-$(date +%Y%m%d-%H%M%S)"

@@ -75,7 +75,8 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
         // Super-tap and the dock button reset the search session; swipe-open
         // was the remaining door, so a query survived close and came back.
         resetSearchSession();
-        SearchProviders::warm();
+        // No SearchProviders::warm() here: see X54 in main.cpp. The first
+        // keystroke starts cold providers; an open never launches GTK apps.
         OmarchySearch::init();
 
         for (const auto& MONITOR : State::monitorState()->monitors()) {
@@ -143,7 +144,24 @@ void COverviewGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
         OVERVIEW->onSwipeEnd();
 }
 
-void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+void COverviewWorkspaceGesture::setTapeOffset(const PHLWORKSPACE& ws) {
+    ScrollOverview::DesktopTape::setOffset(ws, m_tapeOffset);
+}
+
+// A gesture bound to "swipe" (any direction) is handed its updates as SWIPE,
+// whose distance is the swipe's LENGTH -- never negative, so left and right
+// were the same motion and no desktop switched (user, 2026-11-01: "super+3
+// finger swipe does not switch desktops"; Omarchy's panel binds the Super one
+// that way). The desktops are a row: such a swipe is read across it.
+template <typename T>
+static T acrossDesktops(T e) {
+    if (e.direction == TRACKPAD_GESTURE_DIR_SWIPE)
+        e.direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+    return e;
+}
+
+void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& eIn) {
+    const auto e = acrossDesktops(eIn);
     ITrackpadGesture::begin(e);
     m_inOverview = false;
     m_overview.reset();
@@ -161,6 +179,9 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
     m_tapeWorkspace.reset();
     if (!m_allWorkspaces && MONITOR && !MONITOR->m_activeSpecialWorkspace) {
         if (const auto WS = MONITOR->m_activeWorkspace; WS) {
+            // A Mosaic desktop on its infinite canvas is NOT a tape here: the
+            // swipe switches desktops at once (user, 2026-10-29). Super+move
+            // and Super+scroll still pan the canvas.
             if (const auto TAPE = ScrollOverview::DesktopTape::probe(WS); TAPE.usable) {
                 m_mode          = EMode::Tape;
                 m_tapeWorkspace = WS;
@@ -189,7 +210,8 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
     m_native.begin(e);
 }
 
-void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& eIn) {
+    const auto e = acrossDesktops(eIn);
     if (m_inOverview) {
         const auto OVERVIEW = m_overview.lock();
         if (!OVERVIEW)
@@ -212,7 +234,7 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
         else if (WANT < 0.0)
             over = WANT; // negative: past the start
         m_tapeOffset = std::clamp(WANT, 0.0, m_tapeMax);
-        ScrollOverview::DesktopTape::setOffset(WS, m_tapeOffset);
+        setTapeOffset(WS);
         if (over == 0.0)
             return;
         // Pinned at the end it reached; the rest of the travel switches.
@@ -251,7 +273,7 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
         m_mode = EMode::Tape;
         if (const auto WS = m_tapeWorkspace.lock()) {
             m_tapeOffset = std::clamp(m_tapeAtEnd ? m_tapeMax - std::abs(D) : std::abs(D), 0.0, m_tapeMax);
-            ScrollOverview::DesktopTape::setOffset(WS, m_tapeOffset);
+            setTapeOffset(WS);
         }
         return;
     }
@@ -259,7 +281,8 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
     m_native.update(e);
 }
 
-void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd& eIn) {
+    const auto e = acrossDesktops(eIn);
     if (m_inOverview) {
         if (const auto OVERVIEW = m_overview.lock())
             OVERVIEW->onWorkspaceSwipeEnd();

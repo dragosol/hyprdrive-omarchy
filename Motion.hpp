@@ -23,6 +23,7 @@
 // houseFixed(), today's house curves whatever the preset.
 
 #include <cstdint>
+#include <string>
 
 namespace ScrollOverview::Motion {
 
@@ -37,6 +38,11 @@ namespace ScrollOverview::Motion {
 
     // The active preset's curve for `role`, t clamped to 0..1.
     float ease(ERole role, float t);
+
+    // A NAMED preset's curve for `role`, whatever animation:curve says -- for
+    // a site with its own curve setting (the infinite canvas's pan,
+    // animation:canvas_curve). An unknown name is the house preset.
+    float easeNamed(const std::string& preset, ERole role, float t);
 
     // The house curves, whatever the preset (the dock stacks).
     float houseFixed(bool decel, float t);

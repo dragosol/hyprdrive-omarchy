@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""hyprdrive -- the user's command for Hyprdrive itself.
+
+  hyprdrive update                  look for a newer release; offer to install it
+  hyprdrive update --check [--json] only report (the settings' "Update available!")
+  hyprdrive update --refresh        ...asking GitHub again instead of the 6-hour cache
+  hyprdrive update --github         install the newest GitHub release
+  hyprdrive update --approved       install the newest marketplace-approved version (Omarchy)
+  hyprdrive update --yes            do not ask before installing
+  hyprdrive update --terminal [...] run `hyprdrive update [...]` in your terminal
+                                    (the settings' button; exit 3: no terminal found)
+  hyprdrive update --never-check    the settings stop looking for updates on their own
+  hyprdrive update --allow-check    ...and start again
+  hyprdrive version                 the installed version
+
+ON OMARCHY (the build from dragosol/hyprdrive-omarchy) a release is out on GitHub
+before the Omarchy plugin marketplace approves it. `update` says which version
+the marketplace has approved and whether the newest one is still waiting, and
+installs either: --approved, the version the marketplace reviewed, or --github,
+the newest release without waiting. NATIVE (dragosol/Hyprdrive, plain Hyprland)
+has no marketplace: `update` installs the newest GitHub release.
+
+Installing = the README's own steps in your checkout (the one `make install` ran
+from; a fresh clone in ~/.local/share/hyprdrive/src when there is none): fetch,
+check out the release, build, install, reload the plugin. A checkout with local
+changes is left alone.
+
+NETWORK. Only HTTPS to api.github.com and raw.githubusercontent.com (no
+redirects followed, 6 s timeout, every response capped in size), and git
+fetching the repository. The settings ask at most once every 6 hours, only while
+they are open; `hyprdrive update --never-check` stops that.
+"""
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# ---- which Hyprdrive this is ------------------------------------------------
+FLAVOR = "omarchy"  # "native" (dragosol/Hyprdrive) or "omarchy" (dragosol/hyprdrive-omarchy)
+
+if FLAVOR == "omarchy":
+    REPO = "dragosol/hyprdrive-omarchy"
+    BRANCH = "new-release"
+    INSTALL_URL = "https://github.com/dragosol/hyprdrive-omarchy#install"
+else:
+    REPO = "dragosol/Hyprdrive"
+    BRANCH = "hyprland-native"
+    INSTALL_URL = "https://github.com/dragosol/Hyprdrive#install"
+PLUGIN_ID = "dragos.hyprdrive"
+MARKET = "omacom/omarchy-plugin-marketplace"
+
+HOME = pathlib.Path(os.environ.get("HOME") or pathlib.Path.home())
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local/state") / "hyprdrive"
+CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME") or HOME / ".cache") / "hyprdrive"
+INSTALL_JSON = STATE / "install.json"  # written by make install (install-fragments.sh)
+NEVER_CHECK = STATE / "no-update-check"
+CHECK_CACHE = CACHE / "update-check.json"
+CHECK_TTL = 6 * 3600
+CLONE_DIR = HOME / ".local/share/hyprdrive/src"
+
+VERSION_RE = re.compile(r"^\d{1,4}(?:\.\d{1,6}){1,4}$")
+SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+MAX_BODY = 512 * 1024
+
+
+# ---- versions ---------------------------------------------------------------
+def parse_version(text):
+    """'v1.9.36.7' / '1.9.36' -> (1, 9, 36, 7) / (1, 9, 36); None for anything else."""
+    if not isinstance(text, str):
+        return None
+    v = text.strip()
+    if v[:1] in ("v", "V"):
+        v = v[1:]
+    if not VERSION_RE.match(v):
+        return None
+    return tuple(int(p) for p in v.split("."))
+
+
+def vstr(t):
+    return ".".join(str(p) for p in t) if t else ""
+
+
+def newer(a, b):
+    """a strictly newer than b (missing parts count as 0: 1.9.36 == 1.9.36.0)."""
+    if not a:
+        return False
+    if not b:
+        return True
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
+
+
+# ---- the network: HTTPS to GitHub only, no redirects, bounded ---------------
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # a 3xx surfaces as an HTTPError instead of being followed
+
+
+ALLOWED = ("https://api.github.com/", "https://raw.githubusercontent.com/")
+
+
+def fetch(url, limit=MAX_BODY):
+    if not url.startswith(ALLOWED):
+        raise ValueError("refusing to fetch %s" % url)
+    opener = urllib.request.build_opener(_NoRedirect)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "hyprdrive-update",
+        "Accept": "application/vnd.github+json",
+    })
+    with opener.open(req, timeout=6) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("response from %s is larger than %d bytes" % (url, limit))
+    return data
+
+
+def fetch_json(url, limit=MAX_BODY):
+    return json.loads(fetch(url, limit).decode("utf-8"))
+
+
+# ---- what is installed ------------------------------------------------------
+def install_info():
+    """{'version', 'source', 'prefix'} from make install's record, else the
+    manifest beside this script (a checkout's omarchy-plugin/bin, or a copy of
+    the Omarchy panel with its manifest one folder up)."""
+    info = {}
+    try:
+        d = json.loads(INSTALL_JSON.read_text())
+        if isinstance(d, dict):
+            info = {k: d[k] for k in ("version", "source", "prefix") if isinstance(d.get(k), str)}
+    except (OSError, ValueError):
+        pass
+    here = pathlib.Path(__file__).resolve().parent
+    for mf in (here.parent / "manifest.json", here.parent.parent / "manifest.json"):
+        if "version" in info:
+            break
+        try:
+            v = json.loads(mf.read_text()).get("version")
+            if isinstance(v, str):
+                info["version"] = v
+                if (mf.parent / ".git").exists() and "source" not in info:
+                    info["source"] = str(mf.parent)
+        except (OSError, ValueError):
+            continue
+    return info
+
+
+# ---- what is out there --------------------------------------------------------
+def latest_release():
+    d = fetch_json("https://api.github.com/repos/%s/releases/latest" % REPO)
+    tag = d.get("tag_name") if isinstance(d, dict) else None
+    v = parse_version(tag)
+    if not v:
+        raise ValueError("the latest release has no version tag")
+    return {"version": vstr(v), "tag": "v" + vstr(v),
+            "url": "https://github.com/%s/releases/tag/v%s" % (REPO, vstr(v))}
+
+
+def manifest_version_at(sha):
+    d = fetch_json("https://raw.githubusercontent.com/%s/%s/manifest.json" % (REPO, sha), 64 * 1024)
+    return vstr(parse_version(d.get("version"))) if isinstance(d, dict) else ""
+
+
+def marketplace():
+    """The newest approved version and the newest pending request for this
+    plugin, from the marketplace's issues: an approved request is closed with
+    `approved-and-verified`, a pending one is open. Each names the exact
+    commit it is about; the version is the title's, else that commit's
+    manifest."""
+    q = 'repo:%s "%s" in:body' % (MARKET, REPO)
+    url = "https://api.github.com/search/issues?" + urllib.parse.urlencode(
+        {"q": q, "sort": "updated", "order": "desc", "per_page": "30"})
+    d = fetch_json(url, 2 * 1024 * 1024)
+    items = d.get("items", []) if isinstance(d, dict) else []
+
+    def describe(it):
+        num = it.get("number")
+        if not isinstance(num, int):
+            return None
+        body = it.get("body") or ""
+        shas = SHA_RE.findall(body if isinstance(body, str) else "")
+        sha = shas[-1] if shas else ""
+        title = it.get("title") if isinstance(it.get("title"), str) else ""
+        m = re.search(r"\b\d+(?:\.\d+){1,4}\b", title)
+        version = vstr(parse_version(m.group(0))) if m else ""
+        if not version and sha:
+            try:
+                version = manifest_version_at(sha)
+            except (OSError, ValueError, urllib.error.URLError):
+                version = ""
+        # Built here, never taken from the response.
+        return {"issue": num, "url": "https://github.com/%s/issues/%d" % (MARKET, num),
+                "sha": sha, "version": version}
+
+    approved = pending = None
+    approved_at = ""
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        labels = {l.get("name") for l in it.get("labels", []) if isinstance(l, dict)}
+        if it.get("state") == "closed" and "approved-and-verified" in labels:
+            when = str(it.get("closed_at") or "")
+            if when > approved_at:
+                desc = describe(it)
+                if desc and desc["sha"]:
+                    approved, approved_at = desc, when
+        elif it.get("state") == "open" and pending is None:
+            pending = describe(it)
+    return {"approved": approved, "pending": pending}
+
+
+def check(refresh=False):
+    """The settings' answer, cached for CHECK_TTL. Never raises."""
+    info = install_info()
+    installed = parse_version(info.get("version", ""))
+    out = {"flavor": FLAVOR, "installed": vstr(installed), "installUrl": INSTALL_URL,
+           "disabled": NEVER_CHECK.exists(), "available": False, "latest": None,
+           "marketplace": None, "approvedNewer": False, "error": None}
+    if out["disabled"] and not refresh:
+        return out
+    cached = None
+    try:
+        cached = json.loads(CHECK_CACHE.read_text())
+    except (OSError, ValueError):
+        pass
+    if isinstance(cached, dict) and cached.get("repo") != REPO:
+        cached = None  # another Hyprdrive's answer (the native one and this share the file)
+    fresh = (isinstance(cached, dict) and not refresh and time.time() - cached.get("checkedAt", 0) < CHECK_TTL)
+    remote = cached.get("remote") if fresh else None
+    if not remote:
+        remote = {"latest": None, "marketplace": None}
+        try:
+            remote["latest"] = latest_release()
+            if FLAVOR == "omarchy":
+                remote["marketplace"] = marketplace()
+        except (OSError, ValueError, urllib.error.URLError) as e:
+            out["error"] = "could not reach GitHub: %s" % (getattr(e, "reason", None) or e)
+            if isinstance(cached, dict) and cached.get("remote"):
+                remote = cached["remote"]  # stale beats nothing
+        else:
+            try:
+                CACHE.mkdir(parents=True, exist_ok=True)
+                tmp = CHECK_CACHE.with_suffix(".tmp")
+                tmp.write_text(json.dumps({"repo": REPO, "checkedAt": time.time(), "remote": remote}))
+                tmp.replace(CHECK_CACHE)
+            except OSError:
+                pass
+    out["latest"] = remote.get("latest")
+    out["marketplace"] = remote.get("marketplace")
+    latest = parse_version((out["latest"] or {}).get("version", ""))
+    approved = parse_version(((out["marketplace"] or {}).get("approved") or {}).get("version", ""))
+    # An unknown installed version is not "out of date": say nothing.
+    out["approvedNewer"] = bool(installed) and newer(approved, installed)
+    out["available"] = bool(installed) and (newer(latest, installed) or out["approvedNewer"])
+    return out
+
+
+# ---- installing ---------------------------------------------------------------
+def run(cmd, cwd=None):
+    print("$ " + " ".join(shlex.quote(c) for c in cmd), flush=True)
+    return subprocess.call(cmd, cwd=cwd)
+
+
+def git(src, *args, capture=False):
+    if capture:
+        r = subprocess.run(["git", "-C", str(src), *args], capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    return run(["git", "-C", str(src), *args])
+
+
+def ask(prompt, yes):
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Not asking without a terminal: pass --yes.")
+        return False
+    try:
+        return input(prompt + " [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def checkout_dir(info):
+    """The checkout `make install` ran from, if it is this repository's;
+    on Omarchy the marketplace's own copy; else a clone of our own."""
+    candidates = []
+    if info.get("source"):
+        candidates.append(pathlib.Path(info["source"]))
+    if FLAVOR == "omarchy":
+        candidates.append(HOME / ".config/omarchy/plugins" / PLUGIN_ID)
+    candidates.append(CLONE_DIR)
+    for c in candidates:
+        url = git(c, "remote", "get-url", "origin", capture=True) if (c / ".git").exists() else None
+        if url and REPO.lower() in url.lower().removesuffix(".git"):
+            return c
+    return None
+
+
+def install(target_ref, label, yes, info):
+    src = checkout_dir(info)
+    if src is not None:
+        dirty = git(src, "status", "--porcelain", "--untracked-files=no", capture=True)
+        if dirty is None:
+            print("%s is not a usable git checkout." % src)
+            return 1
+        if dirty:
+            print("%s has local changes, so it is left alone:\n%s" % (src, dirty))
+            print("Commit or stash them, then run `hyprdrive update` again.")
+            return 1
+        print("Checkout: %s" % src)
+    else:
+        print("No Hyprdrive checkout found: one will be cloned into %s." % CLONE_DIR)
+    print("Installing %s." % label)
+    # Nothing is fetched, cloned or changed before this answer.
+    if not ask("Go ahead?", yes):
+        print("Nothing changed.")
+        return 0
+    if src is None:
+        CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
+        if run(["git", "clone", "-b", BRANCH, "https://github.com/%s.git" % REPO, str(CLONE_DIR)]) != 0:
+            return 1
+        src = CLONE_DIR
+    if git(src, "fetch", "--tags", "origin") != 0:
+        return 1
+    if SHA_RE.fullmatch(target_ref) and git(src, "fetch", "origin", target_ref) != 0:
+        return 1
+    if git(src, "checkout", "--detach", target_ref) != 0:
+        return 1
+    prefix = info.get("prefix") or str(HOME / ".local")
+    if FLAVOR == "omarchy":
+        if run(["make", "all"], cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
+            return 1
+    elif run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
+        return 1
+    so = pathlib.Path(prefix) / "lib/hyprdrive/hyprdrive.so"
+    try:
+        CHECK_CACHE.unlink()
+    except OSError:
+        pass
+    if shutil.which("hyprctl") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        if ask("Reload the plugin now? (Keep your hands off the trackpad for a second.)", yes):
+            run(["hyprctl", "plugin", "unload", str(so)])
+            run(["hyprctl", "plugin", "load", str(so)])
+            run(["hyprctl", "reload"])
+            if FLAVOR == "omarchy" and shutil.which("omarchy"):
+                run(["omarchy", "restart", "shell"])
+            print("Done: Hyprdrive %s is running." % label)
+            return 0
+    print("Installed. Log out and back in to start the new version.")
+    return 0
+
+
+# ---- the terminal -------------------------------------------------------------
+def terminal_command(argv):
+    """The user's terminal running argv, or None."""
+    if shutil.which("xdg-terminal-exec"):
+        return ["xdg-terminal-exec", *argv]
+    term = os.environ.get("TERMINAL", "")
+    known = [term] if term else []
+    known += ["ghostty", "kitty", "alacritty", "foot", "wezterm", "konsole", "gnome-terminal", "xfce4-terminal", "xterm"]
+    for t in known:
+        exe = shutil.which(t) if t else None
+        if not exe:
+            continue
+        name = os.path.basename(exe)
+        if name == "gnome-terminal":
+            return [exe, "--", *argv]
+        if name == "wezterm":
+            return [exe, "start", "--", *argv]
+        return [exe, "-e", *argv]
+    return None
+
+
+def open_in_terminal(args):
+    me = str(pathlib.Path(__file__).resolve())
+    cmd = terminal_command([me, "update", *args, "--hold"])
+    if not cmd:
+        print("No terminal found.", file=sys.stderr)
+        return 3
+    subprocess.Popen(cmd, start_new_session=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
+
+
+# ---- update -------------------------------------------------------------------
+def describe(r):
+    lines = ["Hyprdrive (%s): installed %s" % (r["flavor"], ("v" + r["installed"]) if r["installed"] else "version unknown")]
+    if r["latest"]:
+        lines.append("Newest release on GitHub: v%s  %s" % (r["latest"]["version"], r["latest"]["url"]))
+    mk = r.get("marketplace")
+    if FLAVOR == "omarchy" and mk is not None:
+        a, p = mk.get("approved"), mk.get("pending")
+        lines.append("Approved on the marketplace: %s" % (("v" + a["version"]) if a and a.get("version") else "nothing yet"))
+        if p:
+            lines.append("Waiting for marketplace approval: %s (%s)" % (("v" + p["version"]) if p.get("version") else "a request", p["url"]))
+    if r["error"]:
+        lines.append(r["error"])
+    return "\n".join(lines)
+
+
+def cmd_update(args):
+    flags = set(a for a in args if a.startswith("--"))
+    unknown = flags - {"--check", "--json", "--refresh", "--github", "--approved", "--yes", "--terminal",
+                       "--never-check", "--allow-check", "--hold"}
+    if unknown or any(not a.startswith("--") for a in args):
+        print(__doc__)
+        return 2
+    if "--terminal" in flags:
+        return open_in_terminal([a for a in args if a != "--terminal"])
+    rc = update(flags)
+    if "--hold" in flags:
+        try:
+            input("\nPress Enter to close.")
+        except EOFError:
+            pass
+    return rc
+
+
+def update(flags):
+    if "--never-check" in flags:
+        STATE.mkdir(parents=True, exist_ok=True)
+        NEVER_CHECK.write_text("The Hyprdrive settings do not look for updates. `hyprdrive update --allow-check` undoes this.\n")
+        print("The settings will no longer look for updates. `hyprdrive update` still does when you run it.")
+        return 0
+    if "--allow-check" in flags:
+        try:
+            NEVER_CHECK.unlink()
+        except OSError:
+            pass
+        print("The settings will look for updates again (at most every 6 hours, while open).")
+        return 0
+
+    checking = "--check" in flags
+    r = check(refresh=("--refresh" in flags) or not checking)
+    if checking:
+        print(json.dumps(r) if "--json" in flags else describe(r))
+        return 0
+    print(describe(r))
+    if not r["latest"] and not r["approvedNewer"]:
+        return 1 if r["error"] else 0
+    info = install_info()
+    yes = "--yes" in flags
+    installed = parse_version(r["installed"])
+    latest = r["latest"]
+    latest_v = parse_version((latest or {}).get("version", ""))
+    approved = ((r.get("marketplace") or {}).get("approved")) or None
+    approved_v = parse_version((approved or {}).get("version", ""))
+
+    def from_github():
+        return install(latest["tag"], "v%s from GitHub" % latest["version"], yes, info)
+
+    def from_marketplace():
+        return install(approved["sha"], "v%s, the version the marketplace approved" % approved["version"], yes, info)
+
+    if FLAVOR != "omarchy":
+        if newer(latest_v, installed):
+            return from_github()
+        print("You have the newest version.")
+        return 0
+
+    if "--approved" in flags:
+        if approved and newer(approved_v, installed):
+            return from_marketplace()
+        print("No marketplace-approved version is newer than yours.")
+        return 0
+    if "--github" in flags:
+        if newer(latest_v, installed):
+            return from_github()
+        print("You have the newest release.")
+        return 0
+    if not newer(latest_v, installed) and not newer(approved_v, installed):
+        print("You have the newest version.")
+        return 0
+    print()
+    if newer(approved_v, installed) and not newer(latest_v, approved_v):
+        return from_marketplace()  # the newest release IS the approved one
+    if not newer(approved_v, installed):
+        print("v%s is not approved on the marketplace yet. You can install it straight from GitHub now,"
+              "\nor wait for the marketplace." % latest["version"])
+        return from_github()
+    # Both: an approved version newer than yours, and a newer one still waiting.
+    print("Two choices:\n  a) v%s, the version the marketplace approved\n  g) v%s from GitHub now, without waiting for its approval"
+          % (approved["version"], latest["version"]))
+    if yes or not sys.stdin.isatty():
+        print("Pick one: `hyprdrive update --approved` or `hyprdrive update --github`.")
+        return 0
+    try:
+        pick = input("Install which? [a/g/N] ").strip().lower()
+    except EOFError:
+        pick = ""
+    if pick.startswith("a"):
+        return install(approved["sha"], "v%s (approved)" % approved["version"], True, info)
+    if pick.startswith("g"):
+        return install(latest["tag"], "v%s from GitHub" % latest["version"], True, info)
+    print("Nothing changed.")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    if argv[0] == "version":
+        print(install_info().get("version") or "unknown")
+        return 0
+    if argv[0] == "update":
+        return cmd_update(argv[1:])
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

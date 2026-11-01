@@ -98,6 +98,7 @@ PY
     install -Dm644 "$PLUGIN_SRC/hyprdrive-icon.png" "$PLUGIN_DEST/hyprdrive-icon.png"
     install -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
     install -Dm755 "$PLUGIN_SRC/bin/hdicons" "$PLUGIN_DEST/bin/hdicons"
+    install -Dm755 "$PLUGIN_SRC/bin/hyprdrive" "$PLUGIN_DEST/bin/hyprdrive"
     # Super+L's layout cycle while the panel's Mosaic switch is on; 40-panel.lua
     # binds it by this path (hdpanel's LAYOUT_CYCLE, beside hdpanel itself).
     install -Dm755 "$PLUGIN_SRC/bin/hd-layout-cycle" "$PLUGIN_DEST/bin/hd-layout-cycle"
@@ -114,3 +115,27 @@ PY
         fi
     fi
 fi
+
+# `hyprdrive update` on PATH: the copy beside the panel's hdpanel (a
+# marketplace install's own checkout, or the copied panel), and install.json --
+# the version, this checkout -- for it to read.
+if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ]; then
+    CLI_SRC=$ROOT/omarchy-plugin/bin/hyprdrive
+else
+    CLI_SRC=$PLUGIN_DEST/bin/hyprdrive
+fi
+if [ -x "$CLI_SRC" ]; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sfn "$CLI_SRC" "$HOME/.local/bin/hyprdrive"
+    echo "cli: $HOME/.local/bin/hyprdrive (hyprdrive update)"
+fi
+python3 - "$ROOT" "$HOME/.local" <<'PY'
+import json, os, pathlib, sys
+root, prefix = sys.argv[1:3]
+state = pathlib.Path(os.environ.get("XDG_STATE_HOME") or pathlib.Path.home() / ".local/state") / "hyprdrive"
+state.mkdir(parents=True, exist_ok=True)
+version = json.loads((pathlib.Path(root) / "manifest.json").read_text()).get("version", "")
+tmp = state / "install.json.tmp"
+tmp.write_text(json.dumps({"version": version, "source": root, "prefix": prefix}) + "\n")
+tmp.replace(state / "install.json")
+PY

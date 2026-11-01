@@ -43,6 +43,9 @@ namespace ScrollOverview::ConfigureHold {
         CHold& operator=(const CHold&) = delete;
     };
 
+    // XGeometry.cpp: a hold is up, so every box is in-between.
+    bool held();
+
     // PLUGIN_EXIT: nothing may stay held once the hook is gone.
     void flush();
 }

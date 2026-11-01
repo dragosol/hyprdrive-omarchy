@@ -167,10 +167,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|type|type \\S+|activate \\S+|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|type|type \\S+|activate \\S+|tile \\S+|xgeom|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | press <keycode> | ripple [x y]",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
@@ -523,6 +523,24 @@ static void registerConfigValuesFor() {
     // layout of desktops with none of their own.
     addKey(makeShared<CBoolValue>(KEY("mosaic:enabled"), "mosaic: Super+L cycles Dwindle -> Scrolling -> Mosaic (the panel asks before turning it on)", false));
     addKey(makeShared<CBoolValue>(KEY("mosaic:default"), "mosaic: new desktops use the Mosaic layout (needs mosaic:enabled)", false));
+    // THE INFINITE CANVAS (MosaicCanvas.hpp, user 2026-10-26). Opt-in; once on, all
+    // directions and the Super zoom-out by default (user, 2026-10-27).
+    addKey(makeShared<CBoolValue>(KEY("mosaic:infinite_canvas"),
+                                  "mosaic: windows that no longer fit the screen spill onto a canvas you pan across, at their own sizes, instead of tiling", false));
+    addKey(makeShared<CStringValue>(KEY("mosaic:canvas_directions"),
+                                    "mosaic: the infinite canvas grows horizontal (a strip) or all (a grid); on "
+                                    "either, hold Super and move the pointer to zoom out to every window, hover one to focus it, let go of Super to zoom back in",
+                                    Hyprlang::STRING{"all"}));
+    // RETIRED (user, 2026-10-29): holding Super always zooms out. Still registered
+    // so a config or settings-panel fragment that sets it loads; nothing reads it.
+    addKey(makeShared<CStringValue>(KEY("mosaic:canvas_super_move"), "mosaic: retired and ignored (holding Super on the canvas always zooms out)",
+                                    Hyprlang::STRING{"zoom"}));
+    // Window titles while Super is held (user, 2026-10-30): any desktop, any
+    // layout; kept in the Mosaic settings.
+    addKey(makeShared<CStringValue>(KEY("mosaic:zoom_labels"),
+                                    "window titles while Super is held and the pointer moves, on any desktop (the zoomed-out canvas too): none, hover (the window "
+                                    "under the pointer) or all",
+                                    Hyprlang::STRING{"hover"}));
     addKey(makeShared<CBoolValue>(KEY("search:easter_egg"), "overview search: type a letter and backspace five times in four seconds and the pill plays search:easter_egg_video", true));
     addKey(makeShared<CStringValue>(KEY("search:easter_egg_video"), "the video the overview's easter egg plays, with its sound (needs ffmpeg); a missing file turns the egg off",
                                     Hyprlang::STRING{"~/.local/share/hyprdrive/easter-egg.mp4"}));
@@ -689,6 +707,11 @@ static void registerConfigValuesFor() {
                                   true));
     addKey(makeShared<CIntValue>(KEY("drag:hold_to_swap_ms"), "how long a dragged window is held over another before letting go swaps them", 1500,
                                  SIntValueOptions{.min = 300, .max = 5000}));
+    // PR #2 (@johwconst, 2026-10-19), opt-in. OverviewInternal.hpp (pickKeepsFocus).
+    addKey(makeShared<CBoolValue>(KEY("focus_follows_pick"),
+                                  "with several monitors, closing the overview leaves focus and the pointer where you picked, instead of on another "
+                                  "monitor's selected window",
+                                  false));
     addKey(makeShared<CBoolValue>(KEY("hot_corner:enabled"), "resting the pointer in a screen corner opens the overview, and closes it again, like GNOME's Activities corner", false));
     addKey(makeShared<CStringValue>(KEY("hot_corner:corner"),
                                     "the hot corner: top-left, top-right, bottom-left or bottom-right (an outer corner only; between two monitors the pointer crosses)",
@@ -748,6 +771,13 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CStringValue>(KEY("animation:curve"),
                                     "the curve family for everything hyprdrive animates except the dock stacks: hyprdrive (the house curves), serpantinum (its window curve), serpantinum_glide, serpantinum_soft, serpantinum_intro, serpantinum_pop, swift, springy, linear",
                                     Hyprlang::STRING{"hyprdrive"}));
+    // THE INFINITE CANVAS'S MOTION (Mosaic.cpp canvasEase, user 2026-10-26):
+    // focus panning a window into view, the Super zoom.
+    addKey(makeShared<CStringValue>(KEY("animation:canvas_curve"),
+                                    "the infinite canvas's pans and zoom: a curve family as animation:curve names them (its travel curve); hyprdrive (the house curve, no overshoot) by default",
+                                    Hyprlang::STRING{"hyprdrive"}));
+    addKey(makeShared<CIntValue>(KEY("animation:canvas_pan_ms"), "the infinite canvas's pans and zoom, in ms (scaled by anim_scale; 0 = instant)", 420,
+                                 SIntValueOptions{.min = 0, .max = 2000}));
     // DESKTOP CHANGES, BY CAUSE (DesktopSwitch.hpp, user 2026-10-15). They
     // gate Hyprland's own workspaces animation, per switch: off, a desktop
     // change of that kind lands in one frame and the other kind still slides.

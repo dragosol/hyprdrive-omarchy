@@ -664,6 +664,80 @@ void writeFavorites() {
     STORE.stamp = std::filesystem::last_write_time(PATH, ec);
 }
 
+// ALWAYS OPEN IN AN EMPTY WORKSPACE (user, 2026-10-29: "Add an option in dock
+// context menu to always spawn certain apps in an empty desktop"). The apps, by
+// desktop id, one per line, beside the favourites; read again only when the
+// file moved. A missing file is an empty list.
+std::filesystem::path emptyDesktopAppsPath() {
+    const auto FAV = favoritesPath();
+    return FAV.empty() ? FAV : FAV.parent_path() / "empty-desktop-apps";
+}
+
+struct SEmptyDesktopStore {
+    std::vector<std::string>        ids;
+    std::filesystem::file_time_type stamp{};
+    bool                            present = false;
+};
+
+SEmptyDesktopStore& emptyDesktopStore() {
+    static SEmptyDesktopStore store;
+    return store;
+}
+
+const std::vector<std::string>& emptyDesktopApps() {
+    auto&           STORE = emptyDesktopStore();
+    std::error_code ec;
+    const auto      PATH = emptyDesktopAppsPath();
+    if (PATH.empty() || !std::filesystem::exists(PATH, ec)) {
+        STORE.ids.clear();
+        STORE.present = false;
+        return STORE.ids;
+    }
+    const auto WRITTEN = std::filesystem::last_write_time(PATH, ec);
+    if (ec || (STORE.present && WRITTEN == STORE.stamp))
+        return STORE.ids;
+    STORE.present = true;
+    STORE.stamp   = WRITTEN;
+    STORE.ids.clear();
+    std::ifstream file(PATH);
+    std::string   line;
+    while (std::getline(file, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+            line.pop_back();
+        if (!line.empty())
+            STORE.ids.emplace_back(line);
+    }
+    return STORE.ids;
+}
+
+bool opensInEmptyDesktop(const std::string& id) {
+    return !id.empty() && std::ranges::contains(emptyDesktopApps(), id);
+}
+
+void toggleEmptyDesktop(const std::string& id) {
+    if (id.empty())
+        return;
+    auto IDS = emptyDesktopApps();
+    if (const auto IT = std::ranges::find(IDS, id); IT != IDS.end())
+        IDS.erase(IT);
+    else
+        IDS.emplace_back(id);
+    const auto PATH = emptyDesktopAppsPath();
+    if (PATH.empty())
+        return;
+    std::error_code ec;
+    std::filesystem::create_directories(PATH.parent_path(), ec);
+    {
+        std::ofstream out(PATH, std::ios::trunc);
+        for (const auto& I : IDS)
+            out << I << "\n";
+    }
+    auto& STORE   = emptyDesktopStore();
+    STORE.ids     = IDS;
+    STORE.present = true;
+    STORE.stamp   = std::filesystem::last_write_time(PATH, ec);
+}
+
 void toggleFavorite(const std::string& id) {
     if (id.empty())
         return;
@@ -3174,6 +3248,8 @@ void moveToEmptyWorkspace(PHLMONITOR monitor, const PHLWINDOW& WINDOW) {
         stealDockSeat();
 }
 
+std::string itemDesktopId(const SItem& item);
+
 void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl = false, bool emptyWorkspace = false) {
     // X35. A location has no windows to minimize: it is opened. Nautilus raises
     // the window it already has for a location rather than opening a second
@@ -3228,8 +3304,9 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     }
 
     // A modifier click on an app that is not running opens it on an empty
-    // desktop. Running, the modifier changes nothing (CTRL still cycles below).
-    if (emptyWorkspace && itemWindows(item).empty()) {
+    // desktop -- and so does any click on one set to always open there.
+    // Running, the modifier changes nothing (CTRL still cycles below).
+    if ((emptyWorkspace || opensInEmptyDesktop(itemDesktopId(item))) && itemWindows(item).empty()) {
         launchInEmptyWorkspace(monitor, item);
         return;
     }
@@ -3399,6 +3476,7 @@ void applyClickAction(PHLMONITOR monitor, const SItem& item, const std::string& 
 
 enum class ERow : uint8_t {
     Separator,
+    AlwaysEmptyWorkspace,
     Action,
     Window,
     Details,
@@ -3743,6 +3821,9 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
     // Running or not: a new window of it, alone on a desktop of its own.
     if (!ID.empty()) {
         rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
+        rows.emplace_back(SRow{.kind  = ERow::AlwaysEmptyWorkspace,
+                               .label = "Always Open in Empty Workspace",
+                               .glyph = opensInEmptyDesktop(ID) ? std::string{MenuGlyph::CHECK} : std::string{}});
         rows.emplace_back(SRow{.kind = ERow::OpenScratchpad, .label = "Open in Scratchpad", .glyph = MenuGlyph::STASH});
     }
 
@@ -4003,6 +4084,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             return;
 
         case ERow::Favorite: toggleFavorite(itemDesktopId(item)); return;
+        case ERow::AlwaysEmptyWorkspace: toggleEmptyDesktop(itemDesktopId(item)); return;
 
         case ERow::ShowWindows: {
             if (!item.uri.empty()) {
@@ -5878,6 +5960,30 @@ CBox roomPillGlobal(PHLMONITOR monitor) {
         return {};
     const double S = std::max(monitor->m_scale, 0.01F);
     return CBox{L.pill.x / S + monitor->m_position.x, L.pill.y / S + monitor->m_position.y, L.pill.w / S, L.pill.h / S};
+}
+
+void onWindowOpen(const PHLWINDOW& window) {
+    // An app set to always open in an empty workspace, launched any other way
+    // (the launcher, a keybind, a terminal, its own "new window"): its new main
+    // window moves to the nearest empty desktop. Not a dialog, a child, a
+    // floating window (picture-in-picture, a popup), nor one already alone.
+    if (!window || window->m_isFloating || window->parent() || window->isModal() || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
+        return;
+    if (!opensInEmptyDesktop(AppSearch::idForClass(window->m_class)))
+        return;
+    // Next turn of the loop: not from inside the window's own map.
+    g_pEventLoopManager->doLater([REF = PHLWINDOWREF{window}] {
+        const auto W = REF.lock();
+        if (!W || !W->m_isMapped || !W->m_workspace || W->m_workspace->m_isSpecialWorkspace)
+            return;
+        const bool ALONE = std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& O) {
+            return O && O != W && O->m_isMapped && !O->isHidden() && O->m_workspace == W->m_workspace;
+        });
+        if (ALONE)
+            return;
+        if (const auto MONITOR = W->m_workspace->m_monitor.lock())
+            moveToEmptyWorkspace(MONITOR, W);
+    });
 }
 
 bool debugActivate(PHLMONITOR monitor, const std::string& wmClass) {

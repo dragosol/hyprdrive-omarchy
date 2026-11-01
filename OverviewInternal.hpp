@@ -278,6 +278,14 @@ inline void removeOverview(CScrollOverview* overview) {
     }
 }
 
+// overview:focus_follows_pick (PR #2, @johwconst, 2026-10-19). With several
+// monitors, only the overview the user picked from moves focus when they all
+// close; the others close without focusing their own selected window, which
+// used to pull focus and the pointer onto the wrong monitor. Off by default.
+inline bool pickKeepsFocus() {
+    return ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:focus_follows_pick");
+}
+
 inline xkb_keysym_t getOverviewKeysym(const IKeyboard::SKeyEvent& event) {
     const auto PKEYBOARD = g_pSeatManager->m_keyboard.lock();
 

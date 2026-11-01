@@ -77,6 +77,7 @@ class COverviewWorkspaceGesture : public ITrackpadGesture {
     // camera when focus moves (a +1180 px jump mid-swipe, measured).
     double                     m_tapeOffset  = 0.0;
     double                     m_tapeMax     = 0.0;
+    void                       setTapeOffset(const PHLWORKSPACE& ws);
     bool                       m_forcedFollow = false; // follow_mouse held at 0 for the swipe
     int                        m_prevFollow   = 1;
 

@@ -1585,6 +1585,12 @@ namespace ScrollOverview::MosaicPack::Box {
         // by windows on three sides reads as a hole even with a corridor out).
         const double PULL      = side == 'M' ? 16.0 : 2.0;
         const double GAPGROWTH = side == 'M' ? 8.0 : 0.0;
+        // THE MIDDLE OF THE CLUSTER (user, 2026-10-27: "when I drag a window to
+        // the center of the cluster it actually puts it in the center"): the
+        // pull to the point alone lost to the compact drop-free cluster, which
+        // kept a big window on its edge. A middle drop is also pulled to the
+        // middle of the cluster it ends up in -- the others close around it.
+        const double CENTRED = side == 'M' ? 32.0 : 0.0;
         const auto   DROPSCORE = [&](const std::vector<IR>& r, const Judged& j) {
             const IR&    Q  = r[static_cast<size_t>(DI)];
             const IR     B  = bbox(r);
@@ -1598,7 +1604,8 @@ namespace ScrollOverview::MosaicPack::Box {
                 ok = QY < BY;
             else if (side == 'B')
                 ok = QY > BY;
-            return j.score + (ok ? 0.0 : 3.0) + PULL * std::hypot(QX - PX, QY - PY) / DIAG + GAPGROWTH * std::max(0.0, j.hole - HOLE0) + 3.0 * std::max(0.0, FILL0 - j.fill) +
+            return j.score + (ok ? 0.0 : 3.0) + PULL * std::hypot(QX - PX, QY - PY) / DIAG + CENTRED * std::hypot(QX - BX, QY - BY) / DIAG +
+                GAPGROWTH * std::max(0.0, j.hole - HOLE0) + 3.0 * std::max(0.0, FILL0 - j.fill) +
                 (ORDERW > 0 ? ORDERW * disorder(r) : 0.0);
         };
         // pinned: the dropped window in the free region on its side of the box, the rest packed around it

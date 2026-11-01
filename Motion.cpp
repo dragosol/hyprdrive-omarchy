@@ -116,6 +116,22 @@ namespace ScrollOverview::Motion {
         return g_live.curves[sc<size_t>(role)].getYForPoint(T);
     }
 
+    float easeNamed(const std::string& preset, ERole role, float t) {
+        // Baked once per name: a pan reads this every frame.
+        static std::string                                       s_name;
+        static std::array<Hyprutils::Animation::CBezierCurve, 3> s_curves;
+        static bool                                              s_baked = false;
+        if (!s_baked || preset != s_name) {
+            const auto& P = presetNamed(preset);
+            bake(s_curves[0], P.decel);
+            bake(s_curves[1], P.accel);
+            bake(s_curves[2], P.pop);
+            s_name  = preset;
+            s_baked = true;
+        }
+        return s_curves[sc<size_t>(role)].getYForPoint(std::clamp(t, 0.F, 1.F));
+    }
+
     float houseFixed(bool decel, float t) {
         if (!g_live.houseBaked) {
             bake(g_live.houseDecel, PRESETS[0].decel);

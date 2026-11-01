@@ -1,6 +1,7 @@
 // MosaicPack: the tight mosaic (MosaicPackFinal.hpp's pack), the dwindle
 // tiles, the calculated limit, and the size each window arrives with.
 #include "../MosaicPack.hpp"
+#include "../MosaicCanvas.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -278,6 +279,67 @@ int main() {
         expect(std::abs(CELLS(t)[2].h - 300) <= 1, "the second of a pair moves the split from its side");
         expect(COVERS(CELLS(t)), "still covers the area after resizes");
     }
+    // DWINDLE PARITY (user, 2026-10-23): what Hyprland's DwindleAlgorithm does
+    // with the same moves, on a 1600x900 area.
+    {
+        const SRect     A{0, 0, 1600, 900};
+        const STreeOpts KEEP{.preserve = true};
+        const auto      AT = [&](const CDwindleTree& t, long long id, const STreeOpts& o) { return *t.cellOf(id, A, o); };
+        // A drop splits the tile under the pointer, on the pointer's half.
+        CDwindleTree t;
+        t.buildBalanced({1, 2});
+        long long under = t.leafAt(1300, 200, A);
+        expect(under == 2, "the pointer over the right tile finds it");
+        // 2's tile is 800x900, taller than wide: dwindle splits it one over the other.
+        t.insertAt(3, under, true, 0.5, -1, A);
+        expect(AT(t, 3, {}).x == 800 && AT(t, 3, {}).y == 0 && AT(t, 3, {}).h == 450 && AT(t, 2, {}).y == 450, "dropped on the top half of 2: above it");
+        // The tile a window was picked out of, its window put back, is unchanged.
+        t.remove(3);
+        expect(AT(t, 2, {}).x == 800 && AT(t, 2, {}).w == 800, "picked out again: its sibling has the space back");
+        // swapwindow: the windows trade tiles, the tiles stay.
+        t.buildWeighted({1, 2, 3}, {4, 1, 1});
+        const SRect BIG = AT(t, 1, {}), SMALL = AT(t, 3, {});
+        t.swapIds(1, 3);
+        expect(AT(t, 3, {}).w == BIG.w && AT(t, 3, {}).h == BIG.h && AT(t, 1, {}).y == SMALL.y, "the big tile and a small one trade windows");
+        // preserve_split: a split keeps its direction when its space changes shape.
+        CDwindleTree p;
+        p.buildBalanced({1, 2});
+        (void)p.layout(A, KEEP);                       // fixed side by side
+        const SRect TALL{0, 0, 600, 900};
+        const auto  C = p.layout(TALL, KEEP);
+        expect(C[0].second.w == 300 && C[0].second.h == 900, "preserve_split: still side by side in a tall space");
+        const auto D = p.layout(TALL, {});
+        expect(D[0].second.w == 600 && D[0].second.h == 450, "without it: across the longer side");
+        // togglesplit flips it, kept.
+        p.toggleSplit(1, A, KEEP);
+        expect(AT(p, 1, KEEP).w == 1600 && AT(p, 1, KEEP).h == 450, "togglesplit: one over the other");
+        p.swapSplit(1);
+        expect(AT(p, 1, KEEP).y == 450, "swapsplit: the two trade sides");
+        // smart_resizing: dragging a tile's right edge moves only the split to its right.
+        CDwindleTree r;
+        r.buildBalanced({1, 2, 3}); // 1 | (2 over 3)
+        r.resizeDwindle(1, 100, 0, {.right = true}, true, A, KEEP);
+        expect(AT(r, 1, KEEP).w == 900 && AT(r, 2, KEEP).x == 900, "smart resize: the right edge grows the left tile by the pointer's travel");
+        const SRect TWO = AT(r, 2, KEEP);
+        r.resizeDwindle(3, 0, -60, {.top = true}, true, A, KEEP);
+        expect(AT(r, 3, KEEP).h == 450 + 60 && AT(r, 2, KEEP).h == TWO.h - 60 && AT(r, 1, KEEP).w == 900, "smart resize: a top edge moves the split above, nothing else");
+        // Not smart: the parent and the first ancestor across, both axes.
+        r.resizeDwindle(2, -100, 40, {}, false, A, KEEP);
+        expect(AT(r, 1, KEEP).w == 800 && AT(r, 2, KEEP).h == TWO.h - 60 + 40, "plain resize: both axes move");
+        // movetoroot: the tile becomes a child of the root.
+        CDwindleTree m;
+        m.buildBalanced({1, 2, 3}); // 1 | (2 over 3)
+        expect(m.moveToRoot(3, true) && AT(m, 3, {}).h == 900, "movetoroot: 3 now spans the height");
+        // moving straight at a lone sibling lands on its far side (dwindle's override).
+        CDwindleTree s;
+        s.buildBalanced({1, 2});
+        expect(s.towardLoneSibling(2, 3, A) && !s.towardLoneSibling(2, 1, A) && s.towardLoneSibling(1, 1, A), "toward a lone sibling: left from the right tile");
+        // splitratio in dwindle's 0..2 units.
+        s.splitRatio(1, 1.5, true);
+        expect(AT(s, 1, {}).w == 1200, "splitratio 1.5 exact: the first tile takes three quarters");
+        s.splitRatio(1, 5, false);
+        expect(AT(s, 1, {}).w == 1520, "splitratio is clamped like dwindle's (0.1..1.9)");
+    }
     // THE CALCULATED LIMIT: others never shrink; the resized window stops where
     // the fast fit test finds no arrangement -- and pack() can place the limit.
     {
@@ -408,6 +470,116 @@ int main() {
         const double LMS = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - T0).count();
         std::printf("  pack of 20: %.2f ms, a resize step at 20: %.2f ms (limit %.0fx%.0f%s)\n", MS, LMS, L.w, L.h, L.reached ? " reached" : "");
         expect(MS < 25.0 && LMS < 25.0, "pack of 20 under 25 ms, a resize step under 25 ms");
+    }
+
+    // ---- THE INFINITE CANVAS (MosaicCanvas.hpp) ----
+    {
+        const SRect  SCREEN{0, 0, 1920, 1040};
+        const double G = 10;
+        std::vector<SRect> MANY;
+        for (int i = 0; i < 9; ++i)
+            MANY.push_back({0, 0, 900, 600});
+        for (const bool TWOD : {false, true}) {
+            const auto C = packCanvas(MANY, SCREEN, std::nullopt, G, TWOD);
+            bool       noOverlap = true, sizesKept = true, onCanvas = true;
+            for (size_t i = 0; i < C.rects.size(); ++i) {
+                sizesKept = sizesKept && C.rects[i].w == 900 && C.rects[i].h == 600;
+                onCanvas  = onCanvas && C.rects[i].x >= -0.5 && C.rects[i].y >= -0.5 && C.rects[i].x + C.rects[i].w <= C.w + 0.5 && C.rects[i].y + C.rects[i].h <= C.h + 0.5;
+                for (size_t j = i + 1; j < C.rects.size(); ++j)
+                    noOverlap = noOverlap && !overlaps(C.rects[i], C.rects[j]) && sep(C.rects[i], C.rects[j]) >= G - 0.5;
+            }
+            expect(C.screensX * C.screensY > 1, TWOD ? "canvas 2D: nine big windows take more than one screen" : "canvas: nine big windows take more than one screen");
+            expect(sizesKept, "canvas: every window keeps its size");
+            expect(noOverlap, "canvas: no two windows overlap, gap kept");
+            expect(onCanvas, "canvas: everything inside the canvas bounds");
+            if (TWOD)
+                expect(C.h > SCREEN.h && C.w > SCREEN.w, "canvas 2D: grows both ways");
+            else
+                expect(C.h <= SCREEN.h + 0.5 && C.w > SCREEN.w, "canvas horizontal: one screen tall, wider than the screen");
+        }
+        // THE TWO DIRECTIONS DIFFER (user, 2026-10-27: "switching between
+        // mosaic canvas directions ... doesn't do anything, I'm stuck in
+        // horizontal"): a desktop a little past one screen used to take one
+        // screen more along x in both. All directions keeps the screen's shape.
+        {
+            const SRect        XPS{12, 34, 2280, 1394};
+            std::vector<SRect> SIX = {{0, 0, 1037, 664}, {0, 0, 751, 504}, {0, 0, 751, 504}, {0, 0, 751, 504}, {0, 0, 751, 504}, {0, 0, 690, 519}};
+            for (int i = 0; i < 8; ++i)
+                SIX.push_back({0, 0, 900, 600});
+            const auto H = packCanvas(SIX, XPS, std::nullopt, G, false);
+            const auto A = packCanvas(SIX, XPS, std::nullopt, G, true);
+            expect(A.h > XPS.h && A.w < H.w && A.w / A.h < H.w / H.h, "canvas: all directions spreads down as well as across, horizontal stays one strip");
+        }
+        // A DROP IN THE MIDDLE OF THE CLUSTER LANDS IN ITS MIDDLE (user,
+        // 2026-10-27): the big window used to stay on the cluster's edge.
+        {
+            const SRect              AR{12, 12, 1896, 1056};
+            const std::vector<SRect> EIGHT = {{0, 0, 622, 416}, {0, 0, 622, 416}, {0, 0, 571, 428}, {0, 0, 571, 428},
+                                              {0, 0, 571, 428}, {0, 0, 571, 428}, {0, 0, 860, 549}, {0, 0, 622, 416}};
+            const auto P = packCanvas(EIGHT, AR, std::nullopt, G, true);
+            bool       centred = true;
+            for (const size_t I : {size_t{6}, size_t{0}, size_t{2}}) {
+                const SCanvasDrop D{.idx = I, .x = P.w / 2, .y = P.h / 2, .oldW = P.w, .oldH = P.h};
+                const auto        Q = packCanvas(EIGHT, AR, std::nullopt, G, true, &D);
+                const auto&       R = Q.rects[I];
+                centred = centred && std::abs(R.x + R.w / 2 - Q.w / 2) < R.w / 2 && std::abs(R.y + R.h / 2 - Q.h / 2) < R.h / 2;
+            }
+            expect(centred, "canvas: a window dropped on the cluster's centre covers the new cluster's centre");
+        }
+        // A window bigger than the screen is shown screen sized.
+        const auto BIG = packCanvas({{0, 0, 2500, 1500}, {0, 0, 800, 600}}, SCREEN, std::nullopt, G, false);
+        expect(BIG.rects[0].w <= SCREEN.w && BIG.rects[0].h <= SCREEN.h, "canvas: an oversized window is clamped to the screen");
+        // The view.
+        const auto V = canvasView(4000, 1000, SCREEN);
+        expect(V.maxX == 4000 - 1920 && V.maxY == 0 && V.originY == 20, "canvas view: pans along x only, centred in y");
+        expect(revealAxis(0, 3000, 500, 1920, V.maxX, G) == 3510 - 1920, "reveal: scrolls just far enough right");
+        expect(revealAxis(1500, 100, 500, 1920, V.maxX, G) == 90, "reveal: scrolls just far enough left");
+        expect(revealAxis(500, 700, 500, 1920, V.maxX, G) == 500, "reveal: a window in view does not move it");
+
+        // ONE TIGHT CLUSTER (user, 2026-10-26: no spaces between windows
+        // other than the gap): every window has a neighbour one gap away.
+        for (const bool TWOD : {false, true}) {
+            const auto C     = packCanvas(MANY, SCREEN, std::nullopt, G, TWOD);
+            bool       tight = true;
+            for (size_t i = 0; i < C.rects.size(); ++i) {
+                double nearest = 1e18;
+                for (size_t j = 0; j < C.rects.size(); ++j)
+                    if (i != j)
+                        nearest = std::min(nearest, sep(C.rects[i], C.rects[j]));
+                tight = tight && nearest <= G + 0.5;
+            }
+            expect(tight, TWOD ? "canvas 2D: every window sits one gap from a neighbour" : "canvas: every window sits one gap from a neighbour");
+        }
+        {
+            // A drop lands at the point it was let go (the plain mosaic's PackHint).
+            const auto FIRST = packCanvas(MANY, SCREEN, std::nullopt, G, false);
+            const SCanvasDrop D{.idx = 0, .x = FIRST.w - 200, .y = FIRST.h / 2, .oldW = FIRST.w, .oldH = FIRST.h};
+            const auto AFTER = packCanvas(MANY, SCREEN, std::nullopt, G, false, &D);
+            const auto& R    = AFTER.rects[0];
+            expect(R.x + R.w / 2 > AFTER.w / 2, "canvas drop: dropped at the far end, it lands in the far half");
+            const auto T0 = std::chrono::steady_clock::now();
+            std::vector<SRect> twelve(12, SRect{0, 0, 900, 600});
+            (void)packCanvas(twelve, SCREEN, std::nullopt, G, true);
+            const double MS = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - T0).count();
+            std::printf("  canvas of 12 (all directions): %.2f ms\n", MS);
+            expect(MS < 40.0, "canvas of 12 packs under 40 ms");
+        }
+        // SMART FOCUS PAN.
+        {
+            const double VW = 1920, MAX = 6000;
+            // Alone: centred.
+            expect(std::abs(smartRevealAxis(VW, MAX, {3000, 600}, std::nullopt, {}, G, 48) - (3300 - 960)) < 0.5, "smart pan: a lone window is centred");
+            // From a neighbour that fits with it: the two centred together.
+            const double PAIR = smartRevealAxis(VW, MAX, {3000, 600}, SSpan{2390, 600}, {}, G, 48);
+            expect(std::abs(PAIR - ((2390 + 3600) / 2.0 - 960)) < 0.5, "smart pan: the window focus came from stays in view");
+            // From one too far to fit: leans toward it, the new one still whole.
+            const double FAR = smartRevealAxis(VW, MAX, {3000, 600}, SSpan{500, 600}, {}, G, 48);
+            expect(std::abs(FAR - (3000 - G)) < 0.5, "smart pan: leans toward a far window, the focused one whole");
+            // Neighbours peek in.
+            const double PEEKS = smartRevealAxis(VW, MAX, {3000, 1500}, std::nullopt, {{1490, 1500}, {4510, 900}}, G, 48);
+            expect(PEEKS <= 2990 - 48 + 0.5 || PEEKS + VW >= 4510 + 48 - 0.5, "smart pan: a neighbour's edge shows where there is room");
+            expect(PEEKS <= 3000 - G + 0.5 && PEEKS + VW >= 4500 + G - 0.5, "smart pan: the focused window stays whole");
+        }
     }
 
     std::printf("mosaic_pack_test: %d checks, %d failed\n", checks, failed);

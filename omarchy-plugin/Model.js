@@ -219,3 +219,17 @@ function chordParts(chord) {
     })
 }
 function chordPretty(chord) { return chordParts(chord).join(" + ") }
+function chordPretty(chord) { return chordParts(chord).join(" + ") }
+
+// "1.9.36.8" newer than "1.9.36.7"? Numeric, part by part; a missing part is 0.
+// An unknown version (empty) is never older: nothing is offered then.
+function versionNewer(a, b) {
+  if (!a || !b) return false
+  var pa = String(a).replace(/^v/, "").split("."), pb = String(b).replace(/^v/, "").split(".")
+  for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+    var x = parseInt(pa[i] || "0", 10), y = parseInt(pb[i] || "0", 10)
+    if (isNaN(x) || isNaN(y)) return false
+    if (x !== y) return x > y
+  }
+  return false
+}
