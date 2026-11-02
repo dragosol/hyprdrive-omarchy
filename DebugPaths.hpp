@@ -98,4 +98,37 @@ namespace ScrollOverview::DebugPaths {
     inline FILE* openLog(std::string_view name, bool append = true) {
         return openLogIn(dir(), name, append);
     }
+    // THE OLD /tmp FILES (marketplace review, #11392). Before 1.9.43 these were
+    // fixed /tmp paths, and a log created there under umask 022 is readable by
+    // every local account -- with query text (prof) and folder activity
+    // (stack) already in it. At load each one is removed if, and only if, it
+    // is a regular file of ours: lstat, so a symlink is never followed (nor is
+    // it removed), and another account's file is left alone (in a sticky /tmp
+    // we could not remove it anyway). Switch files go too: they no longer do
+    // anything there.
+    inline constexpr std::string_view LEGACY_TMP[] = {
+        "hyprdrive-prof.log",     "hyprdrive-profile.on",   "hyprdrive-stack.log",    "hyprdrive-stacklog.on", "hyprdrive-mosaic.log",
+        "hyprdrive-mosaic.on",    "hyprdrive-openprof.log", "hyprdrive-openprof.on",  "hyprdrive-openprof.ab", "hyprdrive-click.log",
+        "hyprdrive-compat.log",   "ovdbg.log",              "hyprdrive-close.log",
+    };
+
+    // Ours to remove: a regular file owned by `uid`. Pure: the test feeds it any stat.
+    inline bool legacyRemovable(const struct stat& st, uid_t uid) {
+        return S_ISREG(st.st_mode) && st.st_uid == uid;
+    }
+
+    // Removes the old files from `dir` (/tmp in the plugin); how many went.
+    inline int removeLegacyIn(const std::string& dir, uid_t uid = ::getuid()) {
+        int removed = 0;
+        for (const auto NAME : LEGACY_TMP) {
+            const auto  P = dir + "/" + std::string{NAME};
+            struct stat st{};
+            if (::lstat(P.c_str(), &st) == 0 && legacyRemovable(st, uid) && ::unlink(P.c_str()) == 0)
+                ++removed;
+        }
+        return removed;
+    }
+    inline int removeLegacy() {
+        return removeLegacyIn("/tmp");
+    }
 }

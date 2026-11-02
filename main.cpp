@@ -2113,6 +2113,10 @@ static SDispatchResult onStackDispatcher(std::string arg) {
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     SCROLLOVERVIEW_HANDLE = handle;
 
+    // The debug logs older versions left in /tmp, readable by everyone at
+    // umask 022: ours are removed at every load (DebugPaths::removeLegacy).
+    ScrollOverview::DebugPaths::removeLegacy();
+
     // Before anything can record a use of a pre-rename name. ONE RELEASE.
     ScrollOverview::Compat::openLog();
 

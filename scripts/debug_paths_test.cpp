@@ -114,6 +114,39 @@ int main() {
         CHECK(modeOf(TARGET) == 0644); // untouched
     }
 
+    // The old /tmp files: ours (regular) are removed -- an old 0644 log with
+    // query text in it above all; a symlink by the same name, and its target,
+    // are left alone; so is a directory; another account's never counts.
+    {
+        const auto OLDDIR = DIR + "/oldtmp";
+        std::filesystem::create_directory(OLDDIR);
+        const auto PROF = OLDDIR + "/hyprdrive-prof.log", STACK = OLDDIR + "/hyprdrive-stack.log";
+        for (const auto& P : {PROF, STACK}) {
+            FILE* F = std::fopen(P.c_str(), "w");
+            std::fputs("q=secret query\n", F);
+            std::fclose(F);
+            ::chmod(P.c_str(), 0644);
+        }
+        const auto TARGET = DIR + "/precious";
+        std::fclose(std::fopen(TARGET.c_str(), "w"));
+        ::chmod(TARGET.c_str(), 0644);
+        ::symlink(TARGET.c_str(), (OLDDIR + "/ovdbg.log").c_str());
+        std::filesystem::create_directory(OLDDIR + "/hyprdrive-click.log");
+        CHECK(DebugPaths::removeLegacyIn(OLDDIR) == 2);
+        CHECK(!std::filesystem::exists(PROF) && !std::filesystem::exists(STACK));
+        CHECK(std::filesystem::is_symlink(OLDDIR + "/ovdbg.log") && modeOf(TARGET) == 0644 && std::filesystem::exists(TARGET));
+        CHECK(std::filesystem::is_directory(OLDDIR + "/hyprdrive-click.log"));
+        // Another account's old log: its stat never qualifies.
+        struct stat other{};
+        other.st_mode = S_IFREG | 0644;
+        other.st_uid  = OTHER;
+        CHECK(!DebugPaths::legacyRemovable(other, ME));
+        other.st_uid = ME;
+        CHECK(DebugPaths::legacyRemovable(other, ME));
+        other.st_mode = S_IFLNK | 0777;
+        CHECK(!DebugPaths::legacyRemovable(other, ME));
+    }
+
     // The cached one follows the environment it was first asked under.
     ::setenv("XDG_RUNTIME_DIR", DIR.c_str(), 1);
     CHECK(DebugPaths::path("hyprdrive-compat.log") == DIR + "/hyprdrive-compat.log");
