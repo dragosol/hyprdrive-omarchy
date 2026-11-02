@@ -193,7 +193,12 @@ int main() {
             fs::permissions(BIN / L, fs::perms::owner_all);
         }
         const fs::path CANARY = DIR / "pwned";
-        const std::string PROMPT = "fix $(touch " + CANARY.string() + ") and `touch " + CANARY.string() + "` for $HOME's \"quoted\" \\ it's\nok";
+        const std::string TOUCH = "$(touch " + CANARY.string() + ")";
+        // The placeholder itself inside the prompt (marketplace review,
+        // #11392): a pass that rescanned inserted text spliced a second
+        // quoted copy into the first, and `%P%$(...)` ran the `$(...)`.
+        for (const std::string& PROMPT : {"fix " + TOUCH + " and `touch " + CANARY.string() + "` for $HOME's \"quoted\" \\ it's\nok", "%P%" + TOUCH,
+                                          "\"%P%\"" + TOUCH, "x %P% %P%' " + TOUCH + " '%P%"}) {
         const auto ITEMS = OmarchySearch::promptAllAgents(PROMPT);
         CHECK(ITEMS.size() == 10);
         for (const auto& IT : ITEMS) {
@@ -211,6 +216,10 @@ int main() {
             CHECK(got.str() == PROMPT);
             CHECK(!fs::exists(CANARY));
         }
+        }
+        // The placeholder only ever comes from the template.
+        CHECK(OmarchySearch::agentCommand("run \"%P%\" then %P%", "%P%") == "run '%P%' then '%P%'");
+        CHECK(OmarchySearch::agentCommand("run \"%P%\" x", "") == "run  x");
         fs::remove_all(DIR);
     }
 

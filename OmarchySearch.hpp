@@ -61,6 +61,9 @@ bool canBeDefaultAgent(const SSearchItem& item);
 bool isDefaultAgent(const SSearchItem& item);
 bool setDefaultAgent(const SSearchItem& item);
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
+// An agent's command template with the prompt in it, shell-quoted, in one pass
+// (no inserted text is rescanned). Pure, host-tested.
+std::string agentCommand(const std::string& tmpl, const std::string& prompt);
 std::vector<SSearchItem> searchMenu(const std::string& query, size_t limit = 10);
 std::vector<SSearchItem> fileResults();
 bool fileSearchBusy();
