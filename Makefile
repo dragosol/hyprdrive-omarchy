@@ -1,7 +1,10 @@
 CXX ?= g++
 
-# ponytail: Fedora ships lua.pc, Arch lua5.4.pc
-LUA_PC := $(shell pkg-config --exists lua5.4 && echo lua5.4 || echo lua)
+# The Lua Hyprland itself is linked to (scripts/lua_pc.sh): its headers' constants
+# must match the liblua the compositor runs. Arch has `lua` 5.5 (Hyprland's) AND
+# `lua54` (via libinput); the old "lua5.4 whenever it exists" pick crashed
+# `hyprctl hyprdrive-binds` (dragosol/Hyprdrive#1).
+LUA_PC := $(shell sh scripts/lua_pc.sh)
 
 # Parallel by default: the edit->build->hyprrestart->gate loop lives and dies
 # by this. Override with make -j1 for readable error output.

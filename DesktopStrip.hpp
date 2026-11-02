@@ -89,8 +89,11 @@ namespace ScrollOverview::DesktopStrip {
     // for, not the animation's fixed one (DesktopStrip.cpp, A QUICK WAY BACK).
     void quickenSwipeRelease(const PHLMONITOR& mon);
 
-    // render.pre: the row's place for this frame (and the swipe's samples).
+    // render.pre: the row's place for this frame.
     void preRender(const PHLMONITOR& mon);
+    // render.pre, AFTER Mosaic::preRender: where a live swipe has the desktop,
+    // for the fingers' speed at its release.
+    void sampleSwipe(const PHLMONITOR& mon);
 
     std::string debugReport();
 }

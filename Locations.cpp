@@ -560,8 +560,7 @@ void emptyTrash() {
     if (!bus)
         return;
 
-    sd_bus_error    error = SD_BUS_ERROR_NULL;
-    sd_bus_message* msg   = nullptr;
+    sd_bus_message* msg = nullptr;
 
     // ask_confirmation TRUE, exactly as `launchAction` passes it. The dialog is
     // Nautilus's, and it is the only thing between a stray click and the user's
@@ -572,14 +571,18 @@ void emptyTrash() {
         sd_bus_message_open_container(msg, 'a', "{sv}"); // platform_data: no parent handle to give
         sd_bus_message_close_container(msg);
 
-        // Not bounded the way the poll is: this one is a USER ACTION, it may
-        // legitimately have to start Nautilus, and it happens on a click rather
-        // than once a second. Emptying the trash is worth a frame.
-        sd_bus_call(bus, msg, 0, &error, nullptr);
+        // NO REPLY EXPECTED, as DockStacks' Sushi call (GitHub #3, thanks
+        // @whogotpwned). Nautilus is D-Bus ACTIVATED: on a cold click the bus
+        // daemon has to start it first, and a blocking sd_bus_call froze the
+        // whole compositor for all of that startup (~15 s). The reply was never
+        // read anyway. Queued instead -- the bus daemon holds it until Nautilus
+        // has started -- and flushed, since this connection only watches
+        // READABLE. Nautilus still asks before it empties anything.
+        sd_bus_message_set_expect_reply(msg, 0);
+        if (sd_bus_send(bus, msg, nullptr) >= 0)
+            sd_bus_flush(bus);
         sd_bus_message_unref(msg);
     }
-
-    sd_bus_error_free(&error);
 }
 
 void unmount(const std::string& uri, bool eject) {

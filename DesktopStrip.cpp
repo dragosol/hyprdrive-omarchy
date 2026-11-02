@@ -499,8 +499,10 @@ namespace ScrollOverview::DesktopStrip {
         constexpr double RELEASE_MIN_S    = 0.08;
         constexpr double EASE_SLOPE       = 4.0; // an ease-out's starting speed, in distances per duration
 
-        // render.pre while the fingers are down: where the swiped desktop is.
-        void sampleSwipe(const PHLMONITOR& mon) {
+        // render.pre while the fingers are down, after Mosaic's (which
+        // re-scales a swiped canvas desktop's offset on every frame a finger
+        // moved): where the swiped desktop is.
+        void sampleSwipeAt(const PHLMONITOR& mon) {
             const auto ACTIVE = mon->m_activeWorkspace;
             if (!ACTIVE || !ACTIVE->m_forceRendering || !ACTIVE->m_renderOffset || !g_pUnifiedWorkspaceSwipe || !g_pUnifiedWorkspaceSwipe->isGestureInProgress())
                 return;
@@ -542,28 +544,60 @@ namespace ScrollOverview::DesktopStrip {
                 v = (g_swipe.o[1] - g_swipe.o[0]) / DT;
         }
         g_swipe = {};
+        // AN ANIMATED VARIABLE HOLDS ITS CONFIG WEAKLY, and one whose config is
+        // gone finishes its animation in ONE frame (user, 2026-11-02: the
+        // desktop peeked from "instantly snaps back", and the one peeked jumped
+        // further out first). Hyprland's swipe never sets a config of its own,
+        // so this release's slides started on the LAST release's timings --
+        // freed below before they could be replaced. Every desktop slide on a
+        // timing of ours, or on one already gone, gets Hyprland's own back
+        // first; only then are this release's made.
+        const auto TREE = ::Config::animationTree()->getAnimationPropertyConfig("workspacesIn");
+        for (const auto& REF : State::workspaceState()->workspaces()) {
+            const auto WS = REF.lock();
+            if (!WS || WS->m_isSpecialWorkspace || !WS->m_renderOffset)
+                continue;
+            const auto CFG  = WS->m_renderOffset->getConfig().lock();
+            const bool OURS = CFG && std::ranges::any_of(g_releaseCfgs, [&CFG](const auto& c) { return c == CFG; });
+            if ((!CFG || OURS) && TREE)
+                WS->m_renderOffset->setConfig(TREE);
+        }
         g_releaseCfgs.clear();
+        // Each desktop the swipe stretched past a canvas overhang starts from
+        // where it was drawn, not from the raw place the last finger event left
+        // (Mosaic.cpp, THE RELEASE STARTS WHERE IT IS DRAWN).
+        Mosaic::swipeReleased(mon);
+
+        // ONE TIME FOR THE WHOLE RELEASE: the desktops came apart when each
+        // took its own, and a swipe catching them mid-way (peeks in quick
+        // succession) snapped them back together. The longest one's.
         static auto PGAP = CConfigValue<::Config::INTEGER>("general:gaps_workspaces");
         const bool  XA   = slideAxisX().value_or(true);
         const double SPAN = (XA ? mon->m_size.x : mon->m_size.y) + sc<double>(*PGAP);
+        std::vector<PHLWORKSPACE> sliding;
+        double                    t = 0, T0 = 0;
         for (const auto& REF : State::workspaceState()->workspaces()) {
             const auto WS = REF.lock();
             if (!WS || WS->m_isSpecialWorkspace || WS->m_monitor.lock() != mon || !WS->m_renderOffset || !WS->m_renderOffset->isBeingAnimated())
                 continue;
             const auto   BASE = WS->m_renderOffset->getConfig().lock();
             const auto   VALS = BASE && BASE->pValues ? BASE->pValues.lock() : BASE;
-            const double T0   = (VALS ? std::max(0.1F, VALS->internalSpeed) : 4.0) * 0.1;
+            const double FULL = (VALS ? std::max(0.1F, VALS->internalSpeed) : 4.0) * 0.1;
             const Vector2D G = WS->m_renderOffset->goal(), V = WS->m_renderOffset->value();
             const double   TO = XA ? G.x - V.x : G.y - V.y, D = std::abs(TO);
             if (D < 1 || SPAN < 1)
                 continue;
-            double t = T0 * std::clamp(std::sqrt(D / SPAN), RELEASE_MIN_FRAC, 1.0);
+            double ti = FULL * std::clamp(std::sqrt(D / SPAN), RELEASE_MIN_FRAC, 1.0);
             if (v * TO > 0) // the fingers were going its way: on at their speed
-                t = std::min(t, EASE_SLOPE * D / std::abs(v));
-            t = std::clamp(t, RELEASE_MIN_S, T0);
-            if (t >= T0 * 0.98)
-                continue;
-            if (auto CFG = timedConfig(BASE, t)) {
+                ti = std::min(ti, EASE_SLOPE * D / std::abs(v));
+            t  = std::max(t, std::clamp(ti, RELEASE_MIN_S, FULL));
+            T0 = std::max(T0, FULL);
+            sliding.push_back(WS);
+        }
+        if (sliding.empty() || t >= T0 * 0.98)
+            return; // the full time anyway: Hyprland's own
+        for (const auto& WS : sliding) {
+            if (auto CFG = timedConfig(WS->m_renderOffset->getConfig().lock(), t)) {
                 WS->m_renderOffset->setConfig(CFG);
                 g_releaseCfgs.push_back(CFG);
             }
@@ -593,6 +627,16 @@ namespace ScrollOverview::DesktopStrip {
             g_stackHook = nullptr;
         }
         g_stacks.clear();
+        // Slides still on a release timing of ours get Hyprland's back first:
+        // freed with this code, theirs would end in one frame.
+        if (const auto TREE = ::Config::animationTree()->getAnimationPropertyConfig("workspacesIn"); TREE && !g_releaseCfgs.empty()) {
+            for (const auto& REF : State::workspaceState()->workspaces()) {
+                const auto WS  = REF.lock();
+                const auto CFG = WS && WS->m_renderOffset ? WS->m_renderOffset->getConfig().lock() : nullptr;
+                if (CFG && std::ranges::any_of(g_releaseCfgs, [&CFG](const auto& c) { return c == CFG; }))
+                    WS->m_renderOffset->setConfig(TREE);
+            }
+        }
         g_releaseCfgs.clear();
         g_swipe = {};
         if (g_timer) {
@@ -759,9 +803,12 @@ namespace ScrollOverview::DesktopStrip {
             end();
     }
 
-    void preRender(const PHLMONITOR& mon) {
+    void sampleSwipe(const PHLMONITOR& mon) {
         if (mon)
-            sampleSwipe(mon);
+            sampleSwipeAt(mon);
+    }
+
+    void preRender(const PHLMONITOR& mon) {
         if (!driving(mon))
             return;
         advance(Clock::now());

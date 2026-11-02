@@ -1,6 +1,7 @@
 #include "OverviewGesture.hpp"
 
 #include "DesktopStrip.hpp"
+#include "Mosaic.hpp"
 #include "DebugPaths.hpp"
 
 #include "Config.hpp"
@@ -235,7 +236,10 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
             const double   GAP   = sc<double>(ScrollOverview::Config::getValue<int>("general:gaps_workspaces"));
             const double   SPAN  = (VERT ? MONITOR->m_size.y : MONITOR->m_size.x) + GAP;
             const double   SWIPE = std::max(1.0, sc<double>(ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_distance")));
-            const double   D     = VERT ? V.y : V.x;
+            // Drawn stretched past a canvas desktop's overhang (Mosaic's swipe
+            // stretch): the swipe's own place is that divided back out, or the
+            // desktop jumped outward by the stretch as it was caught.
+            const double   D     = (VERT ? V.y : V.x) / std::max(1.0, ScrollOverview::Mosaic::swipeStretch(MONITOR->m_activeWorkspace, MONITOR, V));
             if (std::abs(D) >= 0.5 && SPAN > 1)
                 g_pUnifiedWorkspaceSwipe->update(-D / SPAN * SWIPE);
         }

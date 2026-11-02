@@ -73,6 +73,13 @@ namespace ScrollOverview::Mosaic {
     // past its `side` edge (-1 left/top, +1 right/bottom) along the slide's
     // axis: the desktop strip leaves that much room beside it. 0 off a canvas.
     double slideOverhang(const PHLWORKSPACE& ws, const PHLMONITOR& monitor, int side, bool xax);
+    // A swipe let go on `monitor` (after Hyprland's end): each desktop the swipe
+    // stretched starts its release from its stretched place, not the raw one
+    // the last finger event left (Mosaic.cpp, THE RELEASE STARTS WHERE IT IS DRAWN).
+    void swipeReleased(const PHLMONITOR& monitor);
+    // How far the swipe stretches `ws` at `offset` (1 = not at all): a drawn
+    // offset divided by it is the swipe's own.
+    double swipeStretch(const PHLWORKSPACE& ws, const PHLMONITOR& monitor, const Vector2D& offset);
     // The whole canvas in global layout coordinates at the current view, for
     // the overview's strip thumbnail (the whole canvas, zoomed out). Nothing
     // when the desktop is not on its canvas.

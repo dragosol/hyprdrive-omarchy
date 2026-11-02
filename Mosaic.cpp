@@ -2205,6 +2205,8 @@ namespace ScrollOverview::Mosaic {
             Vector2D arriveSet;               // the offset preRender last set while it arrives (arrivalFrame)
             Vector2D leaveSet;                // ... and while a swipe takes it away
             bool     leaveScaled = false;     // a swipe took it away stretched: the release goes as far (arrivalFrame)
+            bool     swipeScaled = false;     // this swipe stretched it (swipeReleased)
+            Vector2D swipeSet;                // ... to here, last
             Vector2D tailGoal, tailLast;
             SP<Hyprutils::Animation::SAnimationPropertyConfig> prevConfig; // the desktop animation's own, back after the tail
             // The tail's: an animated variable holds its config WEAKLY, so this
@@ -3521,7 +3523,9 @@ namespace ScrollOverview::Mosaic {
             const double   K   = (SPAN + O + SLIDE_MARGIN) / SPAN;
             const Vector2D NEW = XAX ? Vector2D{V.x * K, V.y} : Vector2D{V.x, V.y * K};
             OFFV->setValueAndWarp(NEW);
-            SET = NEW;
+            SET                    = NEW;
+            A->m_slide.swipeScaled = true;
+            A->m_slide.swipeSet    = NEW;
             if (SHOWN)
                 A->m_slide.leaveScaled = true;
             return;
@@ -3543,6 +3547,83 @@ namespace ScrollOverview::Mosaic {
             const double K = (SPAN + O + SLIDE_MARGIN) / SPAN;
             trace(std::format("swipe release goes past the overhang: {:.0f} -> {:.0f}", G, G * K));
             *OFFV = XAX ? Vector2D{GOAL.x * K, GOAL.y} : Vector2D{GOAL.x, GOAL.y * K};
+        }
+    }
+
+    // A swiped canvas desktop's stretch at offset `d` (arrivalFrame's): 1 off
+    // a canvas or with nothing hanging past the edge it comes in by.
+    static double swipeStretchOf(CMosaicAlgorithm* A, const PHLWORKSPACE& ws, const PHLMONITOR& mon, const Vector2D& v) {
+        const bool   XAX  = std::abs(v.x) >= std::abs(v.y);
+        const double D    = XAX ? v.x : v.y;
+        const double SPAN = XAX ? mon->m_size.x : mon->m_size.y;
+        if (!A->arrangedAsCanvas() || std::abs(D) < 0.5 || SPAN < 1)
+            return 1.0;
+        const double O = A->nearOverhang(ws, mon, D, XAX);
+        return O < 1 ? 1.0 : (SPAN + O + SLIDE_MARGIN) / SPAN;
+    }
+
+    double swipeStretch(const PHLWORKSPACE& ws, const PHLMONITOR& monitor, const Vector2D& offset) {
+        if (!ws || !monitor)
+            return 1.0;
+        for (auto* A : g_instances)
+            if (A->workspace() == ws)
+                return swipeStretchOf(A, ws, monitor, offset);
+        return 1.0;
+    }
+
+    // THE RELEASE STARTS WHERE IT IS DRAWN (user, 2026-11-02, spamming peeks:
+    // the desktop peeked at "overextends ... beyond peek positions" when let
+    // go). A swipe sets each desktop's RAW offset on every finger event, and
+    // arrivalFrame stretches it past the overhang only before the next frame.
+    // Let go between the two -- a quick peek, released straight after the
+    // fingers moved -- and Hyprland's release began from the raw place, an
+    // overhang nearer than the frame on screen: the desktop leapt in by that
+    // much, then slid away. Every desktop this swipe stretched now starts its
+    // release from its stretched place.
+    void swipeReleased(const PHLMONITOR& monitor) {
+        if (!monitor)
+            return;
+        for (auto* A : g_instances) {
+            const auto WS = A->workspace();
+            if (!WS || WS->m_isSpecialWorkspace || !WS->m_renderOffset || WS->m_monitor.lock() != monitor || !A->m_slide.swipeScaled)
+                continue;
+            A->m_slide.swipeScaled = false;
+            auto& OFFV             = WS->m_renderOffset;
+            if (!OFFV->isBeingAnimated())
+                continue;
+            const Vector2D V = OFFV->value(), G = OFFV->goal();
+            // From where it was drawn: the raw place stretched, unless a frame
+            // already stretched it.
+            Vector2D start = V;
+            if (V.distance(A->m_slide.swipeSet) >= 0.01) {
+                const double K   = swipeStretchOf(A, WS, monitor, V);
+                const bool   XAX = std::abs(V.x) >= std::abs(V.y);
+                if (K > 1.0)
+                    start = XAX ? Vector2D{V.x * K, V.y} : Vector2D{V.x, V.y * K};
+            }
+            // GOING AWAY, AS FAR AS IT WAS STRETCHED (user, 2026-11-02: with
+            // the peeked desktop's windows hanging toward this one, the peek
+            // "overextends once I release"). Hyprland sends a desktop going
+            // away -- a peek let go, or the one a switch left -- a plain screen
+            // off: nearer than its stretched place, so it came back IN across
+            // its overhang first. Its goal is stretched the same way, so it only
+            // ever moves out (arrivalFrame's release branch had done this for
+            // the one a switch left, a frame late: done here, once).
+            Vector2D     goal = G;
+            const bool   GX   = std::abs(G.x) >= std::abs(G.y);
+            const double GD = GX ? G.x : G.y, SPAN = GX ? monitor->m_size.x : monitor->m_size.y;
+            if (!shownNowOn(WS) && std::abs(GD) >= SPAN * 0.99) {
+                const double K = swipeStretchOf(A, WS, monitor, G);
+                if (K > 1.0)
+                    goal = GX ? Vector2D{G.x * K, G.y} : Vector2D{G.x, G.y * K};
+                A->m_slide.leaveScaled = false;
+            }
+            if (start.distance(V) < 0.01 && goal.distance(G) < 0.01)
+                continue;
+            trace(std::format("swipe release from where it is drawn: {:.0f} -> {:.0f}, to {:.0f} -> {:.0f}", GX ? V.x : V.y, GX ? start.x : start.y, GD,
+                              GX ? goal.x : goal.y));
+            OFFV->setValue(start); // the same release, from there...
+            *OFFV = goal;          // ... to there
         }
     }
 
