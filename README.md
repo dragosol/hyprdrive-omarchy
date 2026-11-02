@@ -333,7 +333,8 @@ raw.githubusercontent.com: the exact commit the marketplace verified, asked
 with the last ETag so an unchanged registry is not downloaded again), and
 whether a newer version is under review (a search of the marketplace's open
 issues, used only to show its link). The approved version comes only from the
-registry, never from issue text. It sends
+registry, never from issue text. Installing it reads the registry again in full
+first; nothing is ever installed from a cached answer. It sends
 nothing about you or your machine, follows no redirects, waits at most 6
 seconds and caps each answer's size. `hyprdrive update --never-check` turns it
 off; `hyprdrive update --allow-check` turns it back on. Installing an update

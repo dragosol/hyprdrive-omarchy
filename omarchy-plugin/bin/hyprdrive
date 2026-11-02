@@ -66,6 +66,10 @@ INSTALL_JSON = STATE / "install.json"  # written by make install (install-fragme
 NEVER_CHECK = STATE / "no-update-check"
 CHECK_CACHE = CACHE / "update-check.json"
 SNAPSHOT_CACHE = CACHE / "marketplace-snapshot.json"
+# The check cache's format. Before 1.9.40 it held an approval read from issue
+# text; a cache without this exact number is never used, fresh or stale
+# (marketplace review, #11392).
+CACHE_SCHEMA = 2
 CHECK_TTL = 6 * 3600
 CLONE_DIR = HOME / ".local/share/hyprdrive/src"
 
@@ -224,9 +228,11 @@ def published_snapshot(registry):
     return None
 
 
-def approved_release():
+def approved_release(revalidate=False):
     """{'sha', 'version'} for the published snapshot, or None. The registry is
-    asked with the last ETag; an unchanged one reuses the last answer."""
+    asked with the last ETag; an unchanged one reuses the last answer -- for
+    showing it. An install asks with `revalidate`: the whole registry, read and
+    judged again, no cache at all."""
     cached = {}
     try:
         cached = json.loads(SNAPSHOT_CACHE.read_text())
@@ -234,7 +240,8 @@ def approved_release():
         pass
     if not isinstance(cached, dict):
         cached = {}
-    data = fetch(REGISTRY_URL, REGISTRY_MAX, cached.get("etag") if "approved" in cached else None)
+    usable = not revalidate and cached.get("schema") == CACHE_SCHEMA and "approved" in cached
+    data = fetch(REGISTRY_URL, REGISTRY_MAX, cached.get("etag") if usable else None)
     if data is None:
         return cached.get("approved")
     sha = published_snapshot(json.loads(data.decode("utf-8")))
@@ -242,7 +249,7 @@ def approved_release():
     try:
         CACHE.mkdir(parents=True, exist_ok=True)
         tmp = SNAPSHOT_CACHE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"etag": fetch.etag, "approved": approved}))
+        tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "etag": fetch.etag, "approved": approved}))
         tmp.replace(SNAPSHOT_CACHE)
     except OSError:
         pass
@@ -286,8 +293,8 @@ def check(refresh=False):
         cached = json.loads(CHECK_CACHE.read_text())
     except (OSError, ValueError):
         pass
-    if isinstance(cached, dict) and cached.get("repo") != REPO:
-        cached = None  # another Hyprdrive's answer (the native one and this share the file)
+    if isinstance(cached, dict) and (cached.get("repo") != REPO or cached.get("schema") != CACHE_SCHEMA):
+        cached = None  # another Hyprdrive's answer (the two share the file), or an older format
     fresh = (isinstance(cached, dict) and not refresh and time.time() - cached.get("checkedAt", 0) < CHECK_TTL)
     remote = cached.get("remote") if fresh else None
     if not remote:
@@ -299,12 +306,12 @@ def check(refresh=False):
         except (OSError, ValueError, urllib.error.URLError) as e:
             out["error"] = "could not reach GitHub: %s" % (getattr(e, "reason", None) or e)
             if isinstance(cached, dict) and cached.get("remote"):
-                remote = cached["remote"]  # stale beats nothing
+                remote = cached["remote"]  # stale beats nothing -- to show; update() installs nothing from it
         else:
             try:
                 CACHE.mkdir(parents=True, exist_ok=True)
                 tmp = CHECK_CACHE.with_suffix(".tmp")
-                tmp.write_text(json.dumps({"repo": REPO, "checkedAt": time.time(), "remote": remote}))
+                tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "repo": REPO, "checkedAt": time.time(), "remote": remote}))
                 tmp.replace(CHECK_CACHE)
             except OSError:
                 pass
@@ -499,8 +506,12 @@ def update(flags):
         print(json.dumps(r) if "--json" in flags else describe(r))
         return 0
     print(describe(r))
+    if r["error"]:
+        # Whatever is shown came from the cache: never install from it.
+        print("Nothing installed: GitHub could not be reached to confirm the versions.")
+        return 1
     if not r["latest"] and not r["approvedNewer"]:
-        return 1 if r["error"] else 0
+        return 0
     info = install_info()
     yes = "--yes" in flags
     installed = parse_version(r["installed"])
@@ -512,8 +523,19 @@ def update(flags):
     def from_github():
         return install(latest["tag"], "v%s from GitHub" % latest["version"], yes, info)
 
-    def from_marketplace():
-        return install(approved["sha"], "v%s, the version the marketplace approved" % approved["version"], yes, info)
+    def from_marketplace(label="the version the marketplace approved", ask=yes):
+        # Resolved again from the registry right before building: only the
+        # commit the published snapshot names now is installed, never one from
+        # the check's answer or any cache of it (marketplace review, #11392).
+        try:
+            now = approved_release(revalidate=True)
+        except (OSError, ValueError, urllib.error.URLError) as e:
+            print("Nothing installed: the marketplace's registry could not be read (%s)." % (getattr(e, "reason", None) or e))
+            return 1
+        if not now or not newer(parse_version(now.get("version", "")), installed):
+            print("No marketplace-approved version is newer than yours.")
+            return 0
+        return install(now["sha"], "v%s, %s" % (now["version"], label), ask, info)
 
     if FLAVOR != "omarchy":
         if newer(latest_v, installed):
@@ -552,7 +574,7 @@ def update(flags):
     except EOFError:
         pick = ""
     if pick.startswith("a"):
-        return install(approved["sha"], "v%s (approved)" % approved["version"], True, info)
+        return from_marketplace("approved", True)
     if pick.startswith("g"):
         return install(latest["tag"], "v%s from GitHub" % latest["version"], True, info)
     print("Nothing changed.")

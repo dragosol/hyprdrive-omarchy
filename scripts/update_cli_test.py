@@ -170,6 +170,65 @@ with tempfile.TemporaryDirectory() as tmp:
     o.update({"--yes"})
     expect(picked == ["v1.9.38"], "nothing approved: offer GitHub")
 
+    # CACHES CANNOT CARRY AN APPROVAL (marketplace review, #11392): an old
+    # issue-derived update-check.json, a failed refresh, and the install path.
+    import time as _t
+    import urllib.error as _ue
+    registry = source(review=rec(requestEventId=7))  # the registry publishes A (1.9.37)
+    o.SNAPSHOT_CACHE.unlink()  # the registry changed: a real server would send a new ETag
+    old_answer = {"latest": {"version": "9.9.9", "tag": "v9.9.9", "url": "x"},
+                  "marketplace": {"approved": {"sha": B, "version": "9.9.9", "issue": 11900}, "pending": None}}
+    legacy = {"repo": REPO, "checkedAt": _t.time(), "remote": old_answer}  # written before 1.9.40: no schema
+    o.CHECK_CACHE.write_text(json.dumps(legacy))
+    r = o.check(refresh=False)
+    expect(r["marketplace"]["approved"]["sha"] == A and B not in json.dumps(r), "a legacy cache, still fresh, is not used: the registry is asked")
+
+    def offline(url, limit=0):
+        raise _ue.URLError("offline")
+    good_json = o.fetch_json
+    o.fetch_json = offline
+    o.CHECK_CACHE.write_text(json.dumps(legacy))
+    r = o.check(refresh=True)
+    expect(r["error"] and r["marketplace"] is None and B not in json.dumps(r), "a failed refresh does not restore a legacy cache")
+    picked.clear()
+    rc = o.update({"--approved", "--yes"})
+    expect(picked == [] and rc == 1, "failed refresh + legacy cache: nothing installed")
+
+    current = dict(legacy, schema=o.CACHE_SCHEMA, checkedAt=0)  # current format, stale, naming B
+    o.CHECK_CACHE.write_text(json.dumps(current))
+    r = o.check(refresh=True)
+    expect(r["error"] and r["marketplace"]["approved"]["sha"] == B, "a failed refresh shows a current-format cache, marked as an error")
+    picked.clear()
+    for flags in ({"--approved", "--yes"}, {"--github", "--yes"}, {"--yes"}):
+        o.update(flags)
+    expect(picked == [], "failed refresh: nothing installed from any cache, whatever it names")
+    o.fetch_json = good_json
+
+    # The install path: the check's answer names B (as a cache could), the
+    # registry -- read again in full, no ETag -- names A. Only A is built.
+    fresh_answer = {"latest": {"version": "9.9.9", "tag": "v9.9.9", "url": "x"},
+                    "marketplace": {"approved": {"sha": B, "version": "9.9.9"}, "pending": None}}
+    o.CHECK_CACHE.write_text(json.dumps({"schema": o.CACHE_SCHEMA, "repo": REPO, "checkedAt": _t.time(), "remote": fresh_answer}))
+    o.SNAPSHOT_CACHE.write_text(json.dumps({"schema": o.CACHE_SCHEMA, "etag": "W/1", "approved": {"sha": B, "version": "9.9.9"}}))
+    real_check = o.check
+    o.check = lambda refresh=False: real_check(refresh=False)  # use the cached answer naming B
+    picked.clear(); seen.clear()
+    o.update({"--approved", "--yes"})
+    expect(picked == [A], "--approved builds the commit the registry names now, not the cached one")
+    expect((o.REGISTRY_URL, None) in seen, "the install reads the whole registry again (no ETag, no snapshot cache)")
+    registry = source(base=rec(outcome="review-required", capabilities=["installer"]))  # nothing verified any more
+    picked.clear()
+    o.update({"--approved", "--yes"})
+    expect(picked == [], "the registry no longer verifies it: --approved installs nothing")
+
+    def registry_down(url, limit=0, etag=None):
+        raise _ue.URLError("offline")
+    o.fetch = registry_down
+    picked.clear()
+    o.update({"--approved", "--yes"})
+    expect(picked == [], "the registry cannot be read at install time: nothing installed")
+    o.check = real_check
+
     # the terminal
     os.environ["PATH"] = str(home / "bin")
     (home / "bin").mkdir()
