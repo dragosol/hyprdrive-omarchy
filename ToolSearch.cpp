@@ -144,13 +144,23 @@ namespace ToolSearch {
         // (-1 on a failure to run or a timeout). The script is a constant; the
         // user's text only ever arrives as "$1".."$n", which sh does not
         // re-parse -- there is nothing to escape because nothing is spliced.
-        int runScript(const char* script, const std::vector<std::string>& args, std::string& out) {
-            int fds[2];
+        // `input` goes to the script on stdin: the text a user typed (the word
+        // to define, the text to translate) is never in an argument list, which
+        // every local account can read in /proc/<pid>/cmdline (marketplace
+        // review, #11392). `args` hold only what is not theirs to keep private.
+        int runScript(const char* script, const std::vector<std::string>& args, std::string& out, const std::string& input = {}) {
+            int fds[2], in[2];
             if (pipe2(fds, O_CLOEXEC) != 0)
                 return -1;
+            if (pipe2(in, O_CLOEXEC) != 0) {
+                close(fds[0]);
+                close(fds[1]);
+                return -1;
+            }
 
             posix_spawn_file_actions_t actions;
             posix_spawn_file_actions_init(&actions);
+            posix_spawn_file_actions_adddup2(&actions, in[0], STDIN_FILENO);
             posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
             posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
             posix_spawn_file_actions_addclose(&actions, fds[0]);
@@ -166,11 +176,22 @@ namespace ToolSearch {
             const int  RC  = posix_spawnp(&pid, "sh", &actions, nullptr, argv.data(), environ);
             posix_spawn_file_actions_destroy(&actions);
             close(fds[1]);
+            close(in[0]);
             if (RC != 0) {
                 close(fds[0]);
+                close(in[1]);
                 return -1;
             }
             g_child.store(pid);
+            // A few hundred bytes at most, well inside the pipe's buffer; the
+            // script reads it before it writes anything.
+            for (size_t done = 0; done < input.size();) {
+                const ssize_t N = write(in[1], input.data() + done, input.size() - done);
+                if (N <= 0)
+                    break;
+                done += sc<size_t>(N);
+            }
+            close(in[1]);
 
             const auto DEADLINE = std::chrono::steady_clock::now() + std::chrono::milliseconds(RUN_MAX_MS);
             char       buf[4096];
@@ -271,10 +292,20 @@ namespace ToolSearch {
         // reason a real word misses). 22 is curl's HTTP-error exit; anything
         // else is the network, which is reported as such rather than as "no
         // such word".
+        // The word (path-encoded, then its lower-case form) arrives on stdin,
+        // one per line; curl reads its URL from a config on stdin and jq its
+        // input from a here-document, so it is in no argument list.
         constexpr const char* DEFINE_SCRIPT = R"SH(
-for t in "$1" "$2"; do
-  out=$(curl -sS -f -m 7 -H "User-Agent: $4" "https://en.wiktionary.org/api/rest_v1/page/definition/$t"); rc=$?
-  if [ "$rc" -eq 0 ]; then printf '%s' "$out" | jq -r "$3"; exit 0; fi
+IFS= read -r w1; IFS= read -r w2
+for t in "$w1" "$w2"; do
+  out=$(curl -sS -f -m 7 -H "User-Agent: $2" -K - <<EOF
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/$t"
+EOF
+); rc=$?
+  if [ "$rc" -eq 0 ]; then jq -r "$1" <<EOF
+$out
+EOF
+exit 0; fi
   [ "$rc" -eq 22 ] || exit 2
 done
 exit 3
@@ -289,16 +320,25 @@ exit 3
         // scores as near-exact (>= 0.95). Below that its "matches" include fuzzy
         // hits on OTHER sentences, some not even in the target language (seen:
         // "The book is on the table" offered for a French translation).
+        // The text arrives on stdin (curl's q@-); the reply reaches jq through a
+        // here-document. Neither is ever an argument.
         constexpr const char* MYMEMORY_SCRIPT = R"SH(
-out=$(curl -sS -f -m 8 -G "https://api.mymemory.translated.net/get" --data-urlencode "q=$1" --data-urlencode "langpair=$2|$3") || exit 2
-printf '%s' "$out" | jq -r '([(.responseStatus|tostring), (.responseData.detectedLanguage // ""), (.responseData.translatedText // "")] | @tsv), ([.matches[]? | select(((.match // 0) | tonumber? // 0) >= 0.95) | .translation] | map(select(. != null and . != "")) | unique | .[:4][] | ["alt", .] | @tsv)'
+out=$(curl -sS -f -m 8 -G "https://api.mymemory.translated.net/get" --data-urlencode "q@-" --data-urlencode "langpair=$1|$2") || exit 2
+jq -r '([(.responseStatus|tostring), (.responseData.detectedLanguage // ""), (.responseData.translatedText // "")] | @tsv), ([.matches[]? | select(((.match // 0) | tonumber? // 0) >= 0.95) | .translation] | map(select(. != null and . != "")) | unique | .[:4][] | ["alt", .] | @tsv)' <<EOF
+$out
+EOF
 )SH";
 
         // -- LibreTranslate-compatible (self-hosted). "auto" is its detect.
         constexpr const char* LIBRE_SCRIPT = R"SH(
-body=$(jq -nc --arg q "$1" --arg s "$2" --arg t "$3" '{q:$q,source:$s,target:$t,format:"text"}')
-out=$(curl -sS -f -m 10 -X POST "$4/translate" -H 'Content-Type: application/json' -d "$body") || exit 2
-printf '%s' "$out" | jq -r '["200", (.detectedLanguage.language // ""), (.translatedText // "")] | @tsv'
+body=$(jq -nc --rawfile q /dev/stdin --arg s "$1" --arg t "$2" '{q:$q,source:$s,target:$t,format:"text"}')
+out=$(curl -sS -f -m 10 -X POST "$3/translate" -H 'Content-Type: application/json' --data-binary @- <<EOF
+$body
+EOF
+) || exit 2
+jq -r '["200", (.detectedLanguage.language // ""), (.translatedText // "")] | @tsv' <<EOF
+$out
+EOF
 )SH";
 
         constexpr const char* USER_AGENT = "hyprdrive-omarchy (https://github.com/dragosol/hyprdrive-omarchy)";
@@ -314,7 +354,7 @@ printf '%s' "$out" | jq -r '["200", (.detectedLanguage.language // ""), (.transl
                 std::string word = Q.term;
                 std::ranges::replace(word, ' ', '_');
                 std::string out;
-                const int   RC = runScript(DEFINE_SCRIPT, {urlPathEncode(word), urlPathEncode(lower(word)), DEFINE_JQ, USER_AGENT}, out);
+                const int   RC = runScript(DEFINE_SCRIPT, {DEFINE_JQ, USER_AGENT}, out, urlPathEncode(word) + "\n" + urlPathEncode(lower(word)) + "\n");
                 if (RC == 2 || RC < 0) {
                     res.state = SResult::EState::Error;
                     return res;
@@ -333,7 +373,7 @@ printf '%s' "$out" | jq -r '["200", (.detectedLanguage.language // ""), (.transl
             const bool  LIBRE = !r.endpoint.empty();
             const auto  FROM  = Q.from.empty() ? (LIBRE ? "auto" : "autodetect") : Q.from;
             std::string out;
-            const int   RC = LIBRE ? runScript(LIBRE_SCRIPT, {Q.term, FROM, Q.to, r.endpoint}, out) : runScript(MYMEMORY_SCRIPT, {Q.term, FROM, Q.to}, out);
+            const int   RC = LIBRE ? runScript(LIBRE_SCRIPT, {FROM, Q.to, r.endpoint}, out, Q.term) : runScript(MYMEMORY_SCRIPT, {FROM, Q.to}, out, Q.term);
 
             res.title = Q.term;
             if (RC != 0) {

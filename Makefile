@@ -67,6 +67,8 @@ check: hyprdrive.so
 	python3 scripts/hdicons_test.py
 	python3 scripts/update_cli_test.py
 	python3 scripts/keybind_editor_test.py
+	python3 scripts/agent_run_test.py
+	python3 scripts/tool_scripts_test.py
 
 PREFIX ?= $(HOME)/.local
 
@@ -76,6 +78,7 @@ PREFIX ?= $(HOME)/.local
 install: hyprdrive.so check
 	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
 	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
+	install -Dm755 libexec/agent-run $(PREFIX)/lib/hyprdrive/agent-run
 	bash scripts/install-fragments.sh
 
 uninstall:

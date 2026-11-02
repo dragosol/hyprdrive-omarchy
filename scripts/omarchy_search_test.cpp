@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
 
 static int s_testsPassed = 0;
 
@@ -87,13 +88,13 @@ int main() {
         CHECK(!grokResults.empty());
         CHECK(grokResults.front().name.find("Grok") != std::string::npos);
         CHECK(grokResults.front().category == "AI Agent");
-        CHECK(grokResults.front().actionCommand.find("what is the weather today") != std::string::npos);
+        CHECK(grokResults.front().agentPrompt == "what is the weather today" && grokResults.front().actionCommand.find("weather") == std::string::npos);
 
         auto agyResults = OmarchySearch::searchAgents("/agy solve this problem");
         CHECK(!agyResults.empty());
         CHECK(agyResults.front().name.find("AGY") != std::string::npos || agyResults.front().name.find("Antigravity") != std::string::npos);
         CHECK(agyResults.front().category == "AI Agent");
-        CHECK(agyResults.front().actionCommand.find("solve this problem") != std::string::npos);
+        CHECK(agyResults.front().agentPrompt == "solve this problem" && agyResults.front().actionCommand.find("solve") == std::string::npos);
 
         auto all = OmarchySearch::promptAllAgents("what is the weather today");
         // Sentence queries only list agents that are installed and logged in
@@ -101,7 +102,7 @@ int main() {
         CHECK(all.size() < 8);
         for (const auto& it : all) {
             CHECK(it.description == "what is the weather today");
-            CHECK(it.actionCommand.find("what is the weather today") != std::string::npos);
+            CHECK(it.agentPrompt == "what is the weather today" && it.actionCommand.find("weather") == std::string::npos);
             CHECK(it.kind == OmarchySearch::EItemKind::Agent);
         }
 
@@ -173,10 +174,12 @@ int main() {
         CHECK(!overviewSpacePreviews(ESearchIntent::Hovering, false, true, true));
     }
 
-    // Agent prompts reach `bash -c` (activate()) as typed text, never as shell
-    // (marketplace review, #11012). Every agent's real command is run through
-    // bash with stand-in launchers first in PATH that record the last argv word
-    // -- the prompt -- byte for byte. A canary file must not appear.
+    // An agent's prompt is TYPED into it by agent-run, never passed as an
+    // argument (marketplace review, #11392: /proc/<pid>/cmdline is readable by
+    // every local account). No row's command holds any of the prompt; the
+    // prompt goes to a 0600 file in a 0700 directory; every agent's real
+    // command, run through bash with stand-in launchers and agents and the real
+    // agent-run, gets it typed byte for byte and the file is gone after.
     {
         namespace fs = std::filesystem;
         char tmpl[] = "/tmp/hd-agent-test-XXXXXX";
@@ -186,40 +189,80 @@ int main() {
         for (const char* ID : {"grok", "antigravity", "gemini", "claude", "opencode", "codex", "copilot", "crush", "pi", "agent"})
             std::ofstream(USAGE / (std::string(ID) + ".json")) << "{\"ready\": true}";
         setenv("XDG_STATE_HOME", DIR.c_str(), 1);
+        const fs::path RUN = DIR / "run";
+        fs::create_directories(RUN);
+        fs::permissions(RUN, fs::perms::owner_all, fs::perm_options::replace);
+        setenv("XDG_RUNTIME_DIR", RUN.c_str(), 1);
+
+        // agent-run beside this binary, where agentRunner() looks.
+        const fs::path RUNNER = OmarchySearch::agentRunner();
+        CHECK(!RUNNER.empty());
+        fs::copy_file("libexec/agent-run", RUNNER, fs::copy_options::overwrite_existing);
+        fs::permissions(RUNNER, fs::perms::owner_all);
+
         const fs::path BIN = DIR / "bin";
         fs::create_directories(BIN);
-        for (const char* L : {"omarchy-launch-tui", "omarchy-agent"}) {
-            std::ofstream(BIN / L) << "#!/bin/bash\nprintf '%s' \"${@: -1}\" > \"$HD_GOT\"\n";
-            fs::permissions(BIN / L, fs::perms::owner_all);
-        }
-        const fs::path CANARY = DIR / "pwned";
-        const std::string TOUCH = "$(touch " + CANARY.string() + ")";
-        // The placeholder itself inside the prompt (marketplace review,
-        // #11392): a pass that rescanned inserted text spliced a second
-        // quoted copy into the first, and `%P%$(...)` ran the `$(...)`.
-        for (const std::string& PROMPT : {"fix " + TOUCH + " and `touch " + CANARY.string() + "` for $HOME's \"quoted\" \\ it's\nok", "%P%" + TOUCH,
-                                          "\"%P%\"" + TOUCH, "x %P% %P%' " + TOUCH + " '%P%"}) {
-        const auto ITEMS = OmarchySearch::promptAllAgents(PROMPT);
+        // The launcher drops its --app-id and runs the rest here; every agent
+        // asks for bracketed paste and records what it is typed.
+        std::ofstream(BIN / "omarchy-launch-tui") << "#!/bin/sh\nshift\nexec \"$@\"\n";
+        const fs::path FAKE = DIR / "fake-agent.py";
+        std::ofstream(FAKE) << "import os, sys\n"
+                               "sys.stdout.write('\\x1b[?2004hagent> '); sys.stdout.flush()\n"
+                               "got = b''\n"
+                               "while not (b'\\x1b[201~' in got and got.endswith(b'\\n')):\n"
+                               "    c = os.read(0, 4096)\n"
+                               "    if not c: break\n"
+                               "    got += c\n"
+                               "open(os.environ['HD_GOT'], 'wb').write(got)\n";
+        for (const char* A : {"grok", "agy", "gemini", "claude", "opencode", "codex", "copilot", "crush", "pi", "omarchy-agent"})
+            std::ofstream(BIN / A) << "#!/bin/sh\nexec python3 '" << FAKE.string() << "'\n";
+        for (const auto& E : fs::directory_iterator(BIN))
+            fs::permissions(E.path(), fs::perms::owner_all);
+
+        const fs::path    CANARY = DIR / "pwned";
+        const std::string TOUCH  = "$(touch " + CANARY.string() + ")";
+        const std::string PROMPT = "SECRET-7f3a fix " + TOUCH + " and `touch " + CANARY.string() + "` for $HOME's \"quoted\" \\ %P% it's\nsecond line";
+        const auto        ITEMS  = OmarchySearch::promptAllAgents(PROMPT);
         CHECK(ITEMS.size() == 10);
         for (const auto& IT : ITEMS) {
+            CHECK(IT.actionCommand.find("SECRET") == std::string::npos);
+            CHECK(IT.actionCommand.find("touch") == std::string::npos);
+            CHECK(IT.agentPrompt == PROMPT);
+            CHECK(IT.actionCommand.find("--prompt-file @HYPRDRIVE_PROMPT_FILE@ -- ") != std::string::npos);
+
+            const std::string PATH = OmarchySearch::writePromptFile(IT.agentPrompt);
+            CHECK(!PATH.empty());
+            struct stat st {};
+            CHECK(stat(PATH.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+            CHECK(stat((RUN / "hyprdrive").c_str(), &st) == 0 && (st.st_mode & 0777) == 0700);
+            std::stringstream body;
+            body << std::ifstream(PATH).rdbuf();
+            CHECK(body.str() == PROMPT);
+
+            const std::string CMD = OmarchySearch::withPromptFile(IT.actionCommand, PATH);
+            CHECK(CMD.find("@HYPRDRIVE_PROMPT_FILE@") == std::string::npos && CMD.find("SECRET") == std::string::npos);
             const fs::path GOT = DIR / "got";
             fs::remove(GOT);
-            // hand actionCommand to bash -c exactly as activate() does: as one argv word, via a file
-            std::ofstream(DIR / "cmd") << IT.actionCommand;
-            const int RC = std::system(("env PATH='" + BIN.string() + ":/usr/bin:/bin' HD_GOT='" + GOT.string() + "' /bin/bash -c \"$(cat '" + (DIR / "cmd").string() + "')\"").c_str());
+            std::ofstream(DIR / "cmd") << CMD;
+            // as activate() runs it: bash -c, the command one argv word
+            const int RC = std::system(("env PATH='" + BIN.string() + ":/usr/bin:/bin' HD_GOT='" + GOT.string() + "' /bin/bash -c \"$(cat '" +
+                                        (DIR / "cmd").string() + "')\" </dev/null >/dev/null 2>&1")
+                                           .c_str());
             CHECK(RC == 0);
-            std::ifstream f(GOT);
             std::stringstream got;
-            got << f.rdbuf();
-            if (got.str() != PROMPT)
+            got << std::ifstream(GOT).rdbuf();
+            if (got.str() != "\x1b[200~" + PROMPT + "\x1b[201~\n")
                 std::cerr << IT.name << ": got [" << got.str() << "]" << std::endl;
-            CHECK(got.str() == PROMPT);
+            CHECK(got.str() == "\x1b[200~" + PROMPT + "\x1b[201~\n");
+            CHECK(!fs::exists(PATH));
             CHECK(!fs::exists(CANARY));
         }
-        }
-        // The placeholder only ever comes from the template.
-        CHECK(OmarchySearch::agentCommand("run \"%P%\" then %P%", "%P%") == "run '%P%' then '%P%'");
-        CHECK(OmarchySearch::agentCommand("run \"%P%\" x", "") == "run  x");
+        // A path the command could not carry as it is: refused.
+        CHECK(OmarchySearch::withPromptFile(ITEMS.front().actionCommand, "/tmp/a b").empty());
+        CHECK(OmarchySearch::withPromptFile(ITEMS.front().actionCommand, "/tmp/a'$(id)").empty());
+        // A row without a prompt opens the agent as it is, no runner.
+        for (const auto& IT : OmarchySearch::promptAllAgents(""))
+            CHECK(IT.agentPrompt.empty() && IT.actionCommand.find("agent-run") == std::string::npos);
         fs::remove_all(DIR);
     }
 

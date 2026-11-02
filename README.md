@@ -276,7 +276,8 @@ make all
 make install
 ```
 
-`make install` copies `hyprdrive.so` to `~/.local/lib/hyprdrive/`, lays fragments
+`make install` copies `hyprdrive.so` and `agent-run` (the helper that types an
+agent prompt in, see Network use) to `~/.local/lib/hyprdrive/`, lays fragments
 in `~/.config/hypr/hyprdrive/`, and adds `require("hypr.hyprdrive")` to
 `~/.config/hypr/hyprland.lua` if it is not already there.
 
@@ -310,7 +311,14 @@ a third party:
 Set `search:translate_endpoint` to a self-hosted
 [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) URL to keep
 translations on your own machine. Requests run off the compositor thread via
-`curl` and `jq`, with your text passed as an argument, never through a shell.
+`curl` and `jq`. Your text reaches them on standard input, never as a
+command-line argument (which every local account can read in
+`/proc/<pid>/cmdline`).
+
+**Agent prompts** (`/claude fix the tests` in the search) stay off command
+lines too: the prompt goes to a private file (mode 0600, in
+`$XDG_RUNTIME_DIR/hyprdrive`), and `agent-run` starts the agent without it,
+deletes the file, and types the prompt into the agent once its screen is up.
 
 ```lua
 hl.config({ plugin = { hyprdrive = { search = { dictionary = true, translate = true } } } })

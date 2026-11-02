@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""agent-run --prompt-file FILE -- COMMAND [ARGS...]
+
+Runs an agent CLI on a terminal of its own and TYPES the prompt into it, so
+the prompt is never in any process's argument list (marketplace review,
+#11392: /proc/<pid>/cmdline is readable by every local account, and the
+agent CLIs take an opening prompt only as an argument).
+
+The overview search writes the prompt to FILE -- a fresh 0600 file in
+$XDG_RUNTIME_DIR/hyprdrive -- and passes only its path. This reads it and
+deletes it at once, starts COMMAND on a pseudo-terminal, passes everything
+through to the real terminal, and once the agent's first screen has gone
+quiet types the prompt (as one bracketed paste when the agent has asked for
+those) and presses Enter. Keys typed before that cancel it: the user has
+taken over (the terminal's own replies -- focus events, answers to the
+agent's queries -- are not keys). Exits with the agent's status.
+"""
+import fcntl
+import os
+import pty
+import re
+import select
+import signal
+import stat
+import sys
+import termios
+import time
+import tty
+
+SETTLE_S = 1.0      # output quiet this long: the agent is waiting for input (Claude redraws ~0.6 s in)
+FIRST_WAIT_S = 20.0  # no first screen by then: type it anyway
+PASTE_ON = b"\x1b[?2004h"
+# What a terminal sends by itself -- answers to the agent's queries, focus
+# in/out, cursor reports -- is not the user typing.
+TERMINAL_REPLY = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|O.|[@-Z\\-_])")
+
+
+def read_prompt(path):
+    """The prompt, from a regular file of ours that nobody else can read; the
+    file is removed whatever happens."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return b""
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+            return b""
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def write_all(fd, data):
+    while data:
+        try:
+            n = os.write(fd, data)
+        except InterruptedError:
+            continue
+        data = data[n:]
+
+
+def typed(prompt, paste):
+    body = prompt.rstrip(b"\r\n")
+    if paste:
+        return b"\x1b[200~" + body.replace(b"\x1b[201~", b"") + b"\x1b[201~"
+    # No bracketed paste: a newline would submit half of it.
+    return body.replace(b"\r\n", b" ").replace(b"\n", b" ").replace(b"\r", b" ")
+
+
+def main(argv):
+    if len(argv) < 5 or argv[1] != "--prompt-file" or argv[3] != "--":
+        sys.stderr.write("usage: agent-run --prompt-file FILE -- COMMAND [ARGS...]\n")
+        return 2
+    prompt = read_prompt(argv[2])
+    cmd = argv[4:]
+
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp(cmd[0], cmd)
+        except OSError as e:
+            sys.stderr.write("agent-run: %s: %s\n" % (cmd[0], e.strerror))
+        os._exit(127)
+
+    interactive = os.isatty(0)
+
+    def sync_size(*_):
+        if interactive:
+            try:
+                fcntl.ioctl(master, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))
+            except OSError:
+                pass
+
+    sync_size()
+    signal.signal(signal.SIGWINCH, sync_size)
+    saved = termios.tcgetattr(0) if interactive else None
+    if interactive:
+        tty.setraw(0)
+
+    start = last_out = time.monotonic()
+    seen_output = paste = False
+    tail = b""
+    pending = bool(prompt)
+    stdin_open = True
+    try:
+        while True:
+            fds = [master] + ([0] if stdin_open else [])
+            try:
+                ready, _, _ = select.select(fds, [], [], 0.05)
+            except InterruptedError:
+                continue
+            now = time.monotonic()
+            if master in ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    data = b""
+                if not data:
+                    break
+                write_all(1, data)
+                seen_output, last_out = True, now
+                tail = (tail + data)[-64:]
+                if PASTE_ON in tail:
+                    paste = True
+            if 0 in ready:
+                data = os.read(0, 65536)
+                if not data:
+                    stdin_open = False
+                else:
+                    if TERMINAL_REPLY.sub(b"", data):
+                        pending = False  # the user is typing: theirs, not ours
+                    write_all(master, data)
+            if pending and ((seen_output and now - last_out >= SETTLE_S) or now - start >= FIRST_WAIT_S):
+                pending = False
+                write_all(master, typed(prompt, paste))
+                time.sleep(0.15)
+                write_all(master, b"\r")
+    finally:
+        prompt = b""
+        if saved is not None:
+            termios.tcsetattr(0, termios.TCSADRAIN, saved)
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status) if hasattr(os, "waitstatus_to_exitcode") else (status >> 8)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

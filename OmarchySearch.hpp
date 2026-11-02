@@ -28,6 +28,7 @@ struct SSearchItem {
     std::string iconFont;     // nerd-font family for menu glyphs; empty = JetBrainsMono Nerd Font
     std::string category;     // "Apps", "Omarchy Menu", "AI Agent", "Calculator", "Files", "Settings"
     std::string actionCommand;// shell command or executable
+    std::string agentPrompt;  // an agent row's prompt: written to a 0600 file at activate(), never into actionCommand
     std::string filePath;     // absolute path for files
     uint64_t    fileSizeBytes = 0;
     std::string fileSizeStr;
@@ -61,9 +62,12 @@ bool canBeDefaultAgent(const SSearchItem& item);
 bool isDefaultAgent(const SSearchItem& item);
 bool setDefaultAgent(const SSearchItem& item);
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
-// An agent's command template with the prompt in it, shell-quoted, in one pass
-// (no inserted text is rescanned). Pure, host-tested.
-std::string agentCommand(const std::string& tmpl, const std::string& prompt);
+// A prompt for an agent is typed into it by agent-run, never passed as an
+// argument (OmarchySearch.cpp, A PROMPT IS TYPED). Host-tested.
+std::string agentRunner();
+std::string agentLaunch(const std::string& tmpl, bool withPrompt);
+std::string writePromptFile(const std::string& prompt);
+std::string withPromptFile(const std::string& command, const std::string& path);
 std::vector<SSearchItem> searchMenu(const std::string& query, size_t limit = 10);
 std::vector<SSearchItem> fileResults();
 bool fileSearchBusy();
