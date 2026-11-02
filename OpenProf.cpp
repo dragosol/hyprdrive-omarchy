@@ -1,4 +1,5 @@
 #include "OpenProf.hpp"
+#include "DebugPaths.hpp"
 #include "Config.hpp"
 
 #include <hyprland/src/includes.hpp>
@@ -70,7 +71,7 @@ namespace OpenProf {
         std::unordered_map<MONITORID, CHyprSignalListener> g_commitListeners;
         std::unordered_map<MONITORID, double>            g_period;
 
-        // A/B (touch /tmp/hyprdrive-openprof.ab): alternate Hyprland's frame
+        // A/B (touch $XDG_RUNTIME_DIR/hyprdrive-openprof.ab): alternate Hyprland's frame
         // scheduler per open, and put the user's own value back after each
         // window. Runtime only -- nothing is written to their config.
         int  g_abOpen  = 0;
@@ -163,7 +164,7 @@ namespace OpenProf {
         void flush() {
             if (g_lines.empty())
                 return;
-            if (FILE* f = std::fopen("/tmp/hyprdrive-openprof.log", "a")) {
+            if (FILE* f = ScrollOverview::DebugPaths::openLog("hyprdrive-openprof.log")) {
                 for (const auto& l : g_lines)
                     std::fprintf(f, "%s\n", l.c_str());
                 std::fclose(f);
@@ -285,7 +286,7 @@ namespace OpenProf {
 
     void begin(const char* what) {
         // Read per open, not per load: touch/rm the flag with no reload.
-        if (::access("/tmp/hyprdrive-openprof.on", F_OK) != 0)
+        if (!ScrollOverview::DebugPaths::flagOn("hyprdrive-openprof.on"))
             return;
         flush(); // a previous window cut short by this open
         g_on       = true;
@@ -341,7 +342,7 @@ namespace OpenProf {
             });
         }
         std::string ab;
-        if (::access("/tmp/hyprdrive-openprof.ab", F_OK) == 0) {
+        if (ScrollOverview::DebugPaths::flagOn("hyprdrive-openprof.ab")) {
             abRestore();
             g_abSaved       = ScrollOverview::Config::getValue<int>("render:new_render_scheduling");
             const int SCHED = (g_abOpen++ % 2 == 0) ? 1 : 0;

@@ -5,6 +5,7 @@
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
+#include "DebugPaths.hpp"
 #include "Mosaic.hpp"
 #include "FlightBlur.hpp"
 #include "OpenProf.hpp"
@@ -10453,9 +10454,11 @@ void CScrollOverview::render() {
     if (Prof::enabled() && Prof::pending) {
         ++Prof::frames;
         const auto SINCEKEY = std::chrono::duration<double, std::milli>(Prof::clock::now() - Prof::keyAt).count();
-        if (FILE* const F = std::fopen("/tmp/hyprdrive-prof.log", "a")) {
-            std::fprintf(F, "q=%-6s f=%llu sinceKey=%7.2fms  FRAME=%6.2fms  bg=%6.2fms  live=%6.2fms  strip=%6.2fms  renderSearch=%6.2fms  match=%5.2fms/%llu  rows=%5.2fms  app=%5.2fms  scan=%5.2fms/%llu  TEXT[cold=%llu %6.2fms]  ICON[cold=%llu resolve=%6.2f decode=%6.2f upload=%6.2f]  LETTERS[n=%zu busy=%d]  RETARGET[%d]  SCALE[%.5f]  FIELDW[%.3f]\n",
-                         g_search.query.text.c_str(), (unsigned long long)Prof::frames, SINCEKEY,
+        if (FILE* const F = ScrollOverview::DebugPaths::openLog("hyprdrive-prof.log")) {
+            // The query's LENGTH, never its text: a log of timings has no
+            // business holding what was searched for (marketplace review, #11392).
+            std::fprintf(F, "qlen=%-3zu f=%llu sinceKey=%7.2fms  FRAME=%6.2fms  bg=%6.2fms  live=%6.2fms  strip=%6.2fms  renderSearch=%6.2fms  match=%5.2fms/%llu  rows=%5.2fms  app=%5.2fms  scan=%5.2fms/%llu  TEXT[cold=%llu %6.2fms]  ICON[cold=%llu resolve=%6.2f decode=%6.2f upload=%6.2f]  LETTERS[n=%zu busy=%d]  RETARGET[%d]  SCALE[%.5f]  FIELDW[%.3f]\n",
+                         g_search.query.text.size(), (unsigned long long)Prof::frames, SINCEKEY,
                          Prof::frameNs / 1e6, Prof::bgNs / 1e6, Prof::liveNs / 1e6, Prof::stripNs / 1e6, Prof::srchNs / 1e6,
                          Prof::matchNs / 1e6, (unsigned long long)Prof::matchCalls,
                          Prof::rowsNs / 1e6, Prof::appNs / 1e6, Prof::scanNs / 1e6, (unsigned long long)Prof::scanCalls,

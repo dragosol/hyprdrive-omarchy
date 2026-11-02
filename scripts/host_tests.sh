@@ -48,6 +48,7 @@ run search_letters_test scripts/search_letters_test.cpp
 run workspace_plan_test scripts/workspace_plan_test.cpp
 run strip_layout_test scripts/strip_layout_test.cpp
 run tool_search_test scripts/tool_search_test.cpp
+run debug_paths_test scripts/debug_paths_test.cpp
 run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
 run mount_sort_test scripts/mount_sort_test.cpp
 run gvfs_mount_test scripts/gvfs_mount_test.cpp

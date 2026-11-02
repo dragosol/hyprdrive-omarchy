@@ -113,8 +113,8 @@ namespace ScrollOverview::Stacks {
     // button, a monitor going away). Deliberately not a release: nothing moves.
     void abandonItemDrag();
     bool isOpen();
-    // Stack event log for diagnosis: written only while /tmp/hyprdrive-stacklog.on
-    // exists (touch it / rm it, no reload), to /tmp/hyprdrive-stack.log.
+    // Stack event log for diagnosis: written only while $XDG_RUNTIME_DIR/hyprdrive-stacklog.on
+    // exists (touch it / rm it, no reload), to $XDG_RUNTIME_DIR/hyprdrive-stack.log.
     void traceEvent(const std::string& what);
     // Pointer motion: a pressed fan item pulled far enough becomes a real drag.
     void onPointerMove();

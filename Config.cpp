@@ -167,10 +167,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|type|type \\S+|activate \\S+|tile \\S+|xgeom|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|type|type \\S+|activate \\S+|tile \\S+|xgeom|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
@@ -648,7 +648,7 @@ static void registerConfigValuesFor() {
     // `show-apps-always-in-the-edge`, at the reference's values. The last two are
     // a pair: false/true is what puts the button at the right-hand end of a
     // bottom dock rather than in among the apps.
-    addKey(makeShared<CBoolValue>(KEY("dock:flight_log"), "flight lifecycle log to /tmp/ovdbg.log, for scripts/z_rig.sh + zflight_gate.py", false));
+    addKey(makeShared<CBoolValue>(KEY("dock:flight_log"), "flight lifecycle log to $XDG_RUNTIME_DIR/ovdbg.log, for scripts/z_rig.sh + zflight_gate.py", false));
     addKey(makeShared<CBoolValue>(KEY("dock:show_favorites"), "hyprgnomedock: pinned apps in the dock whether running or not (D2D show-favorites)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:show_apps_button"), "hyprgnomedock: the Show Applications button (D2D show-show-apps-button)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:show_apps_at_top"), "hyprgnomedock: Show Applications at the START of the dock (D2D show-apps-at-top)", false));

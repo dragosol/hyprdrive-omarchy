@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DebugPaths.hpp"
+
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include <chrono>
@@ -39,7 +41,7 @@ namespace Prof {
         // The sentinel file is read once per plugin LOAD, so `touch` it and
         // hot-reload the plugin and the same instrument is live.
         static const bool ON = std::getenv("HYPRDRIVE_PROFILE") != nullptr || std::getenv("SCROLLOVERVIEW_PROFILE") != nullptr ||
-                               ::access("/tmp/hyprdrive-profile.on", F_OK) == 0;
+                               ScrollOverview::DebugPaths::flagOn("hyprdrive-profile.on"); // ours only (DebugPaths.hpp)
         return ON;
     }
 

@@ -88,7 +88,7 @@ Prefix: `plugin:hyprdrive:dock:`
 | `press_tilt` | bool | `true` |  | a pressed dock icon leans further in toward the press point, with a glare where it is pressed |
 | `dance_urgent` | bool | `true` |  | hyprgnomedock: wiggle an urgent app's icon (D2D dance-urgent-applications) |
 | `urgent_notify` | bool | `true` |  | an urgent app's icon hops up from the screen edge while the dock is hidden (it no longer reveals the dock) |
-| `flight_log` | bool | `false` |  | flight lifecycle log to /tmp/ovdbg.log, for scripts/z_rig.sh + zflight_gate.py |
+| `flight_log` | bool | `false` |  | flight lifecycle log to $XDG_RUNTIME_DIR/ovdbg.log, for scripts/z_rig.sh + zflight_gate.py |
 | `show_favorites` | bool | `true` |  | hyprgnomedock: pinned apps in the dock whether running or not (D2D show-favorites) |
 | `show_apps_button` | bool | `true` |  | hyprgnomedock: the Show Applications button (D2D show-show-apps-button) |
 | `show_apps_at_top` | bool | `false` |  | hyprgnomedock: Show Applications at the START of the dock (D2D show-apps-at-top) |

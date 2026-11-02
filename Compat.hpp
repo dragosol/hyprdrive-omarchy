@@ -30,7 +30,7 @@
 // that fires per use is a warning nobody reads.
 //
 // The warning goes to stderr (the session captures it, so it lands in the
-// journal) and to /tmp/hyprdrive-compat.log, which is the same file-sink
+// journal) and to $XDG_RUNTIME_DIR/hyprdrive-compat.log (DebugPaths.hpp), the same file-sink
 // convention the dock's flight log already uses. It is deliberately NOT a
 // notification: this fires on any config that has not been migrated yet --
 // which, for one release, is every existing config -- and a notification would

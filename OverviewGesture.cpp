@@ -1,4 +1,5 @@
 #include "OverviewGesture.hpp"
+#include "DebugPaths.hpp"
 
 #include "Config.hpp"
 #include "IOverview.hpp"
@@ -72,6 +73,9 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
         if (!ensureScrollOverviewHooks())
             return;
 
+        // Locked: the swipe opens nothing (hyprdriveSessionLocked).
+        if (hyprdriveSessionLocked())
+            return;
         // Super-tap and the dock button reset the search session; swipe-open
         // was the remaining door, so a query survived close and came back.
         resetSearchSession();
@@ -421,7 +425,7 @@ void clickLog(const char* fmt, ...) {
     if (!ENABLED)
         return;
 
-    if (FILE* F = fopen("/tmp/hyprdrive-click.log", "a")) {
+    if (FILE* F = ScrollOverview::DebugPaths::openLog("hyprdrive-click.log")) {
         va_list ap;
         va_start(ap, fmt);
         vfprintf(F, fmt, ap);

@@ -191,6 +191,8 @@ void                              dropScrollOverviewsForMonitor(PHLMONITOR monit
 // toggle that lands on a closing overview, and resetting there would drop the
 // filter mid-close-animation.
 bool                              openScrollOverview(PHLMONITOR monitor);
+// The session is locked (main.cpp): no overview opens and no key is taken.
+bool                              hyprdriveSessionLocked();
 
 // The dock's Show Windows (user, 2026-09-24): the overview, filtered as if
 // `query` had been typed. Starts a fresh session when the overview is not

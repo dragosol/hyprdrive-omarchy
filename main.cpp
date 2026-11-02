@@ -423,6 +423,9 @@ static bool openOverviewOne(PHLMONITOR monitor) {
         return true;
     }
 
+    if (hyprdriveSessionLocked())
+        return false;
+
     if (!ensureScrollOverviewHooks())
         return false;
 
@@ -442,6 +445,16 @@ static bool openOverviewOne(PHLMONITOR monitor) {
 // setup above is not something a second implementation should duplicate.
 bool openScrollOverview(PHLMONITOR monitor) {
     return openOverview(monitor);
+}
+
+// THE LOCK SCREEN OWNS THE KEYBOARD (marketplace review, #11392). Hyprland
+// hands plugins every key before the seat does, the lock screen's included:
+// with an overview up, keys meant for the password field became search text
+// and reached the search providers. While the session is locked no overview
+// opens, the raw key listener consumes nothing, and locking closes whatever
+// was open and drops its search (onSessionLock).
+bool hyprdriveSessionLocked() {
+    return g_pSessionLockManager && g_pSessionLockManager->isSessionLocked();
 }
 
 static void afterQueryEdit();
@@ -1068,6 +1081,20 @@ static int onFileResultsReady(int fd, uint32_t mask, void* data) {
 }
 
 static CHyprSignalListener g_pRawKeyHook;
+static CHyprSignalListener g_pSessionLockHook;
+
+// Locking closes every overview at once and drops the search with it: no
+// query, no half-typed compose sequence, no provider work still running, no
+// key repeating (hyprdriveSessionLocked).
+static void onSessionLock() {
+    stopSearchRepeat();
+    g_consumedPresses.clear();
+    resetSearchSession();
+    const auto OPEN = scrollOverviews(); // close() unregisters: walk a copy
+    for (const auto& OVERVIEW : OPEN)
+        if (OVERVIEW)
+            OVERVIEW->close();
+}
 static CHyprSignalListener g_pTapSuperButtonHook;
 static CHyprSignalListener g_pRenderPreHook;
 static CHyprSignalListener g_pMembOpenHook;
@@ -1122,6 +1149,13 @@ static void                registerRawKeyHooks() {
                 g_heldGuardKeys.insert(event.keycode);
             else
                 g_heldGuardKeys.erase(event.keycode);
+        }
+
+        // Locked: every key is the lock screen's. Nothing below runs, nothing
+        // is cancelled, no search key repeats (hyprdriveSessionLocked).
+        if (hyprdriveSessionLocked()) {
+            stopSearchRepeat();
+            return;
         }
 
         // The zoomed-out canvas: the user's screenshot key (Print) shoots it,
@@ -1742,6 +1776,12 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
         report += ScrollOverview::wallpaperStashReport();
         return {.success = false, .error = report};
     }
+    // `lockstate`: the lock and the overview search, for the lock gate
+    // (scripts/headless/lock_gate.sh). The query's LENGTH, never its text.
+    if (TOPIC == "lockstate")
+        return {.success = false,
+                .error   = std::format("hyprdrive lockstate: locked={} overviews={} accepting={} qlen={}", hyprdriveSessionLocked() ? 1 : 0, scrollOverviews().size(),
+                                       overviewAcceptsSearch() ? 1 : 0, g_search.query.text.size())};
     if (TOPIC == "type") {
         const std::string Q = data.size() > 1 ? std::string{data[1]} : std::string{};
         g_search.query.text   = Q;
@@ -2550,6 +2590,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // behind them; without this they can never be restored.
     ScrollOverview::Minimize::adoptStashedWindows();
     registerRawKeyHooks();
+    if (g_pSessionLockManager)
+        g_pSessionLockHook = g_pSessionLockManager->m_events.lock.listen([] { onSessionLock(); });
     attachPadFingerListeners();
     // Both read their keys at once: only after registerConfig() above.
     ScrollOverview::FingerSwipe::init();
@@ -2650,6 +2692,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
         g_fileWakeFd = -1;
     }
     g_pRawKeyHook.reset();
+    g_pSessionLockHook.reset();
     g_pTapSuperButtonHook.reset();
     g_pRenderPreHook.reset();
     CursorShape::shutdown();

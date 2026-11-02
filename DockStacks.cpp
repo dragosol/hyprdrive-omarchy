@@ -1,6 +1,7 @@
 // First: it widens private members of the Hyprland headers it includes, and
 // that only works if nothing has included them before it.
 #include "Motion.hpp"
+#include "DebugPaths.hpp"
 #include "OverviewInternal.hpp"
 
 #include "DockStacks.hpp"
@@ -1666,10 +1667,10 @@ namespace ScrollOverview::Stacks {
     }
 
     void traceEvent(const std::string& what) {
-        struct stat st{};
-        if (::stat("/tmp/hyprdrive-stacklog.on", &st) != 0)
+        // Ours only, in the private runtime directory (DebugPaths.hpp).
+        if (!ScrollOverview::DebugPaths::flagOn("hyprdrive-stacklog.on"))
             return;
-        if (FILE* f = std::fopen("/tmp/hyprdrive-stack.log", "a")) {
+        if (FILE* f = ScrollOverview::DebugPaths::openLog("hyprdrive-stack.log")) {
             const auto MS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() % 100000000;
             std::fprintf(f, "%08lld %s\n", sc<long long>(MS), what.c_str());
             std::fclose(f);

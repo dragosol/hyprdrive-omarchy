@@ -1,4 +1,5 @@
 #include "Compat.hpp"
+#include "DebugPaths.hpp"
 
 #include "Config.hpp"
 #include "globals.hpp"
@@ -13,7 +14,8 @@
 
 namespace {
 
-constexpr const char* COMPAT_LOG = "/tmp/hyprdrive-compat.log";
+// DebugPaths.hpp: owner-only, in the private runtime directory.
+constexpr const char* COMPAT_LOG = "hyprdrive-compat.log";
 
 struct SPair {
     std::string           modern;
@@ -29,7 +31,7 @@ std::vector<SPair>& pairs() {
 bool g_warned = false;
 
 void appendLog(const std::string& line) {
-    if (FILE* const F = std::fopen(COMPAT_LOG, "a")) {
+    if (FILE* const F = ScrollOverview::DebugPaths::openLog(COMPAT_LOG)) {
         std::fputs(line.c_str(), F);
         std::fputc('\n', F);
         std::fclose(F);
@@ -108,7 +110,7 @@ std::filesystem::path stateDir(const char* name) {
 namespace ScrollOverview::Compat {
 
 void openLog() {
-    if (FILE* const F = std::fopen(COMPAT_LOG, "w")) {
+    if (FILE* const F = ScrollOverview::DebugPaths::openLog(COMPAT_LOG, false)) {
         std::fprintf(F, "# %s compat log -- every use of a pre-rename name, and the one warning\n", NAME);
         std::fclose(F);
     }
