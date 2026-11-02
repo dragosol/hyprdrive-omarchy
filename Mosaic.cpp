@@ -1,5 +1,7 @@
 // The "mosaic" layout: see Mosaic.hpp and MosaicPack.hpp.
 #include "Mosaic.hpp"
+
+#include "DesktopStrip.hpp"
 #include "DebugPaths.hpp"
 #include "MosaicPack.hpp"
 #include "MosaicCanvas.hpp"
@@ -32,6 +34,8 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/supplementary/DragController.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+
+#include <limits>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
@@ -1623,6 +1627,15 @@ namespace ScrollOverview::Mosaic {
                 armCanvasTick();
             return true;
         }
+        // Zooming out, not drawn zoomed yet (the first tick is still to come).
+        bool zoomPending() const {
+            return m_zoom.on && m_zoom.to >= 1.0 && !m_zoomed;
+        }
+        // A canvas wider than the screen: there is a zoomed-out view of it.
+        bool canZoomOut() const {
+            const auto VIEW = canvasViewNow();
+            return VIEW && (VIEW->maxX > 1.0 || VIEW->maxY > 1.0);
+        }
         // Super let go: back in, with the view on the focused window.
         void zoomIn() {
             if (!m_zoomed)
@@ -1966,6 +1979,39 @@ namespace ScrollOverview::Mosaic {
                 if (const auto T = targetOfId(m_tree.leafAt(M.x, M.y, *AREA, treeOpts(), idOf(old))); T && T != old)
                     return T;
             }
+            // THE ONE UNDER THE POINTER (user, 2026-11-02: closing a window
+            // focused "a window my cursor is not over ... if my cursor is not
+            // on a window it should focus the window nearest to my cursor").
+            // Hyprland asks after the closed window has left the arrangement,
+            // so this used to be the last window in it, wherever that was. Now:
+            // where the windows are going, the one the pointer is over, else
+            // the nearest to it -- or, the pointer on another monitor, the
+            // nearest to where the closed window was.
+            const auto WS  = workspace();
+            const auto MON = WS ? WS->m_monitor.lock() : PHLMONITOR{};
+            Vector2D   at  = old ? old->position().middle() : (MON ? MON->middle() : Vector2D{});
+            if (g_pInputManager && MON) {
+                const auto POINTER = g_pInputManager->getMouseCoordsInternal();
+                if (CBox{MON->m_position, MON->m_size}.containsPoint(POINTER))
+                    at = POINTER;
+            }
+            SP<Layout::ITarget> nearest;
+            double              best = std::numeric_limits<double>::max();
+            for (const auto& E : m_entries) {
+                const auto T = E.target.lock();
+                const auto W = T ? T->window() : PHLWINDOW{};
+                if (!T || T == old || !W || !W->m_isMapped || W->isHidden())
+                    continue;
+                const CBox   B  = T->position();
+                const double DX = std::max({B.x - at.x, 0.0, at.x - (B.x + B.w)});
+                const double DY = std::max({B.y - at.y, 0.0, at.y - (B.y + B.h)});
+                if (DX * DX + DY * DY < best) {
+                    best    = DX * DX + DY * DY;
+                    nearest = T;
+                }
+            }
+            if (nearest)
+                return nearest;
             const int I = indexOf(old);
             if (I < 0)
                 return m_entries.back().target.lock();
@@ -2155,6 +2201,10 @@ namespace ScrollOverview::Mosaic {
             bool     seen        = false; // seen sliding: if it stops off screen with windows still in view, the tail runs
             bool     tail        = false; // sliding on by itself (startSlideTail)
             bool     zoomLeaving = false; // left while zoomed out: the zoom ends once the slide is over
+            bool     preZoomed   = false; // zoomed out ahead of a swipe bringing it in (slideWatch)
+            Vector2D arriveSet;               // the offset preRender last set while it arrives (arrivalFrame)
+            Vector2D leaveSet;                // ... and while a swipe takes it away
+            bool     leaveScaled = false;     // a swipe took it away stretched: the release goes as far (arrivalFrame)
             Vector2D tailGoal, tailLast;
             SP<Hyprutils::Animation::SAnimationPropertyConfig> prevConfig; // the desktop animation's own, back after the tail
             // The tail's: an animated variable holds its config WEAKLY, so this
@@ -2216,7 +2266,12 @@ namespace ScrollOverview::Mosaic {
             CFG->internalBezier  = VALS->internalBezier;
             CFG->internalStyle   = VALS->internalStyle;
             CFG->internalEnabled = VALS->internalEnabled;
-            CFG->internalSpeed   = VALS->internalSpeed * sc<float>(DIST1 / DIST0);
+            // Stretched to keep the starting speed -- but never past the time a
+            // slide that long takes (user, 2026-11-02: a short way back, a
+            // peek let go, crawled for seconds when the stretch was the whole
+            // overhang over a few pixels left to go).
+            const double STRETCH = std::clamp(DIST1 / DIST0, 1.0, std::max(1.0, DIST1 / SPAN));
+            CFG->internalSpeed   = VALS->internalSpeed * sc<float>(STRETCH);
             CFG->pValues         = CFG;
             trace(std::format("slide extended: {:.0f} -> {:.0f} (+{:.0f}), speed {:.1f} -> {:.1f}", XAX ? VAL.x : VAL.y, XAX ? NEWGOAL.x : NEWGOAL.y, NEED,
                               VALS->internalSpeed, CFG->internalSpeed));
@@ -2228,6 +2283,23 @@ namespace ScrollOverview::Mosaic {
             WS->m_renderOffset->setConfig(CFG);
             *WS->m_renderOffset = NEWGOAL;
             return true;
+        }
+        // How far its windows in view at home reach past the edge a slide brings
+        // it in by -- the left one when it arrives from the right (`d` > 0).
+        double nearOverhang(const PHLWORKSPACE& ws, const PHLMONITOR& mon, double d, bool xax) const {
+            const CBox MB{mon->m_position, mon->m_size};
+            double     over = 0;
+            for (const auto& E : m_entries) {
+                const auto T = E.target.lock();
+                const auto W = T ? T->window() : PHLWINDOW{};
+                if (!W || !W->m_isMapped || W->isHidden() || W->m_workspace != ws || W->m_isFloating)
+                    continue;
+                const auto B = W->getFullWindowBoundingBox();
+                if (B.intersection(MB).empty())
+                    continue; // off the view at home: not in the slide
+                over = std::max(over, d > 0 ? (xax ? MB.x - B.x : MB.y - B.y) : (xax ? B.x + B.w - (MB.x + MB.w) : B.y + B.h - (MB.y + MB.h)));
+            }
+            return over;
         }
         // How far past the screen the windows that were in view at home still
         // reach with the desktop at offset `d` (along the slide's axis).
@@ -2855,6 +2927,8 @@ namespace ScrollOverview::Mosaic {
                 g_pHyprRenderer->damageMonitor(M);
     }
 
+    static void armSlideWatch(); // DESKTOP SLIDES, below
+
     static CMosaicAlgorithm* liveZoomed() {
         return g_superCanvas && std::ranges::find(g_instances, g_superCanvas) != g_instances.end() ? g_superCanvas : nullptr;
     }
@@ -2876,6 +2950,8 @@ namespace ScrollOverview::Mosaic {
         if (g_super == ESuper::ZOOMED)
             g_canvasPanning = false;
         g_super = superStillDown ? ESuper::SPENT : ESuper::IDLE;
+        // Desktops kept zoomed out off screen for a swipe end now (slideWatch).
+        armSlideWatch();
     }
 
     void onSuperKey(bool pressed) {
@@ -3250,6 +3326,27 @@ namespace ScrollOverview::Mosaic {
         return MON && MON->m_activeWorkspace == ws && !MON->m_activeSpecialWorkspace;
     }
 
+    // A SWIPE WHILE ZOOMED OUT (user, 2026-11-02: with the canvas zoomed out, a
+    // trackpad swipe brought the next desktop in at full size, its windows from
+    // past the screen's edge popped in at the end, and only then did it zoom
+    // out -- every window moving its own distance while the slide still eased;
+    // Super+scroll looked right). Super+scroll makes the next desktop active
+    // as the slide starts, so its zoom-out runs with the slide; a swipe makes
+    // it active only on release. So a canvas desktop a swipe starts bringing
+    // in while zoomed out starts zooming out right then, exactly as the
+    // Super+scroll one does (user, 2026-11-02: "no longer matches how fedora
+    // does super+scroll" -- an instant zoom did not). While
+    // Super stays down, a desktop zoomed out this way -- or one just left --
+    // stays zoomed out off screen, so swiping back and forth finds it ready
+    // ("windows pop in mid-gesture"); letting go of Super ends every zoom but
+    // the one shown (superEnd).
+    static bool wantsPreZoom(CMosaicAlgorithm* A, const PHLWORKSPACE& ws) {
+        if (g_super != ESuper::ZOOMED || g_zoomPressing || !gestureSwiping() || !ws || !ws->m_renderOffset || shownNowOn(ws) || A->zoomed() || A->zoomPending())
+            return false;
+        const auto OFF = ws->m_renderOffset->value();
+        return (ws->m_forceRendering || std::abs(OFF.x) >= 0.5 || std::abs(OFF.y) >= 0.5) && A->canZoomOut();
+    }
+
     // Every 16 ms while a canvas desktop is sliding, its tail running or a
     // zoomed-out one leaving: a slide that stopped with the desktop off screen
     // starts its tail, and a zoom left behind ends there, unseen.
@@ -3261,7 +3358,25 @@ namespace ScrollOverview::Mosaic {
                 continue;
             const bool SHOWN = shownNowOn(WS), ANIM = WS->m_renderOffset->isBeingAnimated(), SWIPE = gestureSwiping();
             const bool STOPPED_AWAY = !SHOWN && !ANIM && !SWIPE;
-            if (A->m_slide.zoomLeaving && STOPPED_AWAY) {
+            if (wantsPreZoom(A, WS) && A->zoomOut()) {
+                A->m_slide.preZoomed = true;
+                trace("zooming out for a swipe while zoomed out");
+            }
+            if (A->m_slide.preZoomed && !SWIPE && !ANIM) {
+                // The swipe is over. Landed on and the zoom carried here: it is
+                // the live zoom now. Super let go: back in if shown, else the
+                // zoom ends unseen. Super still down: it stays zoomed out.
+                if (A == liveZoomed())
+                    A->m_slide.preZoomed = false;
+                else if (g_super != ESuper::ZOOMED) {
+                    A->m_slide.preZoomed = false;
+                    if (SHOWN)
+                        A->zoomIn();
+                    else
+                        A->endZoomNow();
+                }
+            }
+            if (A->m_slide.zoomLeaving && STOPPED_AWAY && g_super != ESuper::ZOOMED) {
                 A->m_slide.zoomLeaving = false;
                 A->endZoomNow();
             }
@@ -3273,13 +3388,15 @@ namespace ScrollOverview::Mosaic {
             if (A->m_slide.tail)
                 if (const auto MON = WS->m_monitor.lock())
                     g_pHyprRenderer->damageMonitor(MON);
+            if (A->m_slide.seen && DesktopStrip::drives(WS))
+                A->m_slide.seen = false; // the strip's: no tail (slideFrame)
             if (A->m_slide.seen && STOPPED_AWAY) {
                 A->m_slide.seen = false;
                 A->startSlideTail();
             }
             if (A->m_slide.seen && SHOWN && !ANIM && !SWIPE)
                 A->m_slide.seen = false; // came back, or never left
-            again = again || A->m_slide.seen || A->m_slide.tail || A->m_slide.zoomLeaving;
+            again = again || A->m_slide.seen || A->m_slide.tail || A->m_slide.zoomLeaving || A->m_slide.preZoomed;
         }
         if (again && g_slideTimer)
             wl_event_source_timer_update(g_slideTimer, 16);
@@ -3304,6 +3421,12 @@ namespace ScrollOverview::Mosaic {
                 if (ANIM && V.x * L.x >= 0 && V.y * L.y >= 0 && (std::abs(L.x) > std::abs(V.x) || std::abs(L.y) > std::abs(V.y)))
                     OFFV->setValue(L);
             }
+        }
+        // The desktop strip places it (DesktopStrip.hpp), with room for what
+        // hangs past its edges: no extension, no tail.
+        if (DesktopStrip::drives(ws)) {
+            A->m_slide.seen = false;
+            return;
         }
         const auto V     = OFFV->value();
         const bool SHOWN = shownNowOn(ws);
@@ -3343,10 +3466,103 @@ namespace ScrollOverview::Mosaic {
         if (!A || !A->holds(w))
             return false;
         slideFrame(A, WS);
+        // About to be zoomed out for the swipe (wantsPreZoom): the watcher
+        // starts its zoom -- from then on drawn exactly as a Super+scroll arrival.
+        if (wantsPreZoom(A, WS))
+            armSlideWatch();
         if (A->zoomed() || openScrollOverviewForMonitor(monitor) || (std::abs(OFF.x) < 0.5 && std::abs(OFF.y) < 0.5))
             return false;
         const CBox MON{monitor->m_position, monitor->m_size};
         return w->getFullWindowBoundingBox().intersection(MON).empty();
+    }
+
+    // THEY SLIDE IN (user, 2026-11-02: a swipe "instantly pops-in the windows
+    // outside the desktop area from the next desktop"). A window of the
+    // desktop coming in that hangs off its near edge was drawn, whole, over
+    // the desktop still shown the moment the slide began. The desktop coming
+    // in by a finger swipe now starts that much further out -- the swipe
+    // stretched by its largest overhang, the mirror of extendSlide on the way
+    // out -- so every window of it enters from the screen's edge, all at the
+    // same speed. A swipe sets the offset on every finger update: each new
+    // value is scaled here, before the frame (render.pre). Switches by mouse
+    // and keyboard are left exactly as they were ("works as intended").
+    // Past the overhang by a few pixels more: a border at the very edge of the
+    // box left a 1-2 px sliver of the desktop going away for three frames.
+    constexpr double SLIDE_MARGIN = 4.0;
+    static void arrivalFrame(CMosaicAlgorithm* A, const PHLWORKSPACE& ws, const PHLMONITOR& mon) {
+        auto&          OFFV = ws->m_renderOffset;
+        const Vector2D V    = OFFV->value();
+        const bool     ANIM = OFFV->isBeingAnimated(), SHOWN = shownNowOn(ws);
+        if (std::abs(V.x) < 0.5 && std::abs(V.y) < 0.5 && !ANIM) {
+            A->m_slide.arriveSet   = {};
+            A->m_slide.leaveSet    = {};
+            A->m_slide.leaveScaled = false;
+            return;
+        }
+        // Zoomed out (or zooming), the overhang is measured where the windows
+        // are drawn: none once it all fits, so nothing changes then.
+        if (!A->arrangedAsCanvas())
+            return;
+        const bool   XAX  = std::abs(V.x) >= std::abs(V.y);
+        const double D    = XAX ? V.x : V.y;
+        const double SPAN = XAX ? mon->m_size.x : mon->m_size.y;
+        if (std::abs(D) < 0.5 || SPAN < 1)
+            return;
+        // nearOverhang(D): the edge facing the way it moves from -- coming in,
+        // its near edge; going away, its trailing one. The same measure.
+        const bool SWIPE = gestureSwiping();
+        if (SWIPE && ws->m_forceRendering) {
+            auto& SET = SHOWN ? A->m_slide.leaveSet : A->m_slide.arriveSet;
+            if (std::abs(V.x - SET.x) < 0.01 && std::abs(V.y - SET.y) < 0.01)
+                return; // our own value: no finger moved since
+            const double O = A->nearOverhang(ws, mon, D, XAX);
+            if (O < 1)
+                return;
+            const double   K   = (SPAN + O + SLIDE_MARGIN) / SPAN;
+            const Vector2D NEW = XAX ? Vector2D{V.x * K, V.y} : Vector2D{V.x, V.y * K};
+            OFFV->setValueAndWarp(NEW);
+            SET = NEW;
+            if (SHOWN)
+                A->m_slide.leaveScaled = true;
+            return;
+        }
+        // THEY LEAVE QUICKLY (user, 2026-11-02: "windows still slide away too
+        // slowly"). Swiped away and let go: Hyprland sends it exactly a screen
+        // off, which would bring its windows hanging off the trailing edge back
+        // into view, and the tail then carried them off slowly. The release
+        // goes the overhang further instead, on the same animation.
+        if (!SWIPE && A->m_slide.leaveScaled) {
+            A->m_slide.leaveScaled = false;
+            const Vector2D GOAL = OFFV->goal();
+            const double   G    = XAX ? GOAL.x : GOAL.y;
+            if (!ANIM || SHOWN || std::abs(G) < SPAN * 0.99)
+                return; // called back, or not going a screen away
+            const double O = A->nearOverhang(ws, mon, G, XAX);
+            if (O < 1)
+                return;
+            const double K = (SPAN + O + SLIDE_MARGIN) / SPAN;
+            trace(std::format("swipe release goes past the overhang: {:.0f} -> {:.0f}", G, G * K));
+            *OFFV = XAX ? Vector2D{GOAL.x * K, GOAL.y} : Vector2D{GOAL.x, GOAL.y * K};
+        }
+    }
+
+    double slideOverhang(const PHLWORKSPACE& ws, const PHLMONITOR& monitor, int side, bool xax) {
+        if (!ws || !monitor)
+            return 0;
+        for (auto* A : g_instances)
+            if (A->workspace() == ws)
+                return A->arrangedAsCanvas() ? A->nearOverhang(ws, monitor, side < 0 ? 1.0 : -1.0, xax) : 0.0;
+        return 0;
+    }
+
+    void preRender(PHLMONITOR monitor) {
+        if (!monitor)
+            return;
+        for (auto* A : g_instances) {
+            const auto WS = A->workspace();
+            if (WS && !WS->m_isSpecialWorkspace && WS->m_renderOffset && WS->m_monitor.lock() == monitor)
+                arrivalFrame(A, WS, monitor);
+        }
     }
 
     // Is the pointer pushing at an outer edge of its monitor (no monitor

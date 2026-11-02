@@ -1,4 +1,6 @@
 #include "OverviewGesture.hpp"
+
+#include "DesktopStrip.hpp"
 #include "DebugPaths.hpp"
 
 #include "Config.hpp"
@@ -211,7 +213,33 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
         ScrollOverview::Config::setValue("gestures:workspace_swipe_use_r", 1);
     }
 
+    // The desktop strip moving the row (a wheel scroll still landing): the
+    // desktop most on screen becomes the shown one, where it is, for the swipe
+    // to begin from (DesktopStrip.hpp).
+    const bool STRIP = MONITOR && ScrollOverview::DesktopStrip::catchForSwipe(MONITOR);
+
     m_native.begin(e);
+
+    // CAUGHT MID-SLIDE (user, 2026-11-02: reversible "if I change my mind").
+    // A swipe begun while the last one's release is still sliding the desktops
+    // home starts from where they are -- the native swipe begins at 0 and
+    // jumped them there. Its position is set to match the desktop on screen;
+    // the fingers carry on from it, and Hyprland puts the neighbour beside it.
+    if (g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress() && MONITOR && MONITOR->m_activeWorkspace) {
+        if (STRIP)
+            ScrollOverview::DesktopStrip::letGo(MONITOR);
+        const auto& OFF = MONITOR->m_activeWorkspace->m_renderOffset;
+        if (OFF && (OFF->isBeingAnimated() || STRIP)) {
+            const Vector2D V     = OFF->value();
+            const bool     VERT  = std::abs(V.y) > std::abs(V.x);
+            const double   GAP   = sc<double>(ScrollOverview::Config::getValue<int>("general:gaps_workspaces"));
+            const double   SPAN  = (VERT ? MONITOR->m_size.y : MONITOR->m_size.x) + GAP;
+            const double   SWIPE = std::max(1.0, sc<double>(ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_distance")));
+            const double   D     = VERT ? V.y : V.x;
+            if (std::abs(D) >= 0.5 && SPAN > 1)
+                g_pUnifiedWorkspaceSwipe->update(-D / SPAN * SWIPE);
+        }
+    }
 }
 
 void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& eIn) {
@@ -325,6 +353,7 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     if (m_mode == EMode::TapeSwitch) {
         RESTOREFOLLOW();
         g_pUnifiedWorkspaceSwipe->end();
+        ScrollOverview::DesktopStrip::quickenSwipeRelease(Desktop::focusState()->monitor());
         // Cancelled (not far or fast enough): still on the tape's desktop, so the
         // windows settle as a tape swipe would -- snapped, a column focused.
         const auto WS = m_tapeWorkspace.lock();
@@ -336,6 +365,8 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     }
 
     m_native.end(e);
+    // Its release: as quick as its distance and the fingers' speed (DesktopStrip.hpp).
+    ScrollOverview::DesktopStrip::quickenSwipeRelease(Desktop::focusState()->monitor());
 
     // AFTER the native end: the release is where it picks the workspace to land
     // on, and it reads use_r to do it.

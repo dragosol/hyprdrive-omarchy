@@ -169,6 +169,8 @@ KEY_META = [
     _k(PLUGIN + "mission_control_reflow_ms", "int", "animation", 300, min=0, max=1000),
     _k(PLUGIN + "animation:desktop_keyboard", "bool", "animation", True),
     _k(PLUGIN + "animation:desktop_focus", "bool", "animation", True),
+    _k(PLUGIN + "animation:desktop_row_bounce", "bool", "animation", True),
+    _k(PLUGIN + "animation:desktop_jump_through", "bool", "animation", False),
     # Motion blur
     _k(PLUGIN + "motion_blur:enabled", "bool", "blur", True),
     _k(PLUGIN + "layout_motion_blur", "int", "blur", 16, min=0, max=32),
@@ -197,6 +199,11 @@ KEY_META = [
     # rebind keys.
     _k(PLUGIN + "binds:scroll_desktops", "bool", "keybinds", True),
     _k(PLUGIN + "binds:scroll_desktops_mods", "mods", "keybinds", "SUPER", options=SCROLL_MODS),
+    _k(PLUGIN + "binds:scroll_desktops_smooth", "bool", "keybinds", False),
+    _k(PLUGIN + "binds:scroll_desktops_ticks", "int", "keybinds", 1, min=1, max=10),
+    _k(PLUGIN + "binds:scroll_desktops_sticky", "bool", "keybinds", False),
+    _k(PLUGIN + "binds:scroll_desktops_stop_at_empty", "bool", "keybinds", True),
+    _k(PLUGIN + "binds:scroll_desktops_populated_only", "bool", "keybinds", False),
     _k(PLUGIN + "dock:hot_keys", "bool", "keybinds", False),
 ]
 

@@ -66,6 +66,13 @@ namespace ScrollOverview::Mosaic {
     // next door. Also where a slide is noticed (its tail, the zoom left
     // behind): Mosaic.cpp, DESKTOP SLIDES.
     bool hideDuringSlide(const PHLWINDOW& w, const PHLMONITOR& monitor);
+    // render.pre, before every frame of a monitor: a canvas desktop sliding in
+    // starts past its overhang, so its windows slide in (Mosaic.cpp, THEY SLIDE IN).
+    void preRender(PHLMONITOR monitor);
+    // How far the windows of a canvas desktop that are in view at home hang
+    // past its `side` edge (-1 left/top, +1 right/bottom) along the slide's
+    // axis: the desktop strip leaves that much room beside it. 0 off a canvas.
+    double slideOverhang(const PHLWORKSPACE& ws, const PHLMONITOR& monitor, int side, bool xax);
     // The whole canvas in global layout coordinates at the current view, for
     // the overview's strip thumbnail (the whole canvas, zoomed out). Nothing
     // when the desktop is not on its canvas.

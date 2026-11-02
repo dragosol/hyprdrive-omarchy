@@ -28,6 +28,8 @@
 #undef protected
 #undef private
 #include "FlightBlur.hpp"
+
+#include "DesktopStrip.hpp"
 #include "Mosaic.hpp"
 #include <string_view>
 #include <array>
@@ -681,7 +683,10 @@ namespace ScrollOverview::FlightBlur {
                 // AN ORDINARY DESKTOP SWITCH (user, 2026-10-16): Hyprland's
                 // workspaces slide played by a bind, Super+scroll or a dock
                 // click -- the same offset a swipe moves, but on its clock.
-                const bool  SWITCHED  = !WS->m_isSpecialWorkspace && !window->m_pinned && !SWIPED && WSOFFSET->isBeingAnimated();
+                // The desktop strip (DesktopStrip.hpp) sets the offsets by hand
+                // every frame, no clock at all: moved since last frame is moving.
+                const bool  STRIPPED  = !WS->m_isSpecialWorkspace && DesktopStrip::drives(WS) && offsetMoved(WS);
+                const bool  SWITCHED  = !WS->m_isSpecialWorkspace && !window->m_pinned && !SWIPED && (WSOFFSET->isBeingAnimated() || STRIPPED);
                 const bool  OFFSETS   = SLIDING || SWIPED || SWITCHED;
                 const auto* SPACE     = WS->m_space.get();
                 const bool  SCROLLING = SPACE && SPACE->algorithm() && dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(SPACE->algorithm()->m_tiled.get());
@@ -691,8 +696,11 @@ namespace ScrollOverview::FlightBlur {
                 // The infinite canvas moving its view (a pan, the Super zoom, a
                 // swipe): every window moves together every frame, by hand --
                 // smearing each of them was ghost copies and dropped frames
-                // (user, 2026-10-26: "panning is buggy as hell").
-                const bool CANVAS = Mosaic::canvasMotion(window);
+                // (user, 2026-10-26: "panning is buggy as hell"). Not when its
+                // DESKTOP slides (user, 2026-11-02: no motion blur on zoomed-out
+                // Super+scroll or Super+swipe): zoomed out counts as "the view
+                // moving" the whole time, and the slide was never smeared.
+                const bool CANVAS = Mosaic::canvasMotion(window) && !OFFSETS;
                 if (!SHOWN || !(MOVING || RESIZING || OFFSETS) || MODEFLIP || CANVAS || (skip && skip(window)) || (DRAGTARGET && window->layoutTarget() == DRAGTARGET)) {
                     if (IT != g_lastLayoutBox.end()) {
                         g_lastLayoutBox.erase(IT);
@@ -757,10 +765,13 @@ namespace ScrollOverview::FlightBlur {
                 // under the fingers, the scratchpad sliding, the scrolling
                 // tape flicked, or an ordinary retile / open. A swipe has no
                 // animation clock (progress 0: its smear is just its speed).
+                // A desktop's slide is timed by the slide alone: a zoomed-out
+                // canvas window is placed afresh every frame (MosaicDrive), its
+                // own position "animation" always all but done -- which faded
+                // the zoomed-out Super+scroll smear to nothing from frame one.
                 const float PCT  = SWIPED ? 0.F :
-                                            std::max({MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F,
-                                                      // Under the fingers there is no clock: like a swipe, 0.
-                                                      (SLIDING || SWITCHED) && WSOFFSET->isBeingAnimated() ? WSOFFSET->getPercent() : 0.F});
+                    (SLIDING || SWITCHED) ? (WSOFFSET->isBeingAnimated() ? WSOFFSET->getPercent() : 0.F) :
+                                            std::max(MOVING ? window->positionAnimation()->getPercent() : 0.F, RESIZING ? window->sizeAnimation()->getPercent() : 0.F);
                 const ESite SITE = SWIPED                                          ? ESite::SWIPE :
                     SWITCHED                                                       ? ESite::DESKTOP_SLIDE :
                     SLIDING                                                        ? ESite::SCRATCHPAD :

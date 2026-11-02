@@ -167,10 +167,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|type|type \\S+|activate \\S+|tile \\S+|xgeom|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|desktop|type|type \\S+|activate \\S+|tile \\S+|xgeom|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | desktop | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
@@ -793,10 +793,30 @@ static void registerConfigValuesFor() {
     // whether it exists and on which modifiers, and the wheel filter that makes
     // it one desktop per notch follows them.
     addKey(makeShared<CBoolValue>(KEY("binds:scroll_desktops"),
-                                  "<mods> + wheel steps through desktops by number, empty ones included (1 .. max(10, highest); no wrap), one per notch; replaces Omarchy's Super+scroll",
+                                  "<mods> + wheel moves through desktops by number, empty ones included, no wrap -- the row of desktops slides with the wheel; replaces Omarchy's Super+scroll",
                                   true));
     addKey(makeShared<CStringValue>(KEY("binds:scroll_desktops_mods"), "modifiers for binds:scroll_desktops, as a bind spells them (SUPER, SUPER + SHIFT, ...)",
                                     Hyprlang::STRING{"SUPER"}));
+    // THE DESKTOP STRIP (DesktopStrip.hpp, DesktopRowModel.hpp; user,
+    // 2026-11-02): how the wheel moves the row and which desktops are in it.
+    addKey(makeShared<CBoolValue>(KEY("binds:scroll_desktops_smooth"),
+                                  "the row of desktops follows the wheel continuously (two notches a desktop) and settles on the nearest once the wheel stops; false = a desktop per binds:scroll_desktops_ticks notches",
+                                  false));
+    addKey(makeShared<CIntValue>(KEY("binds:scroll_desktops_ticks"),
+                                 "wheel notches per desktop while binds:scroll_desktops_smooth is off; a notch short shows as a peek toward the next desktop", 1,
+                                 SIntValueOptions{.min = 1, .max = 10}));
+    addKey(makeShared<CBoolValue>(KEY("binds:scroll_desktops_sticky"),
+                                  "after the first desktop of a quick scroll, each further one takes more push (two notches more, or a short dead zone when smooth); let go after 0.4 s still",
+                                  false));
+    addKey(makeShared<CBoolValue>(KEY("binds:scroll_desktops_stop_at_empty"),
+                                  "the wheel stops at the first empty desktop past the last one with windows, as the overview does; false = it goes on to 10 or the highest desktop",
+                                  true));
+    addKey(makeShared<CBoolValue>(KEY("binds:scroll_desktops_populated_only"),
+                                  "the wheel visits only desktops with windows, the first empty one after them and the one shown; false = every desktop number between", false));
+    addKey(makeShared<CBoolValue>(KEY("animation:desktop_row_bounce"),
+                                  "the row of desktops stretches a little past its first and last desktop and springs back", true));
+    addKey(makeShared<CBoolValue>(KEY("animation:desktop_jump_through"),
+                                  "a key or dock jump of several desktops (Super+5 from desktop 1) slides through the desktops between", false));
     // MOTION BLUR, PER ANIMATION (user, 2026-09-30). Each site smears a share
     // of its frame-to-frame motion (strength, 0..1; 0 = that site off) shaped
     // over the animation by `fade`: early (full at the start, gone by the

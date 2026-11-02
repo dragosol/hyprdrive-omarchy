@@ -1,5 +1,9 @@
 #pragma once
 
+#include "globals.hpp"
+
+#include <string>
+
 // DESKTOP SWITCHING BY WHEEL, AND ITS ANIMATION BY CAUSE (user, 2026-10-15).
 //
 //   * `hyprdrive:desktop next|prev` (Lua: hl.plugin.hyprdrive.desktop("next"))
@@ -25,6 +29,11 @@ namespace ScrollOverview::DesktopSwitch {
     void init();
     // PLUGIN_EXIT: listeners and the hook gone while this code is mapped.
     void shutdown();
+
+    // render.pre: the desktop strip's frame (DesktopStrip.hpp).
+    void preRender(PHLMONITOR monitor);
+    // `hyprdrive:debug desktop`.
+    std::string debugReport();
 
     // Held around a focus change the plugin itself makes (the dock activating
     // a window on another desktop): what Hyprland's own focus path marks via

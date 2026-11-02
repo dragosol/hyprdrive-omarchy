@@ -1753,6 +1753,9 @@ static SDispatchResult onDebugDispatcher(std::string arg) {
     }
     if (TOPIC == "windows")
         return {.success = false, .error = ScrollOverview::SizeAck::report()};
+    // `desktop`: the desktop strip -- moving or idle, its row, where it is.
+    if (TOPIC == "desktop")
+        return {.success = false, .error = "hyprdrive " + ScrollOverview::DesktopSwitch::debugReport()};
     if (TOPIC == "motion") {
         using ScrollOverview::Motion::ERole;
         const auto E = [](ERole r, float t) { return ScrollOverview::Motion::ease(r, t); };
@@ -2203,6 +2206,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             overview->onPreRender();
 
         ScrollOverview::Dock::damageIfChanged(monitor);
+
+        // The desktop strip's place for this frame (DesktopStrip.hpp), then a
+        // canvas desktop a swipe brings in starts past its overhang (Mosaic.cpp).
+        ScrollOverview::DesktopSwitch::preRender(monitor);
+        ScrollOverview::Mosaic::preRender(monitor);
 
         // Layout motion blur (FlightBlur.hpp). The overview draws its own
         // windows; there, only the sweep runs.

@@ -163,7 +163,11 @@ var sections = [
         { type: "toggle", key: P + "animation:desktop_keyboard", label: "Animate desktop changes from keys", when: "desktopSlideOn",
           desc: "Super+1…0, Super+Tab, Super+scroll and moving a window to a desktop slide there. Off, they switch at once." },
         { type: "toggle", key: P + "animation:desktop_focus", label: "Animate desktop changes when focus moves", when: "desktopSlideOn",
-          desc: "An app, a dock icon or a notification bringing up a window on another desktop slides there. Off, it switches at once." }
+          desc: "An app, a dock icon or a notification bringing up a window on another desktop slides there. Off, it switches at once." },
+        { type: "toggle", key: P + "animation:desktop_row_bounce", label: "Bounce at the first and last desktop", when: "desktopSlideOn",
+          desc: "Scrolling past either end of the row stretches it a little and springs back, so you can feel where it stops." },
+        { type: "toggle", key: P + "animation:desktop_jump_through", label: "Slide through desktops on a jump", when: "desktopSlideOn",
+          desc: "A key or dock jump of several desktops, like Super+5 from desktop 1, slides past the desktops between instead of straight to the new one." }
       ]},
       { title: "Curve", rows: [
         { type: "curve", key: P + "animation:curve", label: "Animation curve", when: "motionOn",
@@ -304,7 +308,7 @@ var sections = [
       ]},
       { title: "Desktops", rows: [
         { type: "keybind", id: "scroll_desktops", key: P + "binds:scroll_desktops", modsKey: P + "binds:scroll_desktops_mods", label: "Scroll through desktops",
-          desc: "Hold the modifier and turn the wheel: one desktop per notch, empty ones included, from 1 up to 10 or your highest. Replaces Omarchy's Super+scroll, which skips empty desktops." },
+          desc: "Hold the modifier and turn the wheel: the row of desktops slides with it, notch after notch, and turns round the moment you scroll back. Replaces Omarchy's Super+scroll." },
         { type: "keybind", id: "dock_hotkeys", key: P + "dock:hot_keys", label: "Dock hotkeys",
           desc: "Super+1…0 open or focus the dock's first ten apps instead of switching to desktops 1…10.",
           confirm: {
@@ -312,6 +316,18 @@ var sections = [
             body: "Super+1…0 will open the dock's apps instead of switching desktops. Turning this off gives them back to desktop switching.",
             allow: "Allow", glyph: "\uf11c"
           } }
+      ]},
+      { title: "Scrolling through desktops", rows: [
+        { type: "toggle", key: P + "binds:scroll_desktops_smooth", label: "Smooth scrolling", when: "scrollDesktopsOn",
+          desc: "The desktops follow the wheel continuously, two notches to a desktop, and settle on the nearest one when you stop. Off, they move a whole desktop at a time." },
+        { type: "slider", key: P + "binds:scroll_desktops_ticks", label: "Notches per desktop", min: 1, max: 10, step: 1, when: "scrollSteppedOn",
+          desc: "How many wheel notches move one desktop. Notches short of a desktop show as a peek of the next one." },
+        { type: "toggle", key: P + "binds:scroll_desktops_sticky", label: "Sticky desktops", when: "scrollDesktopsOn",
+          desc: "After the first desktop of a quick scroll, each further one takes a little more push, so a fast spin is easier to stop where you want." },
+        { type: "toggle", key: P + "binds:scroll_desktops_stop_at_empty", label: "Stop at the first empty desktop", when: "scrollDesktopsOn",
+          desc: "The wheel goes no further than one empty desktop past your last desktop with windows, as the overview does. Off, it goes on to 10 or your highest desktop." },
+        { type: "toggle", key: P + "binds:scroll_desktops_populated_only", label: "Skip empty desktops", when: "scrollDesktopsOn",
+          desc: "Only desktops with windows, plus that first empty one and the desktop you are on. Off, every desktop number in between is visited too." }
       ]},
       { title: "Mosaic", rows: [
         { type: "keybind", id: "mosaic_cycle", bind: "mosaic_cycle", label: "Layout cycle", when: "mosaicOn", chordEdit: true,

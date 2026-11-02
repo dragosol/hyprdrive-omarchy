@@ -377,7 +377,7 @@ one above it.
 | `window` | `select`, `close`, `click` | Act on the window under the cursor |
 | `minimize` | `window`, `restore` | Minimize into the dock, or restore |
 | `hotkey` | `overlay`, or `1`–`10` | Dock slot (unbound here; Super+digit is workspaces, unless the panel's Keybinds section turns dock hotkeys on) |
-| `desktop` | `next`, `prev` | One desktop by number on the focused monitor, empty ones included (1 .. max(10, highest), no wrap); with the overview open, its focused desktop card |
+| `desktop` | `next`, `prev` | One desktop along the focused monitor's row (`binds:scroll_desktops_stop_at_empty` / `_populated_only`; no wrap); with the overview open, its focused desktop card |
 | `stack` | `pin`/`unpin`/`toggle`/`open` `<path>`, `view auto\|fan\|grid <path>`, `sort name\|added\|modified\|kind <path>`, `clear` | Pin and configure dock stacks |
 
 ```lua
@@ -386,10 +386,15 @@ hl.bind("SUPER + H", hl.plugin.hyprdrive.minimize("window"))
 ```
 
 Super+scroll is `desktop` on `SUPER + mouse_down` / `mouse_up`, in place of
-Omarchy's `e+1` / `e-1` (which skip empty desktops), one desktop per wheel
-notch (`binds:scroll_desktops`, `binds:scroll_desktops_mods`). Once the settings
-panel's Keybinds section has written 40-panel.lua it owns this bind and
-30-keybinds.lua's default steps aside.
+Omarchy's `e+1` / `e-1` (which skip empty desktops) (`binds:scroll_desktops`,
+`binds:scroll_desktops_mods`). The wheel moves the row of desktops itself: one
+spring carries it, so quick notches add up without a stop, scrolling back turns
+it round where it is, and several desktops slide past on a fast spin, motion
+blur and all. `binds:scroll_desktops_smooth`, `_ticks`, `_sticky`,
+`_stop_at_empty` and `_populated_only` shape it; `animation:desktop_row_bounce`
+and `animation:desktop_jump_through` are the row's two animation switches. Once
+the settings panel's Keybinds section has written 40-panel.lua it owns this bind
+and 30-keybinds.lua's default steps aside.
 
 Tap Super is not a bind (`tap_super`, default true). Three-finger swipe up on
 the trackpad is the same overview, registered as `hl.plugin.hyprdrive.gesture`
