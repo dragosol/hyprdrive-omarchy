@@ -327,9 +327,13 @@ Nothing about your apps is sent. The collection is CC BY 4.0.
 
 **The update check.** While the settings panel is open, at most once every 6
 hours, `hyprdrive update --check` asks GitHub which release is newest
-(`api.github.com/repos/dragosol/hyprdrive-omarchy/releases/latest`) and which
-version the marketplace approved or is reviewing (a search of
-`omacom/omarchy-plugin-marketplace`'s issues for this repository). It sends
+(`api.github.com/repos/dragosol/hyprdrive-omarchy/releases/latest`), which
+version the marketplace published (its `registry.json` on
+raw.githubusercontent.com: the exact commit the marketplace verified, asked
+with the last ETag so an unchanged registry is not downloaded again), and
+whether a newer version is under review (a search of the marketplace's open
+issues, used only to show its link). The approved version comes only from the
+registry, never from issue text. It sends
 nothing about you or your machine, follows no redirects, waits at most 6
 seconds and caps each answer's size. `hyprdrive update --never-check` turns it
 off; `hyprdrive update --allow-check` turns it back on. Installing an update

@@ -85,45 +85,90 @@ with tempfile.TemporaryDirectory() as tmp:
     r = m.check(refresh=True)
     expect(r["error"] and r["latest"]["version"] == "1.9.36.7", "offline: the stale answer, with the error")
 
-    # OMARCHY: the marketplace's approved and pending requests
+    # OMARCHY: the approved version is the marketplace's PUBLISHED snapshot,
+    # from its registry -- never issue text (marketplace review, #11392).
     o = load("omarchy", home)
     (home / ".local/state/hyprdrive/install.json").write_text(json.dumps({"version": "1.9.36"}))
-    A, P = "a" * 40, "b" * 40
-    search = {"items": [
-        {"number": 12000, "state": "open", "title": "[Verify]: Hyprdrive 1.9.38 (dragos.hyprdrive)", "labels": [{"name": "plugin-update"}],
-         "body": "commit %s" % P, "html_url": "https://evil.example/"},
-        {"number": 11900, "state": "closed", "closed_at": "2026-11-01T00:00:00Z", "title": "[Verify]: Hyprdrive 1.9.37 (dragos.hyprdrive)",
-         "labels": [{"name": "approved-and-verified"}], "body": "sha %s" % A},
-        {"number": 11012, "state": "closed", "closed_at": "2026-10-13T00:00:00Z", "title": "[Plugin]: Hyprdrive", "labels": [{"name": "submission"}], "body": "x " + "c" * 40},
-    ]}
+    A, B = "a" * 40, "b" * 40
+    PID, REPO = "dragos.hyprdrive", "dragosol/hyprdrive-omarchy"
 
-    def fake(url, limit=0):
+    def source(sha=A, base=None, review=None, history=None, repo="https://github.com/" + REPO, plugins=None):
+        s = {"repo": repo, "listingValidatedCommit": sha, "plugins": plugins if plugins is not None else {PID: {}}}
+        if base is not None:
+            s["automatedSecurityBaseline"] = base
+        if review is not None:
+            s["maintainerVerificationReview"] = review
+        if history is not None:
+            s["maintainerVerificationReviewHistory"] = history
+        return {"sources": [s], "retiredPluginIds": []}
+
+    rec = lambda commit=A, **kw: dict({"commit": commit, "repository": REPO, "pluginIds": [PID], "findings": []}, **kw)
+    snap = o.published_snapshot
+    expect(snap(source(review=rec(requestEventId=7))) == A, "a maintainer review of the listed commit: approved")
+    expect(snap(source(base=rec(outcome="passed", capabilities=[]))) == A, "a passed baseline of the listed commit: approved")
+    expect(snap(source(base=rec(outcome="review-required", capabilities=["installer"]))) is None, "review-required with no review: not approved")
+    expect(snap(source(review=rec(B))) is None, "evidence for another commit does not cover the listed one")
+    expect(snap(source(review=rec(findings=["x"]))) is None, "a review with findings: not approved")
+    expect(snap(source(review=rec(requestEventId=7),
+                       history=[{"maintainerVerificationRevocation": {"commit": A, "requestEventId": 7}}])) is None, "a revoked review: not approved")
+    expect(snap(source(review=rec(), repo="https://github.com/evil/hyprdrive-omarchy")) is None, "another repository: not ours")
+    expect(snap(source(review=rec(), plugins={"other.id": {}})) is None, "another plugin id: not ours")
+    expect(snap(source(sha="a" * 39 + "; rm", review=rec())) is None, "a listed commit that is not a full SHA: nothing")
+    expect(snap(dict(source(review=rec()), retiredPluginIds=[PID])) is None, "a retired id: nothing")
+
+    registry = source(review=rec(requestEventId=7))
+    # The case the review raised: an old approved issue edited to name a later,
+    # unreviewed commit. Issues are only ever read for the pending link now.
+    search = {"items": [
+        {"number": 12000, "state": "open", "title": "[Verify]: Hyprdrive 1.9.38 (dragos.hyprdrive)", "body": "commit %s" % B, "html_url": "https://evil.example/"},
+        {"number": 11900, "state": "closed", "closed_at": "2026-11-01T00:00:00Z", "title": "[Verify]: Hyprdrive 9.9.9 (dragos.hyprdrive)",
+         "labels": [{"name": "approved-and-verified"}], "body": "edited later to name %s" % B},
+    ]}
+    seen = []
+
+    def fake_fetch(url, limit=0, etag=None):
+        seen.append((url, etag))
+        if url == o.REGISTRY_URL:
+            if etag == "W/1":
+                return None
+            o.fetch.etag = "W/1"
+            return json.dumps(registry).encode()
+        raise AssertionError("unexpected fetch " + url)
+
+    def fake_json(url, limit=0):
         if "search/issues" in url:
             return search
         if url.endswith("/releases/latest"):
             return {"tag_name": "v1.9.38"}
-        return {"version": "9.9.9"}
-    o.fetch_json = fake
+        if url.endswith("/%s/manifest.json" % A):
+            return {"version": "1.9.37"}
+        raise AssertionError("unexpected json " + url)
+    o.fetch = fake_fetch
+    o.fetch.etag = None
+    o.fetch_json = fake_json
     r = o.check(refresh=True)
     mk = r["marketplace"]
-    expect(mk["approved"]["version"] == "1.9.37" and mk["approved"]["sha"] == A and mk["approved"]["issue"] == 11900, "approved: the closed approved-and-verified request")
-    expect(mk["pending"]["version"] == "1.9.38" and mk["pending"]["url"] == "https://github.com/omacom/omarchy-plugin-marketplace/issues/12000", "pending: the open one, its URL built here")
-    expect(r["available"] and r["approvedNewer"], "omarchy: both an approved and a newer pending version")
+    expect(mk["approved"] == {"sha": A, "version": "1.9.37"}, "approved: the registry's published commit, its manifest's version")
+    expect(B not in json.dumps(mk), "a SHA in issue text is never taken")
+    expect(mk["pending"] == {"issue": 12000, "url": "https://github.com/omacom/omarchy-plugin-marketplace/issues/12000", "version": "1.9.38"},
+           "pending: the open request's link and title version only, URL built here")
+    expect(r["available"] and r["approvedNewer"], "omarchy: an approved version newer than the installed one")
+    o.check(refresh=True)
+    expect(seen[-1] == (o.REGISTRY_URL, "W/1") and o.marketplace()["approved"]["sha"] == A, "an unchanged registry (304) reuses the last answer")
 
     # the update decision, without installing
     picked = []
     o.install = lambda ref, label, yes, info: picked.append(ref) or 0
     o.update({"--approved"})
     o.update({"--github"})
-    expect(picked == [A, "v1.9.38"], "--approved installs the approved commit, --github the newest tag")
-    search["items"][1]["title"] = "[Verify]: Hyprdrive 1.9.38 (dragos.hyprdrive)"
+    expect(picked == [A, "v1.9.38"], "--approved installs the published commit, --github the newest tag")
+    o.SNAPSHOT_CACHE.unlink()
+    registry = source(base=rec(outcome="review-required", capabilities=["installer"]))
     picked.clear()
+    o.update({"--approved"})
+    expect(picked == [], "nothing published as verified: --approved installs nothing")
     o.update({"--yes"})
-    expect(picked == [A], "the newest release IS the approved one: install it")
-    search["items"] = search["items"][:1]
-    picked.clear()
-    o.update({"--yes"})
-    expect(picked == ["v1.9.38"], "nothing approved yet: offer GitHub")
+    expect(picked == ["v1.9.38"], "nothing approved: offer GitHub")
 
     # the terminal
     os.environ["PATH"] = str(home / "bin")

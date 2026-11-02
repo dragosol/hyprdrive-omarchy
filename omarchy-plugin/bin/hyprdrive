@@ -27,7 +27,9 @@ changes is left alone.
 
 NETWORK. Only HTTPS to api.github.com and raw.githubusercontent.com (no
 redirects followed, 6 s timeout, every response capped in size), and git
-fetching the repository. The settings ask at most once every 6 hours, only while
+fetching the repository. The approved version is the marketplace's published
+snapshot, read from its registry.json (asked with the last ETag), never from
+issue text. The settings ask at most once every 6 hours, only while
 they are open; `hyprdrive update --never-check` stops that.
 """
 import json
@@ -63,12 +65,17 @@ CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME") or HOME / ".cache") / "hyp
 INSTALL_JSON = STATE / "install.json"  # written by make install (install-fragments.sh)
 NEVER_CHECK = STATE / "no-update-check"
 CHECK_CACHE = CACHE / "update-check.json"
+SNAPSHOT_CACHE = CACHE / "marketplace-snapshot.json"
 CHECK_TTL = 6 * 3600
 CLONE_DIR = HOME / ".local/share/hyprdrive/src"
 
 VERSION_RE = re.compile(r"^\d{1,4}(?:\.\d{1,6}){1,4}$")
 SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
 MAX_BODY = 512 * 1024
+# The marketplace's published snapshot (VERIFICATION.md): its registry, ~14 MB,
+# asked with the last ETag so an unchanged one costs a 304.
+REGISTRY_URL = "https://raw.githubusercontent.com/%s/main/registry.json" % MARKET
+REGISTRY_MAX = 64 * 1024 * 1024
 
 
 # ---- versions ---------------------------------------------------------------
@@ -107,19 +114,29 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 ALLOWED = ("https://api.github.com/", "https://raw.githubusercontent.com/")
 
 
-def fetch(url, limit=MAX_BODY):
+def fetch(url, limit=MAX_BODY, etag=None):
+    """The body, or None when `etag` is given and the server says 304."""
     if not url.startswith(ALLOWED):
         raise ValueError("refusing to fetch %s" % url)
     opener = urllib.request.build_opener(_NoRedirect)
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "hyprdrive-update",
-        "Accept": "application/vnd.github+json",
-    })
-    with opener.open(req, timeout=6) as r:
-        data = r.read(limit + 1)
+    headers = {"User-Agent": "hyprdrive-update", "Accept": "application/vnd.github+json"}
+    if etag:
+        headers["If-None-Match"] = etag
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with opener.open(req, timeout=6) as r:
+            data = r.read(limit + 1)
+            fetch.etag = r.headers.get("ETag")
+    except urllib.error.HTTPError as e:
+        if etag and e.code == 304:
+            return None
+        raise
     if len(data) > limit:
         raise ValueError("response from %s is larger than %d bytes" % (url, limit))
     return data
+
+
+fetch.etag = None
 
 
 def fetch_json(url, limit=MAX_BODY):
@@ -169,51 +186,89 @@ def manifest_version_at(sha):
     return vstr(parse_version(d.get("version"))) if isinstance(d, dict) else ""
 
 
-def marketplace():
-    """The newest approved version and the newest pending request for this
-    plugin, from the marketplace's issues: an approved request is closed with
-    `approved-and-verified`, a pending one is open. Each names the exact
-    commit it is about; the version is the title's, else that commit's
-    manifest."""
-    q = 'repo:%s "%s" in:body' % (MARKET, REPO)
-    url = "https://api.github.com/search/issues?" + urllib.parse.urlencode(
-        {"q": q, "sort": "updated", "order": "desc", "per_page": "30"})
-    d = fetch_json(url, 2 * 1024 * 1024)
-    items = d.get("items", []) if isinstance(d, dict) else []
-
-    def describe(it):
-        num = it.get("number")
-        if not isinstance(num, int):
+def published_snapshot(registry):
+    """The commit the marketplace PUBLISHED for this plugin, from its registry,
+    or None (marketplace review, #11392). Only the registry's own records count:
+    the source for this repository that lists PLUGIN_ID, its
+    `listingValidatedCommit`, and verification evidence bound to that exact
+    commit -- a passed baseline with nothing flagged, or a maintainer review not
+    revoked. Never issue text: an issue body is the author's to edit. Pure."""
+    if not isinstance(registry, dict):
+        return None
+    retired = registry.get("retiredPluginIds")
+    if isinstance(retired, list) and PLUGIN_ID in retired:
+        return None
+    want = "https://github.com/%s" % REPO.lower()
+    for src in registry.get("sources") or []:
+        if not isinstance(src, dict) or not isinstance(src.get("repo"), str):
+            continue
+        if src["repo"].rstrip("/").lower() != want or not isinstance(src.get("plugins"), dict) or PLUGIN_ID not in src["plugins"]:
+            continue
+        sha = src.get("listingValidatedCommit")
+        if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
             return None
-        body = it.get("body") or ""
-        shas = SHA_RE.findall(body if isinstance(body, str) else "")
-        sha = shas[-1] if shas else ""
+
+        def bound(rec):
+            return (isinstance(rec, dict) and rec.get("commit") == sha and not rec.get("findings")
+                    and PLUGIN_ID in (rec.get("pluginIds") or []) and str(rec.get("repository", "")).lower() == REPO.lower())
+
+        base = src.get("automatedSecurityBaseline")
+        passed = bound(base) and base.get("outcome") == "passed" and not base.get("capabilities")
+        review = src.get("maintainerVerificationReview")
+        revoked = any(isinstance(h, dict) and isinstance(h.get("maintainerVerificationRevocation"), dict)
+                      and h["maintainerVerificationRevocation"].get("commit") == sha
+                      and h["maintainerVerificationRevocation"].get("requestEventId") == (review or {}).get("requestEventId")
+                      for h in src.get("maintainerVerificationReviewHistory") or [])
+        reviewed = bound(review) and not revoked
+        return sha if (passed or reviewed) else None
+    return None
+
+
+def approved_release():
+    """{'sha', 'version'} for the published snapshot, or None. The registry is
+    asked with the last ETag; an unchanged one reuses the last answer."""
+    cached = {}
+    try:
+        cached = json.loads(SNAPSHOT_CACHE.read_text())
+    except (OSError, ValueError):
+        pass
+    if not isinstance(cached, dict):
+        cached = {}
+    data = fetch(REGISTRY_URL, REGISTRY_MAX, cached.get("etag") if "approved" in cached else None)
+    if data is None:
+        return cached.get("approved")
+    sha = published_snapshot(json.loads(data.decode("utf-8")))
+    approved = {"sha": sha, "version": manifest_version_at(sha)} if sha else None
+    try:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = SNAPSHOT_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"etag": fetch.etag, "approved": approved}))
+        tmp.replace(SNAPSHOT_CACHE)
+    except OSError:
+        pass
+    return approved
+
+
+def marketplace():
+    """The version the marketplace published (approved_release: its registry,
+    nothing else) and, for display only, the newest open request for this
+    plugin: its link and the version in its title. A request is never
+    installed from."""
+    approved = approved_release()
+    q = 'repo:%s "%s" in:body is:open' % (MARKET, REPO)
+    url = "https://api.github.com/search/issues?" + urllib.parse.urlencode(
+        {"q": q, "sort": "updated", "order": "desc", "per_page": "10"})
+    d = fetch_json(url, 2 * 1024 * 1024)
+    pending = None
+    for it in (d.get("items", []) if isinstance(d, dict) else []):
+        if not isinstance(it, dict) or it.get("state") != "open" or not isinstance(it.get("number"), int):
+            continue
         title = it.get("title") if isinstance(it.get("title"), str) else ""
         m = re.search(r"\b\d+(?:\.\d+){1,4}\b", title)
-        version = vstr(parse_version(m.group(0))) if m else ""
-        if not version and sha:
-            try:
-                version = manifest_version_at(sha)
-            except (OSError, ValueError, urllib.error.URLError):
-                version = ""
         # Built here, never taken from the response.
-        return {"issue": num, "url": "https://github.com/%s/issues/%d" % (MARKET, num),
-                "sha": sha, "version": version}
-
-    approved = pending = None
-    approved_at = ""
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        labels = {l.get("name") for l in it.get("labels", []) if isinstance(l, dict)}
-        if it.get("state") == "closed" and "approved-and-verified" in labels:
-            when = str(it.get("closed_at") or "")
-            if when > approved_at:
-                desc = describe(it)
-                if desc and desc["sha"]:
-                    approved, approved_at = desc, when
-        elif it.get("state") == "open" and pending is None:
-            pending = describe(it)
+        pending = {"issue": it["number"], "url": "https://github.com/%s/issues/%d" % (MARKET, it["number"]),
+                   "version": vstr(parse_version(m.group(0))) if m else ""}
+        break
     return {"approved": approved, "pending": pending}
 
 
