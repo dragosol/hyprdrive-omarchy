@@ -282,6 +282,21 @@ namespace ScrollOverview::Mosaic {
         // assume the shape and size they were at pre-tiling").
         long long           id = 0;
         bool                trusted = true; // may become its app's size on close
+
+        // The size it is packed at: its natural one -- or, PSEUDOTILED
+        // (Hyprland's pseudo, SUPER+P), the size Hyprland will draw it at,
+        // centred in whatever slot it is given (WindowTarget's pseudo branch).
+        // Packed at its natural size, the difference was empty space around
+        // it (user, 2026-11-02: Zen pseudotiled at 967 tall in a 1083 slot on
+        // the canvas, 58 px of space above and below it).
+        Vector2D packSize() const {
+            if (const auto T = target.lock(); T && T->isPseudo()) {
+                const Vector2D P = T->pseudoSize();
+                if (P.x >= 1 && P.y >= 1)
+                    return P;
+            }
+            return natural;
+        }
     };
 
     // TRACE, for the next odd recording: `touch $XDG_RUNTIME_DIR/hyprdrive-mosaic.on`
@@ -702,7 +717,7 @@ namespace ScrollOverview::Mosaic {
             std::vector<MosaicPack::SRect> sizes;
             for (const auto& E : m_entries)
                 if (!E.target.expired())
-                    sizes.push_back({0, 0, E.natural.x, E.natural.y});
+                    sizes.push_back({0, 0, E.packSize().x, E.packSize().y});
             sizes.push_back({0, 0, N.x, N.y});
             const MosaicPack::SRect AREAR{AREA->x, AREA->y, AREA->w, AREA->h};
             if (canvasOn() || MosaicPack::packEased(sizes, AREAR, looseArea(), innerGap(), nullptr))
@@ -952,7 +967,7 @@ namespace ScrollOverview::Mosaic {
                 return false;
             std::vector<MosaicPack::SRect> sizes;
             for (const auto& E : m_entries)
-                sizes.push_back({0, 0, E.natural.x, E.natural.y});
+                sizes.push_back({0, 0, E.packSize().x, E.packSize().y});
             return MosaicPack::fitsEased(sizes, MosaicPack::SRect{AREA->x, AREA->y, AREA->w, AREA->h}, looseArea(), innerGap());
         }
 
@@ -1303,7 +1318,7 @@ namespace ScrollOverview::Mosaic {
             std::vector<MosaicPack::SRect> sizes;
             sizes.reserve(m_entries.size());
             for (const auto& E : m_entries)
-                sizes.push_back({0, 0, E.natural.x, E.natural.y});
+                sizes.push_back({0, 0, E.packSize().x, E.packSize().y});
 
             const MosaicPack::SRect AREAR{AREA.x, AREA.y, AREA.w, AREA.h};
             m_asMosaic = false;
@@ -1366,7 +1381,7 @@ namespace ScrollOverview::Mosaic {
                 endZoomNow();
             std::vector<MosaicPack::SRect> sizes;
             for (const auto& E : m_entries)
-                sizes.push_back({0, 0, E.natural.x, E.natural.y});
+                sizes.push_back({0, 0, E.packSize().x, E.packSize().y});
             // A WINDOW LET GO ON THE CANVAS lands where it was let go and the
             // cluster packs around it, as a drop in the plain mosaic does
             // (MosaicCanvas.hpp SCanvasDrop -> PackHint).
@@ -2469,7 +2484,8 @@ namespace ScrollOverview::Mosaic {
             for (const auto& E : m_entries) {
                 const auto T = E.target.lock();
                 const auto W = T ? T->window() : PHLWINDOW{};
-                line += std::format(" [{} {:x} natural={}x{}]", appOf(W), (uintptr_t)W.get(), E.natural.x, E.natural.y);
+                line += std::format(" [{} {:x} natural={}x{}{}]", appOf(W), (uintptr_t)W.get(), E.natural.x, E.natural.y,
+                                    T && T->isPseudo() ? std::format(" pseudo={}x{}", T->pseudoSize().x, T->pseudoSize().y) : std::string{});
             }
             trace(line);
         }

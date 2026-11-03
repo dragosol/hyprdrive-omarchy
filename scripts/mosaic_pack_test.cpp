@@ -564,6 +564,85 @@ int main() {
             std::printf("  canvas of 12 (all directions): %.2f ms\n", MS);
             expect(MS < 40.0, "canvas of 12 packs under 40 ms");
         }
+        // THE TIGHT CANVAS (user, 2026-11-02, a screenshot: "this clustering is
+        // still broken ... those spaces mean the separated windows are not
+        // visible and completely offscreen"). Past one screen the canvas is
+        // compacted: no window can slide closer to its neighbours, no space is
+        // shut in between windows, and the gap is kept.
+        {
+            // Windows LOOSE between neighbours: along an axis it has a
+            // neighbour on some side but touches none (more than the gap
+            // away on every side that has one). Facing only the outside on
+            // both sides is not loose: sliding would not bring it closer to anyone.
+            const auto SLACK = [&](const std::vector<SRect>& r) {
+                int loose = 0;
+                for (size_t i = 0; i < r.size(); ++i)
+                    for (int axis = 0; axis < 2; ++axis) {
+                        const SRect& A   = r[i];
+                        const double LO = axis ? A.y : A.x, HI = LO + (axis ? A.h : A.w);
+                        double       lowFree = 1e18, highFree = 1e18;
+                        for (size_t j = 0; j < r.size(); ++j) {
+                            if (j == i)
+                                continue;
+                            const SRect& B     = r[j];
+                            const bool   SHARE = axis ? (A.x < B.x + B.w + G - 0.5 && B.x < A.x + A.w + G - 0.5) : (A.y < B.y + B.h + G - 0.5 && B.y < A.y + A.h + G - 0.5);
+                            if (!SHARE)
+                                continue;
+                            const double BLO = axis ? B.y : B.x, BHI = BLO + (axis ? B.h : B.w);
+                            if (BHI <= LO + 0.5)
+                                lowFree = std::min(lowFree, LO - BHI - G);
+                            else if (BLO >= HI - 0.5)
+                                highFree = std::min(highFree, BLO - HI - G);
+                        }
+                        if (std::min(lowFree, highFree) > 0.5 && std::min(lowFree, highFree) < 1e17)
+                            ++loose;
+                    }
+                return sc_double(loose);
+            };
+            const auto VALID = [&](const SCanvasPack& C, const std::vector<SRect>& sizes, const SRect& area) {
+                bool ok = C.rects.size() == sizes.size();
+                for (size_t i = 0; ok && i < C.rects.size(); ++i) {
+                    ok = ok && C.rects[i].w == std::min(sizes[i].w, area.w) && C.rects[i].h == std::min(sizes[i].h, area.h);
+                    ok = ok && C.rects[i].x >= -0.5 && C.rects[i].y >= -0.5 && C.rects[i].x + C.rects[i].w <= C.w + 0.5 && C.rects[i].y + C.rects[i].h <= C.h + 0.5;
+                    for (size_t j = i + 1; j < C.rects.size(); ++j)
+                        ok = ok && !overlaps(C.rects[i], C.rects[j]) && sep(C.rects[i], C.rects[j]) >= G - 0.5;
+                }
+                return ok;
+            };
+            // The XPS desktop of the screenshot: Zen, two terminals, Dorion,
+            // Pear Messages (each +2 for the border), the work area under the bar.
+            const SRect              XPSAREA{10, 32, 1780, 1083};
+            const std::vector<SRect> FIVE = {{0, 0, 1616, 967}, {0, 0, 755, 508}, {0, 0, 755, 508}, {0, 0, 952, 834}, {0, 0, 1114, 938}};
+            const auto               C    = packCanvas(FIVE, XPSAREA, SRect{5, 27, 1790, 1093}, G, true);
+            expect(VALID(C, FIVE, XPSAREA), "tight canvas (XPS desktop): sizes kept, no overlap, gap kept");
+            expect(SLACK(C.rects) < 0.5, "tight canvas (XPS desktop): no window loose between neighbours");
+            expect(enclosedArea(C.rects, G) < 1, "tight canvas (XPS desktop): no space shut in between windows");
+            expect(C.w * C.h <= 2740.0 * 1782.0 + 1, "tight canvas (XPS desktop): a box no bigger than the old 2740x1782");
+            // Random desktops past one screen.
+            unsigned        seed  = 20261102;
+            const auto      RNG   = [&seed] { return seed = seed * 1103515245u + 12345u, (seed >> 8); };
+            const std::vector<std::pair<double, double>> APPS{{755, 508}, {1616, 967}, {952, 834}, {1114, 938}, {1302, 926}, {902, 602}, {622, 702}, {1039, 666}};
+            bool  allValid = true, noSlack = true;
+            int   tested   = 0;
+            for (int t = 0; t < 150; ++t) {
+                std::vector<SRect> sizes;
+                const int          N = 3 + RNG() % 9;
+                for (int i = 0; i < N; ++i) {
+                    const auto [w, h] = APPS[RNG() % APPS.size()];
+                    sizes.push_back({0, 0, w, h});
+                }
+                const auto R = packCanvas(sizes, XPSAREA, std::nullopt, G, t % 3 != 0);
+                if (R.screensX * R.screensY <= 1)
+                    continue;
+                ++tested;
+                allValid = allValid && VALID(R, sizes, XPSAREA);
+                noSlack  = noSlack && SLACK(R.rects) < 0.5;
+            }
+            std::printf("  tight canvas: %d random desktops past one screen\n", tested);
+            expect(tested > 50 && allValid, "tight canvas (random): sizes kept, no overlap, gap kept");
+            expect(noSlack, "tight canvas (random): no window loose between neighbours");
+        }
+
         // SMART FOCUS PAN.
         {
             const double VW = 1920, MAX = 6000;

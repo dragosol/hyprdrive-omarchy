@@ -21,6 +21,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
+#include <numeric>
 #include <optional>
 #include <vector>
 
@@ -95,6 +97,404 @@ namespace ScrollOverview::MosaicPack {
         }
     }
 
+    // ---- THE TIGHT CANVAS (user, 2026-11-02, a screenshot: "this clustering
+    // is still broken ... sometimes those spaces mean the separated windows are
+    // not visible and completely offscreen and it's awkward to navigate to
+    // them"). The plain mosaic's packer centres: a column shorter than the one
+    // beside it sat in the middle of it, space above and below -- and closing
+    // the slack toward the cluster's centre never moved a column already
+    // centred. On a canvas nothing is gained by centring and every space
+    // pushes a window further off screen. So a canvas past one screen is:
+    //   * GRAVITY-COMPACTED: every window pulled up, then left, until it meets
+    //     a neighbour one gap away or the cluster's edge -- no space between
+    //     windows; what no arrangement fills ends up on the cluster's outside;
+    //   * the TIGHTEST of many arrangements: skyline packings at many widths
+    //     and window orders, and the mosaic packer's own, each compacted,
+    //     scored on the box (its area, its shape against the screen's) and,
+    //     heavily, on any space enclosed between windows. The windows' own
+    //     order wins a near-tie: a window opening does not reshuffle the rest.
+
+    // Pull every window up, then left, until it meets a neighbour (one gap
+    // away) or the top / left edge; again until nothing moves.
+    inline void gravity(std::vector<SRect>& r, double gap, bool upFirst = true) {
+        if (r.empty())
+            return;
+        double minX = 1e18, minY = 1e18;
+        for (const auto& R : r) {
+            minX = std::min(minX, R.x);
+            minY = std::min(minY, R.y);
+        }
+        for (auto& R : r) {
+            R.x -= minX;
+            R.y -= minY;
+        }
+        std::vector<size_t> order(r.size());
+        for (int round = 0; round < 12; ++round) {
+            bool moved = false;
+            for (int pass = 0; pass < 2; ++pass) { // up first, then left (or the other way)
+                const int axis = upFirst ? 1 - pass : pass;
+                std::iota(order.begin(), order.end(), size_t{0});
+                std::ranges::sort(order, [&](size_t a, size_t b) { return axis ? r[a].y < r[b].y : r[a].x < r[b].x; });
+                for (const size_t I : order) {
+                    SRect& A   = r[I];
+                    double lim = 0; // the edge
+                    for (size_t j = 0; j < r.size(); ++j) {
+                        if (j == I)
+                            continue;
+                        const SRect& B = r[j];
+                        // In the way if they come within a gap of each other on the OTHER axis.
+                        const bool SHARE = axis ? (A.x < B.x + B.w + gap - 0.5 && B.x < A.x + A.w + gap - 0.5) : (A.y < B.y + B.h + gap - 0.5 && B.y < A.y + A.h + gap - 0.5);
+                        if (!SHARE)
+                            continue;
+                        const double BEND = axis ? B.y + B.h : B.x + B.w;
+                        const double APOS = axis ? A.y : A.x;
+                        if (BEND <= APOS + 0.5)
+                            lim = std::max(lim, BEND + gap);
+                    }
+                    double& POS = axis ? A.y : A.x;
+                    if (POS - lim >= 0.5) {
+                        POS   = lim;
+                        moved = true;
+                    }
+                }
+            }
+            if (!moved)
+                break;
+        }
+    }
+
+    // Empty space enclosed between windows (not open to the cluster's
+    // outside), in px^2. Each window counts with the gap past its right and
+    // bottom edges, so neighbours one gap apart close off what lies between.
+    inline double enclosedArea(const std::vector<SRect>& r, double gap) {
+        if (r.size() < 3)
+            return 0;
+        std::vector<double> xs{}, ys{};
+        double              maxX = 0, maxY = 0;
+        for (const auto& R : r) {
+            xs.push_back(R.x);
+            xs.push_back(R.x + R.w + gap);
+            ys.push_back(R.y);
+            ys.push_back(R.y + R.h + gap);
+            maxX = std::max(maxX, R.x + R.w + gap);
+            maxY = std::max(maxY, R.y + R.h + gap);
+        }
+        xs.push_back(0);
+        ys.push_back(0);
+        std::ranges::sort(xs);
+        std::ranges::sort(ys);
+        xs.erase(std::unique(xs.begin(), xs.end(), [](double a, double b) { return std::abs(a - b) < 0.5; }), xs.end());
+        ys.erase(std::unique(ys.begin(), ys.end(), [](double a, double b) { return std::abs(a - b) < 0.5; }), ys.end());
+        const size_t NX = xs.size() - 1, NY = ys.size() - 1;
+        if (NX == 0 || NY == 0)
+            return 0;
+        // cell state: 1 covered, 2 reached from outside
+        std::vector<uint8_t> cell(NX * NY, 0);
+        for (size_t cy = 0; cy < NY; ++cy)
+            for (size_t cx = 0; cx < NX; ++cx) {
+                const double MX = (xs[cx] + xs[cx + 1]) / 2, MY = (ys[cy] + ys[cy + 1]) / 2;
+                for (const auto& R : r)
+                    if (MX > R.x && MX < R.x + R.w + gap && MY > R.y && MY < R.y + R.h + gap) {
+                        cell[cy * NX + cx] = 1;
+                        break;
+                    }
+            }
+        std::vector<size_t> stack;
+        for (size_t cy = 0; cy < NY; ++cy)
+            for (size_t cx = 0; cx < NX; ++cx)
+                if ((cx == 0 || cy == 0 || cx == NX - 1 || cy == NY - 1) && cell[cy * NX + cx] == 0) {
+                    cell[cy * NX + cx] = 2;
+                    stack.push_back(cy * NX + cx);
+                }
+        while (!stack.empty()) {
+            const size_t I = stack.back();
+            stack.pop_back();
+            const size_t CX = I % NX, CY = I / NX;
+            const auto   VISIT = [&](size_t x, size_t y) {
+                if (cell[y * NX + x] == 0) {
+                    cell[y * NX + x] = 2;
+                    stack.push_back(y * NX + x);
+                }
+            };
+            if (CX > 0)
+                VISIT(CX - 1, CY);
+            if (CX + 1 < NX)
+                VISIT(CX + 1, CY);
+            if (CY > 0)
+                VISIT(CX, CY - 1);
+            if (CY + 1 < NY)
+                VISIT(CX, CY + 1);
+        }
+        double area = 0;
+        for (size_t cy = 0; cy < NY; ++cy)
+            for (size_t cx = 0; cx < NX; ++cx)
+                if (cell[cy * NX + cx] == 0)
+                    area += (xs[cx + 1] - xs[cx]) * (ys[cy + 1] - ys[cy]);
+        (void)maxX;
+        (void)maxY;
+        return area;
+    }
+
+    // Skyline packing into a strip `width` wide: each window, in `order`, at
+    // the highest place along the top skyline where it fits (then the
+    // leftmost). Windows count with the gap past their right and bottom edges.
+    inline std::vector<SRect> skyline(const std::vector<SRect>& s, const std::vector<size_t>& order, double width, double gap) {
+        struct SSeg {
+            double x, w, y;
+        };
+        std::vector<SSeg>  sky{{0, width + gap, 0}};
+        std::vector<SRect> out(s.size());
+        for (const size_t I : order) {
+            const double W = s[I].w + gap, H = s[I].h + gap;
+            double       bestY = 1e18, bestX = 0;
+            for (size_t k = 0; k < sky.size(); ++k) {
+                const double X = sky[k].x;
+                if (X + W > width + gap + 0.5)
+                    break;
+                double top = 0, run = 0;
+                for (size_t m = k; m < sky.size() && run < W - 0.5; ++m) {
+                    top = std::max(top, sky[m].y);
+                    run += sky[m].w;
+                }
+                if (run < W - 0.5)
+                    continue;
+                if (top < bestY - 0.5 || (std::abs(top - bestY) < 0.5 && X < bestX)) {
+                    bestY = top;
+                    bestX = X;
+                }
+            }
+            if (bestY > 1e17)
+                return {}; // wider than the strip
+            out[I] = SRect{bestX, bestY, s[I].w, s[I].h};
+            // Raise the skyline under it.
+            std::vector<SSeg> next;
+            const double      L = bestX, R = bestX + W;
+            for (const auto& G : sky) {
+                const double GL = G.x, GR = G.x + G.w;
+                if (GR <= L + 0.25 || GL >= R - 0.25) {
+                    next.push_back(G);
+                    continue;
+                }
+                if (GL < L)
+                    next.push_back({GL, L - GL, G.y});
+                if (GR > R)
+                    next.push_back({R, GR - R, G.y});
+            }
+            next.push_back({L, W, bestY + H});
+            std::ranges::sort(next, [](const SSeg& a, const SSeg& b) { return a.x < b.x; });
+            // Merge neighbours at the same height.
+            sky.clear();
+            for (const auto& G : next) {
+                if (!sky.empty() && std::abs(sky.back().y - G.y) < 0.25 && std::abs(sky.back().x + sky.back().w - G.x) < 0.25)
+                    sky.back().w += G.w;
+                else
+                    sky.push_back(G);
+            }
+        }
+        return out;
+    }
+
+    // The bounding box of a layout and its score (lower is tighter): the
+    // box's area, a penalty for a shape unlike the screen's, and a heavy one
+    // for space enclosed between windows.
+    inline double canvasScore(const std::vector<SRect>& r, double gap, double screenAspect, double* boxW = nullptr, double* boxH = nullptr) {
+        double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
+        for (const auto& R : r) {
+            minX = std::min(minX, R.x);
+            minY = std::min(minY, R.y);
+            maxX = std::max(maxX, R.x + R.w);
+            maxY = std::max(maxY, R.y + R.h);
+        }
+        const double W = maxX - minX, H = maxY - minY;
+        if (boxW)
+            *boxW = W;
+        if (boxH)
+            *boxH = H;
+        if (W < 1 || H < 1)
+            return 1e30;
+        const double SHAPE = std::abs(std::log((W / H) / std::max(0.1, screenAspect)));
+        return W * H * (1.0 + 0.35 * SHAPE) + 30.0 * enclosedArea(r, gap);
+    }
+
+    // HUG THE NEIGHBOUR (user, 2026-11-02: Dorion, narrower than Pear above
+    // it, sat against the canvas's left edge with 174 px of space between it
+    // and Zen). A window whose one side faces nothing but the outside, and
+    // whose other side has a neighbour further than the gap, slides over to
+    // it: the space moves to the cluster's outside. It never opens a gap
+    // between windows -- the side it leaves faces nothing.
+    inline void hugNeighbours(std::vector<SRect>& r, double gap) {
+        for (int round = 0; round < 8; ++round) {
+            bool moved = false;
+            for (size_t i = 0; i < r.size(); ++i) {
+                for (int axis = 0; axis < 2; ++axis) {
+                    SRect&       A   = r[i];
+                    const double LO = axis ? A.y : A.x, HI = LO + (axis ? A.h : A.w);
+                    double       lowFree = 1e18, highFree = 1e18; // to the nearest window on each side, minus the gap
+                    for (size_t j = 0; j < r.size(); ++j) {
+                        if (j == i)
+                            continue;
+                        const SRect& B     = r[j];
+                        const bool   SHARE = axis ? (A.x < B.x + B.w + gap - 0.5 && B.x < A.x + A.w + gap - 0.5) : (A.y < B.y + B.h + gap - 0.5 && B.y < A.y + A.h + gap - 0.5);
+                        if (!SHARE)
+                            continue;
+                        const double BLO = axis ? B.y : B.x, BHI = BLO + (axis ? B.h : B.w);
+                        if (BHI <= LO + 0.5)
+                            lowFree = std::min(lowFree, LO - BHI - gap);
+                        else if (BLO >= HI - 0.5)
+                            highFree = std::min(highFree, BLO - HI - gap);
+                    }
+                    double& POS = axis ? A.y : A.x;
+                    if (lowFree > 1e17 && highFree < 1e17 && highFree >= 0.5) {
+                        POS += highFree;
+                        moved = true;
+                    } else if (highFree > 1e17 && lowFree < 1e17 && lowFree >= 0.5) {
+                        POS -= lowFree;
+                        moved = true;
+                    }
+                }
+            }
+            if (!moved)
+                break;
+        }
+    }
+
+    // Gravity toward one corner of four (bit 0: right, bit 1: down): mirrored
+    // into the top-left one and back.
+    inline void gravityToward(std::vector<SRect>& r, double gap, int corner, bool upFirst = true) {
+        const auto FLIP = [&] {
+            for (auto& R : r) {
+                if (corner & 1)
+                    R.x = -R.x - R.w;
+                if (corner & 2)
+                    R.y = -R.y - R.h;
+            }
+        };
+        FLIP();
+        gravity(r, gap, upFirst);
+        FLIP();
+        hugNeighbours(r, gap);
+    }
+
+    // The best corner to compact `r` toward (fewest enclosed pockets, then
+    // the smaller box), `r` compacted that way.
+    inline double compactBest(std::vector<SRect>& r, double gap, const std::function<double(const std::vector<SRect>&)>& score) {
+        std::vector<SRect> best;
+        double             bestScore = 1e30;
+        for (int v = 0; v < 8; ++v) {
+            auto c = r;
+            gravityToward(c, gap, v & 3, v < 4);
+            const double SC = score(c);
+            if (SC < bestScore) {
+                bestScore = SC;
+                best      = std::move(c);
+            }
+        }
+        r = std::move(best);
+        return bestScore;
+    }
+
+    // The tightest compacted arrangement of `s` (sizes already clamped):
+    // `seed` (the mosaic packer's) against skyline packings. `widthCap`: a
+    // horizontal canvas packs transposed, its height the screen's.
+    inline std::vector<SRect> tightestCanvas(const std::vector<SRect>& s, std::vector<SRect> seed, double gap, double screenAspect, bool horizontal, double screenH) {
+        const size_t N = s.size();
+        // Horizontal: work transposed (a strip of the screen's height, growing right).
+        const auto T = [](const SRect& R) { return SRect{R.y, R.x, R.h, R.w}; };
+        std::vector<SRect> sz = s;
+        if (horizontal) {
+            for (auto& R : sz)
+                R = T(R);
+            for (auto& R : seed)
+                R = T(R);
+        }
+        const double ASPECT = horizontal ? 1.0 / std::max(0.01, screenAspect) : screenAspect;
+        const auto   SCORE  = [&](const std::vector<SRect>& r) {
+            double W = 0, H = 0;
+            double sc = canvasScore(r, gap, ASPECT, &W, &H);
+            if (horizontal && W > screenH + 0.5) // transposed: the strip must stay a screen tall
+                sc = 1e30;
+            return sc;
+        };
+
+        std::vector<SRect> best = seed;
+        double             bestScore = seed.empty() ? 1e30 : compactBest(best, gap, SCORE);
+        // The windows' own order, then tall-first, wide-first, big-first.
+        std::vector<std::vector<size_t>> orders(4, std::vector<size_t>(N));
+        for (auto& O : orders)
+            std::iota(O.begin(), O.end(), size_t{0});
+        std::ranges::stable_sort(orders[1], [&](size_t a, size_t b) { return sz[a].h > sz[b].h; });
+        std::ranges::stable_sort(orders[2], [&](size_t a, size_t b) { return sz[a].w > sz[b].w; });
+        std::ranges::stable_sort(orders[3], [&](size_t a, size_t b) { return sz[a].w * sz[a].h > sz[b].w * sz[b].h; });
+        double maxW = 0, sumW = 0;
+        for (const auto& R : sz) {
+            maxW = std::max(maxW, R.w);
+            sumW += R.w + gap;
+        }
+        std::vector<double> widths;
+        if (horizontal)
+            widths.push_back(screenH);
+        else {
+            for (const auto& O : orders) { // every prefix of every order
+                double run = 0;
+                for (const size_t I : O) {
+                    run += sz[I].w + (run > 0 ? gap : 0);
+                    if (run >= maxW - 0.5)
+                        widths.push_back(run);
+                }
+            }
+            for (int k = 0; k <= 24; ++k) // and evenly between the widest window and a single row
+                widths.push_back(maxW + (sumW - maxW) * k / 24.0);
+        }
+        // Every skyline, judged first on its box alone (cheap); only the most
+        // promising few are compacted every way and judged on their pockets.
+        struct SCand {
+            std::vector<SRect> r;
+            double             box;
+            bool               own;
+        };
+        std::vector<SCand> cands;
+        for (size_t o = 0; o < orders.size(); ++o) {
+            for (const double W : widths) {
+                auto r = skyline(sz, orders[o], W, gap);
+                if (r.empty())
+                    continue;
+                double       bw = 0, bh = 0;
+                const double BOX = canvasScore(r, gap, ASPECT, &bw, &bh) - 30.0 * enclosedArea(r, gap);
+                if (horizontal && bw > screenH + 0.5)
+                    continue;
+                cands.push_back({std::move(r), BOX, o == 0});
+            }
+        }
+        std::ranges::sort(cands, [](const SCand& a, const SCand& b) { return a.box < b.box; });
+        constexpr size_t   KEEP = 12;
+        std::vector<SRect> ownBest;
+        double             ownScore = 1e30;
+        size_t             ownSeen  = 0;
+        for (size_t k = 0; k < cands.size(); ++k) {
+            const bool TOP = k < KEEP, OWN = cands[k].own && ownSeen < 2;
+            if (!TOP && !OWN)
+                continue;
+            ownSeen += cands[k].own;
+            auto         r  = cands[k].r;
+            const double SC = compactBest(r, gap, SCORE);
+            if (SC < bestScore) {
+                bestScore = SC;
+                best      = r;
+            }
+            if (cands[k].own && SC < ownScore) {
+                ownScore = SC;
+                ownBest  = r;
+            }
+        }
+        // A near-tie goes to the windows' own order (less churn).
+        if (!ownBest.empty() && ownScore <= bestScore * 1.03)
+            best = ownBest;
+        if (horizontal)
+            for (auto& R : best)
+                R = T(R);
+        return best;
+    }
+
     // `area` is the screen's work area (the view), `loose` the eased one.
     inline SCanvasPack packCanvas(const std::vector<SRect>& sizes, const SRect& area, const std::optional<SRect>& loose, double gap, bool twoD,
                                   const SCanvasDrop* drop = nullptr) {
@@ -146,7 +546,14 @@ namespace ScrollOverview::MosaicPack {
                 x += R.w + gap;
             }
         }
-        closeSlack(*placed, gap, drop ? drop->idx : SIZE_MAX);
+        // Past one screen, no drop: the tightest compacted arrangement (THE
+        // TIGHT CANVAS). One screen, or a drop, as before: the mosaic's own,
+        // its slack closed toward the centre.
+        const bool ONESCREEN = cx == 1 && cy == 1 && fitsEased(s, area, loose, gap);
+        if (!drop && !ONESCREEN)
+            *placed = tightestCanvas(s, *placed, gap, area.w / area.h, !twoD, area.h);
+        else
+            closeSlack(*placed, gap, drop ? drop->idx : SIZE_MAX);
         double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
         for (const auto& R : *placed) {
             minX = std::min(minX, R.x);
