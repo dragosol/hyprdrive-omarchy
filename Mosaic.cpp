@@ -1409,7 +1409,7 @@ namespace ScrollOverview::Mosaic {
             const auto FOCUS = Desktop::focusState()->window();
             const auto OLDRECTS = m_canvas.rects;
             const auto OLDWHO   = m_canvasWho;
-            m_canvas         = MosaicPack::packCanvas(sizes, AREAR, looseArea(), innerGap(), canvasAllDirections(), drop ? &*drop : nullptr);
+            m_canvas         = MosaicPack::packCanvasMemo(m_canvasMemo, sizes, AREAR, looseArea(), innerGap(), canvasAllDirections(), drop ? &*drop : nullptr);
             m_canvasWho.clear();
             for (const auto& E : m_entries)
                 m_canvasWho.push_back(E.target);
@@ -2402,6 +2402,7 @@ namespace ScrollOverview::Mosaic {
         bool                      m_tiledHold = false; // a resize went past its limit: tiles until the mosaic fits unshrunk
         bool                      m_asCanvas  = false; // the last arrangement was the infinite canvas
         MosaicPack::SCanvasPack   m_canvas;            // where everyone sits on it
+        MosaicPack::SCanvasMemo   m_canvasMemo;        // the last packing and its inputs (packCanvasMemo)
         std::vector<WP<Layout::ITarget>> m_canvasWho;  // whose rect is which (m_canvas.rects' order)
         Vector2D                  m_canvasOffset;      // the view, 0..SCanvasView::max
         struct SPan {

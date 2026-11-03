@@ -114,6 +114,15 @@ namespace ScrollOverview::MosaicPack {
     //     heavily, on any space enclosed between windows. The windows' own
     //     order wins a near-tie: a window opening does not reshuffle the rest.
 
+    // BOUNDED (marketplace review, omacom/omarchy-plugin-marketplace#13685:
+    // the search ran on the compositor thread with no limit -- 1.6 s for 96
+    // windows). The search below is for a desktop's worth of windows: it
+    // takes at most CANVAS_SEARCH_MAX of them and MAX_WIDTHS strip widths
+    // per window order. A desktop with more (packCanvas) is shelf-packed,
+    // in linear time.
+    constexpr size_t CANVAS_SEARCH_MAX = 32;
+    constexpr size_t MAX_WIDTHS        = 64;
+
     // Pull every window up, then left, until it meets a neighbour (one gap
     // away) or the top / left edge; again until nothing moves.
     inline void gravity(std::vector<SRect>& r, double gap, bool upFirst = true) {
@@ -188,17 +197,28 @@ namespace ScrollOverview::MosaicPack {
         const size_t NX = xs.size() - 1, NY = ys.size() - 1;
         if (NX == 0 || NY == 0)
             return 0;
-        // cell state: 1 covered, 2 reached from outside
+        // cell state: 1 covered, 2 reached from outside. Each window marks
+        // only the cells under it, found by bisection: the grid's lines include
+        // its edges, so that is its own cells plus one either side to test --
+        // O(cells) for a layout without overlaps, not cells x windows.
         std::vector<uint8_t> cell(NX * NY, 0);
-        for (size_t cy = 0; cy < NY; ++cy)
-            for (size_t cx = 0; cx < NX; ++cx) {
-                const double MX = (xs[cx] + xs[cx + 1]) / 2, MY = (ys[cy] + ys[cy + 1]) / 2;
-                for (const auto& R : r)
-                    if (MX > R.x && MX < R.x + R.w + gap && MY > R.y && MY < R.y + R.h + gap) {
+        for (const auto& R : r) {
+            const double R1 = R.x + R.w + gap, B1 = R.y + R.h + gap;
+            const size_t X0 = static_cast<size_t>(std::max<std::ptrdiff_t>(0, (std::lower_bound(xs.begin(), xs.end(), R.x - 1.0) - xs.begin()) - 1));
+            const size_t X1 = std::min(NX, static_cast<size_t>(std::upper_bound(xs.begin(), xs.end(), R1 + 1.0) - xs.begin()));
+            const size_t Y0 = static_cast<size_t>(std::max<std::ptrdiff_t>(0, (std::lower_bound(ys.begin(), ys.end(), R.y - 1.0) - ys.begin()) - 1));
+            const size_t Y1 = std::min(NY, static_cast<size_t>(std::upper_bound(ys.begin(), ys.end(), B1 + 1.0) - ys.begin()));
+            for (size_t cy = Y0; cy < Y1; ++cy) {
+                const double MY = (ys[cy] + ys[cy + 1]) / 2;
+                if (!(MY > R.y && MY < B1))
+                    continue;
+                for (size_t cx = X0; cx < X1; ++cx) {
+                    const double MX = (xs[cx] + xs[cx + 1]) / 2;
+                    if (MX > R.x && MX < R1)
                         cell[cy * NX + cx] = 1;
-                        break;
-                    }
+                }
             }
+        }
         std::vector<size_t> stack;
         for (size_t cy = 0; cy < NY; ++cy)
             for (size_t cx = 0; cx < NX; ++cx)
@@ -294,10 +314,10 @@ namespace ScrollOverview::MosaicPack {
         return out;
     }
 
-    // The bounding box of a layout and its score (lower is tighter): the
-    // box's area, a penalty for a shape unlike the screen's, and a heavy one
-    // for space enclosed between windows.
-    inline double canvasScore(const std::vector<SRect>& r, double gap, double screenAspect, double* boxW = nullptr, double* boxH = nullptr) {
+    // A layout's bounding box and its score (lower is tighter): the box's
+    // area and a penalty for a shape unlike the screen's. Cheap -- every
+    // candidate is screened on it.
+    inline double boxScore(const std::vector<SRect>& r, double screenAspect, double* boxW = nullptr, double* boxH = nullptr) {
         double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
         for (const auto& R : r) {
             minX = std::min(minX, R.x);
@@ -313,7 +333,13 @@ namespace ScrollOverview::MosaicPack {
         if (W < 1 || H < 1)
             return 1e30;
         const double SHAPE = std::abs(std::log((W / H) / std::max(0.1, screenAspect)));
-        return W * H * (1.0 + 0.35 * SHAPE) + 30.0 * enclosedArea(r, gap);
+        return W * H * (1.0 + 0.35 * SHAPE);
+    }
+    // The full score: the box's, and a heavy penalty for space enclosed
+    // between windows.
+    inline double canvasScore(const std::vector<SRect>& r, double gap, double screenAspect, double* boxW = nullptr, double* boxH = nullptr) {
+        const double BOX = boxScore(r, screenAspect, boxW, boxH);
+        return BOX >= 1e30 ? BOX : BOX + 30.0 * enclosedArea(r, gap);
     }
 
     // HUG THE NEIGHBOUR (user, 2026-11-02: Dorion, narrower than Pear above
@@ -444,6 +470,17 @@ namespace ScrollOverview::MosaicPack {
             }
             for (int k = 0; k <= 24; ++k) // and evenly between the widest window and a single row
                 widths.push_back(maxW + (sumW - maxW) * k / 24.0);
+            // Each width once, and at most MAX_WIDTHS of them, spread evenly
+            // over the range: the prefixes grow with the window count, the
+            // search must not (BOUNDED, packCanvas).
+            std::ranges::sort(widths);
+            widths.erase(std::unique(widths.begin(), widths.end(), [](double a, double b) { return std::abs(a - b) < 0.5; }), widths.end());
+            if (widths.size() > MAX_WIDTHS) {
+                std::vector<double> few;
+                for (size_t k = 0; k < MAX_WIDTHS; ++k)
+                    few.push_back(widths[k * (widths.size() - 1) / (MAX_WIDTHS - 1)]);
+                widths = std::move(few);
+            }
         }
         // Every skyline, judged first on its box alone (cheap); only the most
         // promising few are compacted every way and judged on their pockets.
@@ -459,7 +496,7 @@ namespace ScrollOverview::MosaicPack {
                 if (r.empty())
                     continue;
                 double       bw = 0, bh = 0;
-                const double BOX = canvasScore(r, gap, ASPECT, &bw, &bh) - 30.0 * enclosedArea(r, gap);
+                const double BOX = boxScore(r, ASPECT, &bw, &bh);
                 if (horizontal && bw > screenH + 0.5)
                     continue;
                 cands.push_back({std::move(r), BOX, o == 0});
@@ -495,6 +532,48 @@ namespace ScrollOverview::MosaicPack {
         return best;
     }
 
+    // More windows than the search takes (CANVAS_SEARCH_MAX): rows -- or,
+    // horizontal, columns a screen tall -- in the windows' own order, each
+    // window at the next place along, in one pass. All directions: a few row
+    // lengths around the one a screen-shaped whole would have, the closest to
+    // the screen's shape kept (boxScore) -- a fixed number of linear passes.
+    inline std::vector<SRect> shelfRows(const std::vector<SRect>& s, double gap, bool horizontal, double len) {
+        std::vector<SRect> out;
+        double             along = 0, across = 0, thick = 0; // along the shelf, the shelf's offset, its thickness
+        for (const auto& R : s) {
+            const double A = horizontal ? R.h : R.w, T = horizontal ? R.w : R.h;
+            if (along > 0 && along + A > len + 0.5) {
+                across += thick + gap;
+                along = thick = 0;
+            }
+            out.push_back(horizontal ? SRect{across, along, R.w, R.h} : SRect{along, across, R.w, R.h});
+            along += A + gap;
+            thick = std::max(thick, T);
+        }
+        return out;
+    }
+    inline std::vector<SRect> shelfCanvas(const std::vector<SRect>& s, double gap, double screenAspect, bool horizontal, double screenH) {
+        if (horizontal)
+            return shelfRows(s, gap, true, screenH);
+        double sumA = 0, maxW = 0;
+        for (const auto& R : s) {
+            sumA += (R.w + gap) * (R.h + gap);
+            maxW = std::max(maxW, R.w);
+        }
+        const double       LEN = std::sqrt(sumA * std::max(0.1, screenAspect));
+        std::vector<SRect> best;
+        double             bestScore = 1e30;
+        for (const double K : {1.0, 1.15, 1.3, 1.5, 1.75}) {
+            auto         r  = shelfRows(s, gap, false, std::max(maxW, LEN * K));
+            const double SC = boxScore(r, screenAspect);
+            if (SC < bestScore) {
+                bestScore = SC;
+                best      = std::move(r);
+            }
+        }
+        return best;
+    }
+
     // `area` is the screen's work area (the view), `loose` the eased one.
     inline SCanvasPack packCanvas(const std::vector<SRect>& sizes, const SRect& area, const std::optional<SRect>& loose, double gap, bool twoD,
                                   const SCanvasDrop* drop = nullptr) {
@@ -518,7 +597,19 @@ namespace ScrollOverview::MosaicPack {
         std::optional<std::vector<SRect>> placed;
         SRect                             big = area;
         size_t                            cx = 1, cy = 1;
-        for (size_t step = 0; step <= 4 * sizes.size() + 4 && !placed; ++step) {
+        // More windows than the search takes: shelves (BOUNDED, above).
+        const bool SHELF = s.size() > CANVAS_SEARCH_MAX;
+        if (SHELF) {
+            placed = shelfCanvas(s, gap, area.w / area.h, !twoD, area.h);
+            double W = 0, H = 0;
+            for (const auto& R : *placed) {
+                W = std::max(W, R.x + R.w);
+                H = std::max(H, R.y + R.h);
+            }
+            cx = std::max<size_t>(1, static_cast<size_t>(std::ceil(W / area.w - 1e-9)));
+            cy = std::max<size_t>(1, static_cast<size_t>(std::ceil(H / area.h - 1e-9)));
+        }
+        for (size_t step = 0; !SHELF && step <= 4 * sizes.size() + 4 && !placed; ++step) {
             if (twoD) {
                 const double K = 1.0 + 0.25 * static_cast<double>(step);
                 big            = SRect{area.x, area.y, area.w * K, area.h * K};
@@ -549,10 +640,10 @@ namespace ScrollOverview::MosaicPack {
         // Past one screen, no drop: the tightest compacted arrangement (THE
         // TIGHT CANVAS). One screen, or a drop, as before: the mosaic's own,
         // its slack closed toward the centre.
-        const bool ONESCREEN = cx == 1 && cy == 1 && fitsEased(s, area, loose, gap);
-        if (!drop && !ONESCREEN)
+        const bool ONESCREEN = !SHELF && cx == 1 && cy == 1 && fitsEased(s, area, loose, gap);
+        if (!SHELF && !drop && !ONESCREEN)
             *placed = tightestCanvas(s, *placed, gap, area.w / area.h, !twoD, area.h);
-        else
+        else if (!SHELF)
             closeSlack(*placed, gap, drop ? drop->idx : SIZE_MAX);
         double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
         for (const auto& R : *placed) {
@@ -570,6 +661,40 @@ namespace ScrollOverview::MosaicPack {
         out.screensX = cx;
         out.screensY = cy;
         return out;
+    }
+
+    // The last packing and what it was asked. Hyprland re-lays out a desktop
+    // on many events that change nothing the packing reads (focus, a layer
+    // opening, a fullscreen toggle and back); those reuse it instead of
+    // searching again (BOUNDED, above). packCanvas is a pure function of these.
+    struct SCanvasMemo {
+        std::vector<SRect>         sizes;
+        SRect                      area;
+        std::optional<SRect>       loose;
+        double                     gap  = 0;
+        bool                       twoD = false;
+        std::optional<SCanvasDrop> drop;
+        SCanvasPack                out;
+        bool                       valid = false;
+    };
+    inline SCanvasPack packCanvasMemo(SCanvasMemo& memo, const std::vector<SRect>& sizes, const SRect& area, const std::optional<SRect>& loose, double gap, bool twoD,
+                                      const SCanvasDrop* drop = nullptr) {
+        const auto SAME = [](const SRect& a, const SRect& b) { return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h; };
+        const bool HIT  = memo.valid && memo.gap == gap && memo.twoD == twoD && SAME(memo.area, area) && memo.loose.has_value() == loose.has_value() &&
+            (!loose || SAME(*memo.loose, *loose)) && memo.drop.has_value() == (drop != nullptr) &&
+            (!drop || (memo.drop->idx == drop->idx && memo.drop->x == drop->x && memo.drop->y == drop->y && memo.drop->oldW == drop->oldW && memo.drop->oldH == drop->oldH)) &&
+            std::ranges::equal(memo.sizes, sizes, SAME);
+        if (!HIT) {
+            memo.sizes = sizes;
+            memo.area  = area;
+            memo.loose = loose;
+            memo.gap   = gap;
+            memo.twoD  = twoD;
+            memo.drop  = drop ? std::optional<SCanvasDrop>{*drop} : std::nullopt;
+            memo.out   = packCanvas(sizes, area, loose, gap, twoD, drop);
+            memo.valid = true;
+        }
+        return memo.out;
     }
 
     // Where the canvas sits on screen for a view offset, and the offsets the

@@ -641,6 +641,130 @@ int main() {
             std::printf("  tight canvas: %d random desktops past one screen\n", tested);
             expect(tested > 50 && allValid, "tight canvas (random): sizes kept, no overlap, gap kept");
             expect(noSlack, "tight canvas (random): no window loose between neighbours");
+
+            // BOUNDED (omacom/omarchy-plugin-marketplace#13685). enclosedArea
+            // marks each window's own cells now; the per-cell scan of every
+            // window it replaced is the reference, on skyline packings (which
+            // leave pockets) and on random overlapping rectangles.
+            {
+                const auto REF = [](const std::vector<SRect>& r, double gap) {
+                    if (r.size() < 3)
+                        return 0.0;
+                    std::vector<double> xs{0}, ys{0};
+                    for (const auto& R : r) {
+                        xs.push_back(R.x);
+                        xs.push_back(R.x + R.w + gap);
+                        ys.push_back(R.y);
+                        ys.push_back(R.y + R.h + gap);
+                    }
+                    std::ranges::sort(xs);
+                    std::ranges::sort(ys);
+                    xs.erase(std::unique(xs.begin(), xs.end(), [](double a, double b) { return std::abs(a - b) < 0.5; }), xs.end());
+                    ys.erase(std::unique(ys.begin(), ys.end(), [](double a, double b) { return std::abs(a - b) < 0.5; }), ys.end());
+                    const size_t NX = xs.size() - 1, NY = ys.size() - 1;
+                    std::vector<int> cell(NX * NY, 0);
+                    for (size_t cy = 0; cy < NY; ++cy)
+                        for (size_t cx = 0; cx < NX; ++cx)
+                            for (const auto& R : r)
+                                if ((xs[cx] + xs[cx + 1]) / 2 > R.x && (xs[cx] + xs[cx + 1]) / 2 < R.x + R.w + gap && (ys[cy] + ys[cy + 1]) / 2 > R.y &&
+                                    (ys[cy] + ys[cy + 1]) / 2 < R.y + R.h + gap) {
+                                    cell[cy * NX + cx] = 1;
+                                    break;
+                                }
+                    std::vector<size_t> stack;
+                    for (size_t cy = 0; cy < NY; ++cy)
+                        for (size_t cx = 0; cx < NX; ++cx)
+                            if ((cx == 0 || cy == 0 || cx == NX - 1 || cy == NY - 1) && !cell[cy * NX + cx])
+                                cell[cy * NX + cx] = 2, stack.push_back(cy * NX + cx);
+                    while (!stack.empty()) {
+                        const size_t I = stack.back(), CX = I % NX, CY = I / NX;
+                        stack.pop_back();
+                        for (const auto& [dx, dy] : {std::pair{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
+                            const long X = static_cast<long>(CX) + dx, Y = static_cast<long>(CY) + dy;
+                            if (X >= 0 && Y >= 0 && X < static_cast<long>(NX) && Y < static_cast<long>(NY) && !cell[Y * NX + X])
+                                cell[Y * NX + X] = 2, stack.push_back(Y * NX + X);
+                        }
+                    }
+                    double a = 0;
+                    for (size_t cy = 0; cy < NY; ++cy)
+                        for (size_t cx = 0; cx < NX; ++cx)
+                            if (!cell[cy * NX + cx])
+                                a += (xs[cx + 1] - xs[cx]) * (ys[cy + 1] - ys[cy]);
+                    return a;
+                };
+                int  layouts = 0, pockets = 0;
+                bool same    = true;
+                for (int t = 0; t < 200; ++t) {
+                    std::vector<SRect> r;
+                    const int          N = 3 + RNG() % 14;
+                    if (t % 2 == 0) {
+                        std::vector<SRect> sizes;
+                        for (int i = 0; i < N; ++i)
+                            sizes.push_back({0, 0, 60.0 + RNG() % 900, 40.0 + RNG() % 700});
+                        std::vector<size_t> order(sizes.size());
+                        std::iota(order.begin(), order.end(), size_t{0});
+                        r = skyline(sizes, order, 1200.0 + RNG() % 2000, G);
+                        if (r.empty())
+                            continue;
+                    } else
+                        for (int i = 0; i < N; ++i)
+                            r.push_back({sc_double(RNG() % 3000) - 500, sc_double(RNG() % 2000) - 300, 30.0 + RNG() % 900, 30.0 + RNG() % 700});
+                    const double A = enclosedArea(r, G), B = REF(r, G);
+                    ++layouts;
+                    pockets += B > 1;
+                    same = same && std::abs(A - B) < 1e-6;
+                }
+                std::printf("  enclosed space: %d layouts against the reference, %d with pockets\n", layouts, pockets);
+                expect(layouts > 150 && pockets > 20 && same, "bounded: enclosedArea equals the per-cell reference");
+            }
+            // Past CANVAS_SEARCH_MAX windows the canvas is shelved, in linear
+            // time, and still a valid canvas; at the limit the full search
+            // stays well inside a frame budget (generous: a loaded machine).
+            {
+                bool   shelvedValid = true, columnsFit = true;
+                double worstSearch = 0, worstShelf = 0;
+                for (const size_t N : {CANVAS_SEARCH_MAX, CANVAS_SEARCH_MAX + 1, size_t{200}, size_t{2000}})
+                    for (const bool TWOD : {true, false}) {
+                        std::vector<SRect> sizes;
+                        for (size_t i = 0; i < N; ++i)
+                            sizes.push_back({0, 0, 40.0 + RNG() % 1500, 30.0 + RNG() % 1000});
+                        const auto   T0 = std::chrono::steady_clock::now();
+                        const auto   C  = packCanvas(sizes, XPSAREA, std::nullopt, G, TWOD);
+                        const double MS = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - T0).count();
+                        if (N <= CANVAS_SEARCH_MAX)
+                            worstSearch = std::max(worstSearch, MS);
+                        else {
+                            worstShelf   = std::max(worstShelf, MS);
+                            shelvedValid = shelvedValid && (N > 200 || VALID(C, sizes, XPSAREA)) && C.rects.size() == N;
+                            columnsFit   = columnsFit && (TWOD || C.h <= XPSAREA.h + 0.5);
+                        }
+                    }
+                std::printf("  bounded: %zu windows searched in %.1f ms at worst; 33..2000 shelved in %.2f ms at worst\n", CANVAS_SEARCH_MAX, worstSearch, worstShelf);
+                expect(shelvedValid, "bounded: a shelved canvas keeps sizes, no overlap, gap kept");
+                expect(columnsFit, "bounded: horizontal shelves are a screen tall");
+                expect(worstSearch < 250, "bounded: the search at its window limit stays well under a quarter second");
+                expect(worstShelf < 50, "bounded: 2000 windows shelve in under 50 ms");
+            }
+            // A re-layout with the same inputs reuses the packing; any change re-packs.
+            {
+                SCanvasMemo memo;
+                const auto  A = packCanvasMemo(memo, FIVE, XPSAREA, SRect{5, 27, 1790, 1093}, G, true);
+                const auto  B = packCanvasMemo(memo, FIVE, XPSAREA, SRect{5, 27, 1790, 1093}, G, true);
+                auto        moved = FIVE;
+                moved[2].w += 40;
+                const auto C     = packCanvasMemo(memo, moved, XPSAREA, SRect{5, 27, 1790, 1093}, G, true);
+                const auto FRESH = packCanvas(moved, XPSAREA, SRect{5, 27, 1790, 1093}, G, true);
+                const auto EQ    = [](const SCanvasPack& a, const SCanvasPack& b) {
+                    bool ok = a.w == b.w && a.h == b.h && a.rects.size() == b.rects.size();
+                    for (size_t i = 0; ok && i < a.rects.size(); ++i)
+                        ok = a.rects[i].x == b.rects[i].x && a.rects[i].y == b.rects[i].y && a.rects[i].w == b.rects[i].w && a.rects[i].h == b.rects[i].h;
+                    return ok;
+                };
+                expect(EQ(A, B) && EQ(A, packCanvas(FIVE, XPSAREA, SRect{5, 27, 1790, 1093}, G, true)), "memo: the same inputs give the same canvas");
+                expect(EQ(C, FRESH) && !EQ(A, C), "memo: a changed size packs again");
+                const auto D = packCanvasMemo(memo, moved, XPSAREA, std::nullopt, G, true);
+                expect(EQ(D, packCanvas(moved, XPSAREA, std::nullopt, G, true)), "memo: a changed eased area packs again");
+            }
         }
 
         // SMART FOCUS PAN.
