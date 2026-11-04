@@ -3,6 +3,7 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
+#include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include "OverviewInternal.hpp"
 #include "DebugPaths.hpp"
@@ -75,22 +76,117 @@ namespace {
     std::unordered_map<MONITORID, SWallpaperStash> g_wallpaperStash;
     uint64_t                                       g_wallpaperCommits = 0;
 
-    void markStashDirty(MONITORID id, bool backdropToo) {
+    // WHAT THE FROST BEHIND THE CARDS SHOWS (user, 2026-11-03: "when we have a
+    // live wallpaper or moving background ... I want the blurred darkened
+    // background in overview to be a static screenshot, or a live blur").
+    // plugin:hyprdrive:backdrop. A live wallpaper (linux-wallpaperengine,
+    // mpvpaper) is a BOTTOM layer committing 30-60 times a second; the frost
+    // used to show only BACKGROUND, so it never saw it. Every mode but LIVE is
+    // frozen while the overview is up -- the commits of a moving wallpaper
+    // never re-run the full-screen kawase -- and the cards are untouched: they
+    // stream the live wallpaper as before.
+    using ScrollOverview::Config::EBackdrop;
+
+    // How often each monitor's wallpaper layers commit, for AUTO: the commits
+    // of the last whole second, or of the second running if it is already past.
+    struct SWallpaperRate {
+        Time::steady_tp windowStart{};
+        int             count = 0;
+        double          rate  = 0.0;
+    };
+    std::unordered_map<MONITORID, SWallpaperRate> g_wallpaperRate;
+    constexpr double                              AUTO_LIVE_MAX_HZ = 4.0; // a clock tick or a slideshow stays live; an animation is frozen
+    constexpr auto                                LIVE_MIN_INTERVAL = std::chrono::milliseconds(33); // LIVE re-blurs at most 30 times a second
+
+    double secondsSince(const Time::steady_tp& t, const Time::steady_tp& now) {
+        return std::chrono::duration<double>(now - t).count();
+    }
+
+    void noteWallpaperCommit(MONITORID id) {
+        auto&      R   = g_wallpaperRate[id];
+        const auto NOW = Time::steadyNow();
+        const auto E   = secondsSince(R.windowStart, NOW);
+        if (R.windowStart.time_since_epoch().count() == 0 || E >= 1.0) {
+            R.rate        = R.windowStart.time_since_epoch().count() == 0 ? 0.0 : R.count / std::max(1.0, E);
+            R.windowStart = NOW;
+            R.count       = 0;
+        }
+        ++R.count;
+    }
+
+    double wallpaperRate(MONITORID id) {
+        const auto IT = g_wallpaperRate.find(id);
+        if (IT == g_wallpaperRate.end())
+            return 0.0;
+        const auto E = secondsSince(IT->second.windowStart, Time::steadyNow());
+        // A wallpaper that stopped: the second that is over counts, not the last busy one.
+        return E >= 1.0 ? IT->second.count / E : std::max(IT->second.rate, sc<double>(IT->second.count));
+    }
+
+    // The configured mode reads BOTTOM too (the live wallpaper's layer).
+    bool backdropSeesBottom(EBackdrop m) {
+        return m == EBackdrop::SNAPSHOT || m == EBackdrop::LIVE || m == EBackdrop::AUTO;
+    }
+
+    // What this monitor's frost does right now: AUTO picks LIVE or SNAPSHOT.
+    EBackdrop resolvedBackdrop(MONITORID id) {
+        const auto M = ScrollOverview::Config::getBackdrop();
+        if (M != EBackdrop::AUTO)
+            return M;
+        return wallpaperRate(id) >= AUTO_LIVE_MAX_HZ ? EBackdrop::SNAPSHOT : EBackdrop::LIVE;
+    }
+
+    // Every commit of a monitor's wallpaper layers, open or closed.
+    std::unordered_map<MONITORID, uint64_t> g_wallpaperSeq;
+
+    // While an overview is up: the same commits the stash hears while closed.
+    struct SOpenListen {
+        uint64_t                         layerSig = 0;
+        std::vector<CHyprSignalListener> listeners;
+    };
+    std::unordered_map<MONITORID, SOpenListen> g_openListen;
+
+    void listenWhileOpen(const PHLMONITOR& monitor, uint64_t layerSig) {
+        auto& L = g_openListen[monitor->m_id];
+        if (!L.listeners.empty() && L.layerSig == layerSig)
+            return;
+        L.listeners.clear();
+        L.layerSig     = layerSig;
+        const auto ID  = monitor->m_id;
+        for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
+            for (const auto& weak : monitor->m_layerSurfaceLayers[LAYER]) {
+                const auto LS   = weak.lock();
+                const auto RES  = LS ? LS->m_layerSurface.lock() : nullptr;
+                const auto SURF = RES ? RES->m_surface.lock() : nullptr;
+                if (SURF)
+                    L.listeners.emplace_back(SURF->m_events.commit.listen([ID] {
+                        ++g_wallpaperSeq[ID];
+                        noteWallpaperCommit(ID);
+                    }));
+            }
+        }
+    }
+
+    void markStashDirty(MONITORID id, bool background) {
+        ++g_wallpaperSeq[id];
+        noteWallpaperCommit(id);
         const auto IT = g_wallpaperStash.find(id);
         if (IT == g_wallpaperStash.end())
             return;
         ++g_wallpaperCommits;
         // Same split as shouldHandleSurfaceDamage: the card fill composites
-        // BACKGROUND and BOTTOM, the backdrop BACKGROUND only.
+        // BACKGROUND and BOTTOM, the backdrop BACKGROUND, and BOTTOM too when
+        // the backdrop mode shows a live wallpaper -- the next open then blurs
+        // a fresh frame of it (the snapshot), and a still one costs nothing.
         IT->second.cardWallpaperDirty = true;
-        if (backdropToo)
+        if (background || backdropSeesBottom(ScrollOverview::Config::getBackdrop()))
             IT->second.backdropDirty = true;
     }
 
     void listenToWallpaper(const PHLMONITOR& monitor, SWallpaperStash& st) {
         const auto ID = monitor->m_id;
         for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
-            const bool BACKDROP = LAYER == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+            const bool BACKDROP = LAYER == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND; // markStashDirty's `background`
             for (const auto& weak : monitor->m_layerSurfaceLayers[LAYER]) {
                 const auto LS   = weak.lock();
                 const auto RES  = LS ? LS->m_layerSurface.lock() : nullptr;
@@ -120,6 +216,9 @@ namespace {
 namespace ScrollOverview {
     std::string wallpaperStashReport() {
         std::string out = std::format("  | wallpaper stash: commits while closed {}", g_wallpaperCommits);
+        for (const auto& [id, seq] : g_wallpaperSeq)
+            out += std::format(" [mon {} wallpaper commits {} rate {:.1f}/s listening-open {} backdrop {}]", id, seq, wallpaperRate(id),
+                               g_openListen.contains(id) ? g_openListen.at(id).listeners.size() : 0, sc<int>(resolvedBackdrop(id)));
         for (const auto& [id, st] : g_wallpaperStash)
             out += std::format(" [mon {} backdrop {} dirty {} card {} dirty {}]", id, (bool)st.backdropFB, st.backdropDirty, (bool)st.cardWallpaperFB, st.cardWallpaperDirty);
         return out;
@@ -127,6 +226,8 @@ namespace ScrollOverview {
 
     // Needs the EGL context current. std::nullopt = every monitor (unload).
     void releaseWallpaperStash(std::optional<MONITORID> monitor) {
+        for (auto it = g_openListen.begin(); it != g_openListen.end();)
+            it = (!monitor || it->first == *monitor) ? g_openListen.erase(it) : std::next(it);
         for (auto it = g_wallpaperStash.begin(); it != g_wallpaperStash.end();) {
             if (!monitor || it->first == *monitor) {
                 releaseStash(it->second);
@@ -157,6 +258,8 @@ void CScrollOverview::adoptWallpaperStash() {
 
 void CScrollOverview::stashWallpaperCaches() {
     const auto MONITOR = pMonitor.lock();
+    if (MONITOR)
+        g_openListen.erase(MONITOR->m_id); // closed: the stash's own listeners take over
     // A monitor that is gone (or going) takes its caches with it: releaseGL.
     if (!MONITOR || !MONITOR->m_enabled || (!frost.backdropFB && !frost.cardWallpaperFB))
         return;
@@ -441,17 +544,21 @@ void CScrollOverview::renderWallpaperLayers(PHLMONITOR monitor, const CBox& work
     renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, workspaceBox, renderScale, now, alpha);
 }
 
-void CScrollOverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now) {
+void CScrollOverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now, bool includeBottom) {
     if (!monitor)
         return;
 
     g_pHyprRenderer->renderBackground(monitor);
 
-    for (auto const& ls : monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND]) {
-        if (!Desktop::View::validMapped(ls.lock()))
-            continue;
+    for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
+        if (LAYER == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM && !includeBottom)
+            break;
+        for (auto const& ls : monitor->m_layerSurfaceLayers[LAYER]) {
+            if (!Desktop::View::validMapped(ls.lock()))
+                continue;
 
-        g_pHyprRenderer->renderLayer(ls.lock(), monitor, now);
+            g_pHyprRenderer->renderLayer(ls.lock(), monitor, now);
+        }
     }
 }
 
@@ -489,7 +596,10 @@ static inline void frostSigMixP(uint64_t& h, const void* p) {
     frostSigMix(h, sc<uint64_t>(rc<uintptr_t>(p)));
 }
 
-static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLayer, bool includeBlurKnobs) {
+// includeTextures = false for the backdrop: a commit is what tells it a
+// wallpaper changed (markStashDirty closed, shouldHandleSurfaceDamage open),
+// and a frozen mode must not see a moving wallpaper's new buffer every frame.
+static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLayer, bool includeBlurKnobs, bool includeTextures = true) {
     // Never 0: 0 is the "no signature yet" sentinel in COverviewFrostCache.
     uint64_t h = 0xcbf29ce484222325ULL;
     if (!monitor)
@@ -515,7 +625,7 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
     frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:disable_hyprland_logo")));
     frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:disable_splash_rendering")));
 
-    const auto MIXLAYER = [&h](const PHLLS& ls) {
+    const auto MIXLAYER = [&h, includeTextures](const PHLLS& ls) {
         if (!Desktop::View::validMapped(ls))
             return;
 
@@ -526,6 +636,8 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
         frostSigMixD(h, BOX.width);
         frostSigMixD(h, BOX.height);
         frostSigMixD(h, ls->alpha().value());
+        if (!includeTextures)
+            return;
         if (const auto RES = ls->m_layerSurface ? ls->m_layerSurface->m_surface.lock() : SP<CWLSurfaceResource>{})
             frostSigMixP(h, RES->m_current.texture.get());
     };
@@ -534,8 +646,7 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
         MIXLAYER(ls.lock());
 
     // The card fill also composites BOTTOM (Omarchy's wallpaper often lives
-    // there); the backdrop does not -- renderGlobalWallpaper draws BACKGROUND
-    // only -- so it must not be keyed on it.
+    // there); the backdrop only in the modes that show a live wallpaper.
     if (includeBottomLayer) {
         for (auto const& ls : monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM])
             MIXLAYER(ls.lock());
@@ -636,16 +747,33 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
     if (!monitor || wallpaperMode == 1 || !g_pHyprRenderer->m_renderData.currentFB)
         return;
 
-    if (frost.lastBackdropWallpaperMode != wallpaperMode) {
+    // The backdrop mode is part of the key: switching it in the panel rebuilds.
+    const auto MODE      = ScrollOverview::Config::getBackdrop();
+    const auto RESOLVED  = resolvedBackdrop(monitor->m_id);
+    const bool BOTTOM    = backdropSeesBottom(MODE);
+    const int  MODEKEY   = wallpaperMode * 8 + sc<int>(MODE);
+    if (frost.lastBackdropWallpaperMode != MODEKEY) {
         frost.backdropDirty             = true;
-        frost.lastBackdropWallpaperMode = wallpaperMode;
+        frost.lastBackdropWallpaperMode = MODEKEY;
     }
 
     // Y17: keyed on the blur knobs too -- this cache holds BLURRED pixels, so a
     // theme reload that moves brightness/vibrancy has to rebuild it.
-    if (const auto SIG = wallpaperCacheSignature(monitor, /* includeBottomLayer */ false, /* includeBlurKnobs */ true); SIG != frost.lastBackdropSig) {
+    if (const auto SIG = wallpaperCacheSignature(monitor, /* includeBottomLayer */ BOTTOM, /* includeBlurKnobs */ true, /* includeTextures */ false);
+        SIG != frost.lastBackdropSig) {
         frost.backdropDirty    = true;
         frost.lastBackdropSig  = SIG;
+    }
+
+    // A new frame of the wallpaper (its own commits, heard while open --
+    // listenWhileOpen): LIVE re-blurs, capped below. A commit's damage does not
+    // reliably reach shouldHandleSurfaceDamage while the overview is up
+    // (headless, 2026-11-03: a live BOTTOM wallpaper never re-blurred LIVE).
+    listenWhileOpen(monitor, frost.lastBackdropSig);
+    if (const auto SEQ = g_wallpaperSeq[monitor->m_id]; SEQ != frost.lastBackdropSeq) {
+        frost.lastBackdropSeq = SEQ;
+        if (RESOLVED == EBackdrop::LIVE)
+            frost.backdropDirty = true;
     }
 
     const auto FBSIZE     = monitor->m_pixelSize;
@@ -675,13 +803,30 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
     if (!frost.backdropDirty)
         return;
 
+    // LIVE follows a moving wallpaper at most 30 times a second; the frame
+    // that skips asks for the next one, so the last frame of it is not missed.
+    if (RESOLVED == EBackdrop::LIVE && frost.lastBackdropBuild.time_since_epoch().count() != 0 && now - frost.lastBackdropBuild < LIVE_MIN_INTERVAL &&
+        now >= frost.lastBackdropBuild) {
+        requestInputFrame();
+        return;
+    }
+    frost.lastBackdropBuild = now;
+
     const CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
 
     {
         auto bindBackdrop = g_pHyprRenderer->bindTempFB(frost.backdropFB);
         g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, fullDamage);
-        renderGlobalWallpaper(monitor, now);
+        renderGlobalWallpaper(monitor, now, BOTTOM);
+        // OFF: the wallpaper darkened, no blur -- the same baked-in dim.
+        if (MODE == EBackdrop::OFF)
+            g_pHyprRenderer->draw(CRectPassElement::SRectData{.box = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}, .color = CHyprColor{0.F, 0.F, 0.F, BACKDROP_DIM}},
+                                  fullDamage);
         OverviewRender::flushPass(monitor);
+    }
+    if (MODE == EBackdrop::OFF) {
+        frost.backdropDirty = false;
+        return;
     }
 
     const auto PREV_ENABLED  = ScrollOverview::Config::getValue<bool>("decoration:blur:enabled");
@@ -3863,7 +4008,7 @@ bool CScrollOverview::tabAcrossMonitors() {
         const auto RESULTS = overviewSearchRows();
         g_search.nav.keyboardTile = false;
         TileChrome::setHovered(PHLWINDOW{}, false);
-        if ((!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) && !RESULTS.empty()) {
+        if (overviewSearchPaneUp() && !RESULTS.empty()) {
             g_search.nav.zone              = EOverviewNavZone::Result;
             g_search.nav.explicitSelection = true;
             g_search.nav.intent            = ESearchIntent::Browsing;
@@ -3883,7 +4028,7 @@ bool CScrollOverview::tabAcrossMonitors() {
     // NO RESULTS UP (user, 2026-09-27): "monitor 1 strip -> grid -> monitor 2
     // strip -> grid monitor 2" and round again -- search has nothing to offer,
     // so it is not a stop. Every strip is a stop; a grid with no tiles is not.
-    if (const auto RESULTS = overviewSearchRows(); !((!g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack()) && !RESULTS.empty())) {
+    if (const auto RESULTS = overviewSearchRows(); !(overviewSearchPaneUp() && !RESULTS.empty())) {
         const size_t STOPS = order.size() * 2;
         const size_t FROM  = g_search.nav.zone == EOverviewNavZone::Desktop ? self * 2 : g_search.nav.zone == EOverviewNavZone::Tile ? self * 2 + 1 : STOPS - 1;
         for (size_t step = 1; step <= STOPS; ++step) {
@@ -5061,6 +5206,20 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
     // whole overview arrives and leaves as one thing.
     const float CHROMEFADE = overviewGridProgress(renderScale);
     const auto  HOVEREDTILE = TileChrome::hovered();
+    // THE OTHER DESKTOPS' WINDOWS FADE IN WITH THE REVEAL (user, 2026-11-03,
+    // a recording: "the overhang windows end up sliding in to adjacent desktops
+    // out of nowhere ... a fade-in for windows in adjacent desktops during
+    // overview reveal duration"). A canvas desktop's windows hang past its card,
+    // so as the cards zoom they swept in at full strength over the desktop being
+    // opened from (or closed to). They now arrive and leave with the overview's
+    // own progress, as its chrome does; the current desktop stays solid, and a
+    // tile a search promoted into it counts as its own.
+    const bool  NEIGHBOUR      = workspaceIdx != activeIdx;
+    // The neighbours' windows fade with the open itself -- 0 closed, 1 open,
+    // wherever the fingers hold it and back again -- so the ones hanging into
+    // view slide in rather than appearing whole (user, 2026-11-03). Their
+    // frame and shadow fade with them (renderWindowLive: SRenderParams::alpha).
+    const auto  NEIGHBOURALPHA = [&](bool promoted) { return NEIGHBOUR && !promoted ? CHROMEFADE : 1.F; };
 
     const auto renderOverviewWindow = [&](const PHLWINDOW& window) {
         // F3-b outbound: a releasing tile no longer matches, so the search half
@@ -5117,13 +5276,29 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         // following the fingers (user, 2026-09-30: "works on the trackpad
         // toggle but not on keypress"), with the half-duration fade.
         const bool ZOOMING = scale->isBeingAnimated() && !m_isSwiping;
+        // THE FIRST FRAME OF A KEYPRESS OPEN HAS NO LAST FRAME (user,
+        // 2026-11-03: spamming Super, "no motion blur on overview windows fading
+        // in, while trackpad does"). The smear runs from last frame's box, and
+        // the frame an open starts on has none -- yet a keypress open covers
+        // the most ground on exactly that frame, so a neighbour desktop's
+        // window was drawn there sharp and see-through. A neighbour card is
+        // its desktop zoomed about the screen's centre, so its box at the
+        // zoom's start is this one scaled back by begun/now.
+        std::optional<CBox> firstFramePrev;
+        if (ZOOMING && NEIGHBOUR && !PROMOTED && PREVTILE == lastTileBoxes.end()) {
+            const double   K = sc<double>(scale->begun()) / std::max(sc<double>(scale->value()), 0.01);
+            const Vector2D C = monitor->m_transformedSize / 2.0;
+            if (std::abs(K - 1.0) > 0.001)
+                firstFramePrev = CBox{C.x + (windowBox.x - C.x) * K, C.y + (windowBox.y - C.y) * K, windowBox.w * K, windowBox.h * K};
+        }
+        const bool HAVEPREV = firstFramePrev || (PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2);
         const bool SEARCHMOTION = ((((!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
                                     !scale->isBeingAnimated()) ||
                                    ZOOMING) &&
-            PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2;
+            HAVEPREV;
         bool tileBlurred = false;
         if (SEARCHMOTION) {
-            const CBox& P = PREVTILE->second.box;
+            const CBox& P = firstFramePrev ? *firstFramePrev : PREVTILE->second.box;
             // Three of the user's blur settings (all a quarter of the frame's
             // motion by default -- user, 2026-09-30: 0.5 was too much): the
             // zoom playing from a keypress, the keyboard desktop pan, and tiles
@@ -5138,12 +5313,14 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
             const CBox  HALF = ScrollOverview::FlightBlur::shape(SITE, P, windowBox, PROG);
             // Only a real move: a frame-to-frame jump of a third of the screen
             // is a card swap, not motion.
-            const bool JUMP = std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0;
+            // (Not the first frame's: that one is computed, not a swap.)
+            const bool JUMP = !firstFramePrev &&
+                (std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0);
             if (!JUMP)
                 tileBlurred = ScrollOverview::FlightBlur::drawBlurred(
                     monitor, window, HALF, windowBox,
                     [&] {
-                        renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, 1.F, false);
+                        renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, NEIGHBOURALPHA(PROMOTED), false);
                         // Its badge (the app icon) moves with it and smears
                         // with it (user, 2026-09-30).
                         TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
@@ -5153,7 +5330,7 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
                 OverviewRender::flushPass(monitor);
         }
         if (!tileBlurred) {
-            renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX);
+            renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, NEIGHBOURALPHA(PROMOTED));
             TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
         }
         lastTileBoxes[window.get()] = {windowBox, workspaceIdx};
@@ -6951,7 +7128,8 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     const auto MONITOR = IN.monitor;
     out.monitorId      = MONITOR ? MONITOR->m_id : MONITOR_INVALID;
 
-    out.label = !IN.queried ? "Search, calculate or run" : (IN.emptyResult ? std::string(IN.query) + "    no matches" : std::string(IN.query));
+    out.placeholder = IN.query.empty(); // the root browse is queried with nothing typed: still the placeholder
+    out.label       = out.placeholder ? "Search, calculate or run" : (IN.emptyResult ? std::string(IN.query) + "    no matches" : std::string(IN.query));
 
     // The pill is laid out in the SAME logical space as the strip it sits above.
     // That placement is load-bearing and is NOT the part X22 changed: laid out
@@ -7374,9 +7552,118 @@ static uint64_t renderMonitorId() {
     return MON ? sc<uint64_t>(MON->m_id) : 0xFFFF;
 }
 
+// THE RESULTS EASE LIKE THE DOCK MENU (user, 2026-11-03: "add the same
+// effects to the search results"). The row the selection is on -- hovered or
+// arrowed to -- lifts: its fill fades in, and its icon and text slide a few px
+// right and grow a touch; the row it left eases back. Wall-clock, like the
+// letter bounce: drawSearch notes a change of row, the frame gates below ask
+// searchHoverEasing() for frames while it runs.
+namespace {
+    constexpr float SEARCH_HOVER_MS = 140.F;
+    int             g_searchLitNow = -1, g_searchLitPrev = -1;
+    Time::steady_tp g_searchLitAt{};
+    float           searchLitT() {
+        const float T = std::clamp(SearchLetters::msSince(Time::steadyNow(), g_searchLitAt) / SEARCH_HOVER_MS, 0.F, 1.F);
+        return T * T * (3.F - 2.F * T);
+    }
+    float searchLit(int index) {
+        const float T = searchLitT();
+        return (index == g_searchLitNow ? T : 0.F) + (index == g_searchLitPrev ? 1.F - T : 0.F);
+    }
+}
+// THE PILL PLAYS (user, 2026-11-03: "grow it a little when I press it, just a
+// playful organic grow (and shrink on release) ... no function just fun";
+// "when I hover over it it just grows wider to show the whole text but when I
+// click it it grows until I release"; then: "instead of growing it should
+// shrink ... except get wider on hover to show the full text anyway", and
+// pressed "it should say 'Just type something!'" -- you never need to click it
+// to type). Hovered with nothing typed, the field widens on its own width
+// spring to show the whole placeholder (drawSearch sets the content it fits).
+// Pressed, the whole pill squeezes -- the longer it is held the smaller, down
+// to 1 - PRESS_MAX -- while the placeholder crossfades to the hint, and on
+// release it springs back past rest and settles: an underdamped spring on the
+// wall clock, stepped where the field's springs are (renderSearch), drawn as a
+// scale about the pill's centre.
+namespace {
+    bool g_pillHovered = false;
+    struct SPillPress {
+        static constexpr float K = 260.F, C = 13.F, PRESS_MAX = 0.12F, PRESS_TAU_S = 0.55F;
+        bool                           down = false;
+        Time::steady_tp                downAt{};
+        float                          x = 1.F, v = 0.F;
+        std::optional<Time::steady_tp> last;
+        bool                           moving = false;
+        float target(const Time::steady_tp& now) const {
+            if (!down)
+                return 1.F;
+            const float HELD = SearchLetters::msSince(now, downAt) / 1000.F;
+            return 1.F - 0.04F - (PRESS_MAX - 0.04F) * (1.F - std::exp(-HELD / PRESS_TAU_S));
+        }
+        void step(const Time::steady_tp& now) {
+            if (!last) {
+                last = now;
+                return;
+            }
+            float dt = std::clamp(SearchLetters::msSince(now, *last) / 1000.F, 0.F, 0.05F);
+            last     = now;
+            const float T = target(now);
+            while (dt > 0.F) {
+                const float H = std::min(dt, 1.F / 240.F);
+                v += (-K * (x - T) - C * v) * H;
+                x += v * H;
+                dt -= H;
+            }
+            moving = down || std::abs(x - T) > 0.0005F || std::abs(v) > 0.005F;
+            if (!moving) {
+                x = T;
+                v = 0.F;
+            }
+        }
+    } g_pillPress;
+    // The placeholder's own letters (user, 2026-11-03: "the text should pop in
+    // and erase as if I were typing (same typing animation)"): the same
+    // animator the query's letters use, fed the text the pill is showing.
+    SearchLetters::SAnimator g_placeholderLetters;
+}
+void searchPillPress(bool down) {
+    if (down == g_pillPress.down)
+        return;
+    g_pillPress.down = down;
+    if (down)
+        g_pillPress.downAt = Time::steadyNow();
+    g_pillPress.moving = true;
+}
+// The pill's tail fade returns this long after the pointer lets go of it.
+constexpr float                       PILL_TAIL_RETURN_MS = 220.F;
+std::chrono::steady_clock::time_point g_pillReleasedAt{};
+
+static bool pillPlaying() {
+    return g_pillPress.moving || g_placeholderLetters.busy(Time::steadyNow()) ||
+        (g_pillReleasedAt.time_since_epoch().count() != 0 && SearchLetters::msSince(Time::steadyNow(), g_pillReleasedAt) < PILL_TAIL_RETURN_MS + 20.F);
+}
+
+static bool searchHoverEasing() {
+    return g_searchLitAt.time_since_epoch().count() != 0 && SearchLetters::msSince(Time::steadyNow(), g_searchLitAt) < SEARCH_HOVER_MS + 20.F;
+}
+
 static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part = 0) {
     if (!L.drawable)
         return;
+    {
+        int now = -1;
+        for (const auto& CARD : L.cards)
+            for (const auto& ITEM : CARD.items)
+                if (ITEM.selected)
+                    now = L.hits[ITEM.hit].index;
+        for (const auto& E : L.tool.entries)
+            if (E.selected)
+                now = L.hits[E.hit].index;
+        if (now != g_searchLitNow) {
+            g_searchLitPrev = g_searchLitNow;
+            g_searchLitNow  = now;
+            g_searchLitAt   = Time::steadyNow();
+        }
+    }
     const bool DRAWPILL = part != 2;
     const bool DRAWBODY = part != 1;
 
@@ -7491,10 +7778,10 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         for (const auto& E : L.tool.entries) {
             const CBox& ROW = L.hits[E.hit].box;
 
-            if (E.selected) {
+            if (const float LIT = searchLit(L.hits[E.hit].index); LIT > 0.01F) {
                 CRectPassElement::SRectData sel;
                 sel.box           = ROW;
-                sel.color         = ACCENT.modifyA(0.22F * FADE);
+                sel.color         = ACCENT.modifyA(0.22F * FADE * LIT);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
                 g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(sel));
@@ -7568,12 +7855,25 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         // Rows
         for (const auto& ITEM : CARD.items) {
             const CBox& ROW = L.hits[ITEM.hit].box;
+            const float LIT = searchLit(L.hits[ITEM.hit].index);
+            // The lift: ITEMSHIFT to the right, ITEMGROW about the content's
+            // own centre line (GROWBOX), the fill fading in under it.
+            const float ITEMSHIFT = std::round(4.F * SCALE * LIT);
+            const float ITEMGROW  = 1.F + 0.035F * LIT;
+            const auto  GROWBOX   = [&](CBox b) {
+                const double CY = b.y + b.height / 2.0;
+                b.x += ITEMSHIFT;
+                b.width *= ITEMGROW;
+                b.height *= ITEMGROW;
+                b.y = CY - b.height / 2.0;
+                return b;
+            };
 
-            if (ITEM.selected) {
+            if (LIT > 0.01F) {
                 CRectPassElement::SRectData sel;
                 sel.box           = ROW;
                 const auto SELFILL = ScrollOverview::Config::themeSelectedFill();
-                sel.color          = SELFILL.modifyA(SELFILL.a * FADE * CARD.alpha);
+                sel.color          = SELFILL.modifyA(SELFILL.a * FADE * CARD.alpha * LIT);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
                 g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(sel));
@@ -7592,12 +7892,12 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
                 if (GLYPHTEX && GLYPHTEX->ok()) {
                     CBox glyphBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - sc<float>(GLYPHTEX->m_size.y)) / 2.F), sc<float>(GLYPHTEX->m_size.x),
                                   sc<float>(GLYPHTEX->m_size.y)};
-                    ADDTEX(GLYPHTEX, glyphBox.round());
+                    ADDTEX(GLYPHTEX, GROWBOX(glyphBox));
                     textIndent += std::max(ICOND, sc<float>(GLYPHTEX->m_size.x)) + std::round(8.F * SCALE);
                 }
             } else if (const auto ICONTEX = OverviewRender::appIcon(ITEM.icon); ICONTEX && ICONTEX->ok()) {
                 CBox iconBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - ICOND) / 2.F), ICOND, ICOND};
-                ADDTEX(ICONTEX, iconBox.round());
+                ADDTEX(ICONTEX, GROWBOX(iconBox));
                 textIndent += ICOND + std::round(8.F * SCALE);
             }
 
@@ -7606,7 +7906,9 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             const auto ROWTEX = OverviewRender::text(ITEM.name, FG, ROWPX, false, "", std::max(1, sc<int>(ROW.width - textIndent) - sc<int>(ROWPAD)), 500);
             if (ROWTEX && ROWTEX->ok()) {
                 CBox rowText{ROW.x + textIndent, ROW.y + std::round((ROW.height - sc<float>(ROWTEX->m_size.y)) / 2.F), sc<float>(ROWTEX->m_size.x), sc<float>(ROWTEX->m_size.y)};
-                ADDTEX(ROWTEX, rowText.round());
+                // The icon grew by (ITEMGROW - 1) of its width: the name moves
+                // over with it, so the two do not touch.
+                ADDTEX(ROWTEX, GROWBOX(CBox{rowText.x + ICOND * (ITEMGROW - 1.F), rowText.y, rowText.width, rowText.height}));
 
                 if (!ITEM.description.empty()) {
                     const float DESCX = rowText.x + rowText.width + std::round(8.F * SCALE);
@@ -7616,7 +7918,8 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
                         const int  DESCPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
                         if (const auto DESCTEX = OverviewRender::text(ITEM.description, DESCFG, DESCPX, false, "", DESCW); DESCTEX && DESCTEX->ok()) {
                             CBox descText{DESCX, ROW.y + std::round((ROW.height - sc<float>(DESCTEX->m_size.y)) / 2.F), sc<float>(DESCTEX->m_size.x), sc<float>(DESCTEX->m_size.y)};
-                            ADDTEX(DESCTEX, descText.round());
+                            // Past the grown name, on the same lift.
+                            ADDTEX(DESCTEX, GROWBOX(CBox{descText.x + ICOND * (ITEMGROW - 1.F) + rowText.width * (ITEMGROW - 1.F), descText.y, descText.width, descText.height}));
                         }
                     }
                 }
@@ -7748,7 +8051,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         return;
 
     texFade = FADE;
-    const CHyprColor FG = !L.queried ? ScrollOverview::Config::themeMutedText() : (L.emptyResult ? ScrollOverview::Config::themeUrgent() : ScrollOverview::Config::themeForeground());
+    const CHyprColor FG = L.placeholder ? ScrollOverview::Config::themeMutedText() : (L.emptyResult ? ScrollOverview::Config::themeUrgent() : ScrollOverview::Config::themeForeground());
 
     const int  FONTPX = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
     const auto NOW    = Time::steadyNow();
@@ -7773,6 +8076,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
     FIELDMOTION.contentL = 0.F;
 
     if (!SearchLetters::g_searchLetters.empty()) {
+        g_placeholderLetters.reset(); // a query took over: the placeholder starts at rest next time
         // Serpantinum Input.qml: one texture per codepoint, scale/y/opacity from
         // the add/remove transitions, packed left with 1 logical px of tracking.
         const auto  LIVE    = SearchLetters::g_searchLetters.liveGlyphs();
@@ -7835,7 +8139,166 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         return;
     }
 
-    const auto TEX = OverviewRender::text(L.label, FG, FONTPX, false, "", sc<int>(L.fieldW), L.queried ? 600 : 0);
+    // THE PLACEHOLDER TYPES ITSELF (user, 2026-11-03). At rest it shows the
+    // letters that fit, the last one fading out at the field's end the way a
+    // long query fades at its start. Hovered, it types the rest in -- the field
+    // widening with it on the query's own width spring -- and erases it again
+    // on leaving; pressed, it erases itself and types "Just type something!".
+    // A pill opened at rest does not type itself in: those letters are set as
+    // already arrived.
+    if (L.placeholder) {
+        static const std::string FULL = "Search, calculate or run", HINT = "Just type something!";
+        const float              SPACING = std::max(1.F, SCALE);
+        const float              FADEPX  = std::max(1.F, OVERVIEW_PILL_FADEL * SCALE);
+        const auto               glyphW  = [&](const std::string& g) {
+            const auto T = OverviewRender::text(g, FG, FONTPX, false, "", 0, 0);
+            return (T && T->ok()) ? sc<float>(T->m_size.x) : sc<float>(FONTPX) * 0.5F;
+        };
+        std::string want;
+        if (g_pillPress.down)
+            want = HINT;
+        else if (g_pillHovered)
+            want = FULL;
+        else {
+            // The rest text: whole letters up to the field's rest width, plus the
+            // one the end fade softens.
+            const float REST = OVERVIEW_PILL_FIELDL * SCALE + FADEPX * 0.5F;
+            float       x    = 0.F;
+            for (const auto& G : SearchLetters::codepoints(FULL)) {
+                const float W = glyphW(G);
+                if (x + W > REST)
+                    break;
+                want += G;
+                x += W + SPACING;
+            }
+        }
+        static std::string lastWant; // what the previous frame asked for: releasing the hint clears it in one go
+        static bool        wasEngaged = false;
+        static SearchLetters::clock::time_point engagedAt{};
+        const bool ENGAGED = g_pillPress.down || g_pillHovered;
+        if (ENGAGED && !wasEngaged)
+            engagedAt = NOW;
+        else if (!ENGAGED && wasEngaged)
+            g_pillReleasedAt = NOW;
+        wasEngaged = ENGAGED;
+        auto& A          = g_placeholderLetters;
+        const bool FRESH = A.empty();
+        // HOVER RETYPES THE FADED TAIL (user, 2026-11-03): at rest "or run"
+        // dissolves into the field's edge; hovering backspaces those faded
+        // words and types them back in full, rather than only adding the
+        // letters that did not fit.
+        if (!FRESH && g_pillHovered && !g_pillPress.down && lastWant != FULL && lastWant != HINT) {
+            const auto TAIL = FULL.rfind(' ', FULL.rfind(' ') - 1);
+            A.sync(FULL.substr(0, TAIL + 1), NOW);
+        }
+        A.sync(want, NOW);
+        if (FRESH && !g_pillPress.down && !g_pillHovered) {
+            for (auto& LT : A.letters)
+                LT.bornAt = NOW - std::chrono::seconds(5); // already there: no type-in on open
+        } else {
+            // Typed, not pasted: what this sync took away is backspaced from the
+            // end, quickly, and only THEN is the new text typed in a letter at a
+            // time -- erasing and typing at once put two words on top of each
+            // other mid-swap.
+            constexpr auto TYPE  = std::chrono::milliseconds(22);
+            constexpr auto ERASE = std::chrono::milliseconds(12);
+            std::vector<SearchLetters::SLetter*> dying, born;
+            for (auto& LT : A.letters) {
+                if (LT.bornAt == NOW && !LT.dyingAt)
+                    born.push_back(&LT);
+                if (LT.dyingAt && *LT.dyingAt == NOW)
+                    dying.push_back(&LT);
+            }
+            // The press and its release are not typing (user, 2026-11-03): the
+            // text goes in one go, as if cleared, and the hint arrives in one
+            // go, as if pasted. Only hover types and backspaces.
+            const bool ONEGO = g_pillPress.down || lastWant == HINT;
+            for (size_t k = 0; k < dying.size(); ++k)
+                dying[k]->dyingAt = ONEGO ? NOW : NOW + ERASE * sc<int>(dying.size() - 1 - k);
+            const auto AFTER = dying.empty() ? std::chrono::steady_clock::duration{} :
+                                               std::chrono::duration_cast<std::chrono::steady_clock::duration>((ONEGO ? ERASE * 0 : ERASE * sc<int>(dying.size())) +
+                                                                                                         std::chrono::milliseconds(sc<int>(SearchLetters::EXIT_MS * 0.6F)));
+            for (size_t k = 0; k < born.size(); ++k)
+                born[k]->bornAt = NOW + AFTER + (g_pillPress.down ? TYPE * 0 : TYPE * sc<int>(k));
+        }
+
+        lastWant = want;
+        const auto         LIVE = A.liveGlyphs();
+        std::vector<float> widths;
+        widths.reserve(LIVE.size());
+        for (const auto& G : LIVE)
+            widths.push_back(glyphW(G));
+
+        const float FIELDRIGHT = FIELDX + L.fieldW;
+        const auto  ENDALPHA   = [&](float rightX) {
+            const float T = std::clamp((FIELDRIGHT - rightX + FADEPX * 0.5F) / FADEPX, 0.F, 1.F);
+            return T * T * (3.F - 2.F * T);
+        };
+        // THE TAIL FADE (user, 2026-11-03: "make the tail fade so 'or run'
+        // fades away"): while the whole text does not fit the field, its last
+        // stretch dissolves to nothing AT the field's edge instead of being cut
+        // there. Weighted by how much of the text is still out of the field, so
+        // as the hovered field widens to fit it the tail comes back to full.
+        // Where the fade runs, in the rest layout: full at the start of "or",
+        // gone just past the last letter the rest field holds.
+        float tailFrom = 0.F, tailTo = 0.F;
+        {
+            const size_t TAILAT = FULL.rfind(' ', FULL.rfind(' ') - 1) + 1;
+            const float  RESTW  = OVERVIEW_PILL_FIELDL * SCALE + FADEPX * 0.5F;
+            float        x      = 0.F;
+            size_t       byte   = 0;
+            for (const auto& G : SearchLetters::codepoints(FULL)) {
+                const float W = glyphW(G);
+                if (byte == TAILAT)
+                    tailFrom = x;
+                if (x + W > RESTW)
+                    break;
+                tailTo = x + W * 2.F;
+                x += W + SPACING;
+                byte += G.size();
+            }
+        }
+        // Engaged (hovered or held), the letters typed since are whole and the
+        // faded ones on their way out stay faded; let go, the tail fades back.
+        const auto TAILWEIGHT = [&](SearchLetters::clock::time_point bornAt) {
+            if (ENGAGED)
+                return bornAt < engagedAt ? 1.F : 0.F;
+            return g_pillReleasedAt.time_since_epoch().count() == 0 ? 1.F :
+                                                                       std::clamp(SearchLetters::msSince(NOW, g_pillReleasedAt) / PILL_TAIL_RETURN_MS, 0.F, 1.F);
+        };
+        const auto  TAILALPHA  = [&](float centreX, SearchLetters::clock::time_point bornAt) {
+            if (tailTo <= tailFrom)
+                return 1.F;
+            // An even ramp, by each letter's middle: "o" barely touched, "u" a ghost.
+            const float T = 1.F - std::clamp((centreX - FIELDX - tailFrom) / (tailTo - tailFrom), 0.F, 1.F);
+            return 1.F + (T - 1.F) * TAILWEIGHT(bornAt);
+        };
+        float shownEnd = 0.F; // the right edge of what is on screen so far, for the field to fit
+        for (const auto& P : A.place(widths, SPACING, SCALE, NOW, sc<int>(L.monitorId) + 4096)) {
+            const auto TEX = OverviewRender::text(P.glyph, FG, FONTPX, false, "", 0, 0);
+            if (!TEX || !TEX->ok())
+                continue;
+            const float W  = sc<float>(TEX->m_size.x);
+            if (P.opacity > 0.3F)
+                shownEnd = std::max(shownEnd, P.x + W);
+            const float H  = sc<float>(TEX->m_size.y);
+            const float CX = FIELDX + P.x + W * 0.5F;
+            const float CY = PILL.y + std::round((PILL.height - H) / 2.F) + H * 0.5F + P.y;
+            const float DW = W * P.scale;
+            const float DH = H * P.scale;
+            ADDLETTER(TEX, CBox{CX - DW * 0.5F, CY - DH * 0.5F, DW, DH}, P.opacity * ENDALPHA(FIELDX + P.x + W) * TAILALPHA(FIELDX + P.x + W * 0.5F, P.bornAt));
+        }
+        // The field fits the letters as they arrive and leave while hovered or
+        // held (the query's width spring); at rest it keeps its rest width.
+        // Held, the pill is squeezed AROUND this field: aimed wide enough that
+        // the hint still fits at the tightest squeeze (a constant, so the
+        // spring is not re-aimed every frame of the hold).
+        if (g_pillPress.down || g_pillHovered || shownEnd > OVERVIEW_PILL_FIELDL * SCALE + 0.5F)
+            FIELDMOTION.contentL = (g_pillHovered && !g_pillPress.down ? std::max(shownEnd, OVERVIEW_PILL_FIELDL * SCALE) : shownEnd) / std::max(SCALE, 0.01F) /
+                (g_pillPress.down ? 1.F - SPillPress::PRESS_MAX : 1.F);
+        return;
+    }
+    const auto TEX = OverviewRender::text(L.label, FG, FONTPX, false, "", sc<int>(L.fieldW), L.placeholder ? 0 : 600);
     if (!TEX || !TEX->ok())
         return;
 
@@ -7887,7 +8350,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // ---- ANIMATE: re-aim the search animations from this frame's results.
     // Results exist once there is query text, or while browsing an Omarchy
     // submenu after Enter (query is cleared so children are listed).
-    const bool QUERIED = !g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack();
+    const bool QUERIED = overviewSearchPaneUp(); // a query, a submenu, or the root browse (search:browse_on_click)
 
     const size_t MATCHES = !g_search.query.text.empty() ? matchingWindowCount() : 0;
     const auto   RESULTS = QUERIED ? overviewSearchRows() : std::vector<SSearchRow>{};
@@ -8023,6 +8486,10 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         const auto& SL   = searchLayoutHere();
         const bool  KEYS = activeScrollOverview().get() == this;
         const bool PILLLIT = (KEYS && g_search.nav.zone == EOverviewNavZone::Search) || pointerOnChrome(SL.pill);
+        g_pillHovered      = KEYS && pointerOnChrome(SL.pill) && g_search.query.text.empty();
+        g_pillPress.step(Time::steadyNow());
+        if (pillPlaying())
+            requestInputFrame();
         const bool BODYLIT = (KEYS && g_search.nav.zone == EOverviewNavZone::Result) || pointerOnChrome(SL.containerBox);
         // THE RESULTS PANE'S ENTRANCE AND EXIT, motion-blurred (user,
         // 2026-09-30: "0.5 motion blur on the search results pane appearing /
@@ -8040,7 +8507,29 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
             blurred = ScrollOverview::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
                                                               ScrollOverview::FlightBlur::layoutSamples());
         }
-        drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
+        if (std::abs(g_pillPress.x - 1.F) > 0.0005F) {
+            // The pill, squeezed about its own centre: its BOXES are scaled, not
+            // the draw (a render modifier scales each box but not the rounded
+            // mask or the clip, which left square corners poking past the
+            // outline). Every corner is drawn from these boxes as usual; the
+            // type keeps its size and is clipped to the narrower field.
+            if (!blurred)
+                drawSearch(SL, PILLLIT, BODYLIT, 2);
+            const float    S  = g_pillPress.x;
+            const Vector2D C  = SL.pill.middle();
+            const auto     SQ = [&](const CBox& b) {
+                return CBox{C.x + (b.x - C.x) * S, C.y + (b.y - C.y) * S, b.width * S, b.height * S}.round();
+            };
+            SSearchLayout squeezed = SL;
+            squeezed.pill          = SQ(SL.pill);
+            squeezed.badge         = SQ(SL.badge);
+            squeezed.gap           = SL.gap * S;
+            squeezed.fieldW        = std::max(1.F, SL.fieldW * S);
+            if (SL.fieldXExact > 0.F)
+                squeezed.fieldXExact = sc<float>(C.x + (SL.fieldXExact - C.x) * S);
+            drawSearch(squeezed, PILLLIT, BODYLIT, 1);
+        } else
+            drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
         // The easter egg (KeyboardCat.hpp) opens out of the pill, over it.
         ScrollOverview::KeyboardCat::render(monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
     }
@@ -8335,16 +8824,12 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
     // overview was reopened -- which was the user's workaround, not a fix.
     forceWorkspaceAlphaVisible(window->m_workspace);
 
-    // alphaMul is the strip's fade. It has to be applied AFTER the forces
-    // above, which exist to pin this very channel at 1 (E8-f), and restored
-    // immediately -- same set/render/restore shape renderOverviewLayerLevel
-    // uses for layer surfaces, and it works for the same reason: the pass
-    // elements read the alpha as they are built, not at draw time.
-    const bool  MODULATE = alphaMul < 0.999F;
-    const auto& WALPHA   = window->alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN);
-    const float PREVA    = WALPHA ? WALPHA->value() : 1.F;
-    if (MODULATE && WALPHA)
-        WALPHA->setValueAndWarp(PREVA * std::clamp(alphaMul, 0.F, 1.F));
+    // alphaMul is the strip's fade (and the neighbour desktops' fade on open).
+    // It rides SRenderParams::alpha, the flight fade's lever (Y5), so the
+    // shadow, the border and every decoration fade WITH the content (user,
+    // 2026-11-03: the frames and shadows still popped in). It used to warp the
+    // window's own alpha, which only the surface reads -- the chrome stayed
+    // solid around a window that was still invisible.
 
     OverviewWindow::renderOverviewWindow({
         .monitor              = monitor,
@@ -8368,11 +8853,9 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
         .selected             = (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile && closeOnWindow == window && activeScrollOverview().get() == this) ||
             TileChrome::hovered() == window || dragged,
         .dragged              = dragged,
+        .alpha                = std::clamp(alphaMul, 0.F, 1.F),
         .ownsRenderPass       = ownsPass,
     });
-
-    if (MODULATE && WALPHA)
-        WALPHA->setValueAndWarp(PREVA);
 }
 
 void CScrollOverview::refreshWindows() {
@@ -8890,6 +9373,9 @@ bool CScrollOverview::needsIdleRepaint() const {
     // Per OUTPUT, the same way onPreRender asks: a hover easing on the other
     // monitor is not a reason for this one to repaint.
     if (TileChrome::animatingOn(pMonitor.lock()))
+        return true;
+
+    if (searchHoverEasing() || pillPlaying())
         return true;
 
     if (ScrollOverview::BorderFade::animatingOn(pMonitor.lock()))
@@ -9465,7 +9951,11 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
         // wallpaper is often a BOTTOM layer); renderGlobalWallpaper, and so the
         // backdrop, draws BACKGROUND only.
         frost.cardWallpaperDirty = true;
-        if (layerOwner->m_layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
+        // plugin:hyprdrive:backdrop: only LIVE re-blurs while the overview is
+        // up. Every other mode keeps the frame it opened with, so a moving
+        // wallpaper never re-runs the full-screen kawase (the cards above still
+        // stream it).
+        if (resolvedBackdrop(MONITOR->m_id) == EBackdrop::LIVE)
             markBackdropBlurDirty();
         return true;
     }
@@ -9893,7 +10383,7 @@ void CScrollOverview::onPreRender() {
     // (strip_top, tile_h), not pixel diffs -- strip_top is quantised to 2px, so
     // it holds still through the eased tail and reading THAT as frame timing
     // invents a 196ms stall which the painted-frame signal shows is not there.
-    if (TileChrome::animatingOn(pMonitor.lock()))
+    if (TileChrome::animatingOn(pMonitor.lock()) || searchHoverEasing())
         gridSetReflowActive(pMonitor.lock());
 
     // V2. The SUPER-hold pill eases on the same kind of wall clock, and inside
@@ -9988,6 +10478,13 @@ void CScrollOverview::onWorkspaceChange() {
 
     const auto previousActiveIdx = activeWorkspaceIndex();
     const auto previousStartedOn = startedOn;
+    // WHERE THE STRIP IS ON SCREEN RIGHT NOW: a swipe drags the camera
+    // (viewOffset) before the workspace changes. The insert/remove transition
+    // below restarts from viewOffset 0, so its old offsets must carry the drag
+    // or the strip snaps back a drag's length for a frame -- swiping off an
+    // empty desktop (which removes it) flashed the neighbour card into the
+    // middle (user, 2026-11-03).
+    const float PREVIOUSDRAG = sc<float>(axisValue(viewOffset->value(), layout));
 
     // consume any pending gesture-driven settle (set by finishWorkspaceScrollFollow)
     const bool   GESTURESETTLE       = trackpadGestureSettlePending;
@@ -10019,8 +10516,24 @@ void CScrollOverview::onWorkspaceChange() {
     const bool PREVIOUSISOURS = previousStartedOn &&
         (previousStartedOn == trailingWorkspace ||
          std::find(gapWorkspaces.begin(), gapWorkspaces.end(), previousStartedOn) != gapWorkspaces.end());
-    const bool SHOULDREMOVEPREVIOUSWORKSPACE = previousStartedOn && previousStartedOn != NEWWORKSPACE && !PREVIOUSISOURS &&
-        !previousStartedOn->m_isSpecialWorkspace && !previousStartedOn->isPersistent() && previousStartedOn->getWindowCount() == 0;
+    const bool LEFTEMPTY = previousStartedOn && previousStartedOn != NEWWORKSPACE && !PREVIOUSISOURS && !previousStartedOn->m_isSpecialWorkspace &&
+        !previousStartedOn->isPersistent() && previousStartedOn->getWindowCount() == 0;
+    // THE EMPTY DESKTOP YOU LEFT IS THE SPARE ANYWAY (user, 2026-11-03: swiping
+    // off it, the top strip "glitches for a frame"). The empty desktop at the
+    // end of the strip is exactly the one E2 keeps as its trailing spare: removing
+    // it let Hyprland reap it, and the next rebuild made the same id again as the
+    // trailing workspace -- one frame with a desktop missing from the strip.
+    // Keep it instead, held as the trailing workspace (reaped on close, as that
+    // one always is).
+    bool keptAsSpare = false;
+    if (LEFTEMPTY && pMonitor) {
+        const auto ROW = workspacePlanFor(pMonitor.lock());
+        if (ROW.spare && ROW.existing && *ROW.spare == previousStartedOn->m_id && previousStartedOn->m_monitor.lock() == pMonitor.lock()) {
+            trailingWorkspace = previousStartedOn;
+            keptAsSpare       = true;
+        }
+    }
+    const bool SHOULDREMOVEPREVIOUSWORKSPACE = LEFTEMPTY && !keptAsSpare;
     const auto REMOVEDWORKSPACE = REQUESTEDREMOVEDWORKSPACE ? REQUESTEDREMOVEDWORKSPACE : SHOULDREMOVEPREVIOUSWORKSPACE ? previousStartedOn : PHLWORKSPACE{};
 
     pendingRemovedWorkspace = REMOVEDWORKSPACE;
@@ -10043,7 +10556,7 @@ void CScrollOverview::onWorkspaceChange() {
         workspaceInsertTransition.transitionOldRelativeOffset = 0.F;
 
         for (size_t i = 0; i < previousWorkspaceIDs.size(); ++i) {
-            const auto OFFSET = previousWorkspaceOffsets.contains(previousWorkspaceIDs[i]) ? previousWorkspaceOffsets.at(previousWorkspaceIDs[i]) : 0.F;
+            const auto OFFSET = (previousWorkspaceOffsets.contains(previousWorkspaceIDs[i]) ? previousWorkspaceOffsets.at(previousWorkspaceIDs[i]) : 0.F) - PREVIOUSDRAG;
             workspaceInsertTransition.oldRelativeOffsets.emplace(previousWorkspaceIDs[i], OFFSET);
             if (REMOVEDPREVIOUSWORKSPACE && previousWorkspaceIDs[i] == REMOVEDWORKSPACE->m_id)
                 workspaceInsertTransition.transitionOldRelativeOffset = OFFSET;
@@ -11022,6 +11535,11 @@ void OvInternal::releasePointerLocks() {
 PHLWINDOWREF OvInternal::g_focusAtOpen;
 static uint64_t g_warpSeq          = 0;
 static bool     g_handoffShutdown = false;
+static bool     g_warpCentred     = false; // overviewCenterCursorOnHandoff: this close centres the cursor
+
+void overviewCenterCursorOnHandoff() {
+    g_warpCentred = true;
+}
 
 // Unload: the queued warp would call into this plugin after dlclose. And no NEW
 // one may be queued after this: PLUGIN_EXIT destroys any open overview AFTER
@@ -11058,11 +11576,12 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
         return;
     g_warpSeq = g_pEventLoopManager->doLater([] {
         g_warpSeq        = 0;
-        const auto FINAL = Desktop::focusState()->window();
-        if (!Desktop::View::validMapped(FINAL) || FINAL == g_focusAtOpen.lock())
+        const bool CENTRE = std::exchange(g_warpCentred, false);
+        const auto FINAL  = Desktop::focusState()->window();
+        if (!Desktop::View::validMapped(FINAL) || (FINAL == g_focusAtOpen.lock() && !CENTRE))
             return;
         const CBox BOX{FINAL->m_realPosition->goal(), FINAL->m_realSize->goal()};
-        if (BOX.width < 1 || BOX.height < 1 || BOX.containsPoint(g_pInputManager->getMouseCoordsInternal()))
+        if (BOX.width < 1 || BOX.height < 1 || (!CENTRE && BOX.containsPoint(g_pInputManager->getMouseCoordsInternal())))
             return;
         ScrollOverview::Stacks::traceEvent(std::format("locks: warp into {}", FINAL->m_class));
         Pointer::pointerController()->warpTo(BOX.middle(), true);

@@ -215,6 +215,8 @@ void    pumpRetiled(const PHLWINDOW& window, PHLMONITOR monitor, const Time::ste
 // the note beside the key in Config.cpp for why `scroll-switch-workspace` is not
 // a key of its own.
 bool    scroll(PHLMONITOR monitor, const Vector2D& point, bool up);
+// The context menu's window list, a row a tick (false: not over the menu).
+bool    menuScroll(PHLMONITOR monitor, const Vector2D& point, bool up);
 
 // X32 reordering and G12 share ONE drop handler, per G12's "the two drag
 // sources land in the same dock drop handler and must not fight". Both end in

@@ -1750,6 +1750,30 @@ namespace ScrollOverview::Stacks {
         return false;
     }
 
+    // THE FAN'S GAPS ARE THE FAN'S (user, 2026-11-03, on a canvas desktop:
+    // hovering the Downloads fan, "the window steals my focus and moves my
+    // cursor away from the fan stack"). contains() is the rows alone, so the
+    // space between two papers, or between the fan and its icon, was the
+    // window underneath's: focus followed the mouse onto it, and Mosaic panned
+    // the canvas to the window -- the pointer riding along, off the fan. For
+    // hover, the fan's drawn area and its icon cell are one piece.
+    bool ownsHover(PHLMONITOR monitor, const Vector2D& point) {
+        if (contains(monitor, point))
+            return true;
+        if (!g_popup || g_popup->leaving || !monitor || g_popup->monitor != monitor->m_id)
+            return false;
+        CBox area = g_popup->grid ? g_popup->plate : g_popup->fanBounds;
+        if (area.empty())
+            return false;
+        if (!g_popup->anchor.empty()) {
+            const double X0 = std::min(area.x, g_popup->anchor.x), Y0 = std::min(area.y, g_popup->anchor.y);
+            const double X1 = std::max(area.x + area.width, g_popup->anchor.x + g_popup->anchor.width);
+            const double Y1 = std::max(area.y + area.height, g_popup->anchor.y + g_popup->anchor.height);
+            area = CBox{X0, Y0, X1 - X0, Y1 - Y0};
+        }
+        return area.containsPoint(point);
+    }
+
     // V11 SPEC V5. WHAT IS UNDER THE POINTER, and therefore what SPACE means.
     //
     // Deliberately NOT a second hit test: it walks the same `rows` that

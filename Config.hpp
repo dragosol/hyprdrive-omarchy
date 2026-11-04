@@ -32,6 +32,16 @@ enum class EScrollAction {
     COLUMN,
 };
 
+// What the overview blurs behind the desktop cards (plugin:hyprdrive:backdrop).
+// The cards themselves always show the live desktop; this is only the frost.
+enum class EBackdrop {
+    OFF,       // the static wallpaper darkened, no blur
+    WALLPAPER, // the static wallpaper (BACKGROUND layer) blurred -- the old look
+    SNAPSHOT,  // BACKGROUND + BOTTOM (a live wallpaper) blurred once as it opens
+    LIVE,      // the same, re-blurred as it moves (at most 30 times a second)
+    AUTO,      // LIVE while the wallpaper changes rarely, SNAPSHOT while it animates
+};
+
 void registerDispatcher(const std::string& name, TDispatcher dispatcher);
 void registerGesture(TGestureRegistrar gestureRegistrar, TGestureKeyword gestureKeyword);
 void registerConfig();
@@ -271,7 +281,7 @@ float         getTouchpadScrollFactor();
 EScrollAction getVerticalScrollAction(ELayout layout);
 EScrollAction getHorizontalScrollAction(ELayout layout);
 int           getWallpaperMode();
-bool          getBlur();
+EBackdrop     getBackdrop();
 std::string   getTerminal();
 bool          getMissionControl();
 int           getMissionControlGap();
@@ -280,6 +290,7 @@ bool          getStrip();
 int           getStripHeight();
 int           getStripMaxScreenPct();
 bool          getSearchDictionary();
+bool          getSearchBrowseOnClick();
 bool          getSearchTranslate();
 std::string   getSearchTranslateEndpoint();
 std::string   getSearchTranslateTarget();

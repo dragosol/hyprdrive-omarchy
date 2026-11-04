@@ -68,10 +68,12 @@ var sections = [
           desc: "Room between windows in the grid." }
       ]},
       { title: "Backdrop", rows: [
-        { type: "toggle", key: P + "blur", label: "Blur the wallpaper",
-          desc: "Frost the wallpaper behind the cards, like the lock screen." }
+        { type: "choice", key: P + "backdrop", label: "Behind the cards",
+          desc: "What is blurred and darkened behind the desktop cards. Snapshot freezes a live wallpaper as the overview opens; Live keeps blurring it as it moves (more GPU); Auto is Live while it changes rarely, Snapshot while it animates. The cards always show the live desktop." }
       ]},
       { title: "Search", rows: [
+        { type: "toggle", key: P + "search:browse_on_click", label: "Browse on click",
+          desc: "Clicking the search bar opens the results before you type: the menu, your folders and the AI tools." },
         { type: "toggle", key: P + "search:dictionary", label: "Dictionary",
           desc: "Type “define” and a word to look it up on Wiktionary." },
         { type: "toggle", key: P + "search:translate", label: "Translate",
@@ -128,7 +130,11 @@ var sections = [
           desc: "Icons lean toward the pointer in 3D, and spring flat when it leaves." },
         { type: "toggle", key: P + "dock:press_tilt", label: "Press tilt",
           desc: "A pressed icon leans in toward the click, with light on its face." },
-        { type: "toggle", key: P + "dock:dance_urgent", label: "Wiggle urgent apps" }
+        { type: "toggle", key: P + "dock:dance_urgent", label: "Wiggle urgent apps" },
+        { type: "toggle", key: P + "dock:menu_animation", label: "Menu expands",
+          desc: "The right-click menu grows out of its icon and folds back into it, like the search results." },
+        { type: "slider", key: P + "dock:menu_anim_ms", label: "Menu expand time", min: 0, max: 800, step: 10, unit: "ms", when: "dockMenuAnimOn",
+          desc: "Closing takes about a quarter less. Scaled by the Animation speed." }
       ]},
       { title: "Frost", rows: [
         { type: "slider", key: P + "dock:blur_size", label: "Blur size", min: -1, max: 32, step: 1, fmt: "follow",
@@ -284,6 +290,8 @@ var sections = [
           } },
         { type: "toggle", key: P + "mosaic:default", label: "Make Mosaic the default", when: "mosaicOn",
           desc: "New desktops, and any you have not set with Super+L, start in Mosaic. Off restores the previous default." },
+        { type: "toggle", key: P + "mosaic:spawn_at_cursor", label: "Open windows at the pointer", when: "mosaicOn",
+          desc: "A new window lands where the pointer is, and the others make room around it. Off, new windows join the cluster wherever it packs them." },
         { type: "toggle", key: P + "mosaic:infinite_canvas", label: "Infinite canvas", when: "mosaicOn",
           desc: "When windows no longer fit the screen, they keep their size and spill onto a canvas you pan across, instead of tiling. Hold Super and move the pointer to see every window on it." },
         { type: "choice", key: P + "mosaic:canvas_directions", label: "Canvas directions", when: "canvasOn",

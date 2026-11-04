@@ -214,3 +214,7 @@ bool                              overviewSearchHides(const PHLWINDOW& window);
 // half-typed compose sequence. What the dispatcher does before every open, for
 // the entry points that are not the dispatcher.
 void                              resetSearchSession();
+
+// A dock preview click (Dock.cpp panelClick): the overview's close hands the
+// cursor to the picked window CENTRED, even when it was over the window already.
+void overviewCenterCursorOnHandoff();

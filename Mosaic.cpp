@@ -10,6 +10,7 @@
 #include "globals.hpp"
 #include "IOverview.hpp"
 #include "Dock.hpp"
+#include "DockStacks.hpp"
 #include "OverviewRender.hpp"
 #include "FlightController.hpp"
 
@@ -395,7 +396,11 @@ namespace ScrollOverview::Mosaic {
                 // re-aims it (panTo retargets): quick hops used to leave the
                 // last window focused but off screen.
                 const bool FFM   = reason == Desktop::FOCUS_REASON_FFM;
-                const bool HOVER = FFM && !g_cursorRiding;
+                // Never while the dock has a fan, a pane or a menu up (user,
+                // 2026-11-03): a hover that got past it must not slide the
+                // canvas -- and the pointer with it -- out from under the dock.
+                const bool DOCKUP = ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen();
+                const bool HOVER  = FFM && !g_cursorRiding && !DOCKUP;
                 if (m_asCanvas && !g_canvasPanning && !m_zoomed && w && holds(w) && (!FFM || HOVER))
                     revealWindow(w, true, FROM != w ? FROM : PHLWINDOW{});
             });
@@ -775,7 +780,29 @@ namespace ScrollOverview::Mosaic {
             arriveWithNatural(target, true);
             placeInTiles(target, std::nullopt, DROP);
             placeDropped(target, std::nullopt);
+            if (!DROP)
+                placeAtCursor(target);
             recalculate();
+        }
+
+        // A NEW WINDOW OPENS AT THE POINTER (user, 2026-11-04: "spawn window
+        // nearest to my cursor in mosaic modes so it lands where i intend it
+        // to"). The mosaic and the canvas take it as if it were dropped there
+        // (PackHint / SCanvasDrop): it lands at the pointer, or on that side of
+        // the cluster, everyone else packed around it. Only with the pointer on
+        // this desktop's screen; the tiles keep dwindle's own rule
+        // (placeInTiles), and the first window still centres.
+        void placeAtCursor(const SP<Layout::ITarget>& target) {
+            if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:mosaic:spawn_at_cursor") || !m_tree.empty() || m_entries.size() < 2)
+                return;
+            const auto AREA = area();
+            if (!AREA || indexOf(target) < 0)
+                return;
+            const Vector2D MOUSE = g_pInputManager->getMouseCoordsInternal();
+            if (MOUSE.x < AREA->x || MOUSE.y < AREA->y || MOUSE.x > AREA->x + AREA->w || MOUSE.y > AREA->y + AREA->h)
+                return;
+            trace(std::format("spawn {} at the pointer {}x{}", appOf(target->window()), MOUSE.x, MOUSE.y));
+            m_dropAt = SDropAt{target, MOUSE};
         }
 
         void movedTarget(SP<Layout::ITarget> target, std::optional<Vector2D> focalPoint = std::nullopt) override {
@@ -1398,6 +1425,16 @@ namespace ScrollOverview::Mosaic {
                                                                                               .oldW = m_canvas.w,
                                                                                               .oldH = m_canvas.h}};
                     trace(std::format("canvas drop at canvas {}x{}", m_canvasDrop->drop.x, m_canvasDrop->drop.y));
+                } else if (I >= 0 && !wasCanvas) {
+                    // The mosaic is spilling onto the canvas right now (the window
+                    // that arrived no longer fits, placeAtCursor): there is no old
+                    // canvas to read the point off, but the old view was the screen
+                    // itself, so the point is taken on a canvas the screen's size.
+                    m_canvasDrop = SCanvasDropAt{m_dropAt->target, MosaicPack::SCanvasDrop{.x    = m_dropAt->at.x - AREAR.x,
+                                                                                            .y    = m_dropAt->at.y - AREAR.y,
+                                                                                            .oldW = AREAR.w,
+                                                                                            .oldH = AREAR.h}};
+                    trace(std::format("canvas drop (from the mosaic) at {}x{}", m_canvasDrop->drop.x, m_canvasDrop->drop.y));
                 }
             }
             std::optional<MosaicPack::SCanvasDrop> drop;
@@ -3562,7 +3599,18 @@ namespace ScrollOverview::Mosaic {
             if (O < 1)
                 return;
             const double K = (SPAN + O + SLIDE_MARGIN) / SPAN;
-            trace(std::format("swipe release goes past the overhang: {:.0f} -> {:.0f}", G, G * K));
+            // FROM WHERE IT WAS LAST DRAWN (user, 2026-11-03: the window hanging
+            // off the desktop just left "flashes" once the swipe ends). Let go,
+            // Hyprland restarts the slide away from its own, unstretched place
+            // -- the overhang nearer than the last frame drew it -- and that
+            // frame is drawn before this one stretches the goal: the hanging
+            // window leapt back into view for a frame. It goes on from the
+            // place the swipe's last frame left it.
+            const Vector2D LEFT = A->m_slide.leaveSet;
+            const double   LD   = XAX ? LEFT.x : LEFT.y;
+            if (LD * D > 0 && std::abs(LD) > std::abs(D))
+                OFFV->setValue(LEFT);
+            trace(std::format("swipe release goes past the overhang: {:.0f} -> {:.0f}, from {:.0f}", G, G * K, std::abs(LD) > std::abs(D) ? LD : D));
             *OFFV = XAX ? Vector2D{GOAL.x * K, GOAL.y} : Vector2D{GOAL.x, GOAL.y * K};
         }
     }
@@ -3907,6 +3955,37 @@ namespace ScrollOverview::Mosaic {
         IT->second(PLAIN->arg);
         g_zoomKeysTaken.insert(keycode);
         return true;
+    }
+
+    // THROUGH THE BAR (user, 2026-11-03: "hovering over this topbar area still
+    // focuses the visible windows there (just hover) but clicks and hovers on
+    // topbar are unaffected"). A canvas desktop's windows reach up under the
+    // Omarchy bar and show through it, but the bar is one surface the width of
+    // the screen, so the pointer on it never let focus follow onto them. With
+    // the pointer on the bar, the window under it takes the KEYBOARD focus;
+    // the bar keeps the pointer, so its own hovers and clicks are as before.
+    // And the canvas brings it into view as any hover does (the pointer rides
+    // the pan, so it stays on the window it hovered).
+    void focusUnderBar() {
+        static auto PFOLLOW = CConfigValue<::Config::INTEGER>("input:follow_mouse");
+        if (*PFOLLOW != 1 || g_cursorRiding || zoomOwnsPointer())
+            return;
+        const auto PSURF = g_pSeatManager ? g_pSeatManager->m_state.pointerFocus.lock() : SP<CWLSurfaceResource>{};
+        const auto HLS   = PSURF ? Desktop::View::CWLSurface::fromResource(PSURF) : SP<Desktop::View::CWLSurface>{};
+        const auto VIEW  = HLS ? HLS->view() : SP<Desktop::View::IView>{};
+        if (!VIEW || VIEW->type() != Desktop::View::VIEW_TYPE_LAYER_SURFACE)
+            return;
+        const auto LS = Desktop::View::CLayerSurface::fromView(VIEW);
+        if (!LS || (LS->m_namespace != "omarchy-bar" && LS->m_namespace != "waybar"))
+            return;
+        const Vector2D P   = g_pInputManager->getMouseCoordsInternal();
+        const auto     MON = LS->m_monitor.lock();
+        if (!MON || !MON->m_activeWorkspace || MON->m_activeSpecialWorkspace)
+            return;
+        const auto W = Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        if (!W || !W->m_isMapped || W->isHidden() || W->m_workspace != MON->m_activeWorkspace || W == Desktop::focusState()->window())
+            return;
+        Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
     }
 
     bool zoomOwnsPointer() {

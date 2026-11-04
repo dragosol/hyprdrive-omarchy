@@ -12,6 +12,13 @@
   hyprdrive update --never-check    the settings stop looking for updates on their own
   hyprdrive update --allow-check    ...and start again
   hyprdrive version                 the installed version
+  hyprdrive unload | disable        stop Hyprdrive in this session (Hyprland keeps running)
+  hyprdrive load | enable           start it again (and re-apply your plugin settings)
+  hyprdrive reload                  unload, then load: picks up a freshly installed build
+  hyprdrive status                  whether it is loaded
+
+  unload/load last for this session only: the next login starts Hyprdrive
+  as usual. Keep your hands off the trackpad for the second it takes.
 
 ON OMARCHY (the build from dragosol/hyprdrive-omarchy) a release is out on GitHub
 before the Omarchy plugin marketplace approves it. `update` says which version
@@ -420,6 +427,102 @@ def install(target_ref, label, yes, info):
     return 0
 
 
+# ---- load / unload -------------------------------------------------------------
+def hypr_env():
+    """The environment hyprctl needs: this session's Hyprland, found in
+    $XDG_RUNTIME_DIR/hypr when the shell did not inherit it (an ssh login,
+    a TTY)."""
+    env = dict(os.environ)
+    if env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return env
+    rt = pathlib.Path(env.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()) / "hypr"
+    try:
+        live = [d for d in rt.iterdir() if (d / ".socket.sock").exists()]
+    except OSError:
+        live = []
+    if not live:
+        return None
+    env["HYPRLAND_INSTANCE_SIGNATURE"] = max(live, key=lambda d: d.stat().st_mtime).name
+    env.setdefault("XDG_RUNTIME_DIR", str(rt.parent))
+    return env
+
+
+def hyprctl(env, *args):
+    try:
+        r = subprocess.run(["hyprctl", *args], env=env, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def plugin_so():
+    return pathlib.Path(install_info().get("prefix") or str(HOME / ".local")) / "lib/hyprdrive/hyprdrive.so"
+
+
+def loaded(env):
+    code, out = hyprctl(env, "plugin", "list")
+    return code == 0 and re.search(r"^Plugin hyprdrive\b", out, re.M) is not None
+
+
+def hyprland_replaced():
+    """Hyprland was upgraded under this session: its binary is gone, and a
+    plugin load throws until the next login -- so an unload now could not
+    be undone."""
+    try:
+        pids = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "Hyprland"], capture_output=True, text=True).stdout.split()
+        return any(os.readlink("/proc/%s/exe" % pid).endswith(" (deleted)") for pid in pids)
+    except OSError:
+        return False
+
+
+def cmd_power(verb):
+    if not shutil.which("hyprctl"):
+        print("hyprctl not found: is this a Hyprland session?")
+        return 1
+    env = hypr_env()
+    if env is None:
+        print("No running Hyprland found.")
+        return 1
+    so = plugin_so()
+    on = loaded(env)
+    if verb == "status":
+        print("Hyprdrive is %s (%s)." % ("loaded" if on else "not loaded", so))
+        return 0 if on else 3
+    if verb in ("load", "reload") and not so.exists():
+        print("%s is not there: install Hyprdrive first (make install)." % so)
+        return 1
+    if hyprland_replaced():
+        print("Hyprland was updated since you logged in, and a plugin cannot be loaded into it until you log out and back in.")
+        if verb == "load":
+            return 1
+        print("Leaving Hyprdrive as it is: unloading it now could not be undone this session.")
+        return 1
+    if verb in ("unload", "reload") and on:
+        time.sleep(0.3)
+        code, out = hyprctl(env, "plugin", "unload", str(so))
+        if code != 0 or loaded(env):
+            print("Unloading failed: %s" % out)
+            return 1
+        if verb == "unload":
+            print("Hyprdrive is unloaded. `hyprdrive load` brings it back.")
+            return 0
+    elif verb == "unload":
+        print("Hyprdrive is not loaded.")
+        return 0
+    if verb == "load" and on:
+        print("Hyprdrive is already loaded.")
+        return 0
+    code, out = hyprctl(env, "plugin", "load", str(so))
+    if code != 0 or not loaded(env):
+        print("Loading failed: %s" % out)
+        return 1
+    # Its settings are config keys the plugin registers as it loads: a
+    # config reload hands it the user's values.
+    hyprctl(env, "reload")
+    print("Hyprdrive is loaded.")
+    return 0
+
+
 # ---- the terminal -------------------------------------------------------------
 def terminal_command(argv):
     """The user's terminal running argv, or None."""
@@ -590,6 +693,9 @@ def main(argv):
         return 0
     if argv[0] == "update":
         return cmd_update(argv[1:])
+    verb = {"load": "load", "enable": "load", "unload": "unload", "disable": "unload", "reload": "reload", "status": "status"}.get(argv[0])
+    if verb and len(argv) == 1:
+        return cmd_power(verb)
     print(__doc__)
     return 2
 

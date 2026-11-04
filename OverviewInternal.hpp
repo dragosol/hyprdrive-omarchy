@@ -530,19 +530,19 @@ inline std::vector<SSearchRow> overviewSearchRowsLive();
 // system are; which one is highlighted is navigation state and lives in
 // g_search.nav, which is exactly why it can be left out of the key.
 //
-// The empty-query browse path is deliberately NOT memoised: it is the only
-// caller of recentFiles(), which walks the user's directories and has no
-// generation to key on, and it is never on the per-frame path (renderSearch
-// asks for rows only once something is typed or a menu is open).
+// The empty-query browse (the pill focused with nothing typed, with
+// search:browse_on_click) is on the per-frame path, and it is the only caller
+// of recentFiles(), which stats the user's folder shortcuts and has no
+// generation of its own to key on. So that one answer is memoised too, but for
+// a second at most: a folder made or removed while the browse is up shows
+// within that, and the stats are paid once a second instead of once per frame.
 inline std::vector<SSearchRow> overviewSearchRows() {
     if (g_search.query.windowsOnly)
         return {};
 
     const std::string& Q           = g_search.query.text;
     const bool         MENU_BROWSE = OmarchySearch::canNavigateMenuBack();
-
-    if (Q.empty() && !MENU_BROWSE)
-        return overviewSearchRowsLive();
+    const bool         ROOT_BROWSE = Q.empty() && !MENU_BROWSE;
 
     struct SRowMemo {
         std::string query;
@@ -553,17 +553,21 @@ inline std::vector<SSearchRow> overviewSearchRows() {
         uint64_t    apps    = 0;
         bool        filled  = false;
 
-        std::vector<SSearchRow> rows;
+        std::chrono::steady_clock::time_point builtAt{};
+        std::vector<SSearchRow>               rows;
     };
 
     static SRowMemo MEMO;
+
+    const auto NOW   = std::chrono::steady_clock::now();
+    const bool FRESH = !ROOT_BROWSE || NOW - MEMO.builtAt < std::chrono::seconds(1);
 
     const auto     ROUTE   = OmarchySearch::menuCurrentRoute();
     const uint64_t INPUTS  = OmarchySearch::searchInputsGeneration();
     const uint64_t MEMBERS = Membership::generation();
     const uint64_t APPS    = AppSearch::inventoryGeneration();
 
-    if (MEMO.filled && MEMO.query == Q && MEMO.browse == MENU_BROWSE && MEMO.route == ROUTE && MEMO.inputs == INPUTS && MEMO.members == MEMBERS && MEMO.apps == APPS)
+    if (MEMO.filled && FRESH && MEMO.query == Q && MEMO.browse == MENU_BROWSE && MEMO.route == ROUTE && MEMO.inputs == INPUTS && MEMO.members == MEMBERS && MEMO.apps == APPS)
         return MEMO.rows;
 
     MEMO.query   = Q;
@@ -573,6 +577,7 @@ inline std::vector<SSearchRow> overviewSearchRows() {
     MEMO.members = MEMBERS;
     MEMO.apps    = APPS;
     MEMO.rows    = overviewSearchRowsLive();
+    MEMO.builtAt = NOW;
     MEMO.filled  = true;
 
     return MEMO.rows;
@@ -837,6 +842,15 @@ inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
 // calculator copy, or file open. Submenu navigation returns false so the overview
 // stays open while drilling down into the hierarchy. For an already-open app,
 // Enter focuses that window unless newInstance is set (double-tap Shift).
+// THE RESULTS PANE IS UP: something is typed, a submenu is open, or -- with
+// search:browse_on_click (off by default, user 2026-11-04) -- the pill was
+// clicked with nothing typed, which BROWSES: the menu's root, the folder
+// shortcuts, the agent help rows. Every "are there results to walk into"
+// question asks this one, so the pane and the keys cannot disagree.
+inline bool overviewSearchPaneUp() {
+    return !g_search.query.text.empty() || (g_search.query.active && ScrollOverview::Config::getSearchBrowseOnClick()) || OmarchySearch::canNavigateMenuBack();
+}
+
 void overviewQueryEdited(); // main.cpp
 
 inline bool activateSearchResult(int index, bool newInstance = false) {

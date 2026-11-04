@@ -925,12 +925,13 @@ namespace {
     constexpr size_t                                      WRAP_CACHE_MAX = 256;
 }
 
-SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color, int fontSize, int maxW, int maxH, bool italic, const std::string& fontFamily, int weight) {
+SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color, int fontSize, int maxW, int maxH, bool italic, const std::string& fontFamily, int weight,
+                                 bool centred) {
     if (str.empty() || maxW < 8 || maxH < 8 || fontSize < 1)
         return nullptr;
 
     const std::string& FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
-    const std::string  KEY    = std::format("{}\x1f{}\x1f{:x}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}", str, FAMILY, color.getAsHex(), fontSize, maxW, maxH, weight, italic ? 1 : 0);
+    const std::string  KEY    = std::format("{}\x1f{}\x1f{:x}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}", str, FAMILY, color.getAsHex(), fontSize, maxW, maxH, weight, (italic ? 1 : 0) | (centred ? 2 : 0));
     if (const auto IT = g_wrapCache.find(KEY); IT != g_wrapCache.end())
         return IT->second;
     if (g_wrapCache.size() >= WRAP_CACHE_MAX)
@@ -950,6 +951,8 @@ SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color
     pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
     pango_layout_set_height(layout, maxH * PANGO_SCALE); // positive: a pixel budget, ellipsis on the last line that fits
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+    if (centred)
+        pango_layout_set_alignment(layout, PANGO_ALIGN_CENTER);
 
     PangoRectangle ink, logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);

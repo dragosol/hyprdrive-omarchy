@@ -527,6 +527,8 @@ static void registerConfigValuesFor() {
     // directions and the Super zoom-out by default (user, 2026-10-27).
     addKey(makeShared<CBoolValue>(KEY("mosaic:infinite_canvas"),
                                   "mosaic: windows that no longer fit the screen spill onto a canvas you pan across, at their own sizes, instead of tiling", false));
+    addKey(makeShared<CBoolValue>(KEY("mosaic:spawn_at_cursor"),
+                                  "mosaic: a new window opens where the pointer is, the others packed around it, on the mosaic and the infinite canvas", true));
     addKey(makeShared<CStringValue>(KEY("mosaic:canvas_directions"),
                                     "mosaic: the infinite canvas grows horizontal (a strip) or all (a grid); on "
                                     "either, hold Super and move the pointer to zoom out to every window, hover one to focus it, let go of Super to zoom back in",
@@ -541,6 +543,8 @@ static void registerConfigValuesFor() {
                                     "window titles while Super is held and the pointer moves, on any desktop (the zoomed-out canvas too): none, hover (the window "
                                     "under the pointer) or all",
                                     Hyprlang::STRING{"hover"}));
+    addKey(makeShared<CBoolValue>(KEY("search:browse_on_click"),
+                                  "clicking the overview's search pill with nothing typed opens the results: the menu, folder shortcuts and AI & Tools rows", false));
     addKey(makeShared<CBoolValue>(KEY("search:easter_egg"), "overview search: type a letter and backspace five times in four seconds and the pill plays search:easter_egg_video", true));
     addKey(makeShared<CStringValue>(KEY("search:easter_egg_video"), "the video the overview's easter egg plays, with its sound (needs ffmpeg); a missing file turns the egg off",
                                     Hyprlang::STRING{"~/.local/share/hyprdrive/easter-egg.mp4"}));
@@ -571,7 +575,14 @@ static void registerConfigValuesFor() {
                                  "ms for the drag proxy's grab point to slide to its centre while over a drop target", 160,
                                  SIntValueOptions{.min = 0}));
     addKey(makeShared<CIntValue>(KEY("wallpaper"), "wallpaper mode", 0, SIntValueOptions{.min = 0, .max = 2}));
-    addKey(makeShared<CBoolValue>(KEY("blur"), "blur the overview wallpaper", false));
+    // Kept so an old `blur = ...` line still parses; nothing reads it (the frost
+    // was always on). plugin:hyprdrive:backdrop picks what it shows.
+    addKey(makeShared<CBoolValue>(KEY("blur"), "unused: see plugin:hyprdrive:backdrop", false));
+    addKey(makeShared<CStringValue>(KEY("backdrop"),
+                                    "what the overview blurs behind the desktop cards: off (the wallpaper darkened, no blur), wallpaper (the static "
+                                    "wallpaper), snapshot (a live wallpaper, frozen as the overview opens), live (re-blurred as it moves), auto (live "
+                                    "while it changes rarely, snapshot while it animates)",
+                                    Hyprlang::STRING{"snapshot"}));
 
     // OVERVIEW_CPP_SPEC §13.9. Defaults are the user's dumped Dash to Dock
     // config, not upstream defaults. Real keys from day one so hyprsettings
@@ -640,6 +651,9 @@ static void registerConfigValuesFor() {
     // DockTilt (user, 2026-09-14): the card lean from dragos.shastasia.com, in
     // two halves the panel switches separately. Both off leaves the flat squish.
     addKey(makeShared<CBoolValue>(KEY("dock:hover_tilt"), "dock icons lean toward the pointer in 3D while hovered, and spring flat on leave", true));
+    addKey(makeShared<CBoolValue>(KEY("dock:menu_animation"), "the dock's context menu grows out of its icon and collapses back, like the search results", true));
+    addKey(makeShared<CIntValue>(KEY("dock:menu_anim_ms"), "the dock context menu's expand time in ms (its collapse is ~25% shorter); scaled by anim_scale", 180,
+                                 SIntValueOptions{.min = 0, .max = 2000}));
     addKey(makeShared<CBoolValue>(KEY("dock:press_tilt"), "a pressed dock icon leans further in toward the press point, with a glare where it is pressed", true));
     addKey(makeShared<CBoolValue>(KEY("dock:dance_urgent"), "hyprgnomedock: wiggle an urgent app's icon (D2D dance-urgent-applications)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:urgent_notify"),
@@ -1599,6 +1613,11 @@ bool getSearchDictionary() {
     return *VAL != 0;
 }
 
+bool getSearchBrowseOnClick() {
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:search:browse_on_click");
+    return *VAL != 0;
+}
+
 bool getSearchTranslate() {
     static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:search:translate");
     return *VAL != 0;
@@ -1711,9 +1730,18 @@ int getWallpaperMode() {
     return std::clamp<int>(sc<int>(*VAL), 0, 2);
 }
 
-bool getBlur() {
-    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:blur");
-    return *VAL != 0;
+EBackdrop getBackdrop() {
+    static auto& VAL = valueRef<std::string>("plugin:hyprdrive:backdrop");
+    const auto&  V   = *VAL;
+    if (V == "off")
+        return EBackdrop::OFF;
+    if (V == "wallpaper")
+        return EBackdrop::WALLPAPER;
+    if (V == "live")
+        return EBackdrop::LIVE;
+    if (V == "auto")
+        return EBackdrop::AUTO;
+    return EBackdrop::SNAPSHOT;
 }
 
 bool getMissionControl() {

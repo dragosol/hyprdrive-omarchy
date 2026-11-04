@@ -106,8 +106,9 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
                           int weight = 0);
 // Pango wrap inside maxW×maxH. Used by the inspector so long paths and hints
 // stay inside the results plate instead of painting off the card.
+// centred: each wrapped line centred in the block (a label over a thumbnail).
 SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color, int fontSize, int maxW, int maxH, bool italic = false, const std::string& fontFamily = "",
-                                 int weight = 0);
+                                 int weight = 0, bool centred = false);
 
 // Drop the text cache. Called when an overview goes away: the strings it held
 // were window titles and search results that the next one will not ask for.

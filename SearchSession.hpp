@@ -316,6 +316,9 @@ struct SSearchLayout {
     int   rounding      = 0;
     float roundingPower = 2.F;
     bool  queried = false, emptyResult = false;
+    // Nothing typed: the pill shows the muted placeholder. NOT !queried -- a
+    // submenu or the root browse has the results up with an empty query.
+    bool  placeholder = true;
 
     CBox  pill, badge;
     // The pill BEFORE the strip label's nudge, and how far it may be lifted
@@ -487,6 +490,12 @@ struct SSearchSession {
     // ---- what the pointer is in the middle of ---------------------------
     struct SPointer {
         std::optional<SResultDrag> drag;
+        // The press landed on the search pill or the results pane: its
+        // RELEASE is the search's too. Left to the grid it ran the default
+        // click -- select the window under the cursor and close -- so a click
+        // on the pill that opened the results (search:browse_on_click) shut
+        // the overview as the pane slid under the pointer.
+        bool uiPress = false;
     } pointer;
 
     // ---- what the last drawn frame published ----------------------------

@@ -153,6 +153,7 @@ struct SPlaced {
     float       scale    = 1.F;
     float       opacity  = 1.F;
     bool        dying    = false;
+    clock::time_point bornAt{};
 };
 
 // Where one letter sits in ONE view -- one monitor's search field. Positions are
@@ -309,6 +310,7 @@ struct SAnimator {
                 .scale    = POSE.scale,
                 .opacity  = POSE.opacity,
                 .dying    = L.dyingAt.has_value(),
+                .bornAt   = L.bornAt,
             });
         }
         return out;

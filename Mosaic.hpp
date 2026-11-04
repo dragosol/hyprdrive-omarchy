@@ -35,6 +35,10 @@ namespace ScrollOverview::Mosaic {
     // Super zoomed the canvas out: pointer motion is the zoom's alone, never
     // Hyprland's focus follows mouse over the windows' real (full size) places.
     bool zoomOwnsPointer();
+    // The pointer on the Omarchy bar: the window showing through it under the
+    // pointer takes the keyboard focus (the bar keeps the pointer), and is
+    // brought into view as any hovered canvas window is.
+    void focusUnderBar();
     // Raw pointer motion: `delta` asked, `moved` what the pointer really moved
     // (less at a screen's edge). A resize reaches past the edge by the rest.
     void onPointerDelta(const Vector2D& delta, const Vector2D& moved);

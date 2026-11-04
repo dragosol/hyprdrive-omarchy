@@ -128,6 +128,10 @@ namespace ScrollOverview::Stacks {
     bool holdsDock(PHLMONITOR monitor);
     // Is a monitor-local RENDER px point over the popup?
     bool contains(PHLMONITOR monitor, const Vector2D& point);
+    // The open fan's/pane's whole area -- the gaps between its rows and the
+    // way down to its dock icon included -- for HOVER only (main.cpp's motion
+    // hook): no window under it may take focus while the pointer crosses it.
+    bool ownsHover(PHLMONITOR monitor, const Vector2D& point);
     // A press or release over the popup. Returns whether it was claimed.
     bool click(PHLMONITOR monitor, const Vector2D& point, bool release);
     // A wheel tick over the popup: the grid scrolls, and so does a fan holding

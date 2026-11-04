@@ -404,6 +404,7 @@ Item {
     case "isolateOvApplies": return !kb("plugin:hyprdrive:dock:isolate_workspaces")
     case "roomApplies": return kb("plugin:hyprdrive:dock:enabled") && !kb("plugin:hyprdrive:dock:autohide")
     case "motionOn": return kn("plugin:hyprdrive:anim_scale") > 0.001
+    case "dockMenuAnimOn": return kb("plugin:hyprdrive:dock:menu_animation") && kn("plugin:hyprdrive:anim_scale") > 0.001
     case "blurOn": return kb("plugin:hyprdrive:motion_blur:enabled")
     case "mosaicOn": return kb("plugin:hyprdrive:mosaic:enabled")
     case "canvasOn": return kb("plugin:hyprdrive:mosaic:enabled") && kb("plugin:hyprdrive:mosaic:infinite_canvas")

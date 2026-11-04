@@ -41,6 +41,7 @@
 #include "Config.hpp"
 #include "DropDecision.hpp" // V3: where a released icon drag goes, as a pure function
 #include "IOverview.hpp"
+#include <hyprland/src/pointer/PointerController.hpp>
 #include "LauncherEntry.hpp"
 #include "StackReader.hpp"
 #include "TextInput.hpp"
@@ -213,6 +214,7 @@ constexpr float  MENU_EDGE_MARGIN = 8.F; // logical px the menu keeps from every
 constexpr float  MENU_GAP       = 8.F;
 constexpr float  MENU_SEP_H     = 9.F;
 constexpr float  MENU_MIN_W     = 170.F;
+constexpr float  MENU_HOVER_MS  = 140.F; // a row easing into (and out of) its hover
 constexpr size_t MENU_LABEL_MAX = 44; // bytes; window titles are arbitrarily long
 
 // OVERVIEW_CPP_SPEC 13.12 X47. The hover preview panel. Windows' taskbar for
@@ -3563,6 +3565,9 @@ namespace MenuGlyph {
     inline constexpr const char* CHECK    = "\uf00c"; // check
     inline constexpr const char* PENCIL   = "\uf040"; // pencil
     inline constexpr const char* MOVE     = "\uf047"; // arrows (move)
+    inline constexpr const char* HERE     = "\uf0ab"; // arrow-circle-down: onto this desktop
+    inline constexpr const char* UP       = "\uf077"; // chevron-up
+    inline constexpr const char* DOWN     = "\uf078"; // chevron-down
 }
 
 struct SRow {
@@ -3576,6 +3581,16 @@ struct SRow {
     bool         danger = false; // Force Quit: drawn in the warning colour
     bool         sub    = false; // belongs to the row above: indented one glyph column
     bool         disabled = false; // greyed out and not clickable (Empty Trash on an empty Trash)
+    // A window row's own moves, as small buttons at its right end (user,
+    // 2026-11-03: an app with seven windows ran the menu off the screen at
+    // four rows a window). Each acts as the row it replaced would have.
+    struct SInline {
+        ERow        kind = ERow::Separator;
+        std::string glyph;
+        std::string label; // shown in the hint's place while the button is hovered
+        CBox        box;   // filled by renderMenu
+    };
+    std::vector<SInline> inlines;
 };
 
 struct SMenu {
@@ -3592,6 +3607,18 @@ struct SMenu {
     CBox              anchor; // the icon cell the menu hangs off
     CBox              box;    // the whole plate, filled by renderMenu
     std::vector<SRow> rows;
+    // The window list scrolls when the menu would not fit above the dock: the
+    // first window row shown (renderMenu clamps it).
+    int scrollTop = 0;
+    // THE HOVER EASES (user, 2026-11-03: "a little hover effect on menu items
+    // (grow, or something fancy)"). Which row -- and which of its buttons, or
+    // -1 for the row itself -- the pointer is on, the one it just left, and
+    // when it changed. renderMenu reads the clock; needsFramesReason keeps
+    // frames coming while it runs.
+    int             hoverRow = -1, hoverInl = -1, prevRow = -1, prevInl = -1;
+    Time::steady_tp hoverAt{};
+    // When it opened: the plate grows out of its icon from here (menuOpenP).
+    Time::steady_tp openedAt{};
 
     // Dock stacks A: Rename in Dock turns the menu into a one-line field.
     bool        editing = false;
@@ -3600,6 +3627,48 @@ struct SMenu {
 };
 
 std::optional<SMenu> g_menu;
+
+// THE MENU EXPANDS LIKE THE SEARCH RESULTS (user, 2026-11-03: "a consistent
+// design language across the interface"). Opening, the plate grows out of its
+// icon -- the width from about the icon's, the height from nothing, its bottom
+// edge where it will stay -- on the decelerating curve, the rows fading in
+// clipped to it; closing, it collapses back on the accelerating one. The close
+// is drawn from a GHOST: closeMenu() hands the menu over and every query keeps
+// seeing a closed menu at once, so nothing else waits on the animation.
+struct SMenuGhost {
+    SMenu           menu;
+    Time::steady_tp closedAt{};
+    float           from = 1.F; // how open it was when it closed
+};
+std::optional<SMenuGhost> g_menuGhost;
+
+float menuAnimMs() {
+    return std::max(0.F, sc<float>(Config::getValue<int>("plugin:hyprdrive:dock:menu_anim_ms")));
+}
+bool menuAnimOn() {
+    return Config::getValue<bool>("plugin:hyprdrive:dock:menu_animation") && menuAnimMs() > 0.F && Config::motionEnabled();
+}
+// How open the live menu is, 0..1, eased (no overshoot: user, 2026-11-04).
+// Its rows cascade in behind the plate (renderMenuOne).
+float menuOpenMs() {
+    return menuAnimMs();
+}
+float menuOpenP(const SMenu& M) {
+    if (!menuAnimOn() || M.openedAt.time_since_epoch().count() == 0)
+        return 1.F;
+    return Motion::ease(Motion::ERole::DECEL, std::clamp(elapsedMs(M.openedAt) / std::max(1.F, menuOpenMs()), 0.F, 1.F));
+}
+bool menuOpening(const SMenu& M) {
+    return menuAnimOn() && M.openedAt.time_since_epoch().count() != 0 && elapsedMs(M.openedAt) < menuOpenMs() + 20.F;
+}
+// How open the closing ghost still is, 0..1, eased; <= 0 once it is gone.
+float menuGhostP(const SMenuGhost& G) {
+    if (!menuAnimOn())
+        return 0.F;
+    const float DUR = menuAnimMs() * 0.75F * std::max(0.05F, G.from); // the exit ~25% shorter, and only what is left of it
+    const float T   = std::clamp(elapsedMs(G.closedAt) / std::max(1.F, DUR), 0.F, 1.F);
+    return G.from * (1.F - Motion::ease(Motion::ERole::ACCEL, T));
+}
 
 // Back off to a lead byte so a truncated title cannot end mid-codepoint and
 // hand the text renderer a broken string.
@@ -3656,20 +3725,20 @@ void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WIN
         }
         if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
             where += " \u00b7 current";
-        rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where});
+        SRow row{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where};
+        // Its moves ride ITS row, as buttons, so which window they move is
+        // never a question (user, 2026-10-08) and a window costs one row, not
+        // four (user, 2026-11-03). Always three slots, so the buttons line up
+        // down the list; a move that does nothing is left out of its slot.
         // Onto the desktop this monitor is showing -- only for a window that is
         // somewhere else (another desktop or a scratchpad). A minimized one is
         // left to Show, which brings it back where it came from.
-        if (ACTIVEID != WORKSPACE_INVALID && on != ACTIVEID && !Minimize::isMinimized(WINDOW))
-            rows.emplace_back(SRow{.kind = ERow::MoveHere, .label = "Move to This Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
-        // Its own Move to Empty Workspace, right under it and indented, so which
-        // window it moves is never a question (user, 2026-10-08). The menu has
-        // no submenus to put it in; an indented row is the flat menu's way of
-        // saying "this belongs to the line above".
-        rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .window = WINDOW, .glyph = MenuGlyph::MOVE, .sub = true});
-        // ...and onto the scratchpad, unless it is already there.
-        if (!Scratchpad::workspaceFor(WINDOW))
-            rows.emplace_back(SRow{.kind = ERow::MoveScratchpad, .label = "Move to Scratchpad", .window = WINDOW, .glyph = MenuGlyph::STASH, .sub = true});
+        const bool HEREOK  = ACTIVEID != WORKSPACE_INVALID && on != ACTIVEID && !Minimize::isMinimized(WINDOW);
+        const bool STASHOK = !Scratchpad::workspaceFor(WINDOW);
+        row.inlines.push_back({.kind = HEREOK ? ERow::MoveHere : ERow::Separator, .glyph = MenuGlyph::HERE, .label = "Move to This Workspace"});
+        row.inlines.push_back({.kind = ERow::MoveEmptyWorkspace, .glyph = MenuGlyph::NEW, .label = "Move to Empty Workspace"});
+        row.inlines.push_back({.kind = STASHOK ? ERow::MoveScratchpad : ERow::Separator, .glyph = MenuGlyph::STASH, .label = "Move to Scratchpad"});
+        rows.emplace_back(std::move(row));
     }
 
     // Every window of the app at once, where they can be compared: the overview
@@ -4163,14 +4232,14 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 // Lays the rows out AND draws them: a row's height is its text's height, and
 // the only way to learn that is to build the texture. Doing both here is what
 // keeps the hit-test boxes and the pixels the user sees the same numbers.
-void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
-    if (!g_menu || !monitor || g_menu->monitor != monitor->m_id)
+void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OPENP) {
+    if (!monitor || M.monitor != monitor->m_id)
         return;
 
     // The package lookup landed: the info rows grow their answers.
-    if (g_menu->infoView && AppInfo::generation() != g_menu->infoGen) {
-        g_menu->infoGen = AppInfo::generation();
-        g_menu->rows    = infoRows(g_menu->item);
+    if (M.infoView && AppInfo::generation() != M.infoGen) {
+        M.infoGen = AppInfo::generation();
+        M.rows    = infoRows(M.item);
     }
 
     const float SCALE  = std::max(monitor->m_scale, 0.01F);
@@ -4189,19 +4258,20 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
 
     struct SRowTex {
         SP<Render::ITexture> label, glyph, hint;
+        std::vector<SP<Render::ITexture>> inlineGlyphs;
     };
     std::vector<SRowTex> textures;
-    textures.reserve(g_menu->rows.size());
+    textures.reserve(M.rows.size());
 
     // One glyph column for the whole plate, so every label starts at the same x
     // -- present only when some row has a glyph.
-    const bool  GLYPHS    = std::ranges::any_of(g_menu->rows, [](const SRow& r) { return !r.glyph.empty(); });
+    const bool  GLYPHS    = std::ranges::any_of(M.rows, [](const SRow& r) { return !r.glyph.empty(); });
     const float GLYPHCOLW = GLYPHS ? std::round(sc<float>(FONTPX) * 1.9F) : 0.F;
     const float HINTGAP   = std::round(18.F * SCALE);
 
     float width  = MENU_MIN_W * SCALE;
     float height = 0.F;
-    for (const auto& ROW : g_menu->rows) {
+    for (const auto& ROW : M.rows) {
         if (ROW.kind == ERow::Separator) {
             textures.emplace_back();
             height += MENU_SEP_H * SCALE;
@@ -4220,9 +4290,22 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
         if (!ROW.hint.empty())
             t.hint = OverviewRender::text(ROW.hint, DIM_COLOR, FONTPX, false, "", 0, 400);
 
-        const float HINTW = t.hint && t.hint->ok() ? HINTGAP + sc<float>(t.hint->m_size.x) : 0.F;
+        float HINTW = t.hint && t.hint->ok() ? HINTGAP + sc<float>(t.hint->m_size.x) : 0.F;
+        float BTNSW = 0.F;
+        if (!ROW.inlines.empty()) {
+            const float BTN = sc<float>(t.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
+            BTNSW           = BTN * sc<float>(ROW.inlines.size()) + HINTGAP * 0.5F;
+            // Room for the longest button name, which takes the hint's place
+            // while hovered: the plate must not change width under the pointer.
+            for (const auto& B : ROW.inlines) {
+                t.inlineGlyphs.push_back(B.kind == ERow::Separator ? SP<Render::ITexture>{} :
+                                                                     OverviewRender::text(B.glyph, DIM_COLOR.modifyA(0.85F), FONTPX, false, "JetBrainsMono Nerd Font", 0, 400));
+                if (const auto L = OverviewRender::text(B.label, DIM_COLOR, FONTPX, false, "", 0, 400); L && L->ok())
+                    HINTW = std::max(HINTW, HINTGAP + sc<float>(L->m_size.x));
+            }
+        }
         const float SUBW  = ROW.sub ? GLYPHCOLW : 0.F;
-        width             = std::max(width, 2.F * MENU_PAD_X * SCALE + SUBW + GLYPHCOLW + sc<float>(t.label->m_size.x) + HINTW);
+        width             = std::max(width, 2.F * MENU_PAD_X * SCALE + SUBW + GLYPHCOLW + sc<float>(t.label->m_size.x) + HINTW + BTNSW);
         height += sc<float>(t.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
         textures.emplace_back(std::move(t));
     }
@@ -4230,7 +4313,37 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
     if (height < 1.F)
         return;
 
-    const float CX = sc<float>(g_menu->anchor.x) + sc<float>(g_menu->anchor.width) / 2.F;
+    // NEVER OFF THE SCREEN (user, 2026-11-03). Taller than the room above the
+    // dock, the window list scrolls inside the plate, a row at a time, between
+    // two chevron strips; the rows above and below it stay put.
+    const double EDGEPX  = std::round(MENU_EDGE_MARGIN * SCALE);
+    const float  ROOM    = sc<float>(layout.pill.y) - MENU_GAP * SCALE - sc<float>(EDGEPX);
+    const float  CHEV    = std::round(MENU_SEP_H * SCALE * 1.6F);
+    int          segFirst = -1, segLast = -1;
+    for (size_t i = 0; i < M.rows.size(); ++i) {
+        if (M.rows[i].kind == ERow::Window && textures[i].label) {
+            if (segFirst < 0)
+                segFirst = sc<int>(i);
+            segLast = sc<int>(i);
+        }
+    }
+    int  visibleRows = 0;
+    bool scrolling   = false;
+    if (height > ROOM && segFirst >= 0) {
+        const float WINH  = sc<float>(textures[segFirst].label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
+        const int   N     = segLast - segFirst + 1;
+        const float OTHER = height - WINH * sc<float>(N);
+        visibleRows       = std::clamp(sc<int>(std::floor((ROOM - OTHER - 2.F * CHEV) / WINH)), 1, N);
+        if (visibleRows < N) {
+            scrolling           = true;
+            M.scrollTop   = std::clamp(M.scrollTop, 0, N - visibleRows);
+            height              = OTHER + 2.F * CHEV + WINH * sc<float>(visibleRows);
+        }
+    }
+    if (!scrolling)
+        M.scrollTop = 0;
+
+    const float CX = sc<float>(M.anchor.x) + sc<float>(M.anchor.width) / 2.F;
     CBox        plate{std::round(CX - width / 2.F), std::round(sc<float>(layout.pill.y) - MENU_GAP * SCALE - height), std::round(width), std::round(height)};
     // Wholly on screen, border and all, with room to breathe: clamped flush to
     // 0 the plate's left border sat ON the screen edge and half of it was cut
@@ -4239,17 +4352,136 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
     plate.x           = std::clamp(plate.x, EDGE, std::max(EDGE, monitor->m_size.x * SCALE - plate.width - EDGE));
     plate.y           = std::max(EDGE, plate.y);
 
-    g_menu->box = plate;
+    M.box = plate;
+
+    // The part of the plate open so far (OPENP: 0 = only the icon, 1 = all of
+    // it), and everything drawn below is clipped to it and fades with it.
+    const float  OP      = std::clamp(OPENP, 0.F, 1.F);
+    const double STARTW  = std::min(plate.width, std::max(sc<double>(M.anchor.width) * 1.2, 40.0 * SCALE));
+    const double VISW    = STARTW + (plate.width - STARTW) * OP;
+    const double VISH    = std::max(1.0, plate.height * OP);
+    const double ACX     = std::clamp(sc<double>(CX), plate.x + VISW / 2.0, plate.x + plate.width - VISW / 2.0);
+    const double VISCX   = ACX + (plate.x + plate.width / 2.0 - ACX) * OP;
+    const CBox   VIS     = CBox{VISCX - VISW / 2.0, plate.y + plate.height - VISH, VISW, VISH}.round();
+    const float  CONTENT = std::clamp((OP - 0.2F) / 0.8F, 0.F, 1.F); // the rows come in once there is room for them
+    // THE ROWS CASCADE: each row comes in on its own stretch of CONTENT, the
+    // one nearest the dock first, rising a few px into its place as it fades
+    // in. Closing runs the same curve backwards, so the top row leaves first.
+    // ROWA / ROWDY are what the row being drawn has (set in the loop below).
+    float      ROWA = CONTENT, ROWDY = 0.F;
+    const auto rowIn = [&](size_t i) {
+        const size_t N  = std::max<size_t>(1, M.rows.size());
+        const float  ST = N > 1 ? std::min(0.07F, 0.55F / sc<float>(N - 1)) : 0.F; // stagger, in CONTENT
+        const float  K  = sc<float>(N - 1 - std::min(i, N - 1));                     // 0 = the row nearest the dock
+        const float  P  = std::clamp(CONTENT * (1.F + ST * sc<float>(N - 1)) - ST * K, 0.F, 1.F);
+        const float  E  = 1.F - (1.F - P) * (1.F - P) * (1.F - P); // cubic out
+        ROWA            = P * P * (3.F - 2.F * P);
+        ROWDY           = (1.F - E) * 9.F * SCALE;
+    };
+    const auto   clipTo  = [&](CBox c) { return c.empty() ? VIS : c.intersection(VIS); };
+    const auto   ADDTEX  = [&](CTexPassElement::SRenderData d) {
+        if (ROWDY != 0.F) {
+            d.box.y += ROWDY;
+            if (!d.clipBox.empty())
+                d.clipBox.y += ROWDY;
+        }
+        d.clipBox = clipTo(d.clipBox);
+        d.a *= ROWA;
+        if (!d.clipBox.empty() && d.a > 0.001F)
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+    };
+    const auto ADDRECT = [&](CRectPassElement::SRectData d) {
+        if (ROWDY != 0.F) {
+            d.box.y += ROWDY;
+            if (!d.clipBox.empty())
+                d.clipBox.y += ROWDY;
+        }
+        d.clipBox = clipTo(d.clipBox);
+        d.color   = d.color.modifyA(d.color.a * ROWA);
+        if (!d.clipBox.empty() && d.color.a > 0.001F)
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(d));
+    };
 
     // X13/X29/X86: menu frost -- shared chrome sample in overview, live on desktop.
-    frostedPlate(monitor, plate, sc<int>(std::round(MENU_RADIUS * SCALE)), 1.F);
+    frostedPlate(monitor, VIS, sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE, VISH / 2.0))), 1.F);
 
     const auto MOUSE = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
 
+    // What the pointer is on, by last frame's boxes (the ones it was drawn at).
+    {
+        int hr = -1, hi = -1;
+        for (size_t i = 0; i < M.rows.size(); ++i) {
+            const auto& R = M.rows[i];
+            if (R.kind == ERow::Separator || R.disabled || R.box.empty() || !R.box.containsPoint(MOUSE))
+                continue;
+            hr = sc<int>(i);
+            for (size_t b = 0; b < R.inlines.size(); ++b)
+                if (R.inlines[b].kind != ERow::Separator && !R.inlines[b].box.empty() && R.inlines[b].box.containsPoint(MOUSE))
+                    hi = sc<int>(b);
+            break;
+        }
+        if (hr != M.hoverRow || hi != M.hoverInl) {
+            M.prevRow  = M.hoverRow;
+            M.prevInl  = M.hoverInl;
+            M.hoverRow = hr;
+            M.hoverInl = hi;
+            M.hoverAt  = Time::steadyNow();
+        }
+    }
+    const float HT = [&] {
+        const float T = std::clamp(elapsedMs(M.hoverAt) / MENU_HOVER_MS, 0.F, 1.F);
+        return T * T * (3.F - 2.F * T);
+    }();
+    // The row's highlight (the row itself hovered, not one of its buttons).
+    const auto rowLit = [&](int i) {
+        return (M.hoverRow == i && M.hoverInl < 0 ? HT : 0.F) + (M.prevRow == i && M.prevInl < 0 ? 1.F - HT : 0.F);
+    };
+    // The row's lift: it stays lifted while the pointer is on its buttons.
+    const auto rowLift = [&](int i) {
+        const bool NOW = M.hoverRow == i, WAS = M.prevRow == i;
+        return NOW && WAS ? 1.F : NOW ? HT : WAS ? 1.F - HT : 0.F;
+    };
+    const auto buttonLit = [&](int i, int b) {
+        return (M.hoverRow == i && M.hoverInl == b ? HT : 0.F) + (M.prevRow == i && M.prevInl == b ? 1.F - HT : 0.F);
+    };
+
+    const auto chevron = [&](float atY, bool up, bool more) {
+        if (!more)
+            return;
+        const auto T = OverviewRender::text(up ? MenuGlyph::UP : MenuGlyph::DOWN, DIM_COLOR, std::max(1, sc<int>(std::round(FONTPX * 0.8F))), false, "JetBrainsMono Nerd Font", 0, 400);
+        if (!T || !T->ok())
+            return;
+        CTexPassElement::SRenderData c;
+        c.tex = T;
+        c.box = CBox{std::round(plate.x + (plate.width - sc<float>(T->m_size.x)) / 2.F), std::round(atY + (CHEV - sc<float>(T->m_size.y)) / 2.F), sc<float>(T->m_size.x),
+                     sc<float>(T->m_size.y)};
+        c.a   = 1.F;
+        ADDTEX(c);
+    };
+
     float y = sc<float>(plate.y);
-    for (size_t i = 0; i < g_menu->rows.size(); ++i) {
-        auto&       row = g_menu->rows[i];
+    for (size_t i = 0; i < M.rows.size(); ++i) {
+        auto&       row = M.rows[i];
         const auto& TEX = textures[i];
+        rowIn(i);
+
+        if (scrolling && sc<int>(i) == segFirst) {
+            chevron(y, true, M.scrollTop > 0);
+            y += CHEV;
+        }
+        if (scrolling && sc<int>(i) >= segFirst && sc<int>(i) <= segLast) {
+            const int K = sc<int>(i) - segFirst;
+            if (K < M.scrollTop || K >= M.scrollTop + visibleRows) {
+                row.box = {};
+                for (auto& B : row.inlines)
+                    B.box = {};
+                if (sc<int>(i) == segLast) {
+                    chevron(y, false, M.scrollTop + visibleRows < segLast - segFirst + 1);
+                    y += CHEV;
+                }
+                continue;
+            }
+        }
 
         if (!TEX.label) {
             row.box = CBox{plate.x, std::round(y), plate.width, std::round(MENU_SEP_H * SCALE)};
@@ -4258,7 +4490,7 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             sep.box   = CBox{std::round(plate.x + MENU_PAD_X * SCALE), std::round(y + MENU_SEP_H * SCALE / 2.F),
                              std::round(plate.width - 2.F * MENU_PAD_X * SCALE), sc<double>(std::max(1.F, std::round(SCALE)))};
             sep.color = CHyprColor{INK.r, INK.g, INK.b, 0.15F};
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(sep));
+            ADDRECT(sep);
 
             y += MENU_SEP_H * SCALE;
             continue;
@@ -4267,7 +4499,19 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
         const float ROWH = sc<float>(TEX.label->m_size.y) + 2.F * MENU_ROW_PAD_Y * SCALE;
         row.box          = CBox{plate.x, std::round(y), plate.width, std::round(ROWH)};
 
-        if (!row.disabled && row.box.containsPoint(MOUSE)) {
+        // The row's buttons, right to left from the plate's inner edge.
+        const SRow::SInline* hoveredInline = nullptr;
+        const float          BTN           = std::round(ROWH);
+        for (size_t b = 0; b < row.inlines.size(); ++b) {
+            auto& B = row.inlines[b];
+            B.box   = CBox{std::round(plate.x + plate.width - MENU_PAD_X * SCALE * 0.5F - BTN * sc<float>(row.inlines.size() - b)), std::round(y), BTN, std::round(ROWH)};
+            if (B.kind == ERow::Separator)
+                continue;
+            if (B.box.containsPoint(MOUSE))
+                hoveredInline = &B;
+        }
+
+        if (const float LIT = row.disabled ? 0.F : rowLit(sc<int>(i)); LIT > 0.01F) {
             // X56: the context menu's row highlight follows the theme too --
             // except on the destructive row, which lights in its own colour so
             // the pointer landing on it is noticed.
@@ -4281,7 +4525,7 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             // where it meets the next row.
             const int  RADIUS = sc<int>(std::round(MENU_RADIUS * SCALE));
             const bool FIRST  = i == 0;
-            const bool LAST   = i + 1 == g_menu->rows.size();
+            const bool LAST   = i + 1 == M.rows.size();
             CBox       shape  = row.box;
             if (FIRST && !LAST)
                 shape.height += RADIUS; // stretch down: only the top is rounded
@@ -4293,14 +4537,17 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             CRectPassElement::SRectData fill;
             fill.box           = shape;
             fill.clipBox       = row.box;
-            fill.color         = ROWACCENT.modifyA(row.danger ? 0.18F : 0.26F);
+            fill.color         = ROWACCENT.modifyA((row.danger ? 0.18F : 0.26F) * LIT);
             fill.round         = FIRST || LAST ? RADIUS : 0;
             fill.roundingPower = 2.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
+            ADDRECT(fill);
         }
 
-        // A sub-row starts where its parent's label does.
-        const float TEXTX = std::round(plate.x + MENU_PAD_X * SCALE + (row.sub ? GLYPHCOLW : 0.F));
+        // A sub-row starts where its parent's label does. A hovered row's glyph
+        // and label lift: a few px to the right, and a touch larger.
+        const float LIFT  = rowLift(sc<int>(i));
+        const float GROW  = 1.F + 0.035F * LIFT;
+        const float TEXTX = std::round(plate.x + MENU_PAD_X * SCALE + (row.sub ? GLYPHCOLW : 0.F) + 4.F * SCALE * LIFT);
         const float TEXTY = std::round(y + MENU_ROW_PAD_Y * SCALE);
         const float LH    = sc<float>(TEX.label->m_size.y);
 
@@ -4308,28 +4555,59 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
             CTexPassElement::SRenderData g;
             g.tex = TEX.glyph;
             // Centred in the column and on the label's line.
-            g.box = CBox{std::round(TEXTX + (GLYPHCOLW - sc<float>(TEX.glyph->m_size.x)) / 2.F - GLYPHCOLW * 0.15F),
-                         std::round(TEXTY + (LH - sc<float>(TEX.glyph->m_size.y)) / 2.F), sc<float>(TEX.glyph->m_size.x), sc<float>(TEX.glyph->m_size.y)};
+            const float GW = sc<float>(TEX.glyph->m_size.x) * GROW, GH = sc<float>(TEX.glyph->m_size.y) * GROW;
+            g.box = CBox{std::round(TEXTX + (GLYPHCOLW - GW) / 2.F - GLYPHCOLW * 0.15F), std::round(TEXTY + (LH - GH) / 2.F), GW, GH};
             g.a   = 1.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(g));
+            ADDTEX(g);
         }
 
         CTexPassElement::SRenderData text;
         text.tex = TEX.label;
-        text.box = CBox{TEXTX + GLYPHCOLW, TEXTY, sc<float>(TEX.label->m_size.x), LH};
+        text.box = CBox{TEXTX + GLYPHCOLW, TEXTY - (LH * GROW - LH) / 2.F, sc<float>(TEX.label->m_size.x) * GROW, LH * GROW};
         text.a   = 1.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(text));
+        ADDTEX(text);
 
-        if (TEX.hint && TEX.hint->ok()) {
+        for (size_t b = 0; b < row.inlines.size(); ++b) {
+            const auto& B = row.inlines[b];
+            const auto  G = b < TEX.inlineGlyphs.size() ? TEX.inlineGlyphs[b] : SP<Render::ITexture>{};
+            if (B.kind == ERow::Separator || !G || !G->ok())
+                continue;
+            // A hovered button's chip pops in from smaller, and its glyph grows.
+            const float BL = buttonLit(sc<int>(i), sc<int>(b));
+            if (BL > 0.01F) {
+                CRectPassElement::SRectData fill;
+                const double INSET = 3.F * SCALE + (1.F - BL) * 5.F * SCALE;
+                fill.box           = CBox{B.box.x + INSET, B.box.y + INSET, B.box.width - 2 * INSET, B.box.height - 2 * INSET};
+                fill.color         = ScrollOverview::Config::highlightColor().modifyA(0.30F * BL);
+                fill.round         = sc<int>(std::round(6.F * SCALE));
+                fill.roundingPower = 2.F;
+                ADDRECT(fill);
+            }
+            CTexPassElement::SRenderData g;
+            g.tex = G;
+            const float BG = 1.F + 0.15F * BL, GW = sc<float>(G->m_size.x) * BG, GH = sc<float>(G->m_size.y) * BG;
+            g.box = CBox{std::round(B.box.x + (B.box.width - GW) / 2.F), std::round(B.box.y + (B.box.height - GH) / 2.F), GW, GH};
+            g.a   = 1.F;
+            ADDTEX(g);
+        }
+        // A hovered button names itself where the hint was.
+        const auto HINTTEX = hoveredInline ? OverviewRender::text(hoveredInline->label, LABEL_COLOR, FONTPX, false, "", 0, 400) : TEX.hint;
+        const float HINTRIGHT = row.inlines.empty() ? sc<float>(plate.x + plate.width - MENU_PAD_X * SCALE) :
+                                                      sc<float>(row.inlines.front().box.x) - HINTGAP * 0.5F;
+        if (HINTTEX && HINTTEX->ok()) {
             CTexPassElement::SRenderData h;
-            h.tex = TEX.hint;
-            h.box = CBox{std::round(plate.x + plate.width - MENU_PAD_X * SCALE - sc<float>(TEX.hint->m_size.x)), std::round(TEXTY + (LH - sc<float>(TEX.hint->m_size.y)) / 2.F),
-                         sc<float>(TEX.hint->m_size.x), sc<float>(TEX.hint->m_size.y)};
+            h.tex = HINTTEX;
+            h.box = CBox{std::round(HINTRIGHT - sc<float>(HINTTEX->m_size.x)), std::round(TEXTY + (LH - sc<float>(HINTTEX->m_size.y)) / 2.F),
+                         sc<float>(HINTTEX->m_size.x), sc<float>(HINTTEX->m_size.y)};
             h.a   = 1.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(h));
+            ADDTEX(h);
         }
 
         y += ROWH;
+        if (scrolling && sc<int>(i) == segLast) {
+            chevron(y, false, M.scrollTop + visibleRows < segLast - segFirst + 1);
+            y += CHEV;
+        }
     }
 
     // The pill's outline on the menu too (user, 2026-09-29): theme accent at
@@ -4338,15 +4616,27 @@ void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
     {
         const int                       BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
         CBorderPassElement::SBorderData border;
-        border.box = plate.copy().round();
+        border.box = VIS;
         border.grad1.reset(ScrollOverview::Config::highlightColor().modifyA(1.F));
         border.a             = 1.F;
         border.borderSize    = BORDERSIZE;
-        border.round         = sc<int>(std::round(MENU_RADIUS * SCALE));
+        border.round         = sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE, VISH / 2.0)));
         border.roundingPower = 2.F;
         if (Stacks::drawableBox(border.box))
             g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
     }
+}
+
+void renderMenu(PHLMONITOR monitor, const SLayout& layout) {
+    if (g_menuGhost) {
+        const float P = menuGhostP(*g_menuGhost);
+        if (P <= 0.001F)
+            g_menuGhost.reset();
+        else
+            renderMenuOne(monitor, layout, g_menuGhost->menu, P);
+    }
+    if (g_menu)
+        renderMenuOne(monitor, layout, *g_menu, menuOpenP(*g_menu));
 }
 
 } // namespace
@@ -4603,10 +4893,31 @@ bool uiContains(PHLMONITOR monitor, const Vector2D& point) {
     return occupiesPointer(monitor, point);
 }
 
+bool menuScroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
+    if (!menuContains(monitor, point))
+        return false;
+    // One row a tick; renderMenu clamps it to the list. A touchpad sends a
+    // stream of small events: a short dead time keeps it a row at a time.
+    static Time::steady_tp s_last{};
+    if (elapsedMs(s_last) >= 35.F) {
+        s_last = Time::steadyNow();
+        g_menu->scrollTop += up ? -1 : 1;
+        if (g_menu->scrollTop < 0)
+            g_menu->scrollTop = 0;
+        for (const auto& M : State::monitorState()->monitors())
+            if (M && M->m_id == g_menu->monitor)
+                g_pHyprRenderer->damageMonitor(M);
+    }
+    return true;
+}
+
 bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
     // The stack pane floats above everything else of the dock's (2026-09-24:
     // its wheel ticks were going to the window under it).
     if (Stacks::scroll(monitor, point, up))
+        return true;
+    // The context menu's window list (it scrolls when it would not fit).
+    if (menuScroll(monitor, point, up))
         return true;
     if (!pillContains(monitor, point))
         return occupiesPointer(monitor, point); // hover plate / menu: swallow, do not leak
@@ -5337,7 +5648,9 @@ bool openMenu(PHLMONITOR monitor, const Vector2D& point) {
     if (ITEM == LAYOUT.items.end())
         return false;
 
+    g_menuGhost.reset();
     g_menu = SMenu{.monitor = monitor->m_id, .item = *ITEM, .anchor = ITEM->iconBox, .box = {}, .rows = buildRows(*ITEM, monitor)};
+    g_menu->openedAt = Time::steadyNow();
     return true;
 }
 
@@ -5346,6 +5659,10 @@ bool menuOpen() {
 }
 
 void closeMenu() {
+    if (g_menu && !g_menu->box.empty() && menuAnimOn() && !g_menu->editing) {
+        const float P = menuOpenP(*g_menu);
+        g_menuGhost   = SMenuGhost{.menu = std::move(*g_menu), .closedAt = Time::steadyNow(), .from = std::min(P, 1.F)};
+    }
     g_menu.reset();
 }
 
@@ -5443,6 +5760,19 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
     const auto ROW = std::ranges::find_if(g_menu->rows, [&](const SRow& row) { return row.kind != ERow::Separator && !row.box.empty() && row.box.containsPoint(point); });
     if (ROW == g_menu->rows.end())
         return false; // the plate, between rows: swallowed by the caller, menu stays up
+
+    // A window row's button: the move it names, for that row's window.
+    for (const auto& B : ROW->inlines) {
+        if (B.box.empty() || !B.box.containsPoint(point))
+            continue;
+        if (B.kind == ERow::Separator)
+            return true; // an empty slot: not a button, and not the row either
+        const auto ITEM = g_menu->item;
+        SRow       PICK{.kind = B.kind, .label = B.label, .window = ROW->window};
+        closeMenu();
+        activateRow(monitor, ITEM, PICK);
+        return true;
+    }
 
     // Get Info / Back: the menu stays up and changes what it shows.
     // Dock stacks A: Empty Folder asks first, in place; Rename becomes a field.
@@ -5708,6 +6038,13 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
     // X34. The hotkey overlay fades.
     if (overlayUp())
         return "hotkey-overlay";
+
+    if (g_menu && g_menu->monitor == monitor->m_id && elapsedMs(g_menu->hoverAt) < MENU_HOVER_MS + 20.F)
+        return "menu-hover";
+    if (g_menu && g_menu->monitor == monitor->m_id && menuOpening(*g_menu))
+        return "menu-expand";
+    if (g_menuGhost && g_menuGhost->menu.monitor == monitor->m_id)
+        return "menu-collapse";
 
     // The press squish, and above all its spring-back, which runs after the
     // button came up with no pointer motion left to repaint it.
@@ -6845,7 +7182,14 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // windows, and the preview says so rather than leaving the user to
         // wonder why clicking it slides a workspace in. Suppressed on the
         // scratchpad's own panel, where every cell would carry the same label.
-        if (g_hover.panel->scratchpadName.empty() && Scratchpad::holdsWindow(WINDOW)) {
+        //
+        // A window ASKING FOR ATTENTION wears the same dimming, labelled
+        // "Needs attention" in yellow (user, 2026-11-04): the dock icon jumps
+        // for the app, and an app with several windows (Ghostty) leaves you
+        // guessing which one it is. Urgency wins over the scratchpad label.
+        const bool URGENT = WINDOW->m_isUrgent;
+        const bool PARKED = g_hover.panel->scratchpadName.empty() && Scratchpad::holdsWindow(WINDOW);
+        if (URGENT || PARKED) {
             const int DIMROUND = INNER;
 
             CRectPassElement::SRectData dim;
@@ -6858,8 +7202,16 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             // Deliberately NOT a theme colour, and that is the whole point of
             // the label: it is read over a DARKENED thumbnail, and a dark
             // theme's own foreground is the one colour that disappears there.
-            if (const auto TEX = OverviewRender::text("in scratchpad", CHyprColor{1.F, 1.F, 1.F, 0.96F}, std::max(1, sc<int>(std::round(PANEL_PARKED_PT * SCALE))),
-                                                      false, "", sc<int>(cell.width));
+            // Wrapped, centred line by line (user, 2026-11-04): a narrow cell
+            // breaks "Needs attention" onto two lines instead of cutting it to
+            // "Needs attenti...". The ellipsis is left for a cell too small
+            // even for that.
+            const int LABELPX = std::max(1, sc<int>(std::round(PANEL_PARKED_PT * SCALE)));
+            const int LABELPAD = sc<int>(std::round(8.F * SCALE));
+            if (const auto TEX = OverviewRender::textWrapped(URGENT ? "Needs attention" : "in scratchpad",
+                                                             URGENT ? CHyprColor{1.F, 0.86F, 0.2F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 0.96F}, LABELPX,
+                                                             std::max(8, sc<int>(cell.width) - 2 * LABELPAD), std::max(8, sc<int>(cell.height) - 2 * LABELPAD), false, "",
+                                                             URGENT ? 700 : 400, true);
                 TEX && TEX->ok()) {
                 CTexPassElement::SRenderData label;
                 label.tex = TEX;
@@ -7236,10 +7588,21 @@ bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
     // Always go to the window on its own desktop. A restore-flight from here
     // would pull it onto the current desktop from the dock (below the screen);
     // switching first is what "click the preview of that window" means.
-    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+    // ...and the cursor goes to it, CENTRED (user, 2026-11-03: "not only
+    // switch me to the desktop ... and focus on that window but also center my
+    // cursor on it"). On a canvas desktop the focus starts a pan to bring it
+    // into view; the cursor, put on the window first, rides that pan.
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW) {
+        overviewCenterCursorOnHandoff(); // the overview's close does the warp, once it has handed focus over
         OVERVIEW->selectAndClose(WINDOW);
-    else
+    } else {
         activateWindow(WINDOW);
+        if (Desktop::View::validMapped(WINDOW) && Desktop::focusState()->window() == WINDOW) {
+            const CBox BOX{WINDOW->m_realPosition->goal(), WINDOW->m_realSize->goal()};
+            if (BOX.width >= 1 && BOX.height >= 1)
+                Pointer::pointerController()->warpTo(BOX.middle(), true);
+        }
+    }
 
     return true;
 }

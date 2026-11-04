@@ -126,7 +126,9 @@ struct COverviewFrostCache {
     bool     cardWallpaperDirty  = true;
     bool     overviewStateValid  = false;
     float    lastOverviewScale   = 1.F;
-    int      lastBackdropWallpaperMode = -1;
+    int      lastBackdropWallpaperMode = -1; // wallpaper mode * 8 + plugin:hyprdrive:backdrop
+    Time::steady_tp lastBackdropBuild{};     // LIVE's 30-a-second cap
+    uint64_t        lastBackdropSeq = 0;     // the wallpaper commits LIVE last saw (g_wallpaperSeq)
     Vector2D lastOverviewViewOffset    = Vector2D{};
 
     // Y17. Signature of everything the two wallpaper caches read that a SURFACE
@@ -255,7 +257,7 @@ class CScrollOverview : public IOverview {
     void   redrawAll(bool forcelowres = false);
     void   renderListShadow();
     void   onWorkspaceChange();
-    void   renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now);
+    void   renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now, bool includeBottom = false);
     void   renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha = 1.F);
     void   updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now);
     void   updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp& now);
@@ -972,3 +974,6 @@ namespace ScrollOverview {
 
 // Leave the overview's submap if no overview holds it (scrollOverview.cpp).
 void healStuckOverviewSubmap();
+
+// The search pill pressed / let go (scrollOverview.cpp, THE PILL PLAYS).
+void searchPillPress(bool down);
