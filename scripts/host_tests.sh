@@ -50,6 +50,7 @@ run strip_layout_test scripts/strip_layout_test.cpp
 run tool_search_test scripts/tool_search_test.cpp
 run debug_paths_test scripts/debug_paths_test.cpp
 run stack_model_test scripts/stack_model_test.cpp StackModel.cpp
+run submap_borrow_test scripts/submap_borrow_test.cpp
 run mount_sort_test scripts/mount_sort_test.cpp
 run gvfs_mount_test scripts/gvfs_mount_test.cpp
 run mosaic_pack_test scripts/mosaic_pack_test.cpp

@@ -62,6 +62,11 @@ BACKDROPS = [
     {"value": "live", "label": "Live"},
     {"value": "auto", "label": "Auto"},
 ]
+FULLSCREEN_DESKTOPS = [
+    {"value": "next", "label": "Its own desktop"},
+    {"value": "free", "label": "The next free desktop"},
+    {"value": "stay", "label": "Stay put"},
+]
 HOT_CORNERS = [
     {"value": "top-left", "label": "Top left"},
     {"value": "top-right", "label": "Top right"},
@@ -113,6 +118,9 @@ def _k(key, kind, group, default, **extra):
 # layout live in the panel (Schema.js); this is what the back end needs to
 # coerce, persist and reset.
 KEY_META = [
+    # General
+    _k(PLUGIN + "general:file_manager", "str", "general", ""),  # options: file_manager_options(), per dump
+    _k(PLUGIN + "general:fullscreen_desktop", "enum", "general", "next", options=FULLSCREEN_DESKTOPS),
     # Overview
     _k(PLUGIN + "tap_super", "bool", "overview", True),
     _k(PLUGIN + "mission_control", "bool", "overview", True),
@@ -140,6 +148,7 @@ KEY_META = [
     _k(PLUGIN + "dock:isolate_workspaces", "bool", "dock", False),
     _k(PLUGIN + "dock:show_favorites", "bool", "dock", True),
     _k(PLUGIN + "dock:show_apps_button", "bool", "dock", True),
+    _k(PLUGIN + "dock:folders_anywhere", "bool", "dock", False),
     _k(PLUGIN + "dock:show_trash", "bool", "dock", True),
     _k(PLUGIN + "dock:show_mounts", "bool", "dock", False),
     _k(PLUGIN + "dock:show_mounts_network", "bool", "dock", True),
@@ -203,6 +212,7 @@ KEY_META = [
     _k(PLUGIN + "mosaic:enabled", "bool", "mosaic", False),
     _k(PLUGIN + "mosaic:default", "bool", "mosaic", False),
     _k(PLUGIN + "mosaic:spawn_at_cursor", "bool", "mosaic", True),
+    _k(PLUGIN + "mosaic:quiet_new_windows", "bool", "mosaic", True),
     _k(PLUGIN + "mosaic:infinite_canvas", "bool", "mosaic", False),
     _k(PLUGIN + "mosaic:canvas_directions", "enum", "mosaic", "all", options=CANVAS_DIRECTIONS),
     _k(PLUGIN + "mosaic:zoom_labels", "enum", "mosaic", "hover", options=ZOOM_LABELS),
@@ -1419,6 +1429,68 @@ def monitor_options(current):
     return opts
 
 
+def file_manager_options(current):
+    """general:file_manager's choices, made when the panel loads: "System
+    default" (naming the app xdg-mime has for folders), then every installed
+    file manager -- a desktop entry in the FileManager category that opens
+    inode/directory and is not hidden (editors such as Kate also open folders,
+    and are not offered unless they are the default). A chosen one that is
+    gone stays listed so the choice still shows."""
+    def entry_name(path):
+        name, hidden, mimes, cats = "", False, "", ""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                in_main = False
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("["):
+                        in_main = line == "[Desktop Entry]"
+                        continue
+                    if not in_main or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    if k == "Name" and not name:
+                        name = v
+                    elif k == "MimeType":
+                        mimes = v
+                    elif k == "Categories":
+                        cats = v
+                    elif k in ("NoDisplay", "Hidden") and v.strip().lower() == "true":
+                        hidden = True
+        except OSError:
+            return None, False, False
+        opens = not hidden and "inode/directory" in mimes.split(";")
+        return name, opens, opens and "FileManager" in cats.split(";")
+
+    dirs = [os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local/share")]
+    dirs += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
+    dirs += [os.path.expanduser("~/.local/share/flatpak/exports/share"), "/var/lib/flatpak/exports/share"]
+    found = {}
+    for d in dirs:
+        appdir = os.path.join(d, "applications")
+        try:
+            names = sorted(os.listdir(appdir))
+        except OSError:
+            continue
+        for fn in names:
+            if not fn.endswith(".desktop") or fn in found:
+                continue
+            name, opens, fm = entry_name(os.path.join(appdir, fn))
+            found[fn] = (name if opens and name else None, fm)
+    default = ""
+    try:
+        default = subprocess.run(["xdg-mime", "query", "default", "inode/directory"], capture_output=True, text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    apps = sorted(((fn, n) for fn, (n, fm) in found.items() if n and (fm or fn in (default, current))), key=lambda t: t[1].lower())
+    dname = (found.get(default) or ("", False))[0] or ""
+    opts = [{"value": "", "label": "System default" + (" (%s)" % dname if dname else "")}]
+    opts += [{"value": fn, "label": n} for fn, n in apps]
+    if current and current not in [o["value"] for o in opts]:
+        opts.append({"value": current, "label": current.replace(".desktop", "") + " (not installed)"})
+    return opts
+
+
 def dump():
     store = load_store()
     live = live_keys()
@@ -1427,6 +1499,10 @@ def dump():
     if live.get(mon_key) == "[[EMPTY]]":
         live[mon_key] = ""
     meta = [dict(m, options=monitor_options(live.get(mon_key, ""))) if m["key"] == mon_key else m for m in KEY_META]
+    fm_key = PLUGIN + "general:file_manager"
+    if live.get(fm_key) == "[[EMPTY]]":
+        live[fm_key] = ""
+    meta = [dict(m, options=file_manager_options(live.get(fm_key, ""))) if m["key"] == fm_key else m for m in meta]
     gestures = store.get("gestures")
     if not gestures:
         gestures = [dict(g) for g in DEFAULT_GESTURES]

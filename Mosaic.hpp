@@ -39,6 +39,8 @@ namespace ScrollOverview::Mosaic {
     // pointer takes the keyboard focus (the bar keeps the pointer), and is
     // brought into view as any hovered canvas window is.
     void focusUnderBar();
+    // Is `ws` laid out by Mosaic (Intent.hpp asks as a window maps)?
+    bool isMosaicWorkspace(const PHLWORKSPACE& ws);
     // Raw pointer motion: `delta` asked, `moved` what the pointer really moved
     // (less at a screen's edge). A resize reaches past the edge by the rest.
     void onPointerDelta(const Vector2D& delta, const Vector2D& moved);

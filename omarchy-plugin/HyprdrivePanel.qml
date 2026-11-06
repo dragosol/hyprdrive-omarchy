@@ -453,6 +453,7 @@ Item {
   readonly property string iconsPath: ctlPath === "" ? "" : ctlPath.replace(/hdpanel$/, "hdicons")
   property var iconApps: []
   property var iconTrash: []
+  property var iconFolders: []
   property var iconSettings: ({ dirs: [], selfhst: false })
   property string iconSel: ""
   property string iconQuery: ""
@@ -462,6 +463,7 @@ Item {
   readonly property var iconApp: {
     for (var i = 0; i < iconApps.length; i++) if (iconApps[i].id === iconSel) return iconApps[i]
     for (var j = 0; j < iconTrash.length; j++) if (iconTrash[j].id === iconSel) return iconTrash[j]
+    for (var f = 0; f < iconFolders.length; f++) if (iconFolders[f].id === iconSel) return iconFolders[f]
     return null
   }
   function iconsRun(args, relist) {
@@ -611,6 +613,7 @@ Item {
         else if (d && d.apps) {
           root.iconApps = d.apps
           root.iconTrash = d.trash || []
+          root.iconFolders = d.folders || []
           root.iconSettings = d.settings || root.iconSettings
           if (root.iconSel === "" && d.apps.length) root.iconSel = d.apps[0].id
         } else if (d && d.settings) root.iconSettings = d.settings
@@ -1419,14 +1422,33 @@ Item {
     }
   }
 
+  // A `dropdown` row (Schema.js) is a list, not segments: one that can be
+  // long or name things (user, 2026-11-05: the file manager "as a dropdown").
   Component {
     id: choiceControl
-    Segmented {
+    Item {
+      id: choiceItem
       property var row: parent ? parent.row : ({})
-      options: root.metaOptions[row.key] || []
-      value: String(root.k(row.key))
-      live: parent ? parent.live : true
-      onPicked: function(v) { root.setKey(row.key, v) }
+      property bool live: parent ? parent.live : true
+      implicitWidth: row.dropdown ? choiceDrop.implicitWidth : choiceSeg.implicitWidth
+      implicitHeight: row.dropdown ? choiceDrop.implicitHeight : choiceSeg.implicitHeight
+      Segmented {
+        id: choiceSeg
+        visible: !choiceItem.row.dropdown
+        options: choiceItem.row.dropdown ? [] : (root.metaOptions[choiceItem.row.key] || [])
+        value: String(root.k(choiceItem.row.key))
+        live: choiceItem.live
+        onPicked: function(v) { root.setKey(choiceItem.row.key, v) }
+      }
+      DropButton {
+        id: choiceDrop
+        visible: !!choiceItem.row.dropdown
+        implicitWidth: Style.space(220)
+        options: choiceItem.row.dropdown ? (root.metaOptions[choiceItem.row.key] || []) : []
+        value: String(root.k(choiceItem.row.key))
+        live: choiceItem.live
+        onPicked: function(v) { root.setKey(choiceItem.row.key, v) }
+      }
     }
   }
 
@@ -1810,7 +1832,7 @@ Item {
         var a = root.iconApp
         if (!a || seeded === a.id) return
         seeded = a.id
-        pickField.text = a.trash ? "trash" : String(a.name || "").toLowerCase()
+        pickField.text = a.trash ? "trash" : a.folder ? "folder" : String(a.name || "").toLowerCase()
         root.iconsSearch(pickField.text)
       }
       Connections {
@@ -1818,6 +1840,7 @@ Item {
         function onIconSelChanged() { ie.seed() }
         function onIconAppsChanged() { ie.seed() }
         function onIconTrashChanged() { ie.seed() }
+        function onIconFoldersChanged() { ie.seed() }
       }
 
       Text {
@@ -1858,6 +1881,53 @@ Item {
             MouseArea {
               id: appArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
               onClicked: root.iconSel = modelData.id
+            }
+          }
+        }
+      }
+
+      // The dock's folders (user, 2026-11-05: "change the icon for that
+      // folder"): a custom icon is the folder's face on the dock, in place of
+      // the folder icon or the pile of its newest files.
+      Column {
+        visible: root.iconFolders.length > 0
+        width: parent.width
+        spacing: Style.space(6)
+        Text {
+          textFormat: Text.PlainText
+          text: "Folders -- a custom icon is what the dock shows for the folder, as a folder or as a stack."
+          width: parent.width; wrapMode: Text.WordWrap
+          color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+        }
+        Flow {
+          width: parent.width
+          spacing: Style.space(8)
+          Repeater {
+            model: root.iconFolders
+            Rectangle {
+              required property var modelData
+              readonly property bool sel: modelData.id === root.iconSel
+              width: Style.space(84); height: Style.space(86)
+              radius: Style.space(12)
+              color: sel ? root.tint(root.accent, 0.18) : (folderArea.containsMouse ? root.tint(root.fg, 0.07) : root.raised)
+              border.width: 1
+              border.color: sel ? root.accent : root.hairline
+              Behavior on color { ColorAnimation { duration: root.quick } }
+              IconPic { anchors.horizontalCenter: parent.horizontalCenter; y: Style.space(10); src: modelData.shown }
+              Rectangle {
+                visible: modelData.override !== ""
+                width: Style.space(8); height: width; radius: width / 2; color: root.accent
+                anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Style.space(7)
+              }
+              Text {
+                anchors.bottom: parent.bottom; anchors.bottomMargin: Style.space(9)
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Style.space(10); horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight; textFormat: Text.PlainText
+                text: modelData.name; color: parent.sel ? root.fg : root.dim
+                font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              }
+              MouseArea { id: folderArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.iconSel = modelData.id }
             }
           }
         }
@@ -1934,7 +2004,7 @@ Item {
               Text { textFormat: Text.PlainText; text: root.iconApp ? root.iconApp.name : ""; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.body }
               Text {
                 textFormat: Text.PlainText
-                text: root.iconApp && root.iconApp.override !== "" ? "Custom icon" : (root.iconApp && root.iconApp.trash ? "Hyprdrive's Trash" : "Its own icon")
+                text: root.iconApp && root.iconApp.override !== "" ? "Custom icon" : (root.iconApp && root.iconApp.trash ? "Hyprdrive's Trash" : root.iconApp && root.iconApp.folder ? "The folder's own icon" : "Its own icon")
                 color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
               }
             }

@@ -770,6 +770,36 @@ namespace ScrollOverview::DesktopStrip {
         g_pHyprRenderer->damageMonitor(mon);
     }
 
+    bool glideTo(const PHLMONITOR& mon, int to) {
+        if (!mon || !mon->m_activeWorkspace || !g_row || to < 1)
+            return false;
+        if (g.on && g.mon.lock() != mon)
+            land();
+        const int CURRENT = sc<int>(mon->m_activeWorkspace->m_id);
+        if (!g.on) {
+            if (!available(mon) || CURRENT < 1)
+                return false;
+            if (!start(mon, withId(withId(g_row(mon, CURRENT), CURRENT), to), CURRENT, std::nullopt))
+                return false;
+        } else {
+            advance(Clock::now());
+            if (indexOf(g.row, to) < 0) {
+                const int    I    = std::clamp(sc<int>(std::floor(g.spring.pos)), 0, sc<int>(g.row.size()) - 1);
+                const int    ID   = g.row[I];
+                const double FRAC = g.spring.pos - I;
+                g.row             = withId(std::move(g.row), to);
+                g.spring.pos      = indexOf(g.row, ID) + FRAC;
+            }
+        }
+        ++g_takes;
+        g.drive.reset(sc<int>(g.row.size()), indexOf(g.row, to));
+        go(g.drive.target);
+        apply();
+        g_pHyprRenderer->damageMonitor(mon);
+        arm();
+        return true;
+    }
+
     bool driving(const PHLMONITOR& mon) {
         return g.on && mon && g.mon.lock() == mon;
     }

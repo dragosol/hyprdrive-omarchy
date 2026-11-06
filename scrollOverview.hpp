@@ -185,6 +185,42 @@ namespace ScrollOverview::DesktopTape {
 
 class CScrollOverview : public IOverview {
   public:
+    // Desktops were renumbered in place (DesktopOrder.hpp): rebuild.
+    void desktopsRenumbered() {
+        onWorkspaceLifecycle({});
+    }
+
+    // MOVING A DESKTOP ALONG THE STRIP (user, 2026-11-05/06: "when I hold down
+    // super and mouseover desktop I want it to highlight the one I mouseover,
+    // and grow it a little, with the tooltip and allow me to move it around and
+    // drop it between desktops. It should be smooth and organic looking").
+    // Super over a desktop with windows lifts it (tint, ring, a little bigger,
+    // "Move this desktop"); pressed, it follows the pointer and the others glide
+    // aside to open its place; dropped, the desktops are renumbered in place
+    // (DesktopOrder::renumber) and every cell and card glides from where it was
+    // drawn to its new place -- the reorder transition.
+    // Desktop `from` takes place `to` (indices into the row); animated.
+    bool moveDesktop(size_t from, size_t to);
+    // The desktop shown moves `dir` places (Super+Shift+Left/Right).
+    bool moveShownDesktop(int dir);
+    void superChanged();
+    struct SDeskDrag {
+        bool                                   pressed = false, live = false;
+        PHLWORKSPACEREF                        ws;
+        size_t                                 from = SIZE_MAX, to = SIZE_MAX;
+        Vector2D                               start, grab; // grab: pointer minus the cell's corner
+        float                                  x = 0.F;     // the lifted cell's drawn x (eased toward the pointer)
+        bool                                   placed = false;
+        std::unordered_map<WORKSPACEID, float> slide;       // others' eased x offsets
+        std::unordered_map<WORKSPACEID, CBox>  drawn;       // where each cell was drawn (logical, unscaled)
+    } deskDrag;
+    bool                                  deskDragButton(bool pressed);
+    bool                                  deskDragMove();
+    bool                                  deskMovable(size_t idx) const;
+    Time::steady_tp                       deskAnimAt{};
+    std::unordered_map<WORKSPACEID, CBox> stripDropBoxes; // the next reorder transition starts its cells here
+    bool                                  stripSettle    = false; // ...even with the order unchanged (dropped home)
+    int                                   stripCellEdges = -1;    // renderStripCell: -1 from its index, else bit0 left, bit1 right
     // The recorded frame cadence for an output, kept across closes, for
     // `hyprdrive:debug frames`. See the note in scrollOverview.cpp.
     static std::string frameCadence(MONITORID monitor);
@@ -288,6 +324,17 @@ class CScrollOverview : public IOverview {
     float        workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const;
     float        workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const;
     CBox         stripCellLogicalBox(size_t workspaceIdx) const;
+    std::vector<size_t> cardOrder() const;
+    // DEPTH (user, 2026-11-06): a card passing BEHIND another during a
+    // transition is drawn a little smaller -- further away -- and grows back
+    // as it comes out from under it. 1 = at rest.
+    float  cardDepth(size_t workspaceIdx) const;
+    // A desktop card's body -- shadow, wallpaper, outline -- in `box`. The
+    // cards and a leaving desktop's ghost are the same thing.
+    void   renderCardBody(PHLMONITOR monitor, const CBox& box, float renderScale, int wallpaperMode, float alpha, const Time::steady_tp& now, float focus);
+    // The card the others pass behind in a reorder (the desktop in view), drawn
+    // last and whole; SIZE_MAX when none.
+    size_t depthAnchor() const;
     CBox         stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, float renderScale) const;
     PHLWORKSPACE workspaceAtStripPoint(const Vector2D& point, size_t* hoveredWorkspaceIdx = nullptr) const;
     // V3. IOverviewGeometry's name for the line above -- the dock reaches it
@@ -621,6 +668,32 @@ class CScrollOverview : public IOverview {
         std::unordered_map<WORKSPACEID, float> oldRelativeOffsets;
         std::unordered_map<WORKSPACEID, float> newRelativeOffsets;
         float                            transitionOldRelativeOffset = 0.F;
+        // KEYED BY THE DESKTOP, NOT ITS NUMBER (FullscreenDesktop.hpp: a
+        // fullscreen app's desktop is inserted by renumbering the ones after it
+        // in place, and keyed by number every one of them looked new, or a
+        // neighbour inherited a removed desktop's place). The maps above and
+        // transitionWorkspaceID hold workspaceKey() values.
+        // A desktop made right next to the one shown slides out from under it
+        // (`bornUnder`, drawn beneath it); one removed slides back under the
+        // desktop shown next (`ghostTo`), fading.
+        WORKSPACEID                      bornUnder  = WORKSPACE_INVALID;
+        float                            ghostTo    = 0.F;
+        WORKSPACEID                      ghostCellTo = WORKSPACE_INVALID; // the desktop whose strip cell a removed one shrinks into
+        bool                             reorder     = false; // the same desktops in a new order (one moved along the strip)
+        std::unordered_map<WORKSPACEID, CBox> oldStripBoxes; // the strip's cells where they were (logical)
+        // Each tile where it was last drawn and on which desktop: one that is
+        // now on ANOTHER desktop (a fullscreen app going to its own and back)
+        // travels from there into its new place as the transition runs.
+        struct STileFrom {
+            CBox        box;
+            WORKSPACEID card = WORKSPACE_INVALID; // workspaceKey of the card it was drawn on
+            CBox        cardBox;                  // that card, as drawn then
+        };
+        std::unordered_map<const Desktop::View::CWindow*, STileFrom> tileFrom;
+        // A desktop going away (removed, or a fullscreen app's emptied one)
+        // slides back under the desktop shown next as a GHOST -- only then; a
+        // reorder has none (drawn in one, it put a stray card mid-screen).
+        bool ghost = false;
     };
 
     // A TILE WHOSE WINDOW IS CLOSING, kept alive long enough to animate out.
@@ -654,6 +727,7 @@ class CScrollOverview : public IOverview {
     struct SLastTile {
         CBox   box;
         size_t cardIdx = 0; // which workspace card's pass drew it
+        CBox   card;        // that card, as drawn
     };
     std::unordered_map<const Desktop::View::CWindow*, SLastTile> lastTileBoxes;
 

@@ -218,3 +218,11 @@ void                              resetSearchSession();
 // A dock preview click (Dock.cpp panelClick): the overview's close hands the
 // cursor to the picked window CENTRED, even when it was over the window already.
 void overviewCenterCursorOnHandoff();
+// Desktops were renumbered in place (DesktopOrder.hpp): every open overview
+// rebuilds its cards and strip.
+void overviewDesktopsRenumbered();
+// Super went down or up: the strip's "move this desktop" lift follows it.
+void overviewSuperChanged();
+// Super+Shift+Left/Right in an open overview: the desktop shown moves a place.
+// True when an overview is open on the focused monitor (the key is its).
+bool overviewMoveShownDesktop(int dir);

@@ -53,10 +53,24 @@ namespace ScrollOverview::Locations {
     // it already has for a location rather than opening a second one, so this is
     // also the reference's "focus the window showing it".
     void activate(const std::string& uri);
+    // "Show in Files": the folder holding `path`, with it selected where the
+    // file manager can (Nautilus, Dolphin). Same file manager as activate().
+    void reveal(const std::string& path);
 
     // The reference's one trash action, and it asks NAUTILUS to do it, with the
     // confirmation dialog: this plugin never deletes the user's files itself.
+    // Without Nautilus -- not on the session bus, or another file manager
+    // chosen (user, 2026-11-05: the Trash "can't be emptied" then) -- it
+    // empties every trash itself, by the freedesktop spec, asking nothing, so
+    // the caller confirms first (emptyTrashAsksFirst false).
     void emptyTrash();
+
+    // True when emptyTrash() will show Nautilus's own "Empty Trash?" dialog.
+    bool emptyTrashAsksFirst();
+
+    // Top-level entries in every trash -- home and each disk's (one per thing
+    // trashed). Never walks into a trashed folder.
+    size_t trashCount();
 
     // The reference's removable actions. A mount can offer both, and the menu
     // draws a row for each, so which one runs is the ROW's answer and not the

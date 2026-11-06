@@ -63,6 +63,9 @@ using namespace Hyprutils::String;
 #include "globals.hpp"
 #include "SearchLetters.hpp"
 #include "KeyboardCat.hpp"
+#include "Intent.hpp"
+#include "GameApps.hpp"
+#include "FullscreenDesktop.hpp"
 #include "Mosaic.hpp"
 #include <hyprland/src/managers/SessionLockManager.hpp>
 
@@ -206,6 +209,11 @@ static void hkSendWindowSize(void* thisptr, bool force) {
 // desktop slide.
 static CFunctionHook* g_pShouldRenderWindowHook = nullptr;
 static bool           hkShouldRenderWindow(void* thisptr, PHLWINDOW window, PHLMONITOR monitor) {
+    // A window travelling to or from its fullscreen desktop is drawn all the
+    // way -- before the canvas's rule that hides windows off its view while
+    // their desktop slides (a fullscreen app on a canvas usually starts there).
+    if (ScrollOverview::FullscreenDesktop::travelling(window, monitor))
+        return true;
     if (ScrollOverview::Mosaic::hideDuringSlide(window, monitor))
         return false;
     return rc<bool (*)(void*, PHLWINDOW, PHLMONITOR)>(g_pShouldRenderWindowHook->m_original)(thisptr, window, monitor);
@@ -1185,6 +1193,19 @@ static void                registerRawKeyHooks() {
             g_tapCtrlLastTapMs  = 0;
         }
 
+        // The overview's strip lifts the desktop under the pointer while Super
+        // is held; Super+Shift+Left/Right moves the desktop shown -- in the
+        // overview only (outside it the chord stays Omarchy's window swap).
+        if (ISSUPER)
+            overviewSuperChanged();
+        if (PRESSED && (event.keycode == 105 || event.keycode == 106) && g_pInputManager &&
+            (g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2)) == (HL_MODIFIER_META | HL_MODIFIER_SHIFT) &&
+            overviewMoveShownDesktop(event.keycode == 106 ? 1 : -1)) {
+            g_consumedPresses.insert(event.keycode);
+            info.cancelled = true;
+            return;
+        }
+
         if (!ISSUPER) {
             if (PRESSED) {
                 // The easter egg owns the overview's keys while it is up: the
@@ -1274,7 +1295,12 @@ static void                registerRawKeyHooks() {
                 // Arrows/Tab/Return are left for CScrollOverview::onKeyboardKey.
                 // PRINT and the XF86 keys are the exception: they are desktop
                 // keys, not query keys, and Omarchy's binds must still see them.
-                if (overviewAcceptsSearch() && !isModifierKeycode(event.keycode) && !isGlobalPassthroughKeycode(event.keycode) &&
+                // So is a CHORD (Super/Ctrl/Alt held) the overview did not take
+                // above or in onKeyboardKey: it is never query text, and the
+                // user's chord binds are borrowed into the submap for exactly
+                // this (SubmapBorrow.hpp) -- Super+F did nothing in the
+                // overview here while native's worked (user, 2026-11-06).
+                if (overviewAcceptsSearch() && g_heldGuardKeys.empty() && !isModifierKeycode(event.keycode) && !isGlobalPassthroughKeycode(event.keycode) &&
                     event.keycode != 15 && event.keycode != 28 && event.keycode != 96 &&
                     event.keycode != 103 && event.keycode != 105 && event.keycode != 106 &&
                     event.keycode != 108) {
@@ -2212,6 +2238,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // canvas desktop a swipe brings in starts past its overhang (Mosaic.cpp).
         ScrollOverview::DesktopSwitch::preRender(monitor);
         ScrollOverview::Mosaic::preRender(monitor);
+        ScrollOverview::FullscreenDesktop::preRender(monitor);
+        ScrollOverview::Intent::preRender(monitor);
         // After Mosaic's: a live swipe's place, for its release (DesktopStrip.hpp).
         ScrollOverview::DesktopStrip::sampleSwipe(monitor);
 
@@ -2454,7 +2482,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             // drag, so Hyprland never entered its own button state machine for
             // it and nothing on its side will let go -- the button came up and
             // the window kept following the pointer until the NEXT click.
-            g_layoutManager->dragController()->dragEnd();
+            // ONLY WITH A TARGET: Hyprland's dragEnd dereferences it unchecked
+            // (DragController.cpp: m_target.lock()->window()), and the drag may
+            // have ended already or its window gone -- releasing then SIGSEGV'd
+            // the compositor (XPS, 2026-11-06 11:19, the whole session lost).
+            if (TARGET)
+                g_layoutManager->dragController()->dragEnd();
             ScrollOverview::Dock::clearDockNativeDrag();
             const auto ANCHOR = ScrollOverview::Placement::takeDragAnchor();
 
@@ -2598,6 +2631,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // The "mosaic" layout (Mosaic.hpp). Registered whether or not the panel has
     // enabled it: a desktop whose saved layout is mosaic must find it at login.
     ScrollOverview::Mosaic::registerLayout(SCROLLOVERVIEW_HANDLE);
+    ScrollOverview::Intent::init();
+    ScrollOverview::GameApps::init();
+    ScrollOverview::FullscreenDesktop::init();
     // Super+scroll's dispatcher and its wheel filter, and the desktop-change
     // animation switches (DesktopSwitch.hpp). Reads keys: after registerConfig().
     ScrollOverview::DesktopSwitch::init();
@@ -2682,6 +2718,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 APICALL EXPORT void PLUGIN_EXIT() {
     // FIRST: Hyprland hands every mosaic desktop back to its default layout and
     // destroys our algorithm objects -- while their code is still mapped.
+    ScrollOverview::Intent::shutdown();
+    ScrollOverview::FullscreenDesktop::shutdown();
+    ScrollOverview::GameApps::shutdown();
     ScrollOverview::Mosaic::shutdown();
     ScrollOverview::Mosaic::unregisterLayout(SCROLLOVERVIEW_HANDLE);
     ScrollOverview::DesktopSwitch::shutdown();

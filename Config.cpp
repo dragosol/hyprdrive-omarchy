@@ -521,12 +521,26 @@ static void registerConfigValuesFor() {
     // MOSAIC (Mosaic.hpp). The layout itself is always registered; these two are
     // the panel's: enabled puts it on Super+L's cycle, default makes it the
     // layout of desktops with none of their own.
+    // GENERAL (user, 2026-11-04): the file manager the dock's folders, stacks
+    // and "Show in Files" open in (Locations::activate / reveal).
+    // A FULLSCREEN APP GETS ITS OWN DESKTOP (FullscreenDesktop.hpp, user 2026-11-05).
+    addKey(makeShared<CStringValue>(KEY("general:fullscreen_desktop"),
+                                    "where an app going fullscreen goes: next (a desktop of its own right after yours; the ones after move along), free (the next free "
+                                    "desktop) or stay (where it is). An app alone on its desktop stays in any case",
+                                    Hyprlang::STRING{"next"}));
+    addKey(makeShared<CStringValue>(KEY("general:file_manager"),
+                                    "the file manager folders open in: a desktop entry such as org.kde.dolphin.desktop, or empty for the system's default for folders",
+                                    Hyprlang::STRING{""}));
     addKey(makeShared<CBoolValue>(KEY("mosaic:enabled"), "mosaic: Super+L cycles Dwindle -> Scrolling -> Mosaic (the panel asks before turning it on)", false));
     addKey(makeShared<CBoolValue>(KEY("mosaic:default"), "mosaic: new desktops use the Mosaic layout (needs mosaic:enabled)", false));
     // THE INFINITE CANVAS (MosaicCanvas.hpp, user 2026-10-26). Opt-in; once on, all
     // directions and the Super zoom-out by default (user, 2026-10-27).
     addKey(makeShared<CBoolValue>(KEY("mosaic:infinite_canvas"),
                                   "mosaic: windows that no longer fit the screen spill onto a canvas you pan across, at their own sizes, instead of tiling", false));
+    // WINDOWS YOU DID NOT ASK FOR (Intent.hpp, user 2026-11-04).
+    addKey(makeShared<CBoolValue>(KEY("mosaic:quiet_new_windows"),
+                                  "mosaic: a window you did not open (a loading screen, an app reopening itself) opens without taking the focus, and the pointer stays on your window",
+                                  true));
     addKey(makeShared<CBoolValue>(KEY("mosaic:spawn_at_cursor"),
                                   "mosaic: a new window opens where the pointer is, the others packed around it, on the mosaic and the infinite canvas", true));
     addKey(makeShared<CStringValue>(KEY("mosaic:canvas_directions"),
@@ -758,6 +772,9 @@ static void registerConfigValuesFor() {
     // reference -- `_ensureLocations` never constructs `Removables` while it is
     // off, so the two keys under it are read by nothing -- and it is false in the
     // target config. The trash is therefore the only location the rice draws.
+    addKey(makeShared<CBoolValue>(KEY("dock:folders_anywhere"),
+                                  "dock stacks: folders can be dragged anywhere among the apps (off: they sit together after the apps; drives, the Trash and Show Overview stay last either way)",
+                                  false));
     addKey(makeShared<CBoolValue>(KEY("dock:show_trash"), "hyprgnomedock: a Trash item at the end of the dock (D2D show-trash)", true));
     addKey(makeShared<CBoolValue>(KEY("dock:show_mounts"), "hyprgnomedock: mounted volumes as dock items (D2D show-mounts)", false));
     addKey(makeShared<CBoolValue>(KEY("dock:show_mounts_network"),

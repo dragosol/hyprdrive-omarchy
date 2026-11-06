@@ -36,7 +36,7 @@ namespace ScrollOverview::StackModel {
             return d == EDisplay::Folder ? "folder" : "stack";
         }
         const char* viewName(EView v) {
-            return v == EView::Grid ? "grid" : v == EView::Fan ? "fan" : "auto";
+            return v == EView::Grid ? "grid" : v == EView::Fan ? "fan" : v == EView::Files ? "files" : "auto";
         }
     }
 
@@ -188,7 +188,7 @@ namespace ScrollOverview::StackModel {
                 .path    = P[5],
                 .sort    = sortFromName(P[1]).value_or(ESort::Added),
                 .display = P[2] == "folder" ? EDisplay::Folder : EDisplay::Stack,
-                .view    = P[3] == "grid" ? EView::Grid : P[3] == "fan" ? EView::Fan : EView::Auto,
+                .view    = viewFromName(P[3]),
                 .label   = P[4],
             });
         }
@@ -219,7 +219,7 @@ namespace ScrollOverview::StackModel {
     }
 
     EView viewFromName(const std::string& name) {
-        return name == "grid" ? EView::Grid : name == "fan" ? EView::Fan : EView::Auto;
+        return name == "grid" ? EView::Grid : name == "fan" ? EView::Fan : name == "files" ? EView::Files : EView::Auto;
     }
 
     size_t fanCapacity(const SFanFit& fit) {

@@ -147,6 +147,14 @@ namespace AppSearch {
     // The desktop id for a window class, or "". X28's Show Details needs it.
     std::string idForClass(const std::string& wmClass);
 
+    // GameApps.cpp's two hooks (Lutris games, Wine programs): entries no
+    // desktop file has, added to every scan, and a window class -> app id map
+    // asked before anything else. Plain pointers: nothing to link without them.
+    inline void (*extraEntries)(std::vector<SEntry>&)             = nullptr;
+    inline std::string (*aliasForClass)(const std::string& lower) = nullptr;
+    // An alias changed: class lookups start over (no rescan).
+    void invalidate();
+
     // X32. The entry for a desktop id, or nullptr. Favourites are stored as ids
     // and a pinned app is usually NOT running, so the dock cannot reach its icon
     // or its Exec through a window class the way every other lookup here does.

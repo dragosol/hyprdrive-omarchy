@@ -46,6 +46,13 @@ namespace ScrollOverview::IconOverrides {
         return out;
     }
 
+    // A dock FOLDER's override id (user, 2026-11-05: "Get Info -> change the
+    // icon for that folder"): its absolute path behind `folder:`, which no
+    // desktop id can start with.
+    inline std::string folderId(const std::string& path) {
+        return "folder:" + path;
+    }
+
     // The override for a desktop id, or nullptr. Cheap to call per frame: the
     // file is stat'ed at most twice a second.
     const std::string* forId(const std::string& desktopId);

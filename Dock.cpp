@@ -330,6 +330,28 @@ constexpr const char* KEY_URGENT_NOTIFY = "plugin:hyprdrive:dock:urgent_notify";
 // and the reference sets them false/true, which on a bottom dock puts the button
 // at the right-hand edge, past everything else.
 constexpr const char* KEY_SHOW_FAVORITES = "plugin:hyprdrive:dock:show_favorites";
+// FOLDERS ANYWHERE (user, 2026-11-05): off, the folders are one group after
+// the apps; on, a folder can be dragged anywhere among them -- stored as an
+// IconOverrides::folderId entry in the favourites list, so the apps' own
+// reorder (pinAt) moves both. Drives, the Trash and Show Overview stay last.
+constexpr const char* KEY_FOLDERS_ANYWHERE = "plugin:hyprdrive:dock:folders_anywhere";
+static bool foldersAnywhere() {
+    return Config::getValue<bool>(KEY_FOLDERS_ANYWHERE);
+}
+// The pinned folder a favourites entry names, when folders may sit there.
+static const Stacks::SStack* placedFolder(const std::string& id) {
+    if (!id.starts_with("folder:/") || !foldersAnywhere())
+        return nullptr;
+    for (const auto& S : Stacks::all())
+        if (S.isDir && S.path == std::string_view(id).substr(7))
+            return &S;
+    return nullptr;
+}
+// Does a favourites entry draw a cell? An app this machine has, or a placed
+// folder. pinAt counts positions by this, so an app and a folder move alike.
+static bool drawnFavorite(const std::string& id) {
+    return AppSearch::entryForId(id) || placedFolder(id);
+}
 constexpr const char* KEY_SHOW_APPS      = "plugin:hyprdrive:dock:show_apps_button";
 constexpr const char* KEY_SHOW_APPS_TOP  = "plugin:hyprdrive:dock:show_apps_at_top";
 constexpr const char* KEY_SHOW_APPS_EDGE = "plugin:hyprdrive:dock:show_apps_always_in_the_edge";
@@ -903,9 +925,25 @@ std::vector<SItem> buildDockItems() {
 
     std::vector<SItem> out;
     std::unordered_set<size_t> claimed;
+    std::unordered_set<std::string> placedPaths; // folders drawn among the favourites
 
     if (Config::getValue<bool>(KEY_SHOW_FAVORITES)) {
         for (const auto& ID : favorites()) {
+            if (const auto* S = placedFolder(ID)) {
+                if (!placedPaths.insert(S->path).second)
+                    continue;
+                const auto* FOLDERICON = IconOverrides::forId(IconOverrides::folderId(S->path));
+                out.emplace_back(SItem{
+                    .icon         = FOLDERICON ? *FOLDERICON : Stacks::themedIcon(S->icon),
+                    .uri          = "file://" + S->path,
+                    .locationName = S->label,
+                    .stack        = true,
+                    .stackPath    = S->path,
+                    .stackDir     = true,
+                    .placed       = true,
+                });
+                continue;
+            }
             const auto* ENTRY = AppSearch::entryForId(ID);
             // A favourite nothing on this machine provides is dropped rather
             // than drawn as a blank slot: the seed is the user's HOST list and
@@ -1006,8 +1044,11 @@ std::vector<SItem> buildDockItems() {
     for (const auto& STACK : Stacks::all()) {
         if (stackIndex++ == DockDrop::placeholderIndex())
             PLACEHOLDER();
+        if (placedPaths.contains(STACK.path))
+            continue; // drawn where the favourites put it
+        const auto* FOLDERICON = STACK.isDir ? IconOverrides::forId(IconOverrides::folderId(STACK.path)) : nullptr;
         out.emplace_back(SItem{
-            .icon         = Stacks::themedIcon(STACK.icon),
+            .icon         = FOLDERICON ? *FOLDERICON : Stacks::themedIcon(STACK.icon),
             .uri          = "file://" + STACK.path,
             .locationName = STACK.label,
             .stack        = true,
@@ -1158,7 +1199,8 @@ SItemsKey itemsKey() {
         (ISOLATE_WS ? 2U : 0U) |                                                          //
         (Config::getValue<bool>(KEY_AGNOSTIC_URG) ? 4U : 0U) |                            //
         (Config::getValue<bool>(KEY_ISOLATE_LOCATIONS) ? 8U : 0U) |                       //
-        (Config::getValue<bool>(KEY_BUILTIN_ICONS) ? 16U : 0U);
+        (Config::getValue<bool>(KEY_BUILTIN_ICONS) ? 16U : 0U) |                          //
+        (Config::getValue<bool>(KEY_FOLDERS_ANYWHERE) ? 32U : 0U);
     // The icon themes and the Trash's look are strings; a change of any of them
     // is a different item list.
     key.themes = std::hash<std::string>{}(AppSearch::omarchyIconTheme() + "|" + Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme") + "|" +
@@ -1247,6 +1289,30 @@ static void publishDockApps(const std::vector<SItem>& items) {
             std::filesystem::rename(P.string() + ".tmp", P, ec);
         }
         lastKey = KEY;
+    }
+
+    // The dock's folders, for the panel's Icons -> Folders: `id TAB name TAB
+    // own icon` in dock-folders, the id being IconOverrides::folderId.
+    {
+        std::string folders;
+        for (const auto& S : Stacks::all())
+            if (S.isDir && S.path.find('\t') == std::string::npos && S.path.find('\n') == std::string::npos) {
+                std::string name = S.label.empty() ? std::filesystem::path(S.path).filename().string() : S.label;
+                std::ranges::replace(name, '\t', ' ');
+                folders += IconOverrides::folderId(S.path) + "\t" + name + "\t" + S.icon + "\n";
+            }
+        static std::string lastFolders;
+        if (folders != lastFolders) {
+            lastFolders = folders;
+            const auto      P = favoritesPath().parent_path() / "dock-folders";
+            std::error_code ec;
+            std::filesystem::create_directories(P.parent_path(), ec);
+            {
+                std::ofstream out(P.string() + ".tmp", std::ios::trunc);
+                out << folders;
+            }
+            std::filesystem::rename(P.string() + ".tmp", P, ec);
+        }
     }
 
     static std::string last;
@@ -3518,7 +3584,7 @@ enum class ERow : uint8_t {
     StackRecent,      // exec = the file's path
     StackSortKey,     // exec = sort name
     StackDisplayKey,  // exec = "stack" | "folder"
-    StackViewKey,     // exec = "auto" | "fan" | "grid"
+    StackViewKey,     // exec = "auto" | "fan" | "grid" | "files"
     StackShowParent,
     StackRename,
     StackRenameField,
@@ -3526,6 +3592,7 @@ enum class ERow : uint8_t {
     StackEmptyAsk,
     StackEmptyConfirm,
     StackEmptyCancel,
+    EmptyTrashConfirm,
 };
 
 // OMARCHY-STYLE ROWS: a Nerd Font glyph column, the label, and a dim hint on the
@@ -3802,6 +3869,9 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
             rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Automatic", .exec = "auto", .glyph = CHECKED(S->view == StackModel::EView::Auto)});
             rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Fan", .exec = "fan", .glyph = CHECKED(S->view == StackModel::EView::Fan)});
             rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View as Grid", .exec = "grid", .glyph = CHECKED(S->view == StackModel::EView::Grid)});
+            // VIEW IN FILES (user, 2026-11-05): a click opens the file manager
+            // and Super+click the fan; the other views swap the two.
+            rows.emplace_back(SRow{.kind = ERow::StackViewKey, .label = "View in Files", .exec = "files", .glyph = CHECKED(S->view == StackModel::EView::Files)});
             rows.emplace_back(SRow{.kind = ERow::Separator});
         }
         // 5-6.
@@ -3814,8 +3884,11 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
             rows.emplace_back(SRow{.kind = ERow::StackTrashNewest, .label = "Move Newest to Trash", .glyph = MenuGlyph::TRASH, .danger = true});
             rows.emplace_back(SRow{.kind = ERow::StackEmptyAsk, .label = "Empty Folder\u2026", .glyph = MenuGlyph::TRASH, .danger = true});
         }
-        // 8. Removing a stack never touches the folder.
+        // 8. Get Info (its icon is changed there), and removing a stack never
+        // touches the folder.
         rows.emplace_back(SRow{.kind = ERow::Separator});
+        if (item.stackDir)
+            rows.emplace_back(SRow{.kind = ERow::Details, .label = "Get Info", .glyph = MenuGlyph::DETAILS});
         rows.emplace_back(SRow{.kind = ERow::StackUnpin, .label = "Remove from Dock", .glyph = MenuGlyph::UNPIN});
         return rows;
     }
@@ -3944,11 +4017,7 @@ static std::vector<SRow> trashInfoRows() {
     else if (const char* HOME = std::getenv("HOME"); HOME && *HOME)
         data = std::string(HOME) + "/.local/share";
     const std::string DIR = data + "/Trash";
-    size_t            n   = 0;
-    std::error_code   ec;
-    for (auto it = std::filesystem::directory_iterator(DIR + "/files", ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec))
-        if (++n >= 100000)
-            break;
+    const size_t      n   = Locations::trashCount(); // every disk's trash, not only this one
     std::string shown = DIR;
     if (const char* HOME = std::getenv("HOME"); HOME && *HOME && shown.starts_with(HOME))
         shown = "~" + shown.substr(std::strlen(HOME));
@@ -3964,9 +4033,40 @@ static std::vector<SRow> trashInfoRows() {
     return rows;
 }
 
+// A dock folder's Get Info: what it is, where, how full -- counted from its
+// cached listing, never walked -- and its icon, changed in the settings'
+// Icons -> Folders (user, 2026-11-05).
+static std::vector<SRow> folderInfoRows(const SItem& item) {
+    std::vector<SRow> rows;
+    const auto&       PATH  = item.stackPath;
+    const std::string NAME  = item.locationName.empty() ? std::filesystem::path(PATH).filename().string() : item.locationName;
+    std::string       shown = PATH;
+    if (const char* HOME = std::getenv("HOME"); HOME && *HOME && shown.starts_with(HOME))
+        shown = "~" + shown.substr(std::strlen(HOME));
+    if (shown.size() > 46)
+        shown = "\u2026" + shown.substr(shown.size() - 45);
+    const auto        L     = StackReader::listing(PATH);
+    const size_t      N     = L.entries.size();
+    const std::string COUNT = N == 0 ? "Empty" : std::to_string(N) + (N == 1 ? " item" : " items");
+    rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Name", .exec = NAME, .glyph = MenuGlyph::TAG, .hint = elide(NAME)});
+    rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Contents", .exec = COUNT, .glyph = MenuGlyph::FILE, .hint = COUNT});
+    rows.emplace_back(SRow{.kind = ERow::InfoLine, .label = "Location", .exec = PATH, .glyph = MenuGlyph::FOLDER, .hint = shown});
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+    const auto ID     = IconOverrides::folderId(PATH);
+    const bool CUSTOM = IconOverrides::forId(ID) != nullptr;
+    rows.emplace_back(SRow{.kind = ERow::InfoIcon, .label = "Folder Icon", .exec = ID, .glyph = MenuGlyph::IMAGE, .hint = std::string(CUSTOM ? "Custom  " : "Change  ") + "\uf054"});
+    rows.emplace_back(SRow{.kind = ERow::InfoReveal, .label = "Show in Files", .exec = PATH, .glyph = MenuGlyph::FOLDER});
+    rows.emplace_back(SRow{.kind = ERow::InfoCopyAll, .label = "Copy Info", .glyph = MenuGlyph::COPY});
+    rows.emplace_back(SRow{.kind = ERow::Separator});
+    rows.emplace_back(SRow{.kind = ERow::InfoBack, .label = "Back", .glyph = MenuGlyph::BACK});
+    return rows;
+}
+
 std::vector<SRow> infoRows(const SItem& item) {
     if (item.uri == "trash:///")
         return trashInfoRows();
+    if (item.stack && item.stackDir)
+        return folderInfoRows(item);
     std::vector<SRow> rows;
     const auto*       ENTRY = AppSearch::entryForId(itemDesktopId(item));
 
@@ -4061,10 +4161,8 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::StackDisplayKey: Stacks::setDisplay(item.stackPath, row.exec == "folder" ? StackModel::EDisplay::Folder : StackModel::EDisplay::Stack); return;
         case ERow::StackViewKey: Stacks::setViewMode(item.stackPath, StackModel::viewFromName(row.exec)); return;
         case ERow::StackShowParent:
-            // FileManager1.ShowItems: the parent folder, this one selected.
-            Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method",
-                                              "org.freedesktop.FileManager1.ShowItems", "['file://" + item.stackPath + "']", ""})
-                .runAsync();
+            // The parent folder, this one selected, in the user's file manager.
+            Locations::reveal(item.stackPath);
             return;
         case ERow::StackTrashNewest: {
             auto L = StackReader::listing(item.stackPath);
@@ -4087,9 +4185,13 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::StackEmptyAsk:
         case ERow::StackEmptyCancel: return;
         case ERow::StackOpen: Locations::activate(item.uri); return;
-        case ERow::StackUnpin: Stacks::unpin(item.stackPath); return; // "Remove from Dock": the folder is untouched
+        case ERow::StackUnpin:
+            unpin(IconOverrides::folderId(item.stackPath)); // its place among the favourites, if it had one
+            Stacks::unpin(item.stackPath);                  // "Remove from Dock": the folder is untouched
+            return;
 
         case ERow::EmptyTrash: Locations::emptyTrash(); return;
+        case ERow::EmptyTrashConfirm: Locations::emptyTrash(); return;
         case ERow::Mount: Locations::mount(item.uri); return;
         case ERow::Unmount: Locations::unmount(item.uri, false); return;
         case ERow::Eject: Locations::unmount(item.uri, true); return;
@@ -4145,12 +4247,9 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             return;
 
         case ERow::InfoReveal:
-            // FileManager1.ShowItems: the freedesktop call every file manager
-            // answers, so this is not Nautilus-only.
+            // In the user's file manager (Locations::reveal).
             if (!row.exec.empty())
-                Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1",
-                                                  "--method", "org.freedesktop.FileManager1.ShowItems", "['file://" + row.exec + "']", ""})
-                    .runAsync();
+                Locations::reveal(row.exec);
             return;
 
         case ERow::Favorite: toggleFavorite(itemDesktopId(item)); return;
@@ -4755,7 +4854,7 @@ float dragThresholdPx(PHLMONITOR monitor) {
 std::vector<size_t> favoriteSlots(const SLayout& layout) {
     std::vector<size_t> out;
     for (size_t i = 0; i < layout.items.size(); ++i)
-        if (layout.items[i].favorite)
+        if (layout.items[i].favorite || layout.items[i].placed)
             out.emplace_back(i);
     return out;
 }
@@ -4814,7 +4913,7 @@ constexpr float GHOST_HOME_MS = 220.F;
 // the icon that would follow it, or past the last favourite when it is the end.
 CBox caretBox(const SLayout& layout, int index, float scale) {
     // A stack drag's caret runs over the stack cells, not the favourites.
-    const auto SLOTS = draggingStack() ? stackSlots(layout) : favoriteSlots(layout);
+    const auto SLOTS = draggingStack() && !foldersAnywhere() ? stackSlots(layout) : favoriteSlots(layout);
     if (index < 0 || SLOTS.empty())
         return {};
 
@@ -5091,6 +5190,19 @@ bool click(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle, b
     // through activateItem too, with SUPER held by definition.
     const uint32_t MODS  = g_pInputManager ? g_pInputManager->getModsFromAllKBs() : 0;
     const bool     EMPTY = ctrl || (MODS & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL)) != 0;
+    // A folder: the fan (or grid) and the file manager are its two opens, and
+    // Super picks the one its view does not (View in Files: click = the file
+    // manager, Super+click = the fan; the other views the other way round).
+    if (ITEM->stack && ITEM->stackDir && !ITEM->uri.empty()) {
+        bool files = false;
+        for (const auto& S : Stacks::all())
+            if (S.path == ITEM->stackPath)
+                files = S.view == StackModel::EView::Files;
+        if (((MODS & HL_MODIFIER_META) != 0) != files) {
+            Locations::activate(ITEM->uri);
+            return true;
+        }
+    }
     activateItem(monitor, *ITEM, shift, ctrl, EMPTY);
     return true;
 }
@@ -5152,7 +5264,7 @@ void pinAt(const std::string& desktopId, int index) {
     // later slot would otherwise land one short of the caret the user saw.
     int from = -1;
     for (int seen = 0; const auto& ID : FAV) {
-        if (!AppSearch::entryForId(ID))
+        if (!drawnFavorite(ID))
             continue;
         if (ID == desktopId) {
             from = seen;
@@ -5173,7 +5285,7 @@ void pinAt(const std::string& desktopId, int index) {
     // ones keep their places instead of being silently reordered around.
     size_t at = FAV.size();
     for (size_t i = 0, seen = 0; i < FAV.size(); ++i) {
-        if (!AppSearch::entryForId(FAV[i]))
+        if (!drawnFavorite(FAV[i]))
             continue;
         if (seen == sc<size_t>(index)) {
             at = i;
@@ -5480,7 +5592,7 @@ bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
         pressEnd();
     }
 
-    g_dockDrag.drag->insert = g_dockDrag.drag->stackPath.empty() ? dropIndexAt(monitor, point) : stackDropIndexAt(monitor, point);
+    g_dockDrag.drag->insert = g_dockDrag.drag->stackPath.empty() || foldersAnywhere() ? dropIndexAt(monitor, point) : stackDropIndexAt(monitor, point);
     return true;
 }
 
@@ -5512,6 +5624,12 @@ bool dragRelease(PHLMONITOR monitor, const Vector2D& point) {
         const float CLICKTOL = 3.F * dragThresholdPx(monitor);
         if (!DRAG.live || DRAG.start.distanceSq(point) <= CLICKTOL * CLICKTOL)
             return false;
+        // Folders anywhere: among the favourites, by the apps' own reorder.
+        if (foldersAnywhere()) {
+            if (const int AT = dropIndexAt(monitor, point); AT >= 0)
+                pinAt(IconOverrides::folderId(DRAG.stackPath), AT);
+            return true;
+        }
         const int INDEX = stackDropIndexAt(monitor, point);
         if (INDEX < 0)
             return true; // off the pill: nothing moves (removing is the menu's job)
@@ -5783,6 +5901,18 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
             SRow{.kind = ERow::Separator},
             SRow{.kind = ERow::StackEmptyCancel, .label = "Cancel", .glyph = MenuGlyph::BACK},
             SRow{.kind = ERow::StackEmptyConfirm, .label = "Move to Trash", .glyph = MenuGlyph::TRASH, .danger = true},
+        };
+        return true;
+    }
+    // Empty Trash asks first when Nautilus will not: without it the empty is
+    // `gio trash --empty`, which deletes for good and asks nothing.
+    if (ROW->kind == ERow::EmptyTrash && !ROW->disabled && !Locations::emptyTrashAsksFirst()) {
+        const auto N = Locations::trashCount();
+        g_menu->rows = {
+            SRow{.kind = ERow::InfoLine, .label = N ? "Delete " + std::to_string(N) + (N == 1 ? " item" : " items") + " for good?" : std::string{"Empty the Trash for good?"}, .glyph = MenuGlyph::TRASH},
+            SRow{.kind = ERow::Separator},
+            SRow{.kind = ERow::StackEmptyCancel, .label = "Cancel", .glyph = MenuGlyph::BACK},
+            SRow{.kind = ERow::EmptyTrashConfirm, .label = "Empty Trash", .glyph = MenuGlyph::TRASH, .danger = true},
         };
         return true;
     }

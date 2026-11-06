@@ -1188,7 +1188,8 @@ namespace {
     bool chooseGrid(const SPopup& p, PHLMONITOR monitor) {
         if (p.view == StackModel::EView::Grid)
             return true;
-        if (p.view == StackModel::EView::Fan || !monitor)
+        // View in Files: the popup is Super+click's, and it is the fan.
+        if (p.view == StackModel::EView::Fan || p.view == StackModel::EView::Files || !monitor)
             return false;
         // Automatic, as the extension: the pane past 12 items or when the fan
         // would not fit the screen.

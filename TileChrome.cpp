@@ -264,8 +264,11 @@ void setHovered(const PHLWINDOW& window, bool lingerOnLeave) {
         if (auto* const PREV = stateFor(PREVWINDOW, false)) {
             // Leaving for empty space holds the blow-up so the close button
             // stays reachable; leaving for another tile, or for the dock, does
-            // not.
-            const bool LINGER = !window && lingerOnLeave;
+            // not. Nor does leaving BEFORE the zoom and caption finished
+            // arriving (user, 2026-11-06): a pass over a tile is not a hover,
+            // and the delayed ease froze it half-grown for the whole linger.
+            const bool ARRIVED = !PREV->hover.running() && PREV->hover.value() >= 0.999F;
+            const bool LINGER  = !window && lingerOnLeave && ARRIVED;
             PREV->hover.retarget(0.F, HOVER_OUT_MS, LINGER ? HOVER_LINGER_MS : 0.F);
             if (LINGER)
                 g_lingering = PREVWINDOW;

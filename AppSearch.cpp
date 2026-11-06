@@ -320,6 +320,8 @@ namespace AppSearch {
                     g_entries.emplace_back(std::move(entry));
                 }
             }
+            if (extraEntries)
+                extraEntries(g_entries);
         }
 
         // X18 wants parity with the search the user actually has on the host,
@@ -778,6 +780,10 @@ namespace AppSearch {
     void refresh() {
         g_scanned = true;
         scan();
+    }
+
+    void invalidate() {
+        ++g_inventoryGen;
     }
 
     uint64_t inventoryGeneration() {
@@ -1264,6 +1270,18 @@ namespace AppSearch {
         static constexpr std::string_view QS_PREFIX = "org.quickshell:";
         const auto WANT  = lower(wmClass.starts_with(QS_PREFIX) ? wmClass.substr(QS_PREFIX.size()) : wmClass);
         size_t     found = std::string::npos;
+
+        // A Lutris game's window (GameApps.hpp): its game's app, before any
+        // desktop file that happens to name the same exe.
+        if (aliasForClass)
+            if (const auto ID = aliasForClass(WANT); !ID.empty())
+                for (size_t i = 0; i < INV.size() && found == std::string::npos; ++i)
+                    if (INV[i].id == ID)
+                        found = i;
+        if (found != std::string::npos) {
+            cache[wmClass] = found;
+            return found;
+        }
 
         for (size_t i = 0; i < INV.size(); ++i) {
             const auto& ENTRY = INV[i];

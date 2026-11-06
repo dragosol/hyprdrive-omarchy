@@ -13,6 +13,7 @@
 #include "OverviewRender.hpp"
 #include "IconSize.hpp"
 #include "StackReader.hpp"
+#include "IconOverrides.hpp"
 
 #include <gio/gio.h>
 
@@ -238,6 +239,13 @@ namespace ScrollOverview::Stacks {
         }
         if (S->display == StackModel::EDisplay::Folder) {
             add(OverviewRender::appIcon(themedIcon(S->icon), false, false, REST), iconBox, 0.F, alpha);
+            return true;
+        }
+        // A CUSTOM ICON (settings -> Icons -> Folders, or the folder's Get
+        // Info) is the folder's face in either display: picking one is asking
+        // to see it, so it takes the place of the pile too.
+        if (const auto* OV = IconOverrides::forId(IconOverrides::folderId(S->path)); OV && !popupShowsStack(S->path)) {
+            add(OverviewRender::appIcon(*OV, false, false, REST), iconBox, 0.F, alpha);
             return true;
         }
 

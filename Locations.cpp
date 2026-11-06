@@ -8,12 +8,16 @@
 
 #include <gio/gio.h>
 #include <gio/gunixmounts.h>
+#include <gio/gdesktopappinfo.h>
 #include <systemd/sd-bus.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <cstdio>
+#include <unistd.h>
+#include <thread>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -81,20 +85,33 @@ namespace {
     // backend is slow or absent that is a stall the frame loop cannot absorb.
     // Measured 2026-08-03: the guest stopped answering hyprctl entirely.
     //
-    // ponytail: the HOME trash only. Files deleted on another filesystem live
-    // in `<mount>/.Trash-1000` and are not counted here, so the icon can read
-    // empty while another disk's trash is not. Upgrade path is to walk the same
-    // mount list readMounts() already reads and stat each one's `.Trash-$UID`.
+    // EVERY TRASH (user, 2026-11-06: "i still have items in the trash but
+    // hyprdrive showing trash as empty"): files deleted on another disk live
+    // in `<mount>/.Trash-1000`, and the home trash alone read empty while an
+    // NTFS drive's trash held three. trashRoots() lists them all.
+    // $XDG_DATA_HOME/Trash/files -- the spec's home trash, which every file
+    // manager shares; ~/.local/share when XDG_DATA_HOME is unset.
+    std::string trashFilesDir() {
+        if (const char* X = std::getenv("XDG_DATA_HOME"); X && *X)
+            return std::string{X} + "/Trash/files";
+        if (const char* HOME = std::getenv("HOME"); HOME && *HOME)
+            return std::string{HOME} + "/.local/share/Trash/files";
+        return {};
+    }
+
+    std::vector<std::filesystem::path> trashRoots();
+
     void readTrash(SLocation& out) {
         out.uri   = TRASH_URI;
         out.name  = "Trash";
         out.empty = true;
 
-        const char* HOME = std::getenv("HOME");
-        if (HOME) {
-            const std::string FILES = std::string{HOME} + "/.local/share/Trash/files";
-            std::error_code   error;
-            out.empty = !std::filesystem::exists(FILES, error) || std::filesystem::is_empty(FILES, error) || error;
+        for (const auto& T : trashRoots()) {
+            std::error_code error;
+            if (!std::filesystem::is_empty(T / "files", error) && !error) {
+                out.empty = false;
+                break;
+            }
         }
 
         // The two names the icon theme spells the two states with, and the same
@@ -128,6 +145,38 @@ namespace {
     static_assert(!networkFs("fuse."));      // the strip must not leave a match on nothing
     static_assert(!networkFs("nfs4x"));      // and it is whole-word, not a prefix test
     static_assert(!networkFs(nullptr));
+
+    // This user's trashes, by the freedesktop Trash spec: the home one, and on
+    // each mounted device `$top/.Trash/$uid` or `$top/.Trash-$uid`. Only
+    // mounts of a real device (/dev/...) that are not network filesystems:
+    // the dock reads this once a POLL_MS on the compositor thread, and a stat
+    // of a stale share would hang it. Only ones that exist (have files/).
+    std::vector<std::filesystem::path> trashRoots() {
+        std::vector<std::filesystem::path> out;
+        if (const auto FILES = trashFilesDir(); !FILES.empty())
+            out.push_back(std::filesystem::path(FILES).parent_path());
+        const std::string UID = std::to_string(getuid());
+        if (FILE* m = std::fopen("/proc/self/mounts", "re")) {
+            char dev[512], dir[1024], type[128];
+            while (std::fscanf(m, "%511s %1023s %127s %*s %*d %*d", dev, dir, type) == 3) {
+                if (std::string_view{dev}.substr(0, 5) != "/dev/" || networkFs(type))
+                    continue;
+                std::string top = dir;
+                // /proc/mounts escapes spaces and the like as \ooo.
+                for (size_t i; (i = top.find('\\')) != std::string::npos && i + 3 < top.size();)
+                    top.replace(i, 4, 1, sc<char>(std::stoi(top.substr(i + 1, 3), nullptr, 8)));
+                if (top == "/")
+                    top.clear();
+                for (const auto& T : {std::filesystem::path(top + "/.Trash") / UID, std::filesystem::path(top + "/.Trash-" + UID)}) {
+                    std::error_code ec;
+                    if (std::filesystem::is_directory(T / "files", ec) && std::ranges::find(out, T) == out.end())
+                        out.push_back(T);
+                }
+            }
+            std::fclose(m);
+        }
+        return out;
+    }
 
     // Mounted volumes come from the kernel's mount table, which is exactly the
     // set `show-mounts-only-mounted true` asks for -- so the common path needs
@@ -320,6 +369,43 @@ namespace {
     void spawn(const std::string& binary, const std::vector<std::string>& args) {
         CProcess process(binary, args);
         process.runAsync();
+    }
+
+    constexpr const char* NAUTILUS_NAME = "org.gnome.Nautilus";
+
+    // Nautilus can answer on the session bus: running (the name has an owner)
+    // or startable by the bus (an activatable name). Asked of the bus daemon
+    // itself, which answers at once; neither call starts anything.
+    bool nautilusOnBus() {
+        sd_bus* bus = userBus();
+        if (!bus)
+            return false;
+
+        bool            found = false;
+        sd_bus_error    error = SD_BUS_ERROR_NULL;
+        sd_bus_message* reply = nullptr;
+        int             owned = 0;
+        if (sd_bus_call_method(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner", &error, &reply, "s", NAUTILUS_NAME) >= 0 && reply &&
+            sd_bus_message_read(reply, "b", &owned) > 0)
+            found = owned != 0;
+        if (reply)
+            reply = sd_bus_message_unref(reply);
+        sd_bus_error_free(&error);
+
+        if (!found && sd_bus_call_method(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListActivatableNames", &error, &reply, "") >= 0 && reply) {
+            char** names = nullptr;
+            if (sd_bus_message_read_strv(reply, &names) > 0 && names) {
+                for (char** n = names; *n; ++n) {
+                    found = found || std::string_view{*n} == NAUTILUS_NAME;
+                    free(*n);
+                }
+                free(names);
+            }
+        }
+        if (reply)
+            sd_bus_message_unref(reply);
+        sd_bus_error_free(&error);
+        return found;
     }
 }
 
@@ -537,25 +623,215 @@ bool openWindows(const std::string& uri) {
     return false;
 }
 
+// THE FILE MANAGER (user, 2026-11-04: "Clement changed his default file manager
+// but hyprdrive still opens nautilus for him from the dock stacks and
+// folders"). plugin:hyprdrive:general:file_manager names a desktop entry
+// ("org.kde.dolphin.desktop", Settings > General); empty, it is the system's
+// default for folders -- xdg-mime's inode/directory, what `xdg-mime default`
+// and every desktop's "default apps" setting change. Nautilus only when
+// neither names anything.
+namespace {
+    GAppInfo* fileManagerApp() {
+        std::string id = Config::getValue<std::string>("plugin:hyprdrive:general:file_manager");
+        if (id == "[[EMPTY]]")
+            id.clear();
+        if (!id.empty()) {
+            if (!id.ends_with(".desktop"))
+                id += ".desktop";
+            if (auto* app = g_desktop_app_info_new(id.c_str()))
+                return G_APP_INFO(app);
+        }
+        return g_app_info_get_default_for_type("inode/directory", FALSE);
+    }
+
+    std::string appId(GAppInfo* app) {
+        const char* ID = app ? g_app_info_get_id(app) : nullptr;
+        return ID ? ID : "";
+    }
+
+    bool isNautilus(GAppInfo* app) {
+        std::string id = appId(app);
+        std::ranges::transform(id, id.begin(), [](unsigned char c) { return std::tolower(c); });
+        return id.find("nautilus") != std::string::npos;
+    }
+
+    // The app's own Exec line with `uri` in its field codes (the Desktop Entry
+    // spec: %u/%U a URI, %f/%F a local path, %i %c %k dropped), as argv -- so it
+    // is launched through Launch::wrap into its own scope like every other app,
+    // not as a child of Hyprland's.
+    std::vector<std::string> argvFor(GAppInfo* app, const std::string& uri, const std::vector<std::string>& extra = {}) {
+        const char* CL = app ? g_app_info_get_commandline(app) : nullptr;
+        if (!CL)
+            return {};
+        gint    argc = 0;
+        gchar** argv = nullptr;
+        if (!g_shell_parse_argv(CL, &argc, &argv, nullptr) || !argv)
+            return {};
+        std::string path = uri;
+        if (uri.starts_with("file://"))
+            if (gchar* P = g_filename_from_uri(uri.c_str(), nullptr, nullptr)) {
+                path = P;
+                g_free(P);
+            }
+        std::vector<std::string> out;
+        bool                     placed = false;
+        for (gint i = 0; i < argc; ++i) {
+            std::string a = argv[i], r;
+            bool        drop = false;
+            for (size_t k = 0; k < a.size(); ++k) {
+                if (a[k] != '%' || k + 1 >= a.size()) {
+                    r += a[k];
+                    continue;
+                }
+                const char C = a[++k];
+                if (C == 'u' || C == 'U') {
+                    r += uri;
+                    placed = true;
+                } else if (C == 'f' || C == 'F') {
+                    r += path;
+                    placed = true;
+                } else if (C == '%')
+                    r += '%';
+                else if (r.empty() && k + 1 == a.size())
+                    drop = true; // a lone %i / %c / %k
+            }
+            if (!drop && !r.empty())
+                out.push_back(r);
+        }
+        g_strfreev(argv);
+        if (out.empty())
+            return {};
+        out.insert(out.begin() + 1, extra.begin(), extra.end());
+        if (!placed)
+            out.push_back(uri);
+        return out;
+    }
+
+    bool launchWith(GAppInfo* app, const std::string& uri, const std::vector<std::string>& extra = {}) {
+        auto argv = argvFor(app, uri, extra);
+        if (argv.empty())
+            return false;
+        std::string              binary = argv.front();
+        std::vector<std::string> args(argv.begin() + 1, argv.end());
+        Launch::wrap(binary, args);
+        spawn(binary, args);
+        return true;
+    }
+}
+
+// The file managers that open `trash:///` themselves: GIO's (Nautilus, Nemo,
+// Caja, Thunar, PCManFM) and KIO's (Dolphin, Konqueror). Any other -- a
+// terminal one, a sandboxed one -- is handed the trash's own folder, which it
+// lists like any other; given trash:/// it showed an empty view.
+static bool opensTrashUri(GAppInfo* app) {
+    std::string id = appId(app);
+    std::ranges::transform(id, id.begin(), [](unsigned char c) { return std::tolower(c); });
+    for (const char* K : {"nautilus", "nemo", "caja", "thunar", "pcmanfm", "dolphin", "konqueror"})
+        if (id.find(K) != std::string::npos)
+            return true;
+    return false;
+}
+
 void activate(const std::string& uri) {
     if (uri.empty())
         return;
-
-    // Open with Nautilus directly. Fedora ships BOTH
-    // org.freedesktop.FileManager1.service (nautilus) and
-    // org.kde.dolphin.FileManager1.service (dolphin --daemon); xdg-open /
-    // FileManager1 activation can land on Dolphin when Nautilus is slow or
-    // stuck. This rice uses Nautilus as the file manager (dock + overview
-    // search + trash). One argv element so a volume label stays one URI.
-    // Nautilus lives on: its own scope, not Hyprland's (Launch.hpp). The gio
-    // mount helpers below are gone in a second and stay as they are.
+    // One argv element so a volume label stays one URI. The file manager lives
+    // on: its own scope, not Hyprland's (Launch.hpp).
+    GAppInfo*   app    = fileManagerApp();
+    std::string target = uri;
+    if (app && uri == TRASH_URI && !opensTrashUri(app))
+        if (const auto DIR = trashFilesDir(); !DIR.empty())
+            target = "file://" + DIR;
+    const bool OK = app && launchWith(app, target);
+    if (app)
+        g_object_unref(app);
+    if (OK)
+        return;
     std::string              binary = "nautilus";
     std::vector<std::string> args   = {uri};
     Launch::wrap(binary, args);
     spawn(binary, args);
 }
 
+void reveal(const std::string& path) {
+    if (path.empty())
+        return;
+    GAppInfo* app = fileManagerApp();
+    // Nautilus (or nothing chosen at all): FileManager1.ShowItems, the parent
+    // folder with this one selected.
+    if (!app || isNautilus(app)) {
+        if (app)
+            g_object_unref(app);
+        Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method",
+                                          "org.freedesktop.FileManager1.ShowItems", "['file://" + path + "']", ""})
+            .runAsync();
+        return;
+    }
+    // Another file manager: Dolphin selects it (--select); the rest open the
+    // folder it is in. ShowItems would go to whoever owns FileManager1, which
+    // is often still Nautilus.
+    std::string id = appId(app);
+    std::ranges::transform(id, id.begin(), [](unsigned char c) { return std::tolower(c); });
+    const bool        DOLPHIN = id.find("dolphin") != std::string::npos;
+    const std::string PARENT  = std::filesystem::path(path).parent_path().string();
+    const bool        OK      = DOLPHIN ? launchWith(app, "file://" + path, {"--select"}) : launchWith(app, "file://" + (PARENT.empty() ? path : PARENT));
+    g_object_unref(app);
+    if (!OK)
+        activate("file://" + (PARENT.empty() ? path : PARENT));
+}
+
+// Every trash this user has (the spec's home trash, and each mount's
+// $topdir/.Trash/$uid and $topdir/.Trash-$uid), emptied on a thread of its own:
+// a big trash takes seconds and this is called from a click. Each top-level
+// entry of files/, info/ and expunged/ is removed; remove_all deletes a
+// symlink itself, never what it points to. The dock's poll sees it empty.
+static void emptyTrashDirs() {
+    const auto trashes = trashRoots();
+    std::thread([trashes] {
+        for (const auto& T : trashes)
+            for (const char* SUB : {"files", "info", "expunged"}) {
+                std::error_code ec;
+                for (auto it = std::filesystem::directory_iterator(T / SUB, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+                    std::error_code rm;
+                    std::filesystem::remove_all(it->path(), rm);
+                }
+            }
+    }).detach();
+}
+
+bool emptyTrashAsksFirst() {
+    // Nautilus's dialog only when Nautilus is the file manager in use: with
+    // another one chosen it is not the trash the user is working with.
+    GAppInfo*  app  = fileManagerApp();
+    const bool OURS = !app || isNautilus(app);
+    if (app)
+        g_object_unref(app);
+    return OURS && nautilusOnBus();
+}
+
+size_t trashCount() {
+    size_t n = 0;
+    for (const auto& T : trashRoots()) {
+        std::error_code ec;
+        for (auto it = std::filesystem::directory_iterator(T / "files", ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec))
+            if (++n >= 100000)
+                return n;
+    }
+    return n;
+}
+
 void emptyTrash() {
+    // No Nautilus to ask (plain Hyprland, another file manager): emptied
+    // here, by the freedesktop Trash spec. NOT `gio trash --empty`: that is
+    // gvfsd-trash's, and without gvfs running (KDE, a bare session) it fails
+    // with "Operation not supported" -- the Trash "can't be emptied". It asks
+    // nothing, so the dock asked first (emptyTrashAsksFirst, the menu's
+    // confirm rows) -- the user's click there is the confirmation.
+    if (!emptyTrashAsksFirst()) {
+        emptyTrashDirs();
+        return;
+    }
+
     sd_bus* bus = userBus();
     if (!bus)
         return;

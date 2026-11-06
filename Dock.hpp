@@ -54,6 +54,10 @@ struct SItem {
     // Dock stacks B: the faint cell a folder being dragged over the dock will
     // become (DockDrop's Moses gap). Not a stack yet: nothing reads its path.
     bool        placeholder = false;
+    // FOLDERS ANYWHERE (dock:folders_anywhere): a stack placed among the
+    // favourites by a `folder:` entry in the favourites store, so it takes
+    // part in their reorder.
+    bool        placed = false;
 
     // THE SCRATCHPAD (Scratchpad.hpp). Not an app and not a location: it owns
     // no window class and no desktop id, so `scratchpadName` is its handle the

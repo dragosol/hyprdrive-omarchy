@@ -15,7 +15,8 @@ namespace ScrollOverview::StackModel {
     enum class EDisplay : uint8_t { Stack, Folder };
     // Auto: the fan while it fits, else the pane. Fan: always the fan, its
     // overflow behind an "N more in Files" row. Grid: always the pane.
-    enum class EView : uint8_t { Auto, Grid, Fan };
+    // Files: a click opens the folder in the file manager, Super+click the fan.
+    enum class EView : uint8_t { Auto, Grid, Fan, Files };
 
     // One item of a folder. Times are unix seconds. `kind` is a content type
     // ("image/png", "inode/directory"); `icon` a themed icon name.

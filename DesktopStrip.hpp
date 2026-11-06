@@ -67,6 +67,11 @@ namespace ScrollOverview::DesktopStrip {
     // before Hyprland touched it. Both are no-ops inside switching().
     bool claims(const PHLMONITOR& mon, int from, int to, bool jumpThrough);
     void take(const PHLMONITOR& mon, int from, int to, const Vector2D& fromOffset, bool jumpThrough);
+    // Slide the row to desktop `to` on `mon` and show it (a fullscreen app's
+    // own desktop, FullscreenDesktop.hpp). Moving already: on toward it from
+    // where the row is -- a change of mind turns the slide round in place.
+    // false: the strip cannot run here; the caller switches the plain way.
+    bool glideTo(const PHLMONITOR& mon, int to);
 
     // The strip is moving the desktops of `mon` / of `ws`'s monitor.
     bool driving(const PHLMONITOR& mon);

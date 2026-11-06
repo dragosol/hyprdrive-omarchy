@@ -1,5 +1,6 @@
 // The "mosaic" layout: see Mosaic.hpp and MosaicPack.hpp.
 #include "Mosaic.hpp"
+#include "Intent.hpp"
 
 #include "DesktopStrip.hpp"
 #include "DebugPaths.hpp"
@@ -350,6 +351,22 @@ namespace ScrollOverview::Mosaic {
     static bool g_canvasPanning = false;
     // rideCursor is warping the pointer: that motion is not the hand's.
     static bool g_cursorRiding = false;
+    // PUSH THROUGH THE EDGE (user, 2026-11-06): the hand pushing at an outer
+    // screen edge pans the canvas by the motion the edge swallows, when the
+    // focused window hides everything on that side. Latched per push -- the
+    // desktop and the direction, kept while the pushes keep coming -- so it
+    // goes on once the neighbours come into view, to the canvas's end.
+    struct SEdgePanLatch {
+        const void*                           who = nullptr;
+        Vector2D                              dir;
+        std::chrono::steady_clock::time_point at{};
+    };
+    static SEdgePanLatch g_edgePan;
+    constexpr auto       EDGE_PAN_HOLD = std::chrono::milliseconds(250);
+    // A window sliding under the pointer while it pushes is not a hover.
+    static bool edgePanRecent() {
+        return g_edgePan.who && std::chrono::steady_clock::now() - g_edgePan.at < EDGE_PAN_HOLD;
+    }
     // The canvas's frame clock (pans, zooms, a drag pushing at the screen's
     // edge): an event-loop timer, never a request from inside the render pass.
     static void armCanvasTick();
@@ -400,7 +417,7 @@ namespace ScrollOverview::Mosaic {
                 // 2026-11-03): a hover that got past it must not slide the
                 // canvas -- and the pointer with it -- out from under the dock.
                 const bool DOCKUP = ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen();
-                const bool HOVER  = FFM && !g_cursorRiding && !DOCKUP;
+                const bool HOVER  = FFM && !g_cursorRiding && !DOCKUP && !edgePanRecent();
                 if (m_asCanvas && !g_canvasPanning && !m_zoomed && w && holds(w) && (!FFM || HOVER))
                     revealWindow(w, true, FROM != w ? FROM : PHLWINDOW{});
             });
@@ -636,6 +653,69 @@ namespace ScrollOverview::Mosaic {
                 g_canvasPanning = WAS;
             }
         }
+        // PUSH THROUGH THE EDGE: `lost` is the motion an outer screen edge
+        // swallowed (onPointerDelta), per axis toward the edge it was lost at.
+        // The view moves by exactly that -- only as far as the hand moves --
+        // and stops where the canvas ends, which is the last window and its
+        // padding. A push STARTS only where there is something to see: a
+        // window wholly past that edge, and none but the focused one showing
+        // on that side of it (one that peeks can be hovered instead).
+        bool pushThrough(const Vector2D& lost) {
+            if (!m_asCanvas || m_zoomed || !shownNow())
+                return false;
+            const auto VIEW = canvasViewNow();
+            const auto AREA = area();
+            if (!VIEW || !AREA)
+                return false;
+            const auto     NOW = std::chrono::steady_clock::now();
+            const Vector2D CUR = m_canvasOffset;
+            Vector2D       want = CUR;
+            Vector2D       dir;
+            for (int axis = 0; axis < 2; ++axis) {
+                const double D = axis ? lost.y : lost.x;
+                if (std::abs(D) < 0.01)
+                    continue;
+                const double SIGN    = D > 0 ? 1.0 : -1.0;
+                const double LATCHED = axis ? g_edgePan.dir.y : g_edgePan.dir.x;
+                const bool   GOING   = g_edgePan.who == this && LATCHED == SIGN && NOW - g_edgePan.at < EDGE_PAN_HOLD;
+                if (!GOING && !pushMayStart(axis, SIGN, CUR, *AREA))
+                    continue;
+                const double MAX = axis ? VIEW->maxY : VIEW->maxX;
+                double&      w   = axis ? want.y : want.x;
+                w                = std::clamp(w + D, 0.0, MAX);
+                (axis ? dir.y : dir.x) = SIGN;
+            }
+            if (dir.x == 0 && dir.y == 0)
+                return false;
+            g_edgePan = {this, dir, NOW};
+            if (std::abs(want.x - CUR.x) < 0.01 && std::abs(want.y - CUR.y) < 0.01)
+                return true; // at the canvas's end: held there
+            setCanvasOffset(want, true);
+            return true;
+        }
+        bool pushMayStart(int axis, double sign, const Vector2D& cur, const CBox& area) const {
+            const auto F  = Desktop::focusState()->window();
+            const auto FR = F && holds(F) ? canvasRectOf(F) : std::nullopt;
+            if (!FR)
+                return false;
+            const double VL = axis ? cur.y : cur.x, VR = VL + (axis ? area.h : area.w);
+            const double OL = axis ? cur.x : cur.y, OR = OL + (axis ? area.w : area.h);
+            const double FC = axis ? FR->y + FR->h / 2.0 : FR->x + FR->w / 2.0;
+            bool         hidden = false;
+            for (const auto& Q : m_canvas.rects) {
+                if (std::abs(Q.x - FR->x) < 0.5 && std::abs(Q.y - FR->y) < 0.5)
+                    continue;
+                const double QL = axis ? Q.y : Q.x, QR = QL + (axis ? Q.h : Q.w);
+                const double PL = axis ? Q.x : Q.y, PR = PL + (axis ? Q.w : Q.h);
+                if ((QL + QR) / 2.0 * sign <= FC * sign)
+                    continue; // not on that side of the focused window
+                const bool SHOWING = QL < VR - 0.5 && QR > VL + 0.5 && PL < OR - 0.5 && PR > OL + 0.5;
+                if (SHOWING)
+                    return false;
+                hidden |= sign > 0 ? QL >= VR - 0.5 : QR <= VL + 0.5;
+            }
+            return hidden;
+        }
         // Where `w` sits on the canvas.
         std::optional<MosaicPack::SRect> canvasRectOf(const PHLWINDOW& w) const {
             for (size_t i = 0; i < m_canvasWho.size() && i < m_canvas.rects.size(); ++i)
@@ -780,7 +860,9 @@ namespace ScrollOverview::Mosaic {
             arriveWithNatural(target, true);
             placeInTiles(target, std::nullopt, DROP);
             placeDropped(target, std::nullopt);
-            if (!DROP)
+            // A window the user did not ask for is not put where they are
+            // working (Intent.hpp): the packer finds it a place.
+            if (!DROP && !Intent::quiet(target->window()))
                 placeAtCursor(target);
             recalculate();
         }
@@ -3290,7 +3372,13 @@ namespace ScrollOverview::Mosaic {
         if (!MON || MON->m_activeSpecialWorkspace)
             return;
         auto* A = reachingOn(MON->m_activeWorkspace);
-        if (!A)
+        // No resize reaching: a canvas desktop may be pushed through instead
+        // (pushThrough) -- not under a Super+drag, which pans by the clock
+        // (updateEdgePush).
+        auto* C = A ? nullptr : canvasOf(MON->m_activeWorkspace);
+        if (C && g_layoutManager && g_layoutManager->dragController()->target())
+            C = nullptr;
+        if (!A && !C)
             return;
         // Only past an outer edge (no monitor that way) the pointer is at.
         const CBox B     = MON->logicalBox();
@@ -3309,8 +3397,12 @@ namespace ScrollOverview::Mosaic {
             else if (LOST.y < 0 && P.y <= B.y + 1 && OUTER(Math::DIRECTION_UP))
                 r.y = LOST.y;
         }
-        if (r.x != 0 || r.y != 0)
+        if (r.x == 0 && r.y == 0)
+            return;
+        if (A)
             A->resizeReach(r);
+        else if (C->pushThrough(r))
+            trace(std::format("push through the edge {}x{} -> view {}x{}", r.x, r.y, C->canvasOffset().x, C->canvasOffset().y));
     }
 
     // The desktop on `ws` whose resize may reach past the screen's edge.
@@ -4162,6 +4254,10 @@ namespace ScrollOverview::Mosaic {
         return ws && std::ranges::any_of(g_instances, [&](const CMosaicAlgorithm* a) { return a->workspace() == ws; });
     }
 
+    bool isMosaicWorkspace(const PHLWORKSPACE& ws) {
+        return onMosaicWorkspace(ws);
+    }
+
     static void adoptFloating(const PHLWINDOW& w) {
         if (!w || !w->m_isMapped || !w->m_isFloating || !onMosaicWorkspace(w->m_workspace))
             return;
@@ -4169,6 +4265,17 @@ namespace ScrollOverview::Mosaic {
             return;
         if (w->m_ruleApplicator && w->m_ruleApplicator->m_tagKeeper.isTagged("hyprdrive-float"))
             return;
+        // A window that cannot change size is not a mosaic member, like a
+        // dialog: min == max (X11 WM_NORMAL_HINTS, or an xdg-toplevel's min and
+        // max). Tiled, it was stretched past its fixed size, and an X11 one
+        // answered every configure with its own size -- a ConfigureRequest
+        // ping-pong (~1200/s) that starved the seat (Battle.net's login window,
+        // 362x693, mapped at 1726x1470; 2026-11-06).
+        if (const auto MIN = w->minSize(), MAX = w->maxSize();
+            MIN && MAX && MIN->x >= 1 && MIN->y >= 1 && std::abs(MAX->x - MIN->x) < 1 && std::abs(MAX->y - MIN->y) < 1) {
+            trace(std::format("floating window {:x} is fixed-size ({}x{}): stays floating", (uintptr_t)w.get(), MIN->x, MIN->y));
+            return;
+        }
         trace(std::format("adopt floating window {:x} into the mosaic", (uintptr_t)w.get()));
         (void)::Config::Actions::floatWindow(::Config::Actions::TOGGLE_ACTION_DISABLE, w);
     }

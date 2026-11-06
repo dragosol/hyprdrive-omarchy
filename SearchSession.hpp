@@ -148,6 +148,7 @@ struct SSearchFieldMotion {
     // PondFluid.qml: widthSpring / widthDamping, mass 1.1, epsilon 0.4 -- and
     // slideSpring / slideDamping for the text sliding under the cap.
     static constexpr float WIDTH_SPRING = 4.0F, WIDTH_DAMPING = 0.44F, WIDTH_MASS = 1.1F, WIDTH_EPSILON = 0.4F;
+    static constexpr float LAND_TAU_MS = 70.F;
     static constexpr float SLIDE_SPRING = 4.6F, SLIDE_DAMPING = 0.30F, SLIDE_MASS = 1.0F, SLIDE_EPSILON = 0.4F;
 
     float widthL   = OVERVIEW_PILL_FIELDL; // the field, logical px
@@ -161,19 +162,31 @@ struct SSearchFieldMotion {
     float                          drawWidthL = OVERVIEW_PILL_FIELDL, drawScrollL = 0.F;
 
     std::optional<Time::steady_tp> last;
+    // The draw pass is the only place the text is measured, one frame behind
+    // stepTo: the first frame of an overview steps with nothing measured yet,
+    // so it lands on the bare rest width and the second frame -- the first with
+    // the placeholder measured -- sprang out past its real width and back (user,
+    // 2026-11-06: "remove the overshoot of the search bar when overview opens").
+    // The field LANDS until that first measurement has been taken.
+    bool                           measured = false, landedMeasured = false;
     // What the last stepTo answered, for the overview's idle gate: these two
     // springs are wall-clock, so nothing the compositor animates reports them.
     bool                           moving = false;
 
     // Returns whether either spring is still moving, so the caller keeps frames
     // coming until both have settled.
-    bool stepTo(float wantWidthL, float wantScrollL, const Time::steady_tp& now) {
+    // `land`: take the target as it is, without springing to it (the overview
+    // opening or closing around a pill at rest -- see renderSearch).
+    bool stepTo(float wantWidthL, float wantScrollL, const Time::steady_tp& now, bool land = false) {
         // The first frame of an overview lands at rest rather than springing in
         // from wherever the struct's defaults happen to be.
-        if (!last) {
+        if (!last || !landedMeasured) {
+            landedMeasured = measured;
             last        = now;
             widthL      = wantWidthL;
             scrollL     = wantScrollL;
+            widthV      = 0.F;
+            scrollV     = 0.F;
             drawWidthL  = widthL;
             drawScrollL = scrollL;
             moving      = false;
@@ -182,6 +195,23 @@ struct SSearchFieldMotion {
 
         const float DTMS = std::chrono::duration<float, std::milli>(now - *last).count();
         last             = now;
+
+        // Landing: a critically damped glide (no overshoot by construction) that
+        // smooths the zoom's whole-px font steps instead of jumping with them.
+        if (land) {
+            const float K = 1.F - std::exp(-DTMS / LAND_TAU_MS);
+            widthL += (wantWidthL - widthL) * K;
+            scrollL += (wantScrollL - scrollL) * K;
+            if (std::abs(wantWidthL - widthL) < WIDTH_EPSILON)
+                widthL = wantWidthL;
+            if (std::abs(wantScrollL - scrollL) < SLIDE_EPSILON)
+                scrollL = wantScrollL;
+            widthV = scrollV = 0.F;
+            drawWidthL       = widthL;
+            drawScrollL      = scrollL;
+            moving           = widthL != wantWidthL || scrollL != wantScrollL;
+            return moving;
+        }
 
         qtSpringStep(widthL, widthV, wantWidthL, WIDTH_SPRING, WIDTH_DAMPING, WIDTH_MASS, WIDTH_EPSILON, DTMS);
         qtSpringStep(scrollL, scrollV, wantScrollL, SLIDE_SPRING, SLIDE_DAMPING, SLIDE_MASS, SLIDE_EPSILON, DTMS);

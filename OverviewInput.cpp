@@ -37,6 +37,10 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
 
         lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
 
+        // A desktop in the hand owns the motion (SDeskDrag).
+        if (deskDragMove())
+            return;
+
         updateTileHover();
 
         // Search hover is motion-only: results appearing under a parked cursor
@@ -368,6 +372,11 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
 
         if (event.button == MAIN_BUTTON) {
             lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
+
+            // Super + a desktop on the strip: picked up to move (SDeskDrag),
+            // ahead of the submap's Super-click.
+            if (!drag.activeWindow && deskDragButton(event.state == WL_POINTER_BUTTON_STATE_PRESSED))
+                return;
 
             // X24 dock-side, in the overview. The pill is pinned here (§10
             // clause 6) and floats OVER the main area, so without this the tile
@@ -845,6 +854,13 @@ void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallback
             return;
 
         if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter) && BASE_MODS != 0)
+            return;
+
+        // Tab is the pane cycle only as a plain key (Shift+Tab included). A
+        // chord -- SUPER+TAB is the README's suggested overview toggle -- is the
+        // user's bind (borrowed into the submap, see borrowGlobalPassthroughBinds and SubmapBorrow.hpp);
+        // taking it as a plain Tab cycled panes instead of closing (O5).
+        if ((KEYSYM == XKB_KEY_Tab || KEYSYM == XKB_KEY_ISO_Left_Tab) && BASE_MODS != 0)
             return;
 
         // SUPER+W CLOSES THE HIGHLIGHTED TILE (user, 2026-09-23).

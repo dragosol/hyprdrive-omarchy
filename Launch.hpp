@@ -24,6 +24,12 @@
 
 namespace ScrollOverview::Launch {
 
+    // Told of every launch that goes through wrap() (Intent::init sets it): a
+    // window the user launched may take the focus (Intent.hpp). A plain
+    // pointer, so the host tests that include this header link without it.
+    inline void (*onLaunch)() = nullptr;
+
+
     // The uwsm-app binary to wrap launches with, or "" when this compositor is
     // not running as uwsm's WM unit. Decided once: neither changes mid-session.
     inline const std::string& uwsmApp() {
@@ -46,6 +52,8 @@ namespace ScrollOverview::Launch {
 
     // binary + args -> uwsm-app -- binary args (or untouched).
     inline void wrap(std::string& binary, std::vector<std::string>& args) {
+        if (onLaunch)
+            onLaunch();
         const auto& APP = uwsmApp();
         if (APP.empty())
             return;

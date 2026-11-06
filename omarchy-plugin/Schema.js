@@ -32,6 +32,20 @@ var P = "plugin:hyprdrive:"
 
 var sections = [
   {
+    id: "general", title: "General", icon: "\uf013", group: "general",
+    subtitle: "What Hyprdrive opens things with.",
+    cards: [
+      { title: "Fullscreen", rows: [
+        { type: "choice", key: P + "general:fullscreen_desktop", label: "Fullscreen apps",
+          desc: "Its own desktop: a fullscreen app gets the desktop right after yours, the others move along a place, and it comes back when you leave fullscreen. An app alone on its desktop keeps it." }
+      ]},
+      { title: "Apps", rows: [
+        { type: "choice", dropdown: true, key: P + "general:file_manager", label: "File manager",
+          desc: "Where the dock's folders and stacks, Open in Files and Show in Files open. System default follows your desktop's default for folders." }
+      ]}
+    ]
+  },
+  {
     id: "overview", title: "Overview", icon: "", group: "overview",
     subtitle: "Mission Control, the desktop strip and search.",
     cards: [
@@ -101,6 +115,8 @@ var sections = [
       { title: "Contents", rows: [
         { type: "toggle", key: P + "dock:show_favorites", label: "Pinned favorites" },
         { type: "toggle", key: P + "dock:show_apps_button", label: "Applications button" },
+        { type: "toggle", key: P + "dock:folders_anywhere", label: "Folders anywhere",
+          desc: "Off, your folders sit together after the apps. On, drag a folder anywhere among the apps. Drives, the Trash and Show Overview stay at the end either way." },
         { type: "toggle", key: P + "dock:show_trash", label: "Trash" },
         { type: "toggle", key: P + "dock:show_mounts", label: "Mounted drives" },
         { type: "toggle", key: P + "dock:show_mounts_network", label: "Network drives", when: "mountsOn",
@@ -145,7 +161,7 @@ var sections = [
   },
   {
     id: "icons", title: "Icons", icon: "\uf03e", group: "icons",
-    subtitle: "Give any app on the dock a different icon.",
+    subtitle: "Give any app or folder on the dock a different icon.",
     cards: [
       { title: "Dock icons", rows: [
         { type: "icons", label: "Change an app's icon",
@@ -292,6 +308,8 @@ var sections = [
           desc: "New desktops, and any you have not set with Super+L, start in Mosaic. Off restores the previous default." },
         { type: "toggle", key: P + "mosaic:spawn_at_cursor", label: "Open windows at the pointer", when: "mosaicOn",
           desc: "A new window lands where the pointer is, and the others make room around it. Off, new windows join the cluster wherever it packs them." },
+        { type: "toggle", key: P + "mosaic:quiet_new_windows", label: "Windows you didn't open stay quiet", when: "mosaicOn",
+          desc: "A loading screen or an app reopening itself opens without taking your focus, and your pointer stays on your window. Windows you launch (keys, the dock, a launcher) still come forward." },
         { type: "toggle", key: P + "mosaic:infinite_canvas", label: "Infinite canvas", when: "mosaicOn",
           desc: "When windows no longer fit the screen, they keep their size and spill onto a canvas you pan across, instead of tiling. Hold Super and move the pointer to see every window on it." },
         { type: "choice", key: P + "mosaic:canvas_directions", label: "Canvas directions", when: "canvasOn",

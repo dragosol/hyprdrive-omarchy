@@ -1,3 +1,4 @@
+#include <numeric>
 #include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include <hyprland/src/protocols/PointerConstraints.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
@@ -16,6 +17,9 @@
 #include "KeyboardCat.hpp"
 #include "Motion.hpp"
 #include "BorderFade.hpp"
+#include "DesktopOrder.hpp"
+#include "FullscreenDesktop.hpp"
+#include "SubmapBorrow.hpp"
 
 #include "Compat.hpp"
 #include "Scratchpad.hpp"
@@ -917,6 +921,21 @@ bool CScrollOverview::isSelectedWorkspace(const PHLWORKSPACE& workspace) const {
         images[viewportCurrentWorkspace]->pWorkspace == workspace;
 }
 
+// The insert transition's key for a desktop: the object itself (its number can
+// change under the transition, DesktopOrder.hpp).
+// DEPTH (cardDepth): how much smaller a card behind another is drawn, fully under it.
+static constexpr float DEPTH_SHRINK = 0.12F;
+
+static CBox depthScaled(const CBox& box, const Vector2D& centre, float k) {
+    if (k >= 0.9999F)
+        return box;
+    return {centre.x + (box.x - centre.x) * k, centre.y + (box.y - centre.y) * k, box.w * k, box.h * k};
+}
+
+static WORKSPACEID workspaceKey(const PHLWORKSPACE& ws) {
+    return ws ? sc<WORKSPACEID>(rc<intptr_t>(ws.get())) : WORKSPACE_INVALID;
+}
+
 float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
     const auto MONITOR             = pMonitor.lock();
     const auto MONITORSCALE        = MONITOR ? std::max(MONITOR->m_scale, 0.01F) : 1.F;
@@ -931,7 +950,7 @@ float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activ
     if (!workspaceInsertTransition.active || workspaceIdx >= images.size() || !images[workspaceIdx] || !images[workspaceIdx]->pWorkspace)
         return DEFAULTOFFSET;
 
-    const auto WORKSPACEID = images[workspaceIdx]->pWorkspace->m_id;
+    const auto WORKSPACEID = workspaceKey(images[workspaceIdx]->pWorkspace);
     const auto NEWIT       = workspaceInsertTransition.newRelativeOffsets.find(WORKSPACEID);
     if (NEWIT == workspaceInsertTransition.newRelativeOffsets.end())
         return DEFAULTOFFSET;
@@ -975,11 +994,15 @@ float CScrollOverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
     if (!workspaceInsertTransition.active || workspaceIdx >= images.size() || !images[workspaceIdx] || !images[workspaceIdx]->pWorkspace)
         return 1.F;
 
-    if (images[workspaceIdx]->pWorkspace->m_id != workspaceInsertTransition.transitionWorkspaceID)
+    if (workspaceKey(images[workspaceIdx]->pWorkspace) != workspaceInsertTransition.transitionWorkspaceID)
         return 1.F;
 
-    if (!workspaceInsertTransition.transitionFadeIn)
-        return 1.F;
+    // The emptied desktop a ghost left (REUSEDEXIT): fades in at its place as
+    // the ghost finishes going under.
+    if (!workspaceInsertTransition.transitionFadeIn) {
+        const float T = std::clamp((workspaceInsertProgress->value() - 0.6F) / 0.4F, 0.F, 1.F);
+        return T * T * (3.F - 2.F * T);
+    }
 
     if (workspaceInsertTransition.oldRelativeOffsets.contains(workspaceInsertTransition.transitionWorkspaceID))
         return 1.F;
@@ -5053,7 +5076,8 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
         return;
 
     const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, activeIdx, workspacePitch);
-    const auto WORKSPACEBOX     = getOverviewWorkspaceBox(monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
+    const auto RESTBOX          = getOverviewWorkspaceBox(monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
+    const auto WORKSPACEBOX     = depthScaled(RESTBOX, RESTBOX.middle(), cardDepth(workspaceIdx)); // further back while behind another
     const auto WORKSPACEALPHA   = workspaceOverviewAlpha(workspaceIdx);
 
     if (!overviewBoxIntersectsMonitor(WORKSPACEBOX, monitor))
@@ -5070,7 +5094,21 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
         workspace->m_forceRendering = WASFORCERENDERING;
     });
 
-    renderOverviewWorkspaceShadow(monitor, WORKSPACEBOX, renderScale, wallpaperMode == 0, WORKSPACEALPHA);
+    renderCardBody(monitor, WORKSPACEBOX, renderScale, wallpaperMode, WORKSPACEALPHA, now,
+                   trackpadDetentActive && workspaceIdx == trackpadDetentWorkspace ? std::clamp(trackpadDetentFocus, 0.F, 1.F) : 0.F);
+}
+
+void CScrollOverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float renderScale, int wallpaperMode, float alpha, const Time::steady_tp& now, float focus) {
+    // ONE CARD AT A TIME while cards overlap (a transition: one sliding out
+    // from under another, one passing behind the desktop in view). The fill
+    // below is drawn at once but the shadow and outline are QUEUED, so every
+    // card's outline landed on top of every card's fill: the desktop beneath
+    // showed its border through the one above (user's recordings, 2026-11-06).
+    // At rest the cards never overlap, and nothing is flushed.
+    const bool INORDER = workspaceInsertTransition.active && workspaceInsertProgress->value() < 1.F;
+    renderOverviewWorkspaceShadow(monitor, box, renderScale, wallpaperMode == 0, alpha);
+    if (INORDER)
+        OverviewRender::flushPass(monitor);
 
     // X86: workspace cards do NOT get their own live COverviewBlurPassElement.
     // Windows on the card use the same renderWindow live frost path as main tiles
@@ -5079,37 +5117,37 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
     // so empty-search (many cards) frosted harder than search mode for free.
     // Wallpaper stays the card fill; glass comes from the windows themselves.
 
-    if (wallpaperMode != 0 && WORKSPACEALPHA > 0.001F)
-        renderWallpaperLayers(monitor, WORKSPACEBOX, renderScale, now, WORKSPACEALPHA);
+    if (wallpaperMode != 0 && alpha > 0.001F)
+        renderWallpaperLayers(monitor, box, renderScale, now, alpha);
 
     // GNOME-style rounding (user-directed): composite the native-size wallpaper
     // FB into the card box with shader round/roundingPower. The corners are
     // genuinely clipped and antialiased against whatever is behind them --
     // shadow included -- which no painted-on mask could match exactly.
-    if (WORKSPACEALPHA > 0.001F && frost.cardWallpaperFB && frost.cardWallpaperFB->isAllocated() && frost.cardWallpaperFB->getTexture()) {
+    if (alpha > 0.001F && frost.cardWallpaperFB && frost.cardWallpaperFB->isAllocated() && frost.cardWallpaperFB->getTexture()) {
         const auto    CARDROUND = getOverviewCardRounding(monitor, ScrollOverview::Config::getScale());
-        const auto    BOXPX     = WORKSPACEBOX.copy().round();
+        const auto    BOXPX     = box.copy().round();
         const CRegion DMG{BOXPX};
 
         g_pHyprRenderer->draw(
             CTexPassElement::SRenderData{
                 .tex           = frost.cardWallpaperFB->getTexture(),
                 .box           = BOXPX,
-                .a             = WORKSPACEALPHA,
+                .a             = alpha,
                 .damage        = DMG,
                 .round         = CARDROUND.rounding,
                 .roundingPower = CARDROUND.power,
                 .flipEndFrame  = true,
             },
             DMG);
-    } else if (WORKSPACEALPHA > 0.001F)
-        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, WORKSPACEBOX, renderScale, now);
+    } else if (alpha > 0.001F)
+        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, box, renderScale, now);
 
     // Outline the floating card so it separates from the dimmed canvas behind
     // it. Same accent the tile ring and strip use; same weight as Hyprland
     // window borders, floored at 1 so a theme with border_size 0 still frames
     // the card.
-    if (WORKSPACEALPHA > 0.001F) {
+    if (alpha > 0.001F) {
         const auto CARDROUND   = getOverviewCardRounding(monitor, ScrollOverview::Config::getScale());
         const int  BORDERSIZE  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
         const auto ACCENT      = ScrollOverview::Config::highlightColor();
@@ -5119,18 +5157,20 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
         // midpoint between two, so the weight grows into the detent rather than
         // flicking on at the crossing -- which is what makes it read as the pad
         // catching rather than as a redraw.
-        const float FOCUS = trackpadDetentActive && workspaceIdx == trackpadDetentWorkspace ? std::clamp(trackpadDetentFocus, 0.F, 1.F) : 0.F;
+        const float FOCUS = focus;
 
         CBorderPassElement::SBorderData border;
-        border.box           = WORKSPACEBOX.copy().round();
+        border.box           = box.copy().round();
         border.grad1.reset(ACCENT.modifyA(1.F));
-        border.a             = WORKSPACEALPHA;
+        border.a             = alpha;
         // Ceil, not round: at BORDERSIZE 1 a 0.6x growth rounds back to 1 and
         // the whole effect disappears on a thin-border theme.
         border.borderSize    = BORDERSIZE + sc<int>(std::ceil(FOCUS * sc<float>(BORDERSIZE)));
         border.round         = CARDROUND.rounding;
         border.roundingPower = CARDROUND.power;
         g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+        if (INORDER)
+            OverviewRender::flushPass(monitor);
 
         // The NUMBER is not drawn here. This is the background pass -- it runs
         // before the card's own windows -- so a label written here is painted
@@ -5150,6 +5190,8 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
     const auto WORKSPACEBOX     = getOverviewWorkspaceBox(monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
     const auto VISIBLEBOX       = workspaceOverviewVisibleBox(workspaceIdx, WORKSPACEBOX, renderScale, monitor);
     const bool WORKSPACEVISIBLE = overviewBoxIntersectsMonitor(VISIBLEBOX, monitor);
+    const float DEPTH           = cardDepth(workspaceIdx);
+    const CBox  CARDBOX         = depthScaled(WORKSPACEBOX, WORKSPACEBOX.middle(), DEPTH); // the clip: the card as drawn
 
     // B2: a promoted tile is drawn here, in its own workspace's pass — that is
     // where the m_visible / m_forceRendering override below lives — but at the
@@ -5238,7 +5280,35 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
         if (!WORKSPACEVISIBLE && !PROMOTED)
             return;
 
-        const auto windowBox = TileChrome::scaledBox(window, getOverviewWindowBox(window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout));
+        auto       windowBox = TileChrome::scaledBox(window, getOverviewWindowBox(window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout));
+        // With its card, when that is further back (cardDepth); a promoted tile
+        // sits on the card in view, not this one.
+        if (!PROMOTED)
+            windowBox = depthScaled(windowBox, WORKSPACEBOX.middle(), DEPTH);
+        // A TILE CHANGING DESKTOPS under an insert/remove (a fullscreen app to
+        // its own desktop and back): from where it was drawn, on the other
+        // card, to its place on this one -- unclipped, it crosses between them.
+        bool travelling = false;
+        if (workspaceInsertTransition.active && workspaceInsertProgress->value() < 1.F)
+            if (const auto IT = workspaceInsertTransition.tileFrom.find(window.get()); IT != workspaceInsertTransition.tileFrom.end() && IT->second.box.w >= 2) {
+                const float T    = std::clamp(workspaceInsertProgress->value(), 0.F, 1.F);
+                const CBox& FROM = IT->second.box;
+                if (IT->second.card != workspaceKey(workspace)) {
+                    windowBox  = CBox{FROM.x + (windowBox.x - FROM.x) * T, FROM.y + (windowBox.y - FROM.y) * T, FROM.w + (windowBox.w - FROM.w) * T,
+                                      FROM.h + (windowBox.h - FROM.h) * T};
+                    travelling = true;
+                } else if (const CBox& C = IT->second.cardBox; !PROMOTED && C.w >= 2 && C.h >= 2 && CARDBOX.w >= 2 && CARDBOX.h >= 2) {
+                    // THE WINDOWS LEFT BEHIND (a desktop a window just left
+                    // re-tiles at once -- Hyprland does not animate a desktop
+                    // it is not showing): from where they were on their card to
+                    // where they are, IN the card's own terms, so the card's
+                    // slide and depth carry them as well.
+                    const CBox A = {(FROM.x - C.x) / C.w, (FROM.y - C.y) / C.h, FROM.w / C.w, FROM.h / C.h};
+                    const CBox B = {(windowBox.x - CARDBOX.x) / CARDBOX.w, (windowBox.y - CARDBOX.y) / CARDBOX.h, windowBox.w / CARDBOX.w, windowBox.h / CARDBOX.h};
+                    const CBox R = {A.x + (B.x - A.x) * T, A.y + (B.y - A.y) * T, A.w + (B.w - A.w) * T, A.h + (B.h - A.h) * T};
+                    windowBox    = CBox{CARDBOX.x + R.x * CARDBOX.w, CARDBOX.y + R.y * CARDBOX.h, R.w * CARDBOX.w, R.h * CARDBOX.h};
+                }
+            }
         if (!overviewBoxIntersectsMonitor(windowBox, monitor))
             return;
 
@@ -5320,7 +5390,7 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
                 tileBlurred = ScrollOverview::FlightBlur::drawBlurred(
                     monitor, window, HALF, windowBox,
                     [&] {
-                        renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, NEIGHBOURALPHA(PROMOTED), false);
+                        renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &CARDBOX, false, NEIGHBOURALPHA(PROMOTED), false);
                         // Its badge (the app icon) moves with it and smears
                         // with it (user, 2026-09-30).
                         TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
@@ -5330,10 +5400,10 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
                 OverviewRender::flushPass(monitor);
         }
         if (!tileBlurred) {
-            renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &WORKSPACEBOX, false, NEIGHBOURALPHA(PROMOTED));
+            renderWindowLive(monitor, window, windowBox, renderScale, now, travelling ? nullptr : PROMOTED ? &ACTIVECARDBOX : &CARDBOX, false, travelling ? 1.F : NEIGHBOURALPHA(PROMOTED));
             TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
         }
-        lastTileBoxes[window.get()] = {windowBox, workspaceIdx};
+        lastTileBoxes[window.get()] = {windowBox, workspaceIdx, PROMOTED ? ACTIVECARDBOX : CARDBOX};
     };
 
 
@@ -6203,8 +6273,82 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
 
 // X22: screen-fixed. The strip used to ride the active card, which meant a
 // desktop pan carried it clean off the monitor along with the search bar.
+// The order the cards are drawn in: the row's, except that a desktop being
+// born slides out from BENEATH the one it came from.
+// DEPTH: how far behind a card is, from how much it overlaps the card it
+// passes under -- its current offset against that card's, in pitches. Fully
+// under it, the card is DEPTH_SHRINK smaller; a pitch away, at rest. One rule
+// for both: a fullscreen app's new desktop starts beneath the one it came out
+// of and grows as that one slides off it; a desktop moved along the strip
+// shrinks as it crosses behind the desktop in view and grows back past it.
+size_t CScrollOverview::depthAnchor() const {
+    if (!workspaceInsertTransition.active || !workspaceInsertTransition.reorder || workspaceInsertProgress->value() >= 1.F)
+        return SIZE_MAX;
+    const size_t A = activeWorkspaceIndex();
+    return A < images.size() ? A : SIZE_MAX;
+}
+
+float CScrollOverview::cardDepth(size_t workspaceIdx) const {
+    if (!workspaceInsertTransition.active || workspaceInsertProgress->value() >= 1.F || workspaceIdx >= images.size() || !images[workspaceIdx] ||
+        !images[workspaceIdx]->pWorkspace)
+        return 1.F;
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR)
+        return 1.F;
+    const float  PITCH  = getWorkspaceRenderedPitch(MONITOR, scale->value(), layout);
+    const size_t ACTIVE = activeWorkspaceIndex();
+    if (PITCH < 1.F)
+        return 1.F;
+    const auto under = [&](size_t other) {
+        const float A = workspaceOverviewOffset(workspaceIdx, ACTIVE, PITCH), B = workspaceOverviewOffset(other, ACTIVE, PITCH);
+        const float O = std::clamp(1.F - std::abs(A - B) / PITCH, 0.F, 1.F);
+        return 1.F - DEPTH_SHRINK * O * O * (3.F - 2.F * O); // smoothstep: eases in and out of the dip
+    };
+    if (workspaceInsertTransition.bornUnder != WORKSPACE_INVALID) {
+        if (workspaceKey(images[workspaceIdx]->pWorkspace) != workspaceInsertTransition.transitionWorkspaceID)
+            return 1.F;
+        for (size_t i = 0; i < images.size(); ++i)
+            if (images[i] && workspaceKey(images[i]->pWorkspace) == workspaceInsertTransition.bornUnder)
+                return under(i);
+        return 1.F;
+    }
+    if (workspaceInsertTransition.reorder && workspaceIdx != ACTIVE && ACTIVE < images.size())
+        return under(ACTIVE);
+    return 1.F;
+}
+
+std::vector<size_t> CScrollOverview::cardOrder() const {
+    std::vector<size_t> order(images.size());
+    std::iota(order.begin(), order.end(), size_t{0});
+    if (!workspaceInsertTransition.active || workspaceInsertTransition.bornUnder == WORKSPACE_INVALID || workspaceInsertProgress->value() >= 1.F)
+        return order;
+    size_t born = SIZE_MAX, under = SIZE_MAX;
+    for (size_t i = 0; i < images.size(); ++i) {
+        if (!images[i] || !images[i]->pWorkspace)
+            continue;
+        const auto KEY = workspaceKey(images[i]->pWorkspace);
+        if (KEY == workspaceInsertTransition.transitionWorkspaceID)
+            born = i;
+        if (KEY == workspaceInsertTransition.bornUnder)
+            under = i;
+    }
+    if (born != SIZE_MAX && under != SIZE_MAX && born > under) {
+        order.erase(order.begin() + sc<std::ptrdiff_t>(born));
+        order.insert(order.begin() + sc<std::ptrdiff_t>(under), born);
+    }
+    return order;
+}
+
 CBox CScrollOverview::stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, float renderScale) const {
-    const auto LOGICAL = stripCellLogicalBox(workspaceIdx);
+    auto LOGICAL = stripCellLogicalBox(workspaceIdx);
+    // A desktop insert/remove: the cells slide from where they were.
+    if (workspaceInsertTransition.active && LOGICAL.width > 0 && workspaceIdx < images.size() && images[workspaceIdx] && images[workspaceIdx]->pWorkspace)
+        if (const auto IT = workspaceInsertTransition.oldStripBoxes.find(workspaceKey(images[workspaceIdx]->pWorkspace)); IT != workspaceInsertTransition.oldStripBoxes.end()) {
+            const float T   = std::clamp(workspaceInsertProgress->value(), 0.F, 1.F);
+            const CBox& OLD = IT->second;
+            LOGICAL         = CBox{OLD.x + (LOGICAL.x - OLD.x) * T, OLD.y + (LOGICAL.y - OLD.y) * T, OLD.width + (LOGICAL.width - OLD.width) * T,
+                                   OLD.height + (LOGICAL.height - OLD.height) * T};
+        }
     if (!monitor || LOGICAL.width <= 0)
         return {};
 
@@ -6444,7 +6588,10 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
                 // Radius in RENDER space = the cells' radius plus the padding as
                 // it actually landed after the transform. Measuring the gap off
                 // the transformed boxes avoids duplicating the scale maths.
-                const auto FIRSTCELL = stripCellBox(0, monitor, renderScale);
+                // (The resting box, not stripCellBox: that one glides during a
+                // transition, and a first desktop moving away turned the gap --
+                // and the radius -- into a stadium.)
+                const auto FIRSTCELL = getOverviewGlobalBox(FIRSTLOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
                 // Concentric with the cells only when the theme actually rounds.
                 // Omarchy's squared default (decoration:rounding 0) must stay
                 // squared; inflating by the padding used to force a curve.
@@ -6550,8 +6697,10 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
 
     renderOverviewWorkspaceShadow(monitor, CELL, renderScale, false, FADE);
 
-    const bool ATLEFT  = workspaceIdx == 0;
-    const bool ATRIGHT = workspaceIdx + 1 == images.size();
+    // (A cell gliding to another place takes that place's corners; the lifted
+    // one is a card of its own, every corner round.)
+    const bool ATLEFT  = stripCellEdges >= 0 ? (stripCellEdges & 1) != 0 : workspaceIdx == 0;
+    const bool ATRIGHT = stripCellEdges >= 0 ? (stripCellEdges & 2) != 0 : workspaceIdx + 1 == images.size();
 
     // Resting fill is the strip panel (the same Omarchy terminal plate as the
     // dock). Only hover tints the cell itself.
@@ -6604,7 +6753,9 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
 
     // Tint and outline fade in and out on Hyprland's `border` animation, as a
     // window's border does when it takes focus (BorderFade.hpp).
-    const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 32) ^ sc<uint64_t>(sc<uint32_t>(wimg->pWorkspace->m_id));
+    // Keyed by the desktop itself, not its number: a desktop moved along the
+    // strip keeps its tint and ring through the renumbering.
+    const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 32) ^ sc<uint64_t>(workspaceKey(wimg->pWorkspace));
     if (const float HOVERMIX = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-hover", CELLKEY), hovered); HOVERMIX > 0.F) {
         // X4: the hover tint is themed, from the same general:col.active_border
         // that DropIndicator already reads. White is only the fallback for a
@@ -6850,16 +7001,124 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
 
     renderStripPanel(monitor, renderScale, style);
 
-    for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
+    // A REMOVED DESKTOP'S CELL shrinks back into the cell of the desktop shown
+    // next (a fullscreen app's desktop going away, the reverse of how it grew
+    // out of it), fading -- beneath the cells it slides under.
+    if (workspaceInsertTransition.active && !workspaceInsertTransition.transitionFadeIn && workspaceInsertTransition.ghostCellTo != WORKSPACE_INVALID &&
+        workspaceInsertProgress->value() < 1.F)
+        if (const auto FROM = workspaceInsertTransition.oldStripBoxes.find(workspaceInsertTransition.transitionWorkspaceID); FROM != workspaceInsertTransition.oldStripBoxes.end()) {
+            for (size_t i = 0; i < images.size(); ++i) {
+                if (!images[i] || workspaceKey(images[i]->pWorkspace) != workspaceInsertTransition.ghostCellTo)
+                    continue;
+                const CBox  TO   = stripCellLogicalBox(i);
+                const float T    = std::clamp(workspaceInsertProgress->value(), 0.F, 1.F);
+                const CBox& F    = FROM->second;
+                const CBox  BOX  = {F.x + (TO.x - F.x) * T, F.y + (TO.y - F.y) * T, F.width + (TO.width - F.width) * T, F.height + (TO.height - F.height) * T};
+                const CBox  CELL = getOverviewGlobalBox(BOX, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+                if (CELL.width > 1 && CELL.height > 1)
+                    renderOverviewWorkspaceShadow(monitor, CELL, renderScale, false, style.fade * (1.F - T));
+                break;
+            }
+        }
+
+    // SUPER OVER A DESKTOP: the one to move (see SDeskDrag).
+    size_t superIdx = images.size();
+    if (!DRAGGED && !deskDrag.pressed && isOverviewPointerOnMonitor(monitor) && g_pInputManager && (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META)) {
+        workspaceAtStripPoint(lastMousePosLocal, &superIdx);
+        if (!deskMovable(superIdx))
+            superIdx = images.size();
+    }
+    // Eased per frame, by wall clock: the cells move like things with a little
+    // weight -- the lifted one trails the pointer by a hair, the others glide.
+    const auto  DESKNOW = Time::steadyNow();
+    const float DT      = std::clamp(std::chrono::duration<float>(DESKNOW - deskAnimAt).count(), 0.F, 0.05F);
+    deskAnimAt          = DESKNOW;
+    const float KFOLLOW = 1.F - std::exp(-DT / 0.035F);
+    const float KGLIDE  = 1.F - std::exp(-DT / 0.085F);
+    bool        moving  = false;
+    const bool  LIVE    = deskDrag.live && deskDrag.from < images.size() && deskDrag.to < images.size();
+    const auto  edgesOf = [&](size_t slot) { return (slot == 0 ? 1 : 0) | (slot + 1 == images.size() ? 2 : 0); };
+
+    struct SPlaced {
+        size_t idx;
+        CBox   cell;
+        int    edges;
+        bool   hovered;
+    };
+    std::vector<SPlaced> placed;
+    const auto drawCell = [&](size_t workspaceIdx) {
         const auto& wimg = images[workspaceIdx];
         if (!wimg || !wimg->pWorkspace)
-            continue;
-
-        const auto CELL = stripCellBox(workspaceIdx, monitor, renderScale);
-        if (CELL.width <= 1 || !overviewBoxIntersectsMonitor(CELL, monitor))
-            continue;
-
-        renderStripCell(monitor, workspaceIdx, CELL, DRAGGED, workspaceIdx == hoveredIdx, renderScale, now, style);
+            return;
+        const CBox HOME = stripCellBox(workspaceIdx, monitor, renderScale);
+        if (HOME.width <= 1)
+            return;
+        CBox        cell  = HOME;
+        const auto  KEY   = workspaceKey(wimg->pWorkspace);
+        const auto  CK    = (sc<uint64_t>(monitor->m_id) << 32) ^ sc<uint64_t>(KEY);
+        const bool  MINE  = LIVE && workspaceIdx == deskDrag.from;
+        int         edges = -1;
+        if (MINE) {
+            const CBox FIRST = stripCellBox(0, monitor, renderScale), LASTB = stripCellBox(images.size() - 1, monitor, renderScale);
+            const float WANT = std::clamp(sc<float>(lastMousePosLocal.x - deskDrag.grab.x), sc<float>(FIRST.x), sc<float>(LASTB.x));
+            if (!deskDrag.placed) {
+                deskDrag.x      = sc<float>(HOME.x);
+                deskDrag.placed = true;
+            }
+            deskDrag.x += (WANT - deskDrag.x) * KFOLLOW;
+            moving |= std::abs(WANT - deskDrag.x) > 0.5F;
+            cell.x = deskDrag.x;
+            edges  = 3; // in the hand: a card of its own, every corner round
+        } else if (LIVE) {
+            size_t slot = workspaceIdx;
+            if (deskDrag.from < deskDrag.to && workspaceIdx > deskDrag.from && workspaceIdx <= deskDrag.to)
+                slot = workspaceIdx - 1;
+            else if (deskDrag.to < deskDrag.from && workspaceIdx >= deskDrag.to && workspaceIdx < deskDrag.from)
+                slot = workspaceIdx + 1;
+            const float WANT = sc<float>(stripCellBox(slot, monitor, renderScale).x - HOME.x);
+            float&      s    = deskDrag.slide[KEY];
+            s += (WANT - s) * KGLIDE;
+            moving |= std::abs(WANT - s) > 0.5F;
+            cell.x += s;
+            edges = edgesOf(slot);
+        }
+        if (LIVE) {
+            // Where it was drawn, in the strip's own (logical) terms, unscaled:
+            // the drop's transition starts every cell from here.
+            const CBox L = stripCellLogicalBox(workspaceIdx);
+            if (HOME.width > 0 && HOME.height > 0)
+                deskDrag.drawn[KEY] = {L.x + (cell.x - HOME.x) * L.width / HOME.width, L.y + (cell.y - HOME.y) * L.height / HOME.height, L.width, L.height};
+        }
+        // A LITTLE BIGGER: lifted under Super, a touch more in the hand; both
+        // on Hyprland's border curve, so they swell and settle like the ring.
+        const float LIFT = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-lift", CK), workspaceIdx == superIdx || MINE);
+        const float HELD = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-held", CK), MINE);
+        if (const float G = 1.F + 0.04F * LIFT + 0.03F * HELD; G > 1.0005F) {
+            const double W = cell.width * G, H = cell.height * G;
+            cell           = {cell.x + (cell.width - W) / 2.0, cell.y + (cell.height - H) / 2.0, W, H};
+        }
+        // Whole pixels: a ring drawn on a fractional box seams (a bright dot
+        // mid-edge on the lifted cell).
+        cell.round();
+        if (cell.width <= 1 || !overviewBoxIntersectsMonitor(cell, monitor))
+            return;
+        placed.push_back({workspaceIdx, cell, edges, workspaceIdx == hoveredIdx || workspaceIdx == superIdx || MINE});
+    };
+    // The lifted cell over its neighbours: drawn last.
+    const size_t TOP = LIVE ? deskDrag.from : superIdx;
+    for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx)
+        if (workspaceIdx != TOP)
+            drawCell(workspaceIdx);
+    if (TOP < images.size())
+        drawCell(TOP);
+    if (moving) {
+        damage();
+        requestInputFrame();
+    }
+    for (const auto& P : placed) {
+        stripCellEdges = P.edges;
+        renderStripCell(monitor, P.idx, P.cell, DRAGGED, P.hovered, renderScale, now, style);
+        stripCellEdges = -1;
     }
 
     renderScratchpadCell(monitor, renderScale, now, style);
@@ -6870,7 +7129,7 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
     // would sit in the way of reading it.
     pillNudgeWant                  = 0.F; // the label below re-asks every frame; no label, no lift
     searchLayoutHere().gridNudgeL  = 0.F; // ...and no push on the grid
-    if (!DRAGGED)
+    if (!DRAGGED && !deskDrag.pressed)
         renderStripCellLabel(monitor, renderScale, FADE);
 }
 
@@ -6913,6 +7172,9 @@ bool CScrollOverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, 
         label += (i == 0 ? "  ·  " : ", ") + names[i];
     if (names.size() > 3)
         label += std::format("  +{}", names.size() - 3);
+    // Super held: it says what Super does here.
+    if (g_pInputManager && (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META) && deskMovable(idx))
+        label = "Move this desktop";
 
     const CBox CELL = stripCellBox(idx, monitor, renderScale);
     if (CELL.width <= 1)
@@ -8074,6 +8336,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
     // Nothing measured is nothing to fit: the placeholder keeps the rest width.
     auto& FIELDMOTION = g_search.fieldOn(L.monitorId);
     FIELDMOTION.contentL = 0.F;
+    FIELDMOTION.measured = true;
 
     if (!SearchLetters::g_searchLetters.empty()) {
         g_placeholderLetters.reset(); // a query took over: the placeholder starts at rest next time
@@ -8155,24 +8418,34 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             return (T && T->ok()) ? sc<float>(T->m_size.x) : sc<float>(FONTPX) * 0.5F;
         };
         std::string want;
+        float       restFitEnd = 0.F; // at rest: where the letters that fit end (the field fits these, not the faded rest of the word)
         if (g_pillPress.down)
             want = HINT;
         else if (g_pillHovered)
             want = FULL;
         else {
             // The rest text: whole letters up to the field's rest width, plus the
-            // one the end fade softens.
+            // one the end fade softens -- and then the rest of that word, so it
+            // reads "run", not "ru" (user, 2026-11-06: "might as well add the n
+            // since it fades away"). Those letters lie past the tail fade, so
+            // they are not seen, and the field does not widen for them.
             const float REST = OVERVIEW_PILL_FIELDL * SCALE + FADEPX * 0.5F;
             float       x    = 0.F;
+            bool        over = false;
             for (const auto& G : SearchLetters::codepoints(FULL)) {
                 const float W = glyphW(G);
-                if (x + W > REST)
+                if (!over && x + W > REST)
+                    over = true;
+                if (over && G == " ")
                     break;
                 want += G;
+                if (!over)
+                    restFitEnd = x + W;
                 x += W + SPACING;
             }
         }
         static std::string lastWant; // what the previous frame asked for: releasing the hint clears it in one go
+        static bool        lastRest = false; // the previous frame showed the rest text
         static bool        wasEngaged = false;
         static SearchLetters::clock::time_point engagedAt{};
         const bool ENGAGED = g_pillPress.down || g_pillHovered;
@@ -8187,7 +8460,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         // dissolves into the field's edge; hovering backspaces those faded
         // words and types them back in full, rather than only adding the
         // letters that did not fit.
-        if (!FRESH && g_pillHovered && !g_pillPress.down && lastWant != FULL && lastWant != HINT) {
+        if (!FRESH && g_pillHovered && !g_pillPress.down && lastRest) {
             const auto TAIL = FULL.rfind(' ', FULL.rfind(' ') - 1);
             A.sync(FULL.substr(0, TAIL + 1), NOW);
         }
@@ -8223,6 +8496,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         }
 
         lastWant = want;
+        lastRest = !g_pillPress.down && !g_pillHovered;
         const auto         LIVE = A.liveGlyphs();
         std::vector<float> widths;
         widths.reserve(LIVE.size());
@@ -8293,6 +8567,19 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         // Held, the pill is squeezed AROUND this field: aimed wide enough that
         // the hint still fits at the tightest squeeze (a constant, so the
         // spring is not re-aimed every frame of the hold).
+        // AT REST the text is measured from its layout, not from where its
+        // letters are drawn: the letters glide to their places in device px
+        // while the overview's opening zoom changes the pill's scale under them,
+        // so drawn-px / scale swelled ~12% and fell back, and the field sprang
+        // after it (user, 2026-11-06: "remove the overshoot of the search bar
+        // when overview opens"). Only while letters are still arriving or
+        // leaving does the field follow what is on screen.
+        if (!ENGAGED && LIVE.size() == SearchLetters::codepoints(want).size()) {
+            float laidOut = 0.F;
+            for (const float W : widths)
+                laidOut += W + SPACING;
+            shownEnd = std::min(std::max(0.F, laidOut - SPACING), restFitEnd);
+        }
         if (g_pillPress.down || g_pillHovered || shownEnd > OVERVIEW_PILL_FIELDL * SCALE + 0.5F)
             FIELDMOTION.contentL = (g_pillHovered && !g_pillPress.down ? std::max(shownEnd, OVERVIEW_PILL_FIELDL * SCALE) : shownEnd) / std::max(SCALE, 0.01F) /
                 (g_pillPress.down ? 1.F - SPillPress::PRESS_MAX : 1.F);
@@ -8431,7 +8718,12 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // and a target that wanders by a fraction of a pixel re-arms the spring --
     // which snaps within its epsilon -- every frame it steps.
     const float NEEDL       = FIELDMOTION.contentL > 0.F ? std::ceil(FIELDMOTION.contentL + OVERVIEW_PILL_ENDROOML) : 0.F;
-    if (FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow()))
+    // While the overview zooms in or out around a pill at rest, the field
+    // LANDS on its width: the glyphs are re-rasterised at each step of the
+    // zoom, and a whole-px font size divided by a float scale wobbles a few
+    // logical px -- an underdamped spring turned that into a visible bounce.
+    const bool  FIELDLANDS  = scale->isBeingAnimated() && !g_pillHovered && !g_pillPress.down && g_search.query.text.empty();
+    if (FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow(), FIELDLANDS))
         requestInputFrame();
 
     // ---- LAYOUT: the animated values are sampled once, right here.
@@ -10494,18 +10786,26 @@ void CScrollOverview::onWorkspaceChange() {
     std::vector<WORKSPACEID> previousWorkspaceIDs;
     previousWorkspaceIDs.reserve(images.size());
     std::unordered_map<WORKSPACEID, float> previousWorkspaceOffsets;
+    std::unordered_map<WORKSPACEID, CBox>  previousStripBoxes;
+    // Where each tile was last drawn, and on which desktop's card (before the
+    // cards are rebuilt: cardIdx is an index into the old row).
+    std::unordered_map<const Desktop::View::CWindow*, decltype(workspaceInsertTransition.tileFrom)::mapped_type> previousTiles;
+    for (const auto& [WIN, LAST] : lastTileBoxes)
+        if (LAST.cardIdx < images.size() && images[LAST.cardIdx] && images[LAST.cardIdx]->pWorkspace)
+            previousTiles.emplace(WIN, decltype(workspaceInsertTransition.tileFrom)::mapped_type{LAST.box, workspaceKey(images[LAST.cardIdx]->pWorkspace), LAST.card});
     const auto PREVIOUSLOGICALPITCH = getWorkspaceLogicalPitch(pMonitor.lock(), scale->value(), layout);
     for (size_t i = 0; i < images.size(); ++i) {
         const auto& image = images[i];
         if (!image || !image->pWorkspace)
             continue;
 
-        previousWorkspaceIDs.push_back(image->pWorkspace->m_id);
-        previousWorkspaceOffsets.emplace(image->pWorkspace->m_id, workspaceOverviewLogicalOffset(i, previousActiveIdx, PREVIOUSLOGICALPITCH));
+        previousWorkspaceIDs.push_back(workspaceKey(image->pWorkspace));
+        previousWorkspaceOffsets.emplace(workspaceKey(image->pWorkspace), workspaceOverviewLogicalOffset(i, previousActiveIdx, PREVIOUSLOGICALPITCH));
+        previousStripBoxes.emplace(workspaceKey(image->pWorkspace), stripCellLogicalBox(i));
     }
 
     const auto NEWWORKSPACE      = pMonitor->m_activeWorkspace;
-    const bool INSERTEDWORKSPACE = std::find(previousWorkspaceIDs.begin(), previousWorkspaceIDs.end(), NEWWORKSPACE->m_id) == previousWorkspaceIDs.end();
+    const bool INSERTEDWORKSPACE = std::find(previousWorkspaceIDs.begin(), previousWorkspaceIDs.end(), workspaceKey(NEWWORKSPACE)) == previousWorkspaceIDs.end();
     const auto REQUESTEDREMOVEDWORKSPACE = pendingRemovedWorkspace.lock();
     // E8-d/E8-e: the E2 trailing workspace is empty on purpose, so upstream's
     // "collapse the empty workspace you just left" rule would delete its card the
@@ -10546,11 +10846,49 @@ void CScrollOverview::onWorkspaceChange() {
         REMOVEDWORKSPACE &&
         std::find_if(images.begin(), images.end(), [REMOVEDWORKSPACE](const auto& image) { return image && image->pWorkspace == REMOVEDWORKSPACE; }) == images.end();
 
-    if (INSERTEDWORKSPACE || REMOVEDPREVIOUSWORKSPACE) {
+    // REORDERED: the same desktops in another order (one moved along the
+    // strip). Every card and cell glides from where it was to its new place;
+    // a dropped cell starts from where it was let go (stripDropBoxes).
+    bool REORDERED = std::exchange(stripSettle, false);
+    {
+        std::vector<WORKSPACEID> was, now;
+        for (const auto& image : images)
+            if (image && image->pWorkspace && std::ranges::find(previousWorkspaceIDs, workspaceKey(image->pWorkspace)) != previousWorkspaceIDs.end())
+                now.push_back(workspaceKey(image->pWorkspace));
+        for (const auto K : previousWorkspaceIDs)
+            if (std::ranges::find(now, K) != now.end())
+                was.push_back(K);
+        REORDERED |= was != now;
+    }
+    for (const auto& [K, BOX] : stripDropBoxes)
+        previousStripBoxes[K] = BOX;
+    stripDropBoxes.clear();
+
+    // A FULLSCREEN APP ON AN EMPTY DESKTOP THAT WAS ALREADY THERE (the next
+    // free place, FullscreenDesktop.cpp): shown as if made for it -- out from
+    // under the desktop it left; and when the app goes back, that desktop goes
+    // back under as a ghost while the empty one fades in at its own place.
+    // (Before, both were a plain pan: user's recording, 2026-11-06.)
+    const bool PREVKNOWN   = previousStartedOn && previousStartedOn != NEWWORKSPACE && previousWorkspaceOffsets.contains(workspaceKey(previousStartedOn));
+    const bool REUSEDENTER = !INSERTEDWORKSPACE && PREVKNOWN && ScrollOverview::FullscreenDesktop::isFullscreenDesktop(NEWWORKSPACE);
+    const bool REUSEDEXIT  = !REMOVEDPREVIOUSWORKSPACE && !REUSEDENTER && PREVKNOWN && ScrollOverview::FullscreenDesktop::justLeft(previousStartedOn) &&
+        std::ranges::any_of(images, [&](const auto& image) { return image && image->pWorkspace == previousStartedOn; });
+    const bool BORNLIKE    = INSERTEDWORKSPACE || REUSEDENTER;
+
+    if (INSERTEDWORKSPACE || REMOVEDPREVIOUSWORKSPACE || REORDERED || REUSEDENTER || REUSEDEXIT) {
         workspaceInsertTransition.active                 = true;
-        workspaceInsertTransition.transitionWorkspaceID  = INSERTEDWORKSPACE ? NEWWORKSPACE->m_id : REMOVEDWORKSPACE->m_id;
-        workspaceInsertTransition.transitionFadeIn       = INSERTEDWORKSPACE;
-        workspaceInsertFadeProgress->setConfig(INSERTEDWORKSPACE ? workspaceInsertFadeConfig : workspaceRemoveFadeConfig);
+        workspaceInsertTransition.transitionWorkspaceID  = BORNLIKE ? workspaceKey(NEWWORKSPACE) : REMOVEDPREVIOUSWORKSPACE ? workspaceKey(REMOVEDWORKSPACE) :
+                                                            REUSEDEXIT                ? workspaceKey(previousStartedOn) :
+                                                                                        WORKSPACE_INVALID;
+        workspaceInsertTransition.ghost                  = REMOVEDPREVIOUSWORKSPACE || REUSEDEXIT;
+        workspaceInsertTransition.bornUnder              = WORKSPACE_INVALID;
+        workspaceInsertTransition.ghostTo                = 0.F;
+        workspaceInsertTransition.ghostCellTo            = REMOVEDPREVIOUSWORKSPACE ? workspaceKey(NEWWORKSPACE) : WORKSPACE_INVALID;
+        workspaceInsertTransition.reorder                = REORDERED && !INSERTEDWORKSPACE && !REMOVEDPREVIOUSWORKSPACE && !REUSEDENTER && !REUSEDEXIT;
+        workspaceInsertTransition.oldStripBoxes          = previousStripBoxes;
+        workspaceInsertTransition.tileFrom               = previousTiles;
+        workspaceInsertTransition.transitionFadeIn       = BORNLIKE;
+        workspaceInsertFadeProgress->setConfig(BORNLIKE ? workspaceInsertFadeConfig : workspaceRemoveFadeConfig);
         workspaceInsertTransition.oldRelativeOffsets.clear();
         workspaceInsertTransition.newRelativeOffsets.clear();
         workspaceInsertTransition.transitionOldRelativeOffset = 0.F;
@@ -10558,7 +10896,8 @@ void CScrollOverview::onWorkspaceChange() {
         for (size_t i = 0; i < previousWorkspaceIDs.size(); ++i) {
             const auto OFFSET = (previousWorkspaceOffsets.contains(previousWorkspaceIDs[i]) ? previousWorkspaceOffsets.at(previousWorkspaceIDs[i]) : 0.F) - PREVIOUSDRAG;
             workspaceInsertTransition.oldRelativeOffsets.emplace(previousWorkspaceIDs[i], OFFSET);
-            if (REMOVEDPREVIOUSWORKSPACE && previousWorkspaceIDs[i] == REMOVEDWORKSPACE->m_id)
+            if ((REMOVEDPREVIOUSWORKSPACE && previousWorkspaceIDs[i] == workspaceKey(REMOVEDWORKSPACE)) ||
+                (REUSEDEXIT && previousWorkspaceIDs[i] == workspaceKey(previousStartedOn)))
                 workspaceInsertTransition.transitionOldRelativeOffset = OFFSET;
         }
 
@@ -10567,8 +10906,30 @@ void CScrollOverview::onWorkspaceChange() {
             if (!images[i] || !images[i]->pWorkspace)
                 continue;
 
-            workspaceInsertTransition.newRelativeOffsets.emplace(images[i]->pWorkspace->m_id, workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, NEWLOGICALPITCH));
+            workspaceInsertTransition.newRelativeOffsets.emplace(workspaceKey(images[i]->pWorkspace), workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, NEWLOGICALPITCH));
         }
+
+        // A DESKTOP BORN NEXT TO THE ONE SHOWN (a fullscreen app's, user
+        // 2026-11-05: "show another desktop card sliding out from under it")
+        // starts where that one was, beneath it, and slides out to its place;
+        // its strip cell grows out of that one's cell. A REMOVED one slides
+        // back under the desktop shown next.
+        const auto FROMKEY = workspaceKey(previousStartedOn);
+        if (BORNLIKE && previousStartedOn && previousWorkspaceOffsets.contains(FROMKEY)) {
+            workspaceInsertTransition.bornUnder = FROMKEY;
+            workspaceInsertTransition.oldRelativeOffsets[workspaceKey(NEWWORKSPACE)] = previousWorkspaceOffsets.at(FROMKEY) - PREVIOUSDRAG;
+            // (A reused desktop's strip cell is already in its place.)
+            if (INSERTEDWORKSPACE && previousStripBoxes.contains(FROMKEY))
+                workspaceInsertTransition.oldStripBoxes[workspaceKey(NEWWORKSPACE)] = previousStripBoxes.at(FROMKEY);
+        }
+        if (REMOVEDPREVIOUSWORKSPACE || REUSEDEXIT)
+            if (const auto IT = workspaceInsertTransition.newRelativeOffsets.find(workspaceKey(NEWWORKSPACE)); IT != workspaceInsertTransition.newRelativeOffsets.end())
+                workspaceInsertTransition.ghostTo = IT->second;
+        // The emptied desktop itself stays where it is (its ghost does the
+        // going) and fades in there late (workspaceOverviewAlpha).
+        if (REUSEDEXIT)
+            if (const auto IT = workspaceInsertTransition.newRelativeOffsets.find(workspaceKey(previousStartedOn)); IT != workspaceInsertTransition.newRelativeOffsets.end())
+                workspaceInsertTransition.oldRelativeOffsets[workspaceKey(previousStartedOn)] = IT->second;
 
         workspaceInsertProgress->setValueAndWarp(0.F);
         workspaceInsertFadeProgress->setValueAndWarp(0.F);
@@ -10583,6 +10944,10 @@ void CScrollOverview::onWorkspaceChange() {
         workspaceInsertFadeProgress->setConfig(workspaceInsertFadeConfig);
         workspaceInsertTransition.oldRelativeOffsets.clear();
         workspaceInsertTransition.newRelativeOffsets.clear();
+        workspaceInsertTransition.oldStripBoxes.clear();
+        workspaceInsertTransition.tileFrom.clear();
+        workspaceInsertTransition.ghost = false;
+        workspaceInsertTransition.bornUnder = WORKSPACE_INVALID;
         workspaceInsertTransition.transitionOldRelativeOffset = 0.F;
         workspaceInsertProgress->setValueAndWarp(1.F);
         workspaceInsertFadeProgress->setValueAndWarp(1.F);
@@ -10728,28 +11093,37 @@ void CScrollOverview::render() {
     OpenProf::gpuMark("start");
     {
         Prof::Timer PROFBG{Prof::bgNs, Prof::bgCalls};
-        for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
-            renderWorkspaceBackground(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
+        // The removed desktop's ghost first: beneath the cards it slides under.
+        if (workspaceInsertTransition.active && workspaceInsertTransition.ghost) {
+            // Back under the desktop shown next: a whole card (a bare shadow left
+            // a hole the window crossed in the dark -- user's recording,
+            // 2026-11-06), solid until that desktop covers it, gone at the end.
+            const float GT          = std::clamp(workspaceInsertProgress->value(), 0.F, 1.F);
+            const auto GHOSTALPHA   = std::clamp((1.F - GT) / 0.25F, 0.F, 1.F);
+            const auto GHOSTOFFSET = (workspaceInsertTransition.transitionOldRelativeOffset +
+                                      (workspaceInsertTransition.ghostTo - workspaceInsertTransition.transitionOldRelativeOffset) * GT) * SCALE * MONITOR->m_scale;
+            // ...going further back as it does (cardDepth's rule, against where it ends).
+            const float GHOSTPITCH  = getWorkspaceRenderedPitch(MONITOR, SCALE, layout);
+            // (Against where the desktop covering it IS, not where it ends: it
+            // starts uncovered.)
+            const float GHOSTUNDER  = GHOSTPITCH > 1.F ? std::clamp(1.F - std::abs(GHOSTOFFSET - workspaceOverviewOffset(ACTIVEIDX, ACTIVEIDX, PITCH)) / GHOSTPITCH, 0.F, 1.F) : 0.F;
+            const auto GHOSTREST    = getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), GHOSTOFFSET, layout);
+            const auto GHOSTBOX     = depthScaled(GHOSTREST, GHOSTREST.middle(), 1.F - DEPTH_SHRINK * GHOSTUNDER * GHOSTUNDER * (3.F - 2.F * GHOSTUNDER));
+
+            if (GHOSTALPHA > 0.001F && overviewBoxIntersectsMonitor(GHOSTBOX, MONITOR))
+                renderCardBody(MONITOR, GHOSTBOX, SCALE, WALLPAPERMODE, GHOSTALPHA, NOW, 0.F);
         }
+
+        // (In a reorder the desktop in view is drawn last, card and windows
+        // together, so the ones passing behind it are behind it whole.)
+        const size_t DEPTHANCHOR = depthAnchor();
+        for (const size_t workspaceIdx : cardOrder())
+            if (workspaceIdx != DEPTHANCHOR)
+                renderWorkspaceBackground(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
     }
     OpenProf::gpuMark("bg");
 
-    if (workspaceInsertTransition.active && !workspaceInsertTransition.transitionFadeIn) {
-        const auto GHOSTALPHA   = 1.F - std::clamp(workspaceInsertFadeProgress->value(), 0.F, 1.F);
-        const auto GHOSTOFFSET = workspaceInsertTransition.transitionOldRelativeOffset * SCALE * MONITOR->m_scale;
-        const auto GHOSTBOX     = getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), GHOSTOFFSET, layout);
-
-        if (GHOSTALPHA > 0.001F && overviewBoxIntersectsMonitor(GHOSTBOX, MONITOR)) {
-            renderOverviewWorkspaceShadow(MONITOR, GHOSTBOX, SCALE, WALLPAPERMODE == 0, GHOSTALPHA);
-
-            if (WALLPAPERMODE != 0)
-                renderWallpaperLayers(MONITOR, GHOSTBOX, SCALE, NOW, GHOSTALPHA);
-
-            renderOverviewLayerLevel(MONITOR, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, GHOSTBOX, SCALE, NOW);
-        }
-    }
-
-    // Y17 (GPU, 2026-09-14). CPreBlurElement is a full-monitor dual-kawase that
+ // Y17 (GPU, 2026-09-14). CPreBlurElement is a full-monitor dual-kawase that
     // writes Monitor::m_blurFB, and m_blurFB is read only by a surface that
     // takes Hyprland's xray path. Every tile here goes through
     // OverviewWindow::renderOverviewWindow with scaleBlurToRenderScale=true
@@ -10845,8 +11219,15 @@ void CScrollOverview::render() {
 
     {
         Prof::Timer PROFLIVE{Prof::liveNs, Prof::liveCalls};
-        for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
-            renderWorkspaceLive(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
+        const size_t DEPTHANCHOR = depthAnchor();
+        for (const size_t workspaceIdx : cardOrder())
+            if (workspaceIdx != DEPTHANCHOR)
+                renderWorkspaceLive(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
+        if (DEPTHANCHOR != SIZE_MAX) {
+            OverviewRender::flushPass(MONITOR);
+            renderWorkspaceBackground(MONITOR, DEPTHANCHOR, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
+            OverviewRender::flushPass(MONITOR); // (a tile's prefilter binds a temp FB: nothing may be waiting in the pass)
+            renderWorkspaceLive(MONITOR, DEPTHANCHOR, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
         }
     }
     OpenProf::gpuMark("tiles");
@@ -11166,19 +11547,23 @@ void CScrollOverview::reopen() {
 // binds that were live when it opened are marked submap-universal, and those,
 // and only those, are unmarked on the way out. Read from the live bind table
 // rather than restated here, so Omarchy's own definitions stay the source.
+//
+// O5/B19: the user's keyboard CHORDS too (Super/Ctrl/Alt held) -- Super+F
+// (fullscreen) did nothing with the overview open here while native's worked
+// (user, 2026-11-06). Which binds qualify is SubmapBorrow.hpp's rule
+// (host-tested), the same file as native's.
 static std::vector<WP<SKeybind>> g_passthroughBinds;
 
-static bool isGlobalPassthroughBindKey(std::string key) {
-    std::ranges::transform(key, key.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
-    return key.starts_with("xf86") || key == "print" || key == "sys_req";
-}
+static_assert(ScrollOverview::SubmapBorrow::MOD_SHIFT == HL_MODIFIER_SHIFT && ScrollOverview::SubmapBorrow::MOD_CTRL == HL_MODIFIER_CTRL &&
+              ScrollOverview::SubmapBorrow::MOD_ALT == HL_MODIFIER_ALT && ScrollOverview::SubmapBorrow::MOD_META == HL_MODIFIER_META);
 
 static void borrowGlobalPassthroughBinds(const std::string& fromSubmap) {
     if (!g_pKeybindManager)
         return;
 
     for (const auto& keybind : g_pKeybindManager->m_keybinds) {
-        if (!keybind || keybind->submapUniversal || keybind->submap.name != fromSubmap || !isGlobalPassthroughBindKey(keybind->key))
+        if (!keybind || keybind->submapUniversal || keybind->submap.name != fromSubmap ||
+            !ScrollOverview::SubmapBorrow::borrows(keybind->key, keybind->modmask, keybind->mouse, keybind->catchAll))
             continue;
 
         keybind->submapUniversal = true;
@@ -11539,6 +11924,158 @@ static bool     g_warpCentred     = false; // overviewCenterCursorOnHandoff: thi
 
 void overviewCenterCursorOnHandoff() {
     g_warpCentred = true;
+}
+
+void overviewDesktopsRenumbered() {
+    for (const auto& OV : scrollOverviews())
+        if (auto* S = dynamic_cast<CScrollOverview*>(OV.get()))
+            S->desktopsRenumbered();
+}
+
+void overviewSuperChanged() {
+    for (const auto& OV : scrollOverviews())
+        if (auto* S = dynamic_cast<CScrollOverview*>(OV.get()))
+            S->superChanged();
+}
+
+bool overviewMoveShownDesktop(int dir) {
+    const auto MON = Desktop::focusState()->monitor();
+    for (const auto& OV : scrollOverviews())
+        if (auto* S = dynamic_cast<CScrollOverview*>(OV.get()); S && S->pMonitor.lock() == MON) {
+            S->moveShownDesktop(dir);
+            return true;
+        }
+    return false;
+}
+
+void CScrollOverview::superChanged() {
+    if (closing)
+        return;
+    damage();
+    requestInputFrame();
+}
+
+// A desktop with windows on it, numbered (not special, not named).
+bool CScrollOverview::deskMovable(size_t idx) const {
+    if (idx >= images.size() || !images[idx] || !ScrollOverview::DesktopOrder::ordinary(images[idx]->pWorkspace))
+        return false;
+    return std::ranges::any_of(images[idx]->windows, [](const PHLWINDOWREF& r) {
+        const auto W = r.lock();
+        return W && W->m_isMapped;
+    });
+}
+
+bool CScrollOverview::moveDesktop(size_t from, size_t to) {
+    if (from >= images.size() || to >= images.size())
+        return false;
+    if (from == to) {
+        stripSettle = true; // dropped where it was: it settles back
+        onWorkspaceChange();
+        return true;
+    }
+    std::vector<PHLWORKSPACE> order;
+    std::vector<WORKSPACEID>  ids;
+    for (const auto& I : images) {
+        if (!I || !ScrollOverview::DesktopOrder::ordinary(I->pWorkspace))
+            return false;
+        order.push_back(I->pWorkspace);
+        ids.push_back(I->pWorkspace->m_id);
+    }
+    std::ranges::sort(ids);
+    const auto W = order[from];
+    order.erase(order.begin() + sc<std::ptrdiff_t>(from));
+    order.insert(order.begin() + sc<std::ptrdiff_t>(to), W);
+    std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
+    for (size_t k = 0; k < order.size(); ++k)
+        moves.emplace_back(order[k], ids[k]);
+    ScrollOverview::DesktopOrder::renumber(moves);
+    // (renumber asked for a rebuild; this one runs now, with the transition.)
+    onWorkspaceChange();
+    return true;
+}
+
+bool CScrollOverview::moveShownDesktop(int dir) {
+    const auto MON = pMonitor.lock();
+    if (!MON || closing || images.empty() || deskDrag.pressed)
+        return false;
+    const size_t IDX = activeWorkspaceIndex();
+    if (!deskMovable(IDX))
+        return false;
+    const long TO = sc<long>(IDX) + dir;
+    if (TO < 0 || TO >= sc<long>(images.size()))
+        return false;
+    return moveDesktop(IDX, sc<size_t>(TO));
+}
+
+// The main button with Super held over a movable desktop: it is picked up.
+// Let go without moving it, it was a click (the desktop is picked, as ever).
+bool CScrollOverview::deskDragButton(bool pressed) {
+    if (pressed) {
+        if (!g_pInputManager || !(g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META))
+            return false;
+        size_t idx = images.size();
+        if (!workspaceAtStripPoint(lastMousePosLocal, &idx) || !deskMovable(idx))
+            return false;
+        const CBox CELL = stripCellBox(idx, pMonitor.lock(), scale->value());
+        deskDrag         = {};
+        deskDrag.pressed = true;
+        deskDrag.ws      = images[idx]->pWorkspace;
+        deskDrag.from = deskDrag.to = idx;
+        deskDrag.start              = lastMousePosLocal;
+        deskDrag.grab               = lastMousePosLocal - Vector2D{CELL.x, CELL.y};
+        damage();
+        requestInputFrame();
+        return true;
+    }
+    if (!deskDrag.pressed)
+        return false;
+    const auto D = std::move(deskDrag);
+    deskDrag     = {};
+    if (D.live) {
+        // The desktop may have moved under the drag (a fullscreen app): find it again.
+        size_t from = SIZE_MAX;
+        for (size_t i = 0; i < images.size(); ++i)
+            if (images[i] && images[i]->pWorkspace == D.ws.lock())
+                from = i;
+        stripDropBoxes = D.drawn;
+        if (from == SIZE_MAX || !moveDesktop(from, std::min(D.to, images.size() - 1)))
+            stripDropBoxes.clear();
+    } else
+        performPrimaryClickAction();
+    damage();
+    requestInputFrame();
+    return true;
+}
+
+bool CScrollOverview::deskDragMove() {
+    if (!deskDrag.pressed) {
+        // Super over the strip: the lift follows the pointer from cell to cell.
+        if (g_pInputManager && (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META) && stripUiContains(lastMousePosLocal)) {
+            damage();
+            requestInputFrame();
+        }
+        return false;
+    }
+    const auto  MON = pMonitor.lock();
+    const float THR = ScrollOverview::Config::getDragThreshold() * (MON ? MON->m_scale : 1.F);
+    if (!deskDrag.live && deskDrag.start.distanceSq(lastMousePosLocal) > THR * THR)
+        deskDrag.live = true;
+    if (deskDrag.live && MON && deskDrag.from < images.size()) {
+        // Its place: the slot whose centre is nearest the lifted cell's.
+        const CBox  OWN = stripCellBox(deskDrag.from, MON, scale->value());
+        const float CX  = sc<float>(lastMousePosLocal.x - deskDrag.grab.x) + sc<float>(OWN.width) / 2.F;
+        float       best = 1e9F;
+        for (size_t i = 0; i < images.size(); ++i) {
+            const CBox B = stripCellBox(i, MON, scale->value());
+            if (const float DX = std::abs(sc<float>(B.x + B.width / 2.0) - CX); DX < best) {
+                best        = DX;
+                deskDrag.to = i;
+            }
+        }
+    }
+    damage();
+    requestInputFrame();
+    return true;
 }
 
 // Unload: the queued warp would call into this plugin after dlclose. And no NEW
