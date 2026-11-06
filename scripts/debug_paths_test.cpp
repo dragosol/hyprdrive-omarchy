@@ -1,7 +1,7 @@
 // Host test for DebugPaths.hpp: debug switches and logs only in a private
 // runtime directory of ours, switches only when ours, logs always 0600
 // (marketplace review, #11392).
-#include "../DebugPaths.hpp"
+#include "../src/DebugPaths.hpp"
 
 #include <cstdio>
 #include <cstdlib>

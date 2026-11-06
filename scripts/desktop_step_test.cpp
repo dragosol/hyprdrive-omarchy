@@ -1,7 +1,7 @@
 // Host test for DesktopStepModel.hpp: the Super+scroll desktop walk (range,
 // clamping, desktops on other monitors), one step per wheel notch, and which
 // desktop changes the two animation switches snap.
-#include "../DesktopStepModel.hpp"
+#include "../src/DesktopStepModel.hpp"
 
 #include <cstdio>
 #include <set>

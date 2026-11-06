@@ -17,7 +17,7 @@ OPT ?= -O2
 PKGS := pixman-1 libdrm hyprland pangocairo libinput libudev wayland-server \
         xkbcommon libsystemd gio-2.0 gio-unix-2.0 $(LUA_PC)
 
-CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build \
+CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build -Isrc --embed-dir=. \
             $(shell pkg-config --cflags $(PKGS))
 LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0 xcb)
 
@@ -25,8 +25,10 @@ ifeq ($(CXX),g++)
     CXXFLAGS += -fno-gnu-unique
 endif
 
-SRCS := $(wildcard *.cpp)
-OBJS := $(SRCS:%.cpp=.build/%.o)
+# The sources live in src/ (flat: every #include is a bare name). --embed-dir=. is for
+# BuiltinIcons.cpp's #embed "assets/icons/...", which resolves from the root.
+SRCS := $(wildcard src/*.cpp)
+OBJS := $(SRCS:src/%.cpp=.build/%.o)
 DEPS := $(OBJS:.o=.d)
 
 VERSION_HEADER = .build/PluginVersion.hpp
@@ -49,7 +51,7 @@ hyprdrive.so: $(OBJS)
 # dock stacks C: the icons are #embed-ded, so their object depends on them.
 .build/BuiltinIcons.o: $(wildcard assets/icons/*.svg)
 
-.build/%.o: %.cpp | $(VERSION_HEADER)
+.build/%.o: src/%.cpp | $(VERSION_HEADER)
 	@mkdir -p .build
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 

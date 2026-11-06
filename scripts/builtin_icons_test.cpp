@@ -1,6 +1,6 @@
 // Host test for BuiltinIcons (dock stacks C): every embedded SVG is there,
 // takes the accent, and librsvg renders it to something with real coverage.
-#include "../BuiltinIcons.hpp"
+#include "../src/BuiltinIcons.hpp"
 
 #include <librsvg/rsvg.h>
 

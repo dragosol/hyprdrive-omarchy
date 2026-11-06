@@ -1,7 +1,7 @@
 // MosaicPack: the tight mosaic (MosaicPackFinal.hpp's pack), the dwindle
 // tiles, the calculated limit, and the size each window arrives with.
-#include "../MosaicPack.hpp"
-#include "../MosaicCanvas.hpp"
+#include "../src/MosaicPack.hpp"
+#include "../src/MosaicCanvas.hpp"
 
 #include <chrono>
 #include <cstdio>

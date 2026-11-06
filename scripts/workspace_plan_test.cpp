@@ -3,7 +3,7 @@
 // (2026-09-14: DP-1's spare desktop was one that already lived on eDP-1) and
 // the regressions a later edit could reintroduce.
 
-#include "../WorkspacePlan.hpp"
+#include "../src/WorkspacePlan.hpp"
 
 #include <cstdio>
 #include <tuple>

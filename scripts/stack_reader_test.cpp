@@ -1,5 +1,5 @@
 // StackReader's directory read: caps, hidden files, directories, birth time.
-#include "../StackReader.hpp"
+#include "../src/StackReader.hpp"
 
 #include <cstdio>
 #include <filesystem>

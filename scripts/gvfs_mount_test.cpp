@@ -1,5 +1,5 @@
 // GvfsMount: a gvfsd MountTracker entry -> a dock location.
-#include "../GvfsMount.hpp"
+#include "../src/GvfsMount.hpp"
 
 #include <cstdio>
 #include <string>

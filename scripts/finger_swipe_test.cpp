@@ -1,7 +1,7 @@
 // FingerSwipeModel: a swipe that outlives lifted fingers, and a swipe made
 // under a held drag. Frames are made up; the event ORDER follows libinput 1.31
 // (a count change ends the swipe as cancelled 100 ms after the raw lift).
-#include "../FingerSwipeModel.hpp"
+#include "../src/FingerSwipeModel.hpp"
 
 #include <cstdio>
 #include <string>

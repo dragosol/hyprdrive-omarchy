@@ -1,6 +1,6 @@
 // Host test for HotCornerModel.hpp: corner names, the in-corner band at each
 // corner, and the probes that decide whether a corner is an outer one.
-#include "../HotCornerModel.hpp"
+#include "../src/HotCornerModel.hpp"
 
 #include <cstdio>
 

@@ -18,7 +18,7 @@
 // not move). Either kind failing is a real bug, and neither can be satisfied by
 // a lucky picture.
 
-#include "../OverviewGeometry.hpp"
+#include "../src/OverviewGeometry.hpp"
 
 #include <cmath>
 #include <cstdio>

@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SRC = (ROOT / "ToolSearch.cpp").read_text()
+SRC = (ROOT / "src" / "ToolSearch.cpp").read_text()
 failed = checks = 0
 
 

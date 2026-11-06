@@ -1,7 +1,7 @@
 // Host test for IconSize.hpp: the icon texture size buckets, the never-upscale
 // fit, and that the downscale really filters (a 1 px stripe pattern resampled
 // 4x smaller comes out flat grey, where a single bilinear step aliases it).
-#include "../IconSize.hpp"
+#include "../src/IconSize.hpp"
 
 #include <cmath>
 #include <cstdint>

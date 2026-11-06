@@ -1,5 +1,5 @@
 // IconOverrides::parse -- the per-app dock icon store's line format.
-#include "../IconOverrides.hpp"
+#include "../src/IconOverrides.hpp"
 
 #include <iostream>
 
