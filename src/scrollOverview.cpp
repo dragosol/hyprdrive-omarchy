@@ -10870,7 +10870,7 @@ void CScrollOverview::onWorkspaceChange() {
     // back under as a ghost while the empty one fades in at its own place.
     // (Before, both were a plain pan: user's recording, 2026-11-06.)
     const bool PREVKNOWN   = previousStartedOn && previousStartedOn != NEWWORKSPACE && previousWorkspaceOffsets.contains(workspaceKey(previousStartedOn));
-    const bool REUSEDENTER = !INSERTEDWORKSPACE && PREVKNOWN && ScrollOverview::FullscreenDesktop::isFullscreenDesktop(NEWWORKSPACE);
+    const bool REUSEDENTER = !INSERTEDWORKSPACE && PREVKNOWN && ScrollOverview::FullscreenDesktop::justEntered(NEWWORKSPACE);
     const bool REUSEDEXIT  = !REMOVEDPREVIOUSWORKSPACE && !REUSEDENTER && PREVKNOWN && ScrollOverview::FullscreenDesktop::justLeft(previousStartedOn) &&
         std::ranges::any_of(images, [&](const auto& image) { return image && image->pWorkspace == previousStartedOn; });
     const bool BORNLIKE    = INSERTEDWORKSPACE || REUSEDENTER;

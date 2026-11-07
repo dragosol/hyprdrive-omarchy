@@ -67,6 +67,8 @@ namespace ScrollOverview::FullscreenDesktop {
         std::vector<PHLWINDOWREF> g_settled; // fullscreen, deliberately left where it is
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
         std::chrono::steady_clock::time_point g_leftAt;
+        PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
+        std::chrono::steady_clock::time_point g_enteredAt;
         int                g_busy  = 0; // our own moves: their fullscreen changes are not the user's
         wl_event_source*   g_timer = nullptr;
         CHyprSignalListener g_fsHook, g_closeHook, g_moveHook;
@@ -287,6 +289,8 @@ namespace ScrollOverview::FullscreenDesktop {
             if (!space)
                 return;
             g_trips.push_back({.win = w, .home = HOME, .space = space, .mon = MON, .owes = owes});
+            g_enteredSpace = space;
+            g_enteredAt    = std::chrono::steady_clock::now();
             trace(std::format("{} fullscreen on {}: to {}{}", w->m_class, HOME->m_id, at, owes ? " (owed back)" : ""));
             const auto [SEEN, SEENSIZE] = seenAt(w);
             const auto WAS              = others(HOME, w);
@@ -503,6 +507,10 @@ namespace ScrollOverview::FullscreenDesktop {
 
     bool justLeft(const PHLWORKSPACE& ws) {
         return ws && g_leftSpace.lock() == ws && std::chrono::steady_clock::now() - g_leftAt < std::chrono::seconds(1);
+    }
+
+    bool justEntered(const PHLWORKSPACE& ws) {
+        return ws && g_enteredSpace.lock() == ws && std::chrono::steady_clock::now() - g_enteredAt < std::chrono::seconds(1);
     }
 
     bool isFullscreenDesktop(const PHLWORKSPACE& ws) {

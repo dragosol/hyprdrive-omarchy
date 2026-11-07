@@ -37,4 +37,8 @@ namespace ScrollOverview::FullscreenDesktop {
     // `ws` was a fullscreen app's desktop a moment ago (its trip just ended):
     // the overview shows it going back under the desktop the app returns to.
     bool justLeft(const PHLWORKSPACE& ws);
+    // An app went fullscreen onto `ws` a moment ago (its trip just started):
+    // only then does the overview show the card coming out from under. Merely
+    // scrolling to a fullscreen app's desktop is a plain pan.
+    bool justEntered(const PHLWORKSPACE& ws);
 }
