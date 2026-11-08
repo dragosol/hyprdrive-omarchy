@@ -71,7 +71,7 @@ namespace ScrollOverview::FullscreenDesktop {
         std::chrono::steady_clock::time_point g_enteredAt;
         int                g_busy  = 0; // our own moves: their fullscreen changes are not the user's
         wl_event_source*   g_timer = nullptr;
-        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook;
+        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook;
 
         void trace(const std::string& s) {
             if (!DebugPaths::flagOn("hyprdrive-mosaic.on"))
@@ -391,6 +391,51 @@ namespace ScrollOverview::FullscreenDesktop {
             return true;
         }
 
+        // A WINDOW OPENED OVER A FULLSCREEN APP (user, 2026-11-08: "if I'm in a
+        // fullscreen app and I open a window from that workspace, it opens that
+        // window in fullscreen but then exits the app from fullscreen"). The
+        // app's desktop is its own; the new window gets the desktop right after
+        // it -- the next one if that is empty, else a new one there (the ones
+        // after move along a place) -- not fullscreen, and the app stays as it
+        // is. Run at window.openEarly: the window has its desktop but is not
+        // laid out yet, and Hyprland's on_focus_under_fullscreen takeover comes
+        // after, so it never sees a fullscreen window to take over. A window
+        // the user asked for is shown there; an unasked one (Intent) is not.
+        // Floating windows, dialogs and fullscreen_desktop = stay keep
+        // Hyprland's own behaviour.
+        void besideFullscreen(const PHLWINDOW& w) {
+            if (!w || w->m_isFloating || w->m_pinned || w->parent() || w->isModal() || (w->m_isX11 && (w->isX11OverrideRedirect() || w->x11Parent())))
+                return;
+            const auto WS = w->m_workspace;
+            if (!WS || !DesktopOrder::ordinary(WS) || mode() == "stay")
+                return;
+            const auto APP = Fullscreen::controller()->getFullscreenWindow(WS);
+            if (!APP || APP == w || !fullscreen(APP))
+                return;
+            const bool OURS = tripOf(APP) || std::ranges::any_of(g_settled, [&](const PHLWINDOWREF& r) { return r.lock() == APP; });
+            if (!OURS)
+                return;
+            const auto MON = WS->m_monitor.lock();
+            if (!MON)
+                return;
+            const WORKSPACEID at = WS->m_id + 1;
+            if (!freePlace(at, MON)) {
+                DesktopStrip::finishNow();
+                DesktopOrder::shift(at, +1);
+                moved(at, +1);
+            }
+            auto space = byId(at);
+            if (!space)
+                space = State::workspaceState()->create(at, MON->m_id);
+            if (!space || space == WS)
+                return;
+            trace(std::format("{} opened over fullscreen {} on {}: to {}{}", w->m_class, APP->m_class, WS->m_id, at, w->m_noInitialFocus ? " (unasked: not shown)" : ""));
+            w->m_workspace = space;
+            w->m_monitor   = MON;
+            if (!w->m_noInitialFocus)
+                show(MON, space);
+        }
+
         // THE ONE PASS. Run on the event loop after every fullscreen change,
         // move and close -- never inside one: Hyprland takes a window out of
         // fullscreen to move it and puts it back after, so only the state once
@@ -527,6 +572,7 @@ namespace ScrollOverview::FullscreenDesktop {
             if (!g_busy && !g_trips.empty())
                 arm(1);
         });
+        g_openHook  = Event::bus()->m_events.window.openEarly.listen([](PHLWINDOW w) { besideFullscreen(w); });
         g_closeHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
             if (!g_trips.empty())
                 arm(1);
@@ -535,6 +581,7 @@ namespace ScrollOverview::FullscreenDesktop {
 
     void shutdown() {
         g_fsHook.reset();
+        g_openHook.reset();
         g_closeHook.reset();
         g_moveHook.reset();
         if (g_timer) {

@@ -573,6 +573,11 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
         if (event.button == RESIZE_BUTTON) {
             lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
 
+            // The right button on a desktop in the strip picks it up to move,
+            // like Super+main (SDeskDrag) -- and its release ends that move.
+            if (!drag.activeWindow && !resize.activeWindow && deskDragButton(event.state == WL_POINTER_BUTTON_STATE_PRESSED, true))
+                return;
+
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
                 // ONE POINTER GESTURE AT A TIME. Drag and resize ride DIFFERENT
                 // buttons and had no exclusion between them, so both could own

@@ -12009,9 +12009,15 @@ bool CScrollOverview::moveShownDesktop(int dir) {
 
 // The main button with Super held over a movable desktop: it is picked up.
 // Let go without moving it, it was a click (the desktop is picked, as ever).
-bool CScrollOverview::deskDragButton(bool pressed) {
+// THE RIGHT BUTTON picks one up too, no Super needed (user, 2026-11-08: "add
+// right click to drag desktops in the desktop strip ... another way to drag a
+// workspace around"). Only the button that picked it up puts it down; a right
+// click that never moved puts it back without picking that desktop.
+bool CScrollOverview::deskDragButton(bool pressed, bool right) {
     if (pressed) {
-        if (!g_pInputManager || !(g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META))
+        if (deskDrag.pressed)
+            return true; // the other button, mid-drag: the drag keeps it
+        if (!right && (!g_pInputManager || !(g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META)))
             return false;
         size_t idx = images.size();
         if (!workspaceAtStripPoint(lastMousePosLocal, &idx) || !deskMovable(idx))
@@ -12019,6 +12025,7 @@ bool CScrollOverview::deskDragButton(bool pressed) {
         const CBox CELL = stripCellBox(idx, pMonitor.lock(), scale->value());
         deskDrag         = {};
         deskDrag.pressed = true;
+        deskDrag.right   = right;
         deskDrag.ws      = images[idx]->pWorkspace;
         deskDrag.from = deskDrag.to = idx;
         deskDrag.start              = lastMousePosLocal;
@@ -12029,6 +12036,8 @@ bool CScrollOverview::deskDragButton(bool pressed) {
     }
     if (!deskDrag.pressed)
         return false;
+    if (deskDrag.right != right)
+        return true; // the other button's release: the drag keeps going
     const auto D = std::move(deskDrag);
     deskDrag     = {};
     if (D.live) {
@@ -12040,7 +12049,7 @@ bool CScrollOverview::deskDragButton(bool pressed) {
         stripDropBoxes = D.drawn;
         if (from == SIZE_MAX || !moveDesktop(from, std::min(D.to, images.size() - 1)))
             stripDropBoxes.clear();
-    } else
+    } else if (!D.right)
         performPrimaryClickAction();
     damage();
     requestInputFrame();

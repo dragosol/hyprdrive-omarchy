@@ -211,10 +211,11 @@ class CScrollOverview : public IOverview {
         Vector2D                               start, grab; // grab: pointer minus the cell's corner
         float                                  x = 0.F;     // the lifted cell's drawn x (eased toward the pointer)
         bool                                   placed = false;
+        bool                                   right  = false; // picked up with the right button (no Super needed)
         std::unordered_map<WORKSPACEID, float> slide;       // others' eased x offsets
         std::unordered_map<WORKSPACEID, CBox>  drawn;       // where each cell was drawn (logical, unscaled)
     } deskDrag;
-    bool                                  deskDragButton(bool pressed);
+    bool                                  deskDragButton(bool pressed, bool right = false);
     bool                                  deskDragMove();
     bool                                  deskMovable(size_t idx) const;
     Time::steady_tp                       deskAnimAt{};
