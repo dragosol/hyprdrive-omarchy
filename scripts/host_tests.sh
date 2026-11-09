@@ -18,7 +18,8 @@
 #   search_providers_nobus_test  the GNOME search worker with no session bus
 #                     (the std::terminate that took the compositor down).
 #   trash_dirs_test   TrashDirs.hpp: /proc/mounts decoding (a backslash in a
-#                     drive's label threw on the render thread).
+#                     drive's label threw on the render thread), and Empty
+#                     Trash's walk, which never follows a disk's symlinks.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.

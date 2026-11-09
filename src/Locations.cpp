@@ -151,7 +151,8 @@ namespace {
     // each mounted device `$top/.Trash/$uid` or `$top/.Trash-$uid`. Only
     // mounts of a real device (/dev/...) that are not network filesystems:
     // the dock reads this once a POLL_MS on the compositor thread, and a stat
-    // of a stale share would hang it. Only ones that exist (have files/).
+    // of a stale share would hang it. A disk's trash only when it is a real
+    // one of this user's (TrashDirs::volumeTrashes: never through a symlink).
     std::vector<std::filesystem::path> trashRoots() {
         std::vector<std::filesystem::path> out;
         if (const auto FILES = trashFilesDir(); !FILES.empty())
@@ -166,16 +167,12 @@ namespace {
         }
         // Decoded by TrashDirs (the \ooo escapes, in one pass): a drive whose
         // label holds a backslash used to make the decode here throw.
-        const std::string UID = std::to_string(getuid());
         for (const auto& M : TrashDirs::parseMounts(table)) {
             if (!M.device.starts_with("/dev/") || networkFs(M.type.c_str()))
                 continue;
-            const std::string TOP = M.dir == "/" ? std::string{} : M.dir;
-            for (const auto& T : {std::filesystem::path(TOP + "/.Trash") / UID, std::filesystem::path(TOP + "/.Trash-" + UID)}) {
-                std::error_code ec;
-                if (std::filesystem::is_directory(T / "files", ec) && std::ranges::find(out, T) == out.end())
-                    out.push_back(T);
-            }
+            for (const auto& T : TrashDirs::volumeTrashes(M.dir, getuid()))
+                if (std::ranges::find(out, std::filesystem::path(T)) == out.end())
+                    out.emplace_back(T);
         }
         return out;
     }
@@ -791,21 +788,27 @@ void reveal(const std::string& path) {
 
 // Every trash this user has (the spec's home trash, and each mount's
 // $topdir/.Trash/$uid and $topdir/.Trash-$uid), emptied on a thread of its own:
-// a big trash takes seconds and this is called from a click. Each top-level
-// entry of files/, info/ and expunged/ is removed; remove_all deletes a
-// symlink itself, never what it points to. The dock's poll sees it empty.
+// a big trash takes seconds and this is called from a click. Everything inside
+// files/, info/ and expunged/ is removed, and no symlink is ever followed
+// (TrashDirs::empty). The old walk listed `T/files` through a link: a disk
+// carrying `.Trash-1000/files -> /home/u` had Empty Trash delete the home
+// folder's contents (review 2026-11-09). The dock's poll sees it empty.
 static void emptyTrashDirs() {
-    const auto trashes = trashRoots();
-    std::thread([trashes] {
-        for (const auto& T : trashes)
-            for (const char* SUB : {"files", "info", "expunged"}) {
-                std::error_code ec;
-                for (auto it = std::filesystem::directory_iterator(T / SUB, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
-                    std::error_code rm;
-                    std::filesystem::remove_all(it->path(), rm);
-                }
-            }
-    }).detach();
+    const auto  TRASHES = trashRoots();
+    const auto  FILES   = trashFilesDir();
+    const auto  HOME    = FILES.empty() ? std::filesystem::path{} : std::filesystem::path(FILES).parent_path();
+    const uid_t UID     = getuid();
+    // A thread that throws is std::terminate, and so is one that cannot be
+    // started: either would take the compositor with it. No thread, no
+    // emptying -- the trash stays full and the row can be clicked again.
+    try {
+        std::thread([TRASHES, HOME, UID] {
+            try {
+                for (const auto& T : TRASHES)
+                    TrashDirs::empty(T.string(), T == HOME, UID);
+            } catch (...) {}
+        }).detach();
+    } catch (...) {}
 }
 
 bool emptyTrashAsksFirst() {
