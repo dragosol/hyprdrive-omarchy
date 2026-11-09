@@ -65,6 +65,7 @@ namespace ScrollOverview::FullscreenDesktop {
         std::vector<STrip>   g_trips;
         std::vector<SDebt>   g_debts;
         std::vector<PHLWINDOWREF> g_settled; // fullscreen, deliberately left where it is
+        std::vector<PHLWINDOWREF> g_besides; // opened over a fullscreen app and moved on: shown once mapped
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
         std::chrono::steady_clock::time_point g_leftAt;
         PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
@@ -72,6 +73,7 @@ namespace ScrollOverview::FullscreenDesktop {
         int                g_busy  = 0; // our own moves: their fullscreen changes are not the user's
         wl_event_source*   g_timer = nullptr;
         CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook;
+        void                arm(int ms); // the reconcile timer, below
 
         void trace(const std::string& s) {
             if (!DebugPaths::flagOn("hyprdrive-mosaic.on"))
@@ -434,6 +436,32 @@ namespace ScrollOverview::FullscreenDesktop {
             w->m_monitor   = MON;
             if (!w->m_noInitialFocus)
                 show(MON, space);
+            // SHOWN ON ITS DESKTOP (user, 2026-11-09: "it opens it in the next
+            // desktop but it's not visible until i switch away then switch
+            // back, OR I go to overview"). The rest of Hyprland's map still
+            // judges the window by the desktop it was opened on, which has the
+            // fullscreen app: it marks it not allowed over fullscreen and warps
+            // its fullscreen alpha to 0 -- invisible on a desktop with no
+            // fullscreen app, until a switch recomputes it. Undone once the map
+            // is over (reconcile, on the event loop).
+            g_besides.emplace_back(w);
+            arm(1);
+        }
+
+        // The window besideFullscreen moved, once Hyprland's map is done with
+        // it: drawn and clickable like any window on a desktop with no
+        // fullscreen app.
+        void showBesides() {
+            for (const auto& REF : g_besides) {
+                const auto W = REF.lock();
+                if (!W || !W->m_isMapped || !W->m_workspace || Fullscreen::controller()->hasFullscreen(W->m_workspace))
+                    continue;
+                W->m_allowedOverFullscreen = true;
+                W->updateFullscreenInputState();
+                W->alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN)->setValueAndWarp(1.F);
+                trace(std::format("{} shown on {}", W->m_class, W->m_workspace->m_id));
+            }
+            g_besides.clear();
         }
 
         // THE ONE PASS. Run on the event loop after every fullscreen change,
@@ -441,6 +469,7 @@ namespace ScrollOverview::FullscreenDesktop {
         // fullscreen to move it and puts it back after, so only the state once
         // the event is done means anything.
         int reconcile(void*) {
+            showBesides();
             std::erase_if(g_settled, [](const PHLWINDOWREF& r) { const auto W = r.lock(); return !W || !W->m_isMapped || !fullscreen(W); });
             // Trips.
             for (auto it = g_trips.begin(); it != g_trips.end();) {
@@ -591,6 +620,7 @@ namespace ScrollOverview::FullscreenDesktop {
         g_trips.clear();
         g_debts.clear();
         g_settled.clear();
+        g_besides.clear();
         g_travels.clear();
     }
 }
