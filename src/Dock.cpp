@@ -2981,6 +2981,40 @@ void restoreDockSeat() {
         g_pSeatManager->setKeyboardFocus(surf);
 }
 
+// THE APP YOU ARE IN (user, 2026-11-09: clicking the icon of the app in use
+// switched back to it instead of minimizing). With focus following the mouse
+// the pointer hands the focus to every window it crosses on its way down to
+// the dock, so by the click the focus was on one of those, and the click read
+// as "take me back to this app". A focus that has not lasted PASSING is a
+// pass-over: the one before it, which did last, is the app you were in.
+namespace {
+    constexpr auto                        PASSING = std::chrono::milliseconds(700);
+    PHLWINDOWREF                          g_focusNow, g_focusSettled;
+    std::chrono::steady_clock::time_point g_focusSince{};
+}
+
+} // namespace (anonymous): noteFocus is Dock.hpp's
+
+void noteFocus(const PHLWINDOW& window) {
+    const auto NOW = std::chrono::steady_clock::now();
+    if (window == g_focusNow.lock())
+        return;
+    if (g_focusNow.lock() && NOW - g_focusSince >= PASSING)
+        g_focusSettled = g_focusNow;
+    g_focusNow   = window;
+    g_focusSince = NOW;
+}
+
+namespace {
+
+static PHLWINDOW intentFocus() {
+    const auto CUR = Desktop::focusState()->window();
+    if (CUR && CUR == g_focusNow.lock() && std::chrono::steady_clock::now() - g_focusSince < PASSING)
+        if (const auto SETTLED = g_focusSettled.lock(); SETTLED && Desktop::View::validMapped(SETTLED))
+            return SETTLED;
+    return CUR;
+}
+
 // Go to a window on the desktop it belongs to. Preview clicks and "show me
 // that window" must switch there -- never fly the window onto the current
 // desktop (the restore flight comes up from the dock) and never toggle
@@ -3406,14 +3440,15 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     const bool ALLHERESTASHED = !here.empty() && std::ranges::all_of(here, [](const PHLWINDOW& w) { return Minimize::isMinimized(w); });
     {
         std::string st = "app click " + item.wmClass + " here=" + std::to_string(here.size()) + " allStashed=" + (ALLHERESTASHED ? "1" : "0") + " focus=" +
-            (Desktop::focusState()->window() ? Desktop::focusState()->window()->m_class : std::string("none"));
+            (Desktop::focusState()->window() ? Desktop::focusState()->window()->m_class : std::string("none")) + " intent=" +
+            (intentFocus() ? intentFocus()->m_class : std::string("none"));
         for (const auto& W : here)
             st += std::format(" [{:x} min={} flight={} restoreFlight={} ws={}]", (uintptr_t)W.get(), Minimize::isMinimized(W) ? 1 : 0, Flight::hasFlight(W) ? 1 : 0,
                               Flight::isRestoreFlight(W) ? 1 : 0, W->m_workspace ? W->m_workspace->m_name : "-");
         Stacks::traceEvent(st);
     }
     if (const auto ALL = itemWindows(item); !ALL.empty() && !ALLHERESTASHED) {
-        const auto FOCUSED = Desktop::focusState()->window();
+        const auto FOCUSED = intentFocus(); // not a window the pointer passed over
         if (!FOCUSED || std::ranges::find(ALL, FOCUSED) == ALL.end()) {
             const auto TARGET = recentWindow(ALL);
             Stacks::traceEvent("  -> switch back to one window");
@@ -5127,7 +5162,53 @@ void hotkey(int number, bool shift, bool ctrl) {
         activateItem(MONITOR, ITEM, shift);
 }
 
+// THE POINTER GOES WITH THE FOCUS (user, 2026-11-09: "make clicking the app
+// or dock preview on the dock immediately focus cursor on the app in
+// question", a toggle in the dock settings; then: "clicking its icon will
+// minimize ... ctrl-clicking it should also focus it ... it needs to CENTER
+// the cursor on it"): a window preview click, or a Ctrl+click on an icon,
+// that brings a window forward puts the pointer on its middle -- where it lands, so it rides a
+// desktop switch or a canvas pan. Not while the overview is up (its close
+// places the pointer itself), not when the click focused nothing new.
+static bool pointerFollowsClick() {
+    return Config::getValue<bool>("plugin:hyprdrive:dock:pointer_to_window");
+}
+
+static void pointerToWindow(const PHLWINDOW& window) {
+    if (!window || !Desktop::View::validMapped(window) || Minimize::isMinimized(window) || Desktop::focusState()->window() != window)
+        return;
+    const CBox BOX{window->m_realPosition->goal(), window->m_realSize->goal()};
+    if (BOX.width >= 1 && BOX.height >= 1)
+        Pointer::pointerController()->warpTo(BOX.middle(), true);
+}
+
+static bool clickImpl(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle, bool ctrl);
+
 bool click(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle, bool ctrl) {
+    // The app clicked, and its windows, BEFORE the click changes the dock: the
+    // pointer follows only to one of them (a click that minimizes hands the
+    // focus to some other window, and the pointer stays on the dock).
+    std::vector<PHLWINDOW> mine;
+    // Only a Ctrl+click (user, 2026-11-09: a plain click on the icon is the
+    // minimize/restore toggle, and the pointer has to stay on the dock for
+    // the next one).
+    if (monitor && ctrl && !middle && pointerFollowsClick()) {
+        const auto LAYOUT = layout(monitor);
+        const auto ITEM   = std::ranges::find_if(LAYOUT.items, [&](const SItem& item) { return hoverBox(item.iconBox, monitor->m_scale).containsPoint(point); });
+        if (ITEM != LAYOUT.items.end() && !ITEM->stack && ITEM->uri.empty())
+            mine = itemWindows(*ITEM);
+    }
+    const auto BEFORE  = Desktop::focusState()->window();
+    const bool HANDLED = clickImpl(monitor, point, shift, middle, ctrl);
+    if (HANDLED && !mine.empty() && !scrollOverviewForMonitor(monitor)) {
+        const auto NOW = Desktop::focusState()->window();
+        if (NOW && NOW != BEFORE && std::ranges::find(mine, NOW) != mine.end())
+            pointerToWindow(NOW);
+    }
+    return HANDLED;
+}
+
+static bool clickImpl(PHLMONITOR monitor, const Vector2D& point, bool shift, bool middle, bool ctrl) {
     if (!monitor)
         return false;
 
@@ -7723,15 +7804,13 @@ bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
     // cursor on it"). On a canvas desktop the focus starts a pan to bring it
     // into view; the cursor, put on the window first, rides that pan.
     if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW) {
-        overviewCenterCursorOnHandoff(); // the overview's close does the warp, once it has handed focus over
+        if (pointerFollowsClick())
+            overviewCenterCursorOnHandoff(); // the overview's close does the warp, once it has handed focus over
         OVERVIEW->selectAndClose(WINDOW);
     } else {
         activateWindow(WINDOW);
-        if (Desktop::View::validMapped(WINDOW) && Desktop::focusState()->window() == WINDOW) {
-            const CBox BOX{WINDOW->m_realPosition->goal(), WINDOW->m_realSize->goal()};
-            if (BOX.width >= 1 && BOX.height >= 1)
-                Pointer::pointerController()->warpTo(BOX.middle(), true);
-        }
+        if (pointerFollowsClick())
+            pointerToWindow(WINDOW);
     }
 
     return true;

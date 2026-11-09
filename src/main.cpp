@@ -1110,6 +1110,7 @@ static CHyprSignalListener g_pMembOpenHook;
 static CHyprSignalListener g_pMembLateHook;
 static CHyprSignalListener g_pMembCloseHook;
 static CHyprSignalListener g_pMembKillHook;
+static CHyprSignalListener g_pDockFocusHook; // Dock::noteFocus
 static CHyprSignalListener g_pMembGoneHook;
 static CHyprSignalListener g_pMembPinHook;
 static CHyprSignalListener g_pMembFloatHook;
@@ -1495,6 +1496,9 @@ static std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount,
 
     if (action == "overview")
         return add(makeUnique<COverviewGesture>(direction));
+
+    if (action == "canvas_zoom")
+        return add(makeUnique<CCanvasZoomGesture>(direction));
 
     if (action == "workspace") {
         const auto RES = add(makeUnique<COverviewWorkspaceGesture>());
@@ -2293,6 +2297,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::Mosaic::onWindowClose(w); // its mosaic size, remembered per app
     });
     g_pMembKillHook  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
+    g_pDockFocusHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason) { ScrollOverview::Dock::noteFocus(w); });
     g_pMembGoneHook  = Event::bus()->m_events.window.destroy.listen([](PHLWINDOWREF) { Membership::bump("window.destroy"); });
     g_pMembPinHook   = Event::bus()->m_events.window.pin.listen([](PHLWINDOW) { Membership::bump("window.pin"); });
     g_pMembFloatHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW) { Membership::bump("window.floating"); });
@@ -2764,6 +2769,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pMembLateHook.reset();
     g_pMembCloseHook.reset();
     g_pMembKillHook.reset();
+    g_pDockFocusHook.reset();
     g_pMembGoneHook.reset();
     g_pMembPinHook.reset();
     g_pMembFloatHook.reset();

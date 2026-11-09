@@ -156,6 +156,30 @@ class CHyprdriveForwardGesture : public ITrackpadGesture {
     ITrackpadGesture* m_active = nullptr;
 };
 
+// `canvas_zoom` (user, 2026-11-09: "add 3 finger swipe down as a way to zoom
+// out in infinite canvas temporarily (same result as if I hold down the super
+// button) until I either click on an app. make it follow my finger movements
+// and if I change direction without lifting my fingers it undoes the zoom
+// out"). On a canvas desktop wider or taller than the screen the zoom follows
+// the fingers, and is kept past a third of the swipe; a click picks a window
+// and zooms back in on it, and the same swipe again zooms back in. Anywhere
+// else -- or with the overview up -- it is the overview's swipe in that
+// direction, so the gesture it replaces still works there.
+class CCanvasZoomGesture : public ITrackpadGesture {
+  public:
+    explicit CCanvasZoomGesture(eTrackpadGestureDirection direction) : m_overview(direction) {}
+    ~CCanvasZoomGesture() override = default;
+
+    void begin(const ITrackpadGesture::STrackpadGestureBegin& e) override;
+    void update(const ITrackpadGesture::STrackpadGestureUpdate& e) override;
+    void end(const ITrackpadGesture::STrackpadGestureEnd& e) override;
+
+  private:
+    COverviewGesture m_overview;
+    int              m_mode  = 0; // 1 zooming out, -1 zooming back in, 0 the overview's
+    float            m_delta = 0.F;
+};
+
 // `scratchpad_show` / `scratchpad_hide`: reveal the default scratchpad when none
 // is up; put away the one that is.
 class CScratchpadGesture : public CHyprdriveForwardGesture {

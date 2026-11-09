@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "IOverview.hpp"
 #include "Minimize.hpp"
+#include "Mosaic.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -91,6 +92,9 @@ namespace ScrollOverview::FullscreenGuard {
         CFunctionHook* g_focusHook = nullptr;
         using origFullWindowFocus  = void (*)(void*, PHLWINDOW, Desktop::eFocusReason, SP<CWLSurfaceResource>, bool);
         void hkFullWindowFocus(void* thisptr, PHLWINDOW w, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface, bool forceFSCycle) {
+            // The same veto as rawWindowFocus (DesktopSwitch.cpp).
+            if (reason == Desktop::FOCUS_REASON_FFM && Mosaic::vetoHoverFocus(w))
+                return;
             beforeFocus(w, reason);
             rc<origFullWindowFocus>(g_focusHook->m_original)(thisptr, w, reason, surface, forceFSCycle);
         }

@@ -869,6 +869,39 @@ bool handleClickGestureButton(const IPointer::SButtonEvent& event) {
     return tryFireClick(fingers, event.button);
 }
 
+void CCanvasZoomGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    ITrackpadGesture::begin(e);
+    m_delta = 0.F;
+    m_mode  = ScrollOverview::Mosaic::fingerZoomBegin();
+    if (m_mode == 0)
+        m_overview.begin(e);
+}
+
+void CCanvasZoomGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (m_mode == 0) {
+        m_overview.update(e);
+        return;
+    }
+    // Signed: the fingers going back undo it, clamped to the gesture's length.
+    const float MAX = std::max(1.F, sc<float>(ScrollOverview::Config::getGestureDistance()));
+    m_delta         = std::clamp(m_delta + distance(e), 0.F, MAX);
+    const double T  = m_delta / MAX;
+    ScrollOverview::Mosaic::fingerZoomFollow(m_mode > 0 ? T : 1.0 - T);
+}
+
+void CCanvasZoomGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (m_mode == 0) {
+        m_overview.end(e);
+        return;
+    }
+    const bool   CANCELLED = e.swipe && e.swipe->cancelled;
+    const double Z         = ScrollOverview::Mosaic::fingerZoomLevel();
+    // Out past a third of the way (back in: in past a third of the way back).
+    const bool OUT = m_mode > 0 ? !CANCELLED && Z >= 1.0 / 3.0 : CANCELLED || Z > 2.0 / 3.0;
+    ScrollOverview::Mosaic::fingerZoomEnd(OUT);
+    m_mode = 0;
+}
+
 void CHyprdriveForwardGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
     ITrackpadGesture::begin(e);
     m_active = nullptr;

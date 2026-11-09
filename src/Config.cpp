@@ -543,6 +543,14 @@ static void registerConfigValuesFor() {
                                   true));
     addKey(makeShared<CBoolValue>(KEY("mosaic:spawn_at_cursor"),
                                   "mosaic: a new window opens where the pointer is, the others packed around it, on the mosaic and the infinite canvas", true));
+    // PUSH THROUGH THE EDGE (Mosaic.cpp pushThrough; user, 2026-11-09).
+    addKey(makeShared<CBoolValue>(KEY("mosaic:edge_push"),
+                                  "mosaic: on the infinite canvas, pushing the pointer firmly against a screen edge slides the canvas to show the windows hidden past it",
+                                  true));
+    addKey(makeShared<CIntValue>(KEY("mosaic:edge_push_resistance"),
+                                 "mosaic: how far (px) the pointer must keep pushing into the edge before the canvas gives way (the bottom edge, where the dock is, takes half again "
+                                 "as much); lower = easier",
+                                 400, SIntValueOptions{.min = 50, .max = 1500}));
     addKey(makeShared<CStringValue>(KEY("mosaic:canvas_directions"),
                                     "mosaic: the infinite canvas grows horizontal (a strip) or all (a grid); on "
                                     "either, hold Super and move the pointer to zoom out to every window, hover one to focus it, let go of Super to zoom back in",
@@ -700,6 +708,8 @@ static void registerConfigValuesFor() {
     // that has OVERFLOWED so the focused icon stays in view. This pill never
     // overflows -- the icon size shrinks against height_fraction until it fits --
     // so the requirement holds by construction and a key would be a no-op.
+    addKey(makeShared<CBoolValue>(KEY("dock:pointer_to_window"),
+                                  "dock: clicking a window preview, or Ctrl+clicking an app, puts the pointer on the middle of the window it brings forward (a plain click on an app leaves the pointer on the dock)", true));
     addKey(makeShared<CStringValue>(KEY("dock:scroll_action"),
                                     "hyprgnomedock: wheel over the dock: cycle-windows | switch-workspace | do-nothing (D2D scroll-action)",
                                     Hyprlang::STRING{"cycle-windows"}));

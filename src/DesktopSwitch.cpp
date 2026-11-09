@@ -64,6 +64,11 @@ namespace ScrollOverview::DesktopSwitch {
         // app activation (focus_on_activate), a notification's activate come through
         // here -- so a desktop change seen while it runs is a focus change.
         void hkRawWindowFocus(Desktop::CFocusState* self, PHLWINDOW window, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
+            // Focus following the mouse onto a window that only peeks in at
+            // the edge, or through the dock, focuses nothing
+            // (Mosaic::vetoHoverFocus).
+            if (reason == Desktop::FOCUS_REASON_FFM && Mosaic::vetoHoverFocus(window))
+                return;
             ++g_focusDepth;
             rc<origRawWindowFocus>(g_focusHook->m_original)(self, window, reason, surface);
             --g_focusDepth;

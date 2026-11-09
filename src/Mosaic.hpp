@@ -41,6 +41,16 @@ namespace ScrollOverview::Mosaic {
     void focusUnderBar();
     // Is `ws` laid out by Mosaic (Intent.hpp asks as a window maps)?
     bool isMosaicWorkspace(const PHLWORKSPACE& ws);
+    // The three-finger zoom-out (CCanvasZoomGesture): begin answers 1 (zooming
+    // out), -1 (zooming back in) or 0 (no canvas to zoom here); follow takes
+    // the zoom level 0..1; end settles out (it stays until a click) or in.
+    int    fingerZoomBegin();
+    void   fingerZoomFollow(double z);
+    void   fingerZoomEnd(bool out);
+    double fingerZoomLevel();
+    // Focus following the mouse onto a window that only peeks in at the
+    // screen's edge, or through the dock: refused (DesktopSwitch's focus hook).
+    bool vetoHoverFocus(const PHLWINDOW& w);
     // Raw pointer motion: `delta` asked, `moved` what the pointer really moved
     // (less at a screen's edge). A resize reaches past the edge by the rest.
     void onPointerDelta(const Vector2D& delta, const Vector2D& moved);

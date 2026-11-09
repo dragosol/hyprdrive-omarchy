@@ -375,7 +375,61 @@ namespace ScrollOverview::Mosaic {
         std::chrono::steady_clock::time_point at{};
     };
     static SEdgePressure g_edgePressure;
-    constexpr double     PUSH_PRESSURE = 150.0; // logical px past the edge
+    // How far (logical px) the hand pushes past the edge before the canvas
+    // gives way: mosaic:edge_push_resistance (user, 2026-11-09: "too easy to
+    // push through, especially going down"), half again at the bottom, where
+    // the dock is.
+    static double pushPressure(int axis, double sign) {
+        const double PX = sc<double>(ScrollOverview::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:mosaic:edge_push_resistance"));
+        return std::max(0.0, PX) * (axis == 1 && sign > 0 ? 1.5 : 1.0);
+    }
+    // ON THE DOCK (user, 2026-11-09: "being mouseovered on dock, dock context
+    // menus and folders should prevent focusing a window as usual"): the
+    // pointer on the dock's pill, a menu, a fan or pane, or on any layer
+    // surface but the bar (focusUnderBar has that one) is not on the window
+    // painted underneath -- and while a menu or a fan is up nothing moves.
+    static bool pointerOnChrome(const Vector2D& p) {
+        if (ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen())
+            return true;
+        // The dock answers in monitor-local render px.
+        if (const auto MON = State::monitorState()->query().vec(p).run(); MON && ScrollOverview::Dock::uiContains(MON, (p - MON->m_position) * MON->m_scale))
+            return true;
+        const auto PSURF = g_pSeatManager ? g_pSeatManager->m_state.pointerFocus.lock() : SP<CWLSurfaceResource>{};
+        const auto HLS   = PSURF ? Desktop::View::CWLSurface::fromResource(PSURF) : SP<Desktop::View::CWLSurface>{};
+        const auto VIEW  = HLS ? HLS->view() : SP<Desktop::View::IView>{};
+        if (VIEW && VIEW->type() == Desktop::View::VIEW_TYPE_LAYER_SURFACE) {
+            const auto LS = Desktop::View::CLayerSurface::fromView(VIEW);
+            return !LS || (LS->m_namespace != "omarchy-bar" && LS->m_namespace != "waybar");
+        }
+        return false;
+    }
+    // HOVER GONE STALE (user, 2026-11-09: "when I push for a bit then move my
+    // cursor over previous window it doesn't refocus it"). Hyprland hands the
+    // focus to the window under the pointer only when the pointer ENTERS it.
+    // When the focus moved without the pointer entering anything (a push
+    // focusing the window it brought in) or a hover was refused (on the dock,
+    // a sliver at the edge), the window the pointer is in never gets it back
+    // by moving within it. Set then; the next motion over a window that is not
+    // the focused one focuses it (hoverRefresh, from onMove).
+    static bool g_hoverStale = false;
+    static bool hoverRefresh(bool blocked);
+    static bool pointerAtOuterEdge(const Vector2D& p);
+    // THE DOCK'S BAND (user, 2026-11-09: pushing down "while dock is up still
+    // eventually focuses windows. it should be able to push but not focus
+    // windows UNTIL I have moved my cursor outside the boundaries that
+    // triggered the dock"): an autohiding dock that is up owns the screen's
+    // width from its top edge down, not just its pill -- the pointer there
+    // came to show the dock, and nothing under it takes the focus.
+    static bool pointerInDockBand(const Vector2D& p) {
+        const auto MON = State::monitorState()->query().vec(p).run();
+        if (!MON || !ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:dock:autohide"))
+            return false;
+        const auto L = ScrollOverview::Dock::layout(MON);
+        if (L.pill.width < 1 || L.pill.height < 1)
+            return false; // away: no dock up
+        const double SC = std::max(MON->m_scale, 0.01F);
+        return p.y >= MON->m_position.y + L.pill.y / SC;
+    }
     // A window sliding under the pointer while it pushes is not a hover.
     static bool edgePanRecent() {
         return g_edgePan.who && std::chrono::steady_clock::now() - g_edgePan.at < EDGE_PAN_HOLD;
@@ -430,7 +484,13 @@ namespace ScrollOverview::Mosaic {
                 // 2026-11-03): a hover that got past it must not slide the
                 // canvas -- and the pointer with it -- out from under the dock.
                 const bool DOCKUP = ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen();
-                const bool HOVER  = FFM && !g_cursorRiding && !DOCKUP && !edgePanRecent();
+                // A window sliding under the pointer while it still pushes is
+                // no hover -- but once the pointer is off the edge, the push
+                // is over (user, 2026-11-09: quickly back on the previous
+                // window, it was focused and left half off screen).
+                const Vector2D PTR    = g_pInputManager->getMouseCoordsInternal();
+                const bool     PUSHING = edgePanRecent() && pointerAtOuterEdge(PTR);
+                const bool HOVER  = FFM && !g_cursorRiding && !DOCKUP && !PUSHING && !pointerOnChrome(PTR) && !pointerInDockBand(PTR);
                 if (m_asCanvas && !g_canvasPanning && !m_zoomed && w && holds(w) && (!FFM || HOVER))
                     revealWindow(w, true, FROM != w ? FROM : PHLWINDOW{});
             });
@@ -506,6 +566,12 @@ namespace ScrollOverview::Mosaic {
         void rideCursor(const Vector2D& was) {
             const Vector2D D = m_canvasOffset - was;
             if ((std::abs(D.x) < 0.5 && std::abs(D.y) < 0.5) || m_zoomed || g_pInputManager->isConstrained())
+                return;
+            // On the dock (or its menu, a fan, a bar): the pointer is not on a
+            // window, and stays where it is (user, 2026-11-09: a dock click
+            // that focused an app carried the pointer off the dock with the
+            // pan, and the next click could not minimize).
+            if (pointerOnChrome(g_pInputManager->getMouseCoordsInternal()) || pointerInDockBand(g_pInputManager->getMouseCoordsInternal()))
                 return;
             if (g_layoutManager && g_layoutManager->dragController()->target())
                 return;
@@ -675,6 +741,11 @@ namespace ScrollOverview::Mosaic {
         // window wholly past that edge, and only after a firm push
         // (PUSH_PRESSURE): a light touch is the dock's.
         bool pushThrough(const Vector2D& lost) {
+            if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:mosaic:edge_push"))
+                return false;
+            // A dock menu or fan is up: the push is not the canvas's.
+            if (ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen())
+                return false;
             if (!m_asCanvas || m_zoomed || !shownNow())
                 return false;
             const auto VIEW = canvasViewNow();
@@ -700,7 +771,7 @@ namespace ScrollOverview::Mosaic {
                         P = {this, axis, SIGN, 0.0, NOW};
                     P.sum += std::abs(D);
                     P.at = NOW;
-                    if (P.sum < PUSH_PRESSURE)
+                    if (P.sum < pushPressure(axis, SIGN))
                         continue;
                     P = {};
                 }
@@ -712,11 +783,78 @@ namespace ScrollOverview::Mosaic {
             if (dir.x == 0 && dir.y == 0)
                 return false;
             g_edgePan = {this, dir, NOW};
-            if (std::abs(want.x - CUR.x) < 0.01 && std::abs(want.y - CUR.y) < 0.01)
-                return true; // at the canvas's end: held there
+            if (std::abs(want.x - CUR.x) < 0.01 && std::abs(want.y - CUR.y) < 0.01) {
+                focusUnderPush(); // at the canvas's end: held there, on the last window
+                return true;
+            }
             setCanvasOffset(want, true);
             m_pushedAway = true;
+            focusUnderPush();
             return true;
+        }
+        // At the push's end: is the pointer on another window than the one the
+        // push focused? Then that one gets the focus (hoverRefresh).
+        bool pointerLeftPushFor(const PHLWINDOW& pf) {
+            const Vector2D P = g_pInputManager->getMouseCoordsInternal();
+            const auto     W = Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+            if (!W || W == pf || pointerOnChrome(P) || pointerInDockBand(P))
+                return false;
+            g_hoverStale = true;
+            if (hoverRefresh(false))
+                return true;
+            // Focused already, while the push still held the view: into view now.
+            if (W == Desktop::focusState()->window() && holds(W)) {
+                clickReveal(W);
+                return true;
+            }
+            return Desktop::focusState()->window() != pf;
+        }
+        // THE WINDOW THE PUSH BRINGS UNDER THE POINTER (user, 2026-11-09:
+        // "make the pushing through focus the first window I mouseover
+        // automatically, without having to move my cursor AFTER it's over the
+        // window"): it takes the focus as it arrives -- found on the canvas,
+        // so a dock over that spot does not hide it -- and the push goes on
+        // (no reveal pan: g_canvasPanning).
+        void focusUnderPush() {
+            const auto VIEW = canvasViewNow();
+            if (!VIEW || m_canvas.rects.size() != m_canvasWho.size())
+                return;
+            // The pointer is pressed against the screen's edge, and the canvas
+            // ends a margin short of it (the last window and its padding): the
+            // window within MARGIN of the pointer counts, the nearest first.
+            constexpr double MARGIN = 40.0;
+            const Vector2D   P      = g_pInputManager->getMouseCoordsInternal();
+            if (pointerOnChrome(P) || pointerInDockBand(P))
+                return; // the push goes on; the focus waits until the pointer leaves the dock
+            PHLWINDOW        best;
+            double           bestD = MARGIN + 1;
+            for (size_t i = 0; i < m_canvasWho.size(); ++i) {
+                const auto T = m_canvasWho[i].lock();
+                const auto W = T ? T->window() : PHLWINDOW{};
+                if (!W)
+                    continue;
+                const auto&  R  = m_canvas.rects[i];
+                const double X0 = VIEW->originX + R.x - m_canvasOffset.x, Y0 = VIEW->originY + R.y - m_canvasOffset.y;
+                const double DX = std::max({X0 - P.x, 0.0, P.x - (X0 + R.w)}), DY = std::max({Y0 - P.y, 0.0, P.y - (Y0 + R.h)});
+                const double D  = std::max(DX, DY);
+                if (D < bestD) {
+                    bestD = D;
+                    best  = W;
+                }
+            }
+            if (const auto W = best) {
+                if (W == Desktop::focusState()->window())
+                    return;
+                const bool WAS  = g_canvasPanning;
+                g_canvasPanning = true;
+                Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_KEYBIND);
+                g_canvasPanning = WAS;
+                g_hoverStale    = true;  // Hyprland still has the pointer in the window it was in
+                m_pushedAway    = false; // the focused window is the one under the pointer now
+                m_pushFocused   = W;     // revealed once the push is over (tick)
+                armCanvasTick();
+                trace(std::format("push brought {} under the pointer: focused", W->m_class));
+            }
         }
         // BACK ON THE WINDOW (user, 2026-11-08: "if I push but then put my
         // mouse back on the window, it should re-center/refocus on that window
@@ -730,6 +868,8 @@ namespace ScrollOverview::Mosaic {
                 return;
             if (p.x <= screen.x + 3 || p.y <= screen.y + 3 || p.x >= screen.x + screen.w - 4 || p.y >= screen.y + screen.h - 4)
                 return; // still at an edge: maybe pushing on
+            if (pointerOnChrome(p))
+                return;
             const auto F = Desktop::focusState()->window();
             if (!F || !holds(F))
                 return;
@@ -782,6 +922,26 @@ namespace ScrollOverview::Mosaic {
                     }
                 }
             return best;
+        }
+        // A SLIVER: w shows less than SLIVER px (logical) of itself on the screen one way
+        // or the other -- the few pixels of the next window peeking in at the
+        // edge the hand is pushing at (vetoHoverFocus).
+        bool isSliver(const PHLWINDOW& w) const {
+            constexpr double SLIVER = 120.0; // under a dock, about
+            if (!m_asCanvas || m_zoomed || !shownNow() || !w)
+                return false;
+            const auto WS  = workspace();
+            const auto MON = WS ? WS->m_monitor.lock() : PHLMONITOR{};
+            if (!MON)
+                return false;
+            const CBox SCREEN = MON->logicalBox();
+            for (const auto& E : m_entries)
+                if (const auto T = E.target.lock(); T && T->window() == w) {
+                    const CBox   B = T->position();
+                    const double W = std::min(B.x + B.w, SCREEN.x + SCREEN.w) - std::max(B.x, SCREEN.x), H = std::min(B.y + B.h, SCREEN.y + SCREEN.h) - std::max(B.y, SCREEN.y);
+                    return W > 0 && H > 0 && (W < SLIVER || H < SLIVER);
+                }
+            return false;
         }
         double visibleShare(const PHLWINDOW& w) const {
             const auto AREA = area();
@@ -1646,6 +1806,28 @@ namespace ScrollOverview::Mosaic {
         // One frame of whatever is moving; false when nothing is.
         bool tick(std::chrono::steady_clock::time_point now) {
             bool busy = false;
+            // THE PUSH IS OVER (user, 2026-11-09: "I push into an app and for
+            // me to actually focus it I need to either click it or move my
+            // cursor"): the window it focused comes wholly into view, as a
+            // click would bring it -- the pointer rides the pan, so it stays on
+            // that window.
+            if (const auto PF = m_pushFocused.lock()) {
+                if (edgePanRecent())
+                    busy = true;
+                else {
+                    m_pushFocused.reset();
+                    m_pushedAway = false;
+                    // The pointer left the push for another window: that one
+                    // takes the focus, and the view stays.
+                    if (pointerLeftPushFor(PF))
+                        busy = true;
+                    else if (Desktop::focusState()->window() == PF && holds(PF) && shownNow()) {
+                        trace("the push is over: its window comes into view");
+                        revealWindow(PF, true);
+                        busy = true;
+                    }
+                }
+            }
             if (m_pan.on) {
                 const double T = m_pan.ms > 0 ? std::chrono::duration<double, std::milli>(now - m_pan.start).count() / m_pan.ms : 1.0;
                 if (T >= 1.0) {
@@ -1802,6 +1984,48 @@ namespace ScrollOverview::Mosaic {
             } else
                 armCanvasTick();
             return true;
+        }
+        // THE ZOOM UNDER THE FINGERS (user, 2026-11-09: "3 finger swipe down
+        // ... zoom out in infinite canvas temporarily ... follow my finger
+        // movements and if I change direction without lifting my fingers it
+        // undoes the zoom out"). zoomFollowStart once, zoomFollow per update
+        // with the share of the swipe done (0 = as it was, 1 = all of it), and
+        // zoomSettle at the end: out, or back in on the focused window.
+        bool zoomFollowStart() {
+            if (!canZoomOut() && !m_zoomed)
+                return false;
+            if (m_pan.on)
+                setCanvasOffset(m_canvasOffset, true); // the pan stops where it is
+            m_zoom.on = false;
+            if (!m_zoomed) {
+                m_zoomArea = area();
+                m_zoomN    = liveEntries();
+            }
+            return true;
+        }
+        void zoomFollow(double z) {
+            m_zoom.on = false;
+            m_zoomZ   = std::clamp(z, 0.0, 1.0);
+            drawZoom();
+        }
+        void zoomSettle(bool out) {
+            if (!out) {
+                if (m_zoomed)
+                    zoomIn();
+                else
+                    endZoomNow();
+                return;
+            }
+            const double MS = canvasPanMs() * std::clamp(1.0 - m_zoomZ, 0.25, 1.0);
+            m_zoom          = SZoom{.on = MS >= 1.0, .from = m_zoomZ, .to = 1.0, .start = std::chrono::steady_clock::now(), .ms = MS};
+            if (!m_zoom.on) {
+                m_zoomZ = 1.0;
+                drawZoom();
+            } else
+                armCanvasTick();
+        }
+        double zoomLevel() const {
+            return m_zoomZ;
         }
         // Zooming out, not drawn zoomed yet (the first tick is still to come).
         bool zoomPending() const {
@@ -2604,6 +2828,7 @@ namespace ScrollOverview::Mosaic {
         } m_morph;
         bool                      m_zoomed = false; // some window is drawn off its layout box
         bool                      m_revealPending = false;
+        PHLWINDOWREF                          m_pushFocused;        // the window a push focused, revealed when it ends (tick)
         bool                                  m_pushedAway = false; // the view was pushed off the focused window (backFromPush)
         std::chrono::steady_clock::time_point m_rearrangedAt{}; // the canvas's last new arrangement (revealWindow)
         CHyprSignalListener       m_focusHook;
@@ -3034,6 +3259,9 @@ namespace ScrollOverview::Mosaic {
     namespace {
         enum class ESuper : uint8_t { IDLE, ARMED, ZOOMED, SPENT };
         ESuper            g_super = ESuper::IDLE;
+        // The zoom-out is the fingers' (fingerZoom*), not Super's: it stays
+        // after they lift, until a click picks a window.
+        bool              g_fingerZoom = false;
         Vector2D          g_superAnchor;
         CMosaicAlgorithm* g_superCanvas = nullptr; // the zoomed one
         bool              g_swallowRelease = false;
@@ -3130,7 +3358,8 @@ namespace ScrollOverview::Mosaic {
         g_superCanvas = nullptr;
         if (g_super == ESuper::ZOOMED)
             g_canvasPanning = false;
-        g_super = superStillDown ? ESuper::SPENT : ESuper::IDLE;
+        g_super      = superStillDown && !g_fingerZoom ? ESuper::SPENT : ESuper::IDLE;
+        g_fingerZoom = false;
         // Desktops kept zoomed out off screen for a swipe end now (slideWatch).
         armSlideWatch();
     }
@@ -3144,6 +3373,49 @@ namespace ScrollOverview::Mosaic {
             return;
         }
         superEnd(false);
+    }
+
+    static CMosaicAlgorithm* canvasOf(const PHLWORKSPACE& ws);
+
+    // ---- THE THREE-FINGER ZOOM (CCanvasZoomGesture, OverviewGesture.cpp)
+    // fingerZoomBegin: the gesture starts on the focused monitor. 1 = zooming
+    // out, -1 = zooming back in (it was zoomed out by the fingers already),
+    // 0 = not a canvas that can zoom out (the caller falls back).
+    int fingerZoomBegin() {
+        const auto MON = Desktop::focusState()->monitor();
+        if (!MON || MON->m_activeSpecialWorkspace || openScrollOverviewForMonitor(MON))
+            return 0;
+        auto* A = canvasOf(MON->m_activeWorkspace);
+        if (!A)
+            return 0;
+        if (g_fingerZoom && liveZoomed() == A && g_super == ESuper::ZOOMED)
+            return A->zoomFollowStart() ? -1 : 0;
+        if (g_super != ESuper::IDLE || !A->zoomFollowStart())
+            return 0;
+        g_super       = ESuper::ZOOMED;
+        g_superCanvas = A;
+        g_fingerZoom  = true;
+        g_pSeatManager->setPointerFocus(nullptr, {});
+        g_canvasPanning = true;
+        return 1;
+    }
+    void fingerZoomFollow(double z) {
+        if (auto* A = liveZoomed(); A && g_fingerZoom)
+            A->zoomFollow(z);
+    }
+    void fingerZoomEnd(bool out) {
+        auto* A = liveZoomed();
+        if (!A || !g_fingerZoom)
+            return;
+        if (out) {
+            A->zoomSettle(true);
+            return;
+        }
+        superEnd(false); // back in, on the focused window
+    }
+    double fingerZoomLevel() {
+        const auto* A = liveZoomed();
+        return A && g_fingerZoom ? A->zoomLevel() : 0.0;
     }
 
     void renderZoomLabels(PHLMONITOR monitor) {
@@ -3406,6 +3678,34 @@ namespace ScrollOverview::Mosaic {
     // cursor"). The pointer stops at the screen's edge; what the mouse moved
     // past it -- `delta` minus what the pointer actually moved -- is what the
     // resize reaches past the edge by. Held still, nothing grows.
+    // HOVER FOCUS VETO (user, 2026-11-09: "right now if I push through the
+    // lower boundary it selects the window ... even if I'm mouseovered the
+    // dock"): focus following the mouse does not go to a canvas window that
+    // only peeks in at the screen's edge, nor to anything while the pointer is
+    // on the dock, a dock menu or a folder's fan. A click, a key or the dock
+    // still focuses it.
+    bool vetoHoverFocus(const PHLWINDOW& w) {
+        if (!w || g_cursorRiding)
+            return false;
+        if (pointerOnChrome(g_pInputManager->getMouseCoordsInternal()) || pointerInDockBand(g_pInputManager->getMouseCoordsInternal())) {
+            g_hoverStale = true;
+            return true;
+        }
+        // Only while the pointer is pressed against an outer edge -- pushing.
+        // A window showing a strip at the side is hovered as any other
+        // (user, 2026-11-09: the left-edge windows could not be focused).
+        const Vector2D P   = g_pInputManager->getMouseCoordsInternal();
+        const auto     MON = State::monitorState()->query().vec(P).run();
+        if (!MON)
+            return false;
+        const CBox B    = MON->logicalBox();
+        const bool EDGE = P.x <= B.x + 1 || P.y <= B.y + 1 || P.x >= B.x + B.w - 2 || P.y >= B.y + B.h - 2;
+        const auto* C   = EDGE && w->m_workspace ? canvasOf(w->m_workspace) : nullptr;
+        const bool  V   = C && C->isSliver(w);
+        g_hoverStale |= V;
+        return V;
+    }
+
     void onPointerDelta(const Vector2D& delta, const Vector2D& moved) {
         const Vector2D LOST = delta - moved;
         const bool     NONE = std::abs(LOST.x) < 0.01 && std::abs(LOST.y) < 0.01;
@@ -3894,6 +4194,25 @@ namespace ScrollOverview::Mosaic {
     // The Super gesture, on every pointer motion: the canvas shrinks onto the
     // screen once, and hovering a window focuses it.
     static void superMove(bool blocked) {
+        // ZOOMED OUT BY THE FINGERS: no Super is held, and none is needed --
+        // it stays until a click picks a window (onButton) or Super is let go.
+        if (g_fingerZoom) {
+            auto* A = liveZoomed();
+            if (!A || g_super != ESuper::ZOOMED) {
+                g_fingerZoom = false;
+                return;
+            }
+            const Vector2D P = g_pInputManager->getMouseCoordsInternal();
+            if (g_zoomPressing) {
+                A->zoomMove(P);
+                return;
+            }
+            if (pickerOpen() || blocked)
+                return;
+            if (const auto W = A->zoomedWindowAt(P); W && W != Desktop::focusState()->window())
+                Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
+            return;
+        }
         const int MODS = modsNow();
         if (!(MODS & HL_MODIFIER_META)) {
             if (g_super != ESuper::IDLE)
@@ -4134,8 +4453,40 @@ namespace ScrollOverview::Mosaic {
         return A && A->zoomed() && !pickerOpen();
     }
 
+    // See g_hoverStale. Focus follows the mouse (input:follow_mouse = 1) only.
+    // No wait for the push's hold to run out (user, 2026-11-09: "if i exit
+    // push fast enough it still doesn't refocus the previous app"): the
+    // pointer off the screen's edge is the push over.
+    static bool pointerAtOuterEdge(const Vector2D& p) {
+        const auto MON = State::monitorState()->query().vec(p).run();
+        if (!MON)
+            return false;
+        const CBox B = MON->logicalBox();
+        return p.x <= B.x + 1 || p.y <= B.y + 1 || p.x >= B.x + B.w - 2 || p.y >= B.y + B.h - 2;
+    }
+    static bool hoverRefresh(bool blocked) {
+        static auto PFOLLOW = CConfigValue<::Config::INTEGER>("input:follow_mouse");
+        if (!g_hoverStale || *PFOLLOW != 1 || blocked || g_cursorRiding || zoomOwnsPointer())
+            return false;
+        if (g_layoutManager && g_layoutManager->dragController()->target())
+            return false;
+        const Vector2D P = g_pInputManager->getMouseCoordsInternal();
+        if (pointerOnChrome(P) || pointerInDockBand(P) || pointerAtOuterEdge(P))
+            return false;
+        const auto W = Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        if (!W || !W->m_isMapped || W->isHidden() || W == Desktop::focusState()->window())
+            return false;
+        if (vetoHoverFocus(W))
+            return false;
+        g_hoverStale = false;
+        trace(std::format("hover refresh: {} under the pointer takes the focus", W->m_class));
+        Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
+        return true;
+    }
+
     void onMove(bool blocked) {
         watchCanvasKeys();
+        hoverRefresh(blocked);
         superMove(blocked);
         updateEdgePush();
         if (std::ranges::any_of(g_instances, [](const CMosaicAlgorithm* a) { return a->resizing(); }))

@@ -37,7 +37,8 @@ if hyprdrive_loaded() then
         owned:close()
     else
         hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
-        hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down" })
+        -- Down zooms a canvas desktop out (the overview's swipe elsewhere).
+        hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down", action = "canvas_zoom" })
     end
 
     -- Super+scroll walks the desktops by NUMBER, the empty ones included

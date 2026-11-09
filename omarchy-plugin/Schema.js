@@ -130,6 +130,10 @@ var sections = [
         { type: "toggle", key: P + "dock:isolate_workspaces", label: "Current desktop only, always",
           desc: "The dock lists only the current desktop's apps and windows, outside the overview too." }
       ]},
+      { title: "Clicking", rows: [
+        { type: "toggle", key: P + "dock:pointer_to_window", label: "Pointer follows to the window",
+          desc: "Clicking a window preview, or Ctrl+clicking an app, moves the pointer to the middle of the window it brings up. A plain click on an app leaves the pointer on the dock, so a second click can minimize it again." }
+      ]},
       { title: "Drag and drop", rows: [
         { type: "toggle", key: P + "drag:spring_dock", label: "Spring-loaded apps",
           desc: "Hold a dragged file over a running app or one of its previews: the icon flashes twice and the app comes forward for the drop." },
@@ -314,6 +318,10 @@ var sections = [
           desc: "When windows no longer fit the screen, they keep their size and spill onto a canvas you pan across, instead of tiling. Hold Super and move the pointer to see every window on it." },
         { type: "choice", key: P + "mosaic:canvas_directions", label: "Canvas directions", when: "canvasOn",
           desc: "Horizontal: one strip of windows. All directions: a grid of them." },
+        { type: "toggle", key: P + "mosaic:edge_push", label: "Push past the edge", when: "canvasOn",
+          desc: "Keep pushing the pointer against a screen edge to slide the canvas toward the windows hidden past it. Moving back onto your window brings it fully into view again." },
+        { type: "slider", key: P + "mosaic:edge_push_resistance", label: "Edge resistance", min: 50, max: 1500, step: 50, unit: "px", when: "edgePushOn",
+          desc: "How far you have to keep pushing before the canvas gives way. Higher, and a light push only shows the dock or bar. The bottom edge, where the dock is, takes half again as much." },
         { type: "note", label: "Hold Super and move the pointer", when: "canvasOn",
           desc: "Every window on the canvas zooms out onto the screen. Hover one to focus it, then let go of Super to zoom back in on it. Drag a window while zoomed out to move it; hold it at the screen's edge to take it to the next desktop. A Super+click or Super+drag does not zoom." },
         { type: "choice", key: P + "mosaic:zoom_labels", label: "Window titles while holding Super",

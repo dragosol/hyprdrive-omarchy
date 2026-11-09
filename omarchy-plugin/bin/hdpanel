@@ -150,6 +150,7 @@ KEY_META = [
     _k(PLUGIN + "dock:show_apps_button", "bool", "dock", True),
     _k(PLUGIN + "dock:folders_anywhere", "bool", "dock", False),
     _k(PLUGIN + "dock:show_trash", "bool", "dock", True),
+    _k(PLUGIN + "dock:pointer_to_window", "bool", "dock", True),
     _k(PLUGIN + "dock:show_mounts", "bool", "dock", False),
     _k(PLUGIN + "dock:show_mounts_network", "bool", "dock", True),
     _k(PLUGIN + "dock:mount_sort", "enum", "dock", "mounted", options=MOUNT_SORTS),
@@ -215,6 +216,8 @@ KEY_META = [
     _k(PLUGIN + "mosaic:quiet_new_windows", "bool", "mosaic", True),
     _k(PLUGIN + "mosaic:infinite_canvas", "bool", "mosaic", False),
     _k(PLUGIN + "mosaic:canvas_directions", "enum", "mosaic", "all", options=CANVAS_DIRECTIONS),
+    _k(PLUGIN + "mosaic:edge_push", "bool", "mosaic", True),
+    _k(PLUGIN + "mosaic:edge_push_resistance", "int", "mosaic", 400, min=50, max=1500),
     _k(PLUGIN + "mosaic:zoom_labels", "enum", "mosaic", "hover", options=ZOOM_LABELS),
     # Keybinds. Kept out of AC/battery profiles like Mosaic: a charger must not
     # rebind keys.
@@ -261,7 +264,8 @@ OMARCHY_LAYOUTS = pathlib.Path(os.path.expanduser("~/.local/state/omarchy/worksp
 
 DEFAULT_GESTURES = [
     {"fingers": 3, "direction": "up", "action": "overview", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
-    {"fingers": 3, "direction": "down", "action": "overview", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
+    # Down zooms the canvas out (the overview's swipe anywhere it cannot zoom).
+    {"fingers": 3, "direction": "down", "action": "canvas_zoom", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
     {"fingers": 3, "direction": "horizontal", "action": "workspace", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
     {"fingers": 4, "direction": "down", "action": "close", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
     {"fingers": 4, "direction": "up", "action": "fullscreen", "mods": "", "scale": 1, "disable_inhibit": False, "arg": ""},
@@ -272,6 +276,7 @@ DEFAULT_GESTURES = [
 
 ACTIONS = [
     {"value": "overview", "label": "Overview (follow fingers)"},
+    {"value": "canvas_zoom", "label": "Zoom out the canvas (follow fingers; the overview elsewhere)"},
     {"value": "workspace", "label": "Workspace swipe"},
     {"value": "workspace_all", "label": "Workspace swipe (all, incl. empty)"},
     {"value": "scroll", "label": "Scroll workspace columns"},
@@ -1432,8 +1437,8 @@ def monitor_options(current):
 def file_manager_options(current):
     """general:file_manager's choices, made when the panel loads: "System
     default" (naming the app xdg-mime has for folders), then every installed
-    file manager -- a desktop entry in the FileManager category that opens
-    inode/directory and is not hidden (editors such as Kate also open folders,
+    file manager -- a desktop entry in the FileManager category that is not
+    hidden (editors such as Kate also open folders,
     and are not offered unless they are the default). A chosen one that is
     gone stays listed so the choice still shows."""
     def entry_name(path):
@@ -1459,8 +1464,14 @@ def file_manager_options(current):
                         hidden = True
         except OSError:
             return None, False, False
-        opens = not hidden and "inode/directory" in mimes.split(";")
-        return name, opens, opens and "FileManager" in cats.split(";")
+        # A FileManager-category app is offered even when it does not declare
+        # inode/directory (user, 2026-11-09: Clement's Flea has only
+        # Categories=...FileManager, so it was never listed and every pick
+        # fell back to Files). The dock launches it from its Exec line, so the
+        # MIME type is not needed to open a folder in it.
+        fm = not hidden and "FileManager" in cats.split(";")
+        opens = fm or (not hidden and "inode/directory" in mimes.split(";"))
+        return name, opens, fm
 
     dirs = [os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local/share")]
     dirs += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
@@ -1825,12 +1836,39 @@ def cmd_profile_mode(args):
     return 0
 
 
+def migrate_gestures():
+    """One-time move of a saved map's 3-finger down from `overview` to
+    `canvas_zoom` (user, 2026-11-09: "add 3 finger swipe down as a way to zoom
+    out in infinite canvas"). canvas_zoom is the overview's swipe wherever it
+    cannot zoom, so nothing is lost. Marked done, so a map set back to
+    overview afterwards is kept."""
+    try:
+        store = load_store()
+        done = store.setdefault("migrations", [])
+        if "canvas_zoom_down" in done or not store.get("gestures"):
+            return
+        changed = False
+        for g in store["gestures"]:
+            if (isinstance(g, dict) and int(g.get("fingers", 0)) == 3 and str(g.get("direction") or "") == "down"
+                    and str(g.get("action") or "overview") == "overview" and not g.get("mods")):
+                g["action"] = "canvas_zoom"
+                changed = True
+        done.append("canvas_zoom_down")
+        save_store(store)
+        if changed:
+            write_gesture_fragment(store["gestures"])
+            hyprctl("reload")
+    except Exception:
+        pass
+
+
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
         print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|default|CHORD [--replace]|bind-check CHORD [ID]|capture on|off|gestures-set|profile-save|profile-apply|profile-mode")
         return 0
     cmd = argv[1]
     args = argv[2:]
+    migrate_gestures()
     fn = {
         "dump": cmd_dump,
         "set": cmd_set,
