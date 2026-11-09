@@ -21,6 +21,7 @@
 #include "OverviewRender.hpp"
 #include "OverviewPassElement.hpp"
 #include "StackReader.hpp"
+#include "StoreFile.hpp"
 #include "TextInput.hpp"
 #include "SearchLetters.hpp"
 
@@ -28,7 +29,9 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -204,17 +207,17 @@ namespace {
 
         std::error_code ec;
         std::filesystem::create_directories(PATH.parent_path(), ec);
-        const auto TMP = PATH.string() + ".tmp";
-        {
-            std::ofstream f(TMP, std::ios::trunc);
-            f << StackModel::formatStore(out);
-            if (!f)
-                return;
+        // Whole or not at all (StoreFile.hpp): on a full disk the old write
+        // renamed an empty temp file over this one, and every pinned stack was
+        // gone at the next login. A failed save leaves the file as it was; the
+        // edit still shows, for this session only.
+        if (const int ERR = StoreFile::replace(PATH.string(), StackModel::formatStore(out)); ERR != 0) {
+            std::fprintf(stderr, "[hyprdrive] stacks: could not save %s (%s); the file on disk is unchanged\n", PATH.c_str(), std::strerror(ERR));
+        } else {
+            // Adopt our own mtime so the next poll does not read our output
+            // back -- which is why the generation moves HERE too.
+            store().stamp = std::filesystem::last_write_time(PATH, ec);
         }
-        std::filesystem::rename(TMP, PATH, ec); // atomic on one filesystem: a crash leaves the old file or the new one
-        // Adopt our own mtime so the next poll does not read our output back --
-        // which is why the generation moves HERE too.
-        store().stamp = std::filesystem::last_write_time(PATH, ec);
         ++g_storeGeneration;
     }
 

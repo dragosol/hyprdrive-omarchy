@@ -20,6 +20,8 @@
 #   trash_dirs_test   TrashDirs.hpp: /proc/mounts decoding (a backslash in a
 #                     drive's label threw on the render thread), and Empty
 #                     Trash's walk, which never follows a disk's symlinks.
+#   store_file_test   StoreFile.hpp: the stacks store survives a full disk
+#                     (a short write, /dev/full) byte for byte.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -83,5 +85,6 @@ run thumbs_test scripts/thumbs_test.cpp src/Thumbs.cpp -DTHUMBS_SETTLE_MS=250 -p
 # shellcheck disable=SC2046
 run search_providers_nobus_test scripts/search_providers_nobus_test.cpp src/SearchProviders.cpp $(pkg-config --cflags --libs libsystemd)
 run trash_dirs_test scripts/trash_dirs_test.cpp
+run store_file_test scripts/store_file_test.cpp
 
 exit $fail
