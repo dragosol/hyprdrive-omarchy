@@ -410,6 +410,9 @@ namespace ScrollOverview::Mosaic {
     // a sliver at the edge), the window the pointer is in never gets it back
     // by moving within it. Set then; the next motion over a window that is not
     // the focused one focuses it (hoverRefresh, from onMove).
+    // Over at any focus that is not a hover (2026-11-09: g_focusReasonHook):
+    // a key, a click or the dock put the focus where the user wants it, and
+    // the next motion inside the window under the pointer took it back.
     static bool g_hoverStale = false;
     static bool hoverRefresh(bool blocked);
     static bool pointerAtOuterEdge(const Vector2D& p);
@@ -4490,6 +4493,12 @@ namespace ScrollOverview::Mosaic {
             return false;
         if (g_layoutManager && g_layoutManager->dragController()->target())
             return false;
+        // A BUTTON HELD (2026-11-09): Hyprland keeps the focus where a press
+        // landed until every button is up -- a text selection dragged into
+        // the window beside it stays in its own. This runs from the motion
+        // listener, ahead of that rule, and moved the keyboard focus mid-drag.
+        if (g_pInputManager->hasHeldButtons())
+            return false;
         const Vector2D P = g_pInputManager->getMouseCoordsInternal();
         if (pointerOnChrome(P) || pointerInDockBand(P) || pointerAtOuterEdge(P))
             return false;
@@ -4729,6 +4738,8 @@ namespace ScrollOverview::Mosaic {
         }
     }
 
+    static CHyprSignalListener g_focusReasonHook; // a focus that is not a hover: g_hoverStale is over
+
     void registerLayout(HANDLE handle) {
         // Before the algo exists: windows re-arrive inside addTiledAlgo.
         loadKept();
@@ -4741,12 +4752,20 @@ namespace ScrollOverview::Mosaic {
         g_openLateHook = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW w) { adoptFloating(w); });
         g_desktopShownHook = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE ws) { zoomFollowsDesktop(ws); });
         g_floatingHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW w) { onFloating(w); });
+        // Every desktop, not just the canvas: the dock's veto marks a hover
+        // stale anywhere (focusUnderPush, which focuses by KEYBIND, marks it
+        // again after its own focus).
+        g_focusReasonHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW, Desktop::eFocusReason reason) {
+            if (reason != Desktop::FOCUS_REASON_FFM)
+                g_hoverStale = false;
+        });
     }
 
     void unregisterLayout(HANDLE handle) {
         g_openLateHook.reset();
         g_desktopShownHook.reset();
         g_floatingHook.reset();
+        g_focusReasonHook.reset();
         // Before the algo goes: removing it hands the desktops to dwindle.
         saveKept();
         HyprlandAPI::removeAlgo(handle, "mosaic");
