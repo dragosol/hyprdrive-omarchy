@@ -600,6 +600,18 @@ namespace {
         return std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count();
     }
 
+    // Hops and shakes that have run their course. Only Stacks::render() used
+    // to retire them, and the HIDDEN dock never reaches it: a file landing
+    // while the dock was away kept animating() true, and every monitor
+    // repainted at full rate until the dock was next shown (review
+    // 2026-11-09). Retired before every answer about frames now. The hop is
+    // kept for the hidden dock's longer peek (Dock::STACK_PEEK_MS); on the
+    // dock it is over at HOP_MS and draws nothing after.
+    void retireHops() {
+        std::erase_if(g_bounces, [](const SHop& h) { return elapsed(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
+        std::erase_if(g_shakes, [](const SHop& h) { return elapsed(h.startedAt) > SHAKE_MS; });
+    }
+
     // Rows the fan shows at once: every visible entry, up to its slots -- and
     // one row ("Loading", "Empty folder", "No matches") when there is none.
     size_t fanRows(const SPopup& p) {
@@ -2371,6 +2383,7 @@ namespace ScrollOverview::Stacks {
     }
 
     bool animating() {
+        retireHops();
         // A download's bar moves every frame (the indeterminate slide, or the
         // browser's progress arriving over D-Bus), so it keeps the dock drawing.
         return !g_bounces.empty() || !g_shakes.empty() || anyDownloading();
@@ -2491,10 +2504,7 @@ namespace ScrollOverview::Stacks {
     }
 
     void render(PHLMONITOR monitor, const Dock::SLayout& layout) {
-        // Kept for the hidden dock's longer peek too (Dock::STACK_PEEK_MS); the
-        // on-dock hop itself is over at HOP_MS and draws nothing after.
-        std::erase_if(g_bounces, [](const SHop& h) { return elapsed(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
-        std::erase_if(g_shakes, [](const SHop& h) { return elapsed(h.startedAt) > SHAKE_MS; });
+        retireHops();
 
         if (!g_popup || !monitor || g_popup->monitor != monitor->m_id)
             return;
