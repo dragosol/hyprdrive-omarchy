@@ -302,6 +302,8 @@ DIRECTIONS = ["up", "down", "left", "right", "vertical", "horizontal", "swipe", 
 # an open overview can pan desktops instead of running the native swipe) stay
 # on hyprdrive.gesture. Native close/fullscreen/etc. still use hl.gesture.
 NATIVE_ACTIONS = {"close", "fullscreen", "float", "move", "resize", "special"}
+# Actions newer than some plugins still running, and what stands in for them.
+FALLBACK_ACTIONS = {"canvas_zoom": "overview"}
 DIR_ALIASES = {
     "pinch_in": "pinchin",
     "pinch-in": "pinchin",
@@ -388,15 +390,59 @@ OMARCHY_ANIM_LEAVES = [
 ]
 
 
+# Why the last eval_lua failed: Hyprland's own words, for ApplyFailed.
+_EVAL_ERROR = ""
+
+
 def eval_lua(code):
+    global _EVAL_ERROR
     r = hyprctl_run("eval", code)
     if r is None:
+        _EVAL_ERROR = "Hyprland could not be reached"
         return False
     text = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 or text.lstrip().startswith("error:"):
+        _EVAL_ERROR = text.strip()
         sys.stderr.write(text if text.endswith("\n") else text + "\n")
         return False
     return True
+
+
+# hl.config's refusal of a key the running Hyprland does not have:
+#   unknown config key 'plugin.hyprdrive.general.file_manager'
+UNKNOWN_KEY_RE = re.compile(r"unknown config key '([^']+)'")
+
+
+class ApplyFailed(SystemExit):
+    """A change Hyprland would not take, so nothing was saved. Uncaught it
+    exits like the SystemExit it replaces; `set` and `preview` report it as
+    JSON so the settings can say why (user, 2026-11-09: Clement's settings
+    snapped back with no word of why -- his panel was newer than the plugin
+    running in Hyprland, which had no such keys)."""
+
+    def __init__(self, message, keys=(), behind=False):
+        super().__init__("hdpanel: " + message)
+        self.message = message
+        self.keys = list(keys)
+        self.behind = behind
+
+    def report(self):
+        print(json.dumps({"ok": False, "error": self.message, "behind": self.behind, "keys": self.keys}))
+        return 1
+
+
+def apply_failure():
+    """ApplyFailed for the last refused eval: a plugin older than these
+    settings (or not running) is told apart from anything else."""
+    text = _EVAL_ERROR
+    keys = [k.replace(".", ":") for k in UNKNOWN_KEY_RE.findall(text)]
+    ours = [k for k in keys if k.startswith(PLUGIN)]
+    if ours:
+        if plugin_version():
+            return ApplyFailed("the plugin running is older than these settings", ours, behind=True)
+        return ApplyFailed("the Hyprdrive plugin is not running", ours, behind=True)
+    first = text.splitlines()[0] if text else ""
+    return ApplyFailed(first.removeprefix("error:").strip() or "Hyprland did not take the change", keys)
 
 
 def anim_leaf_lua(leaf, enabled, speed=None, curve=None, style=None):
@@ -1333,7 +1379,17 @@ def write_gesture_fragment(gestures):
     if plugin:
         lines.append("if hyprdrive_loaded() then")
         for g in plugin:
-            lines.append("    pcall(function() hl.plugin.hyprdrive.gesture({ %s }) end)" % ", ".join(gesture_fields(g)))
+            call = "pcall(function() hl.plugin.hyprdrive.gesture({ %s }) end)" % ", ".join(gesture_fields(g))
+            if str(g.get("action") or "") in FALLBACK_ACTIONS:
+                # A plugin older than this action refuses it: the gesture it
+                # replaced, rather than none (the panel can be newer than the
+                # plugin until it is rebuilt).
+                old = dict(g, action=FALLBACK_ACTIONS[str(g["action"])])
+                lines.append("    if not %s then" % call)
+                lines.append("        pcall(function() hl.plugin.hyprdrive.gesture({ %s }) end)" % ", ".join(gesture_fields(old)))
+                lines.append("    end")
+            else:
+                lines.append("    " + call)
         lines.append("end")
     lines.append("")
     FRAGDIR.mkdir(parents=True, exist_ok=True)
@@ -1502,6 +1558,18 @@ def file_manager_options(current):
     return opts
 
 
+def plugin_version():
+    """The loaded plugin's version (`hyprctl plugin list`): empty when it is
+    not loaded."""
+    try:
+        for p in json.loads(hyprctl("plugin", "list", "-j") or "[]"):
+            if isinstance(p, dict) and p.get("name") == "hyprdrive":
+                return str(p.get("version") or "")
+    except ValueError:
+        pass
+    return ""
+
+
 def dump():
     store = load_store()
     live = live_keys()
@@ -1533,8 +1601,16 @@ def dump():
         version = json.loads(mf.read_text()).get("version", "") if mf else ""
     except (OSError, ValueError):
         pass
+    # PLUGIN BEHIND THE SETTINGS: every key here is one the plugin registers,
+    # so a key Hyprland does not know while the plugin is loaded means the
+    # plugin running is older than these settings (a marketplace update of the
+    # panel alone, a build that failed, a reload not done yet). The panel says
+    # so instead of letting each change snap back.
+    running = plugin_version()
+    missing = [m["key"] for m in KEY_META if m["key"].startswith(PLUGIN) and m["key"] not in live] if running else []
     return {
         "version": version,
+        "plugin": {"loaded": bool(running), "reachable": bool(live), "missing": missing},
         "keys": live,
         "owned": store.get("keys", {}),
         "gestures": gestures,
@@ -1575,7 +1651,7 @@ def set_keys(pairs, preview=False):
     if asked.get(MOSAIC_DEFAULT) is True and not asked.get(MOSAIC_ON, mosaic_state(store)[0]):
         raise SystemExit("hdpanel: turn Mosaic on before making it the default")
     if not apply_live_many(coerced):
-        raise SystemExit("hdpanel: live apply failed")
+        raise apply_failure()
     if preview:
         return coerced
     before = mosaic_state(store)
@@ -1593,7 +1669,10 @@ def cmd_set(args):
     if len(args) < 2 or len(args) % 2 != 0:
         raise SystemExit("hdpanel: set KEY VALUE [KEY VALUE ...]")
     pairs = list(zip(args[0::2], args[1::2]))
-    coerced = set_keys(pairs, preview=False)
+    try:
+        coerced = set_keys(pairs, preview=False)
+    except ApplyFailed as e:
+        return e.report()
     print(json.dumps({"ok": True, "keys": {k: v for k, v in coerced}}))
     return 0
 
@@ -1602,7 +1681,10 @@ def cmd_preview(args):
     if len(args) < 2 or len(args) % 2 != 0:
         raise SystemExit("hdpanel: preview KEY VALUE [KEY VALUE ...]")
     pairs = list(zip(args[0::2], args[1::2]))
-    coerced = set_keys(pairs, preview=True)
+    try:
+        coerced = set_keys(pairs, preview=True)
+    except ApplyFailed as e:
+        return e.report()
     print(json.dumps({"ok": True, "preview": True, "keys": {k: v for k, v in coerced}}))
     return 0
 
@@ -1862,6 +1944,24 @@ def migrate_gestures():
         pass
 
 
+def migrate_gesture_fallbacks():
+    """One-time rewrite of a saved map's 35-gestures.lua, so an action newer
+    than the plugin running (canvas_zoom, from the migration above) falls back
+    to the gesture it replaced instead of leaving that swipe dead until the
+    plugin is rebuilt. Hyprland re-reads the fragment when it changes."""
+    try:
+        store = load_store()
+        done = store.setdefault("migrations", [])
+        if "gesture_fallbacks" in done:
+            return
+        if store.get("gestures"):
+            write_gesture_fragment(store["gestures"])
+        done.append("gesture_fallbacks")
+        save_store(store)
+    except Exception:
+        pass
+
+
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
         print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|default|CHORD [--replace]|bind-check CHORD [ID]|capture on|off|gestures-set|profile-save|profile-apply|profile-mode")
@@ -1869,6 +1969,7 @@ def main(argv):
     cmd = argv[1]
     args = argv[2:]
     migrate_gestures()
+    migrate_gesture_fallbacks()
     fn = {
         "dump": cmd_dump,
         "set": cmd_set,

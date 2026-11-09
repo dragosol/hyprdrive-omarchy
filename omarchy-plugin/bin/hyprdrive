@@ -6,6 +6,8 @@
   hyprdrive update --refresh        ...asking GitHub again instead of the 6-hour cache
   hyprdrive update --github         install the newest GitHub release
   hyprdrive update --approved       install the newest marketplace-approved version (Omarchy)
+  hyprdrive update --rebuild        build and reload the plugin from the version you have
+                                    (the settings are newer than the plugin running)
   hyprdrive update --yes            do not ask before installing
   hyprdrive update --terminal [...] run `hyprdrive update [...]` in your terminal
                                     (the settings' button; exit 3: no terminal found)
@@ -373,8 +375,20 @@ def checkout_dir(info):
     return None
 
 
-def install(target_ref, label, yes, info):
+def install(target_ref, label, yes, info, rebuild=False):
+    """Check out target_ref, build, install, reload. rebuild: the checkout as
+    it is -- nothing fetched or checked out (`update --rebuild`)."""
     src = checkout_dir(info)
+    if rebuild and src is None:
+        print("No Hyprdrive checkout found to rebuild from. `hyprdrive update --github` clones and builds the newest release.")
+        return 1
+    if rebuild:
+        # The version checked out now (what the settings are), not the last
+        # one installed.
+        try:
+            label = "the plugin from v%s" % json.loads((src / "manifest.json").read_text())["version"]
+        except (OSError, ValueError, KeyError, TypeError):
+            label = "the plugin"
     if src is not None:
         dirty = git(src, "status", "--porcelain", "--untracked-files=no", capture=True)
         if dirty is None:
@@ -387,28 +401,44 @@ def install(target_ref, label, yes, info):
         print("Checkout: %s" % src)
     else:
         print("No Hyprdrive checkout found: one will be cloned into %s." % CLONE_DIR)
-    print("Installing %s." % label)
+    print(("Rebuilding %s." if rebuild else "Installing %s.") % label)
     # Nothing is fetched, cloned or changed before this answer.
     if not ask("Go ahead?", yes):
         print("Nothing changed.")
         return 0
-    if src is None:
-        CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
-        if run(["git", "clone", "-b", BRANCH, "https://github.com/%s.git" % REPO, str(CLONE_DIR)]) != 0:
+    back = None  # where the checkout was, to go back to if the build fails
+    if not rebuild:
+        if src is None:
+            CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
+            if run(["git", "clone", "-b", BRANCH, "https://github.com/%s.git" % REPO, str(CLONE_DIR)]) != 0:
+                return 1
+            src = CLONE_DIR
+        else:
+            back = git(src, "symbolic-ref", "-q", "--short", "HEAD", capture=True) or git(src, "rev-parse", "HEAD", capture=True)
+        if git(src, "fetch", "--tags", "origin") != 0:
             return 1
-        src = CLONE_DIR
-    if git(src, "fetch", "--tags", "origin") != 0:
+        if SHA_RE.fullmatch(target_ref) and git(src, "fetch", "origin", target_ref) != 0:
+            return 1
+        if git(src, "checkout", "--detach", target_ref) != 0:
+            return 1
+
+    def failed(what):
+        # BUILD FAILED, CHECKOUT GOES BACK (user, 2026-11-09): on Omarchy the
+        # marketplace's checkout IS the settings panel, so a release checked
+        # out and then not built left new settings driving the old plugin --
+        # every change to a newer setting snapped back. Back where it was, the
+        # panel and the plugin it was built with match again.
+        print(what)
+        if back and git(src, "checkout", "-q", back) == 0:
+            print("%s is back where it was, so the settings still match the plugin you have." % src)
         return 1
-    if SHA_RE.fullmatch(target_ref) and git(src, "fetch", "origin", target_ref) != 0:
-        return 1
-    if git(src, "checkout", "--detach", target_ref) != 0:
-        return 1
+
     prefix = info.get("prefix") or str(HOME / ".local")
     if FLAVOR == "omarchy":
         if run(["make", "all"], cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
-            return 1
+            return failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
     elif run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
-        return 1
+        return failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
     so = pathlib.Path(prefix) / "lib/hyprdrive/hyprdrive.so"
     try:
         CHECK_CACHE.unlink()
@@ -574,7 +604,7 @@ def describe(r):
 def cmd_update(args):
     flags = set(a for a in args if a.startswith("--"))
     unknown = flags - {"--check", "--json", "--refresh", "--github", "--approved", "--yes", "--terminal",
-                       "--never-check", "--allow-check", "--hold"}
+                       "--never-check", "--allow-check", "--hold", "--rebuild"}
     if unknown or any(not a.startswith("--") for a in args):
         print(__doc__)
         return 2
@@ -602,6 +632,12 @@ def update(flags):
             pass
         print("The settings will look for updates again (at most every 6 hours, while open).")
         return 0
+
+    if "--rebuild" in flags:
+        # The plugin, built again from the checkout as it is (the settings'
+        # "Rebuild the plugin": they are newer than the plugin running). No
+        # network: nothing is fetched.
+        return install("", "the plugin", "--yes" in flags, install_info(), rebuild=True)
 
     checking = "--check" in flags
     r = check(refresh=("--refresh" in flags) or not checking)

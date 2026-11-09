@@ -38,7 +38,12 @@ if hyprdrive_loaded() then
     else
         hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "up" })
         -- Down zooms a canvas desktop out (the overview's swipe elsewhere).
-        hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down", action = "canvas_zoom" })
+        -- A plugin older than canvas_zoom (not reloaded since this file was
+        -- installed) refuses it: the plain overview swipe then, not an error
+        -- that stops the rest of this file.
+        if not pcall(function() hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down", action = "canvas_zoom" }) end) then
+            hl.plugin.hyprdrive.gesture({ fingers = 3, direction = "down" })
+        end
     end
 
     -- Super+scroll walks the desktops by NUMBER, the empty ones included

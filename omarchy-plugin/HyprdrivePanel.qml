@@ -395,6 +395,7 @@ Item {
 
   // ------------------------------------------------------------- conditions
   function rowEnabled(row) {
+    if (row.key && missingKeys[row.key]) return false
     switch (row.when) {
     case "dockOn": return kb("plugin:hyprdrive:dock:enabled")
     case "mountsOn": return kb("plugin:hyprdrive:dock:enabled") && kb("plugin:hyprdrive:dock:show_mounts")
@@ -531,6 +532,21 @@ Item {
   // when that ran out (or never, after `hyprdrive update --never-check`).
   property var upd: null
   property bool updOpen: false
+
+  // PLUGIN BEHIND THE SETTINGS (user, 2026-11-09: every change Clement made
+  // to a newer setting snapped back, with no word of why). hdpanel's dump
+  // lists the settings the plugin running in Hyprland does not have -- these
+  // settings are newer than it (a marketplace update of the panel alone, a
+  // build that failed, a reload not done yet). Those rows are dimmed and the
+  // card under the version rebuilds the plugin.
+  readonly property var missingKeys: {
+    var o = {}, l = (hd.plugin && hd.plugin.missing) || []
+    for (var i = 0; i < l.length; i++) o[l[i]] = true
+    return o
+  }
+  readonly property int missingCount: ((hd.plugin && hd.plugin.missing) || []).length
+  readonly property bool pluginOff: !!(hd.plugin && hd.plugin.reachable && !hd.plugin.loaded)
+  readonly property bool pluginBehind: missingCount > 0 || pluginOff
   readonly property string updPath: ctlPath === "" ? "" : ctlPath.replace(/[^\/]*$/, "hyprdrive")
   readonly property bool updAvailable: !!(upd && upd.available)
   readonly property bool updOmarchy: !!(upd && upd.flavor === "omarchy")
@@ -572,6 +588,7 @@ Item {
   // touching anything; no terminal (exit 3) or no script: the instructions.
   function updateInTerminal(args, fallbackUrl) {
     updRunProc.fallbackUrl = fallbackUrl || ""
+    updRunProc.hint = "hyprdrive update " + args.join(" ")
     updRunProc.command = [updPath, "update", "--terminal"].concat(args)
     updRunProc.running = true
   }
@@ -595,8 +612,10 @@ Item {
   Process {
     id: updRunProc
     property string fallbackUrl: ""
+    property string hint: ""
     onExited: function(exitCode) {
       if (exitCode !== 0 && updRunProc.fallbackUrl !== "") Qt.openUrlExternally(updRunProc.fallbackUrl)
+      else if (exitCode !== 0) root.showToast("No terminal found: run " + updRunProc.hint)
     }
   }
   Process { id: copyProc }
@@ -702,6 +721,12 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        // Not saved (hdpanel's {"ok": false, ...}): say why, as the dump
+        // that follows puts the old value back.
+        var d = null
+        try { d = JSON.parse(String(text || "")) } catch (e) { d = null }
+        if (d && d.ok === false)
+          root.showToast("Not saved: " + (d.error || "Hyprland refused it"))
         root.ctlBusy = false
         if (ctlProc.refresh && root.ctlQueue.length === 0) root.dump()
         root.pumpCtl()
@@ -1347,6 +1372,17 @@ Item {
         visible: !!sr.row.desc
         text: sr.row.desc || ""
         color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+        lineHeight: 1.15
+      }
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width
+        visible: !!(sr.row.key && root.missingKeys[sr.row.key])
+        text: "The Hyprdrive plugin running now is older than this setting. Rebuild it from the card under the version."
+        color: root.accent
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -2458,10 +2494,71 @@ Item {
           }
         }
 
+        // PLUGIN BEHIND THE SETTINGS: the rebuild, in the user's terminal
+        // (`hyprdrive update --rebuild` asks first, builds the version these
+        // settings are, installs it and reloads the plugin).
+        Rectangle {
+          id: behindCard
+          anchors.top: updCard.bottom
+          anchors.topMargin: root.pluginBehind ? Style.space(10) : 0
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.leftMargin: Style.space(14)
+          anchors.rightMargin: Style.space(14)
+          height: root.pluginBehind ? behindCol.implicitHeight + Style.space(20) : 0
+          visible: root.pluginBehind
+          clip: true
+          radius: Style.space(10)
+          color: root.tint(root.accent, 0.10)
+          border.width: 1
+          border.color: root.tint(root.accent, 0.35)
+          Column {
+            id: behindCol
+            x: Style.space(10); y: Style.space(10)
+            width: parent.width - Style.space(20)
+            spacing: Style.space(6)
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              textFormat: Text.PlainText
+              text: root.pluginOff ? "Hyprdrive isn't running" : "Rebuild the plugin"
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.weight: Font.Bold
+            }
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              textFormat: Text.PlainText
+              text: root.pluginOff
+                ? "The Hyprdrive plugin isn't loaded in Hyprland, so changes here can't take effect. Rebuild and reload it, or log out and back in."
+                : "These settings are newer than the Hyprdrive plugin running in Hyprland, so " + root.missingCount
+                  + " of them can't change until it is rebuilt (they are dimmed)."
+              color: root.tint(root.fg, 0.75)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              lineHeight: 1.15
+            }
+            Rectangle {
+              width: parent.width
+              height: Style.space(28)
+              radius: Style.space(8)
+              color: rebuildMouse.containsMouse ? root.accent : root.tint(root.accent, 0.22)
+              Text { anchors.centerIn: parent; textFormat: Text.PlainText
+                     text: "Rebuild and reload"
+                     color: rebuildMouse.containsMouse ? root.bg : root.accent
+                     font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.weight: Font.DemiBold }
+              MouseArea { id: rebuildMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                          onClicked: root.updateInTerminal(["--rebuild"], "") }
+            }
+          }
+        }
+
         // Find a setting.
         Rectangle {
           id: searchBox
-          anchors.top: updCard.bottom
+          anchors.top: behindCard.bottom
           anchors.topMargin: Style.space(14)
           anchors.left: parent.left
           anchors.right: parent.right
