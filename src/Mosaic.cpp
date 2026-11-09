@@ -3377,6 +3377,20 @@ namespace ScrollOverview::Mosaic {
         superEnd(false);
     }
 
+    // AN OVERVIEW OPENS, THE ZOOM ENDS (2026-11-09). The fingers' zoom stays
+    // up after they lift, and a Super zoom is still up when a Super chord or a
+    // hot corner opens the overview. Nothing ended either: the overview took
+    // each press, and so did the zoom under it (onButton, which runs first) --
+    // a press grabbed or picked the canvas window under that spot, a tile
+    // dragged in the overview carried a canvas window along, and the zoom came
+    // back in on the wrong window. superEnd(true): a Super still held for the
+    // zoom stays spent, so the canvas does not zoom out again the moment the
+    // overview closes (the fingers' zoom goes back to idle either way).
+    void onOverviewOpen() {
+        if (g_super == ESuper::ZOOMED || liveZoomed())
+            superEnd(true);
+    }
+
     static CMosaicAlgorithm* canvasOf(const PHLWORKSPACE& ws);
 
     // ---- THE THREE-FINGER ZOOM (CCanvasZoomGesture, OverviewGesture.cpp)

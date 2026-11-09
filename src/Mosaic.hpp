@@ -69,6 +69,10 @@ namespace ScrollOverview::Mosaic {
     // gesture -- hold and move to zoom out,
     // never while a Super+click or Super+drag has used the press.
     void onSuperKey(bool pressed);
+    // An overview is opening (CScrollOverview's constructor and reopen(), the
+    // two doors every overview comes through): a zoomed-out canvas ends, as
+    // when Super is let go.
+    void onOverviewOpen();
     // A zoomed-out canvas drag (Spring): the window it carries, and handing it
     // to Hyprland as an ordinary Super+drag so a desktop switch takes it along.
     PHLWINDOW zoomCarried();
