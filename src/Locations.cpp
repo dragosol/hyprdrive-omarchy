@@ -5,6 +5,7 @@
 #include "MountSort.hpp"
 #include "GvfsMount.hpp"
 #include "StackModel.hpp"
+#include "TrashDirs.hpp"
 
 #include <gio/gio.h>
 #include <gio/gunixmounts.h>
@@ -155,25 +156,26 @@ namespace {
         std::vector<std::filesystem::path> out;
         if (const auto FILES = trashFilesDir(); !FILES.empty())
             out.push_back(std::filesystem::path(FILES).parent_path());
-        const std::string UID = std::to_string(getuid());
+        std::string table;
         if (FILE* m = std::fopen("/proc/self/mounts", "re")) {
-            char dev[512], dir[1024], type[128];
-            while (std::fscanf(m, "%511s %1023s %127s %*s %*d %*d", dev, dir, type) == 3) {
-                if (std::string_view{dev}.substr(0, 5) != "/dev/" || networkFs(type))
-                    continue;
-                std::string top = dir;
-                // /proc/mounts escapes spaces and the like as \ooo.
-                for (size_t i; (i = top.find('\\')) != std::string::npos && i + 3 < top.size();)
-                    top.replace(i, 4, 1, sc<char>(std::stoi(top.substr(i + 1, 3), nullptr, 8)));
-                if (top == "/")
-                    top.clear();
-                for (const auto& T : {std::filesystem::path(top + "/.Trash") / UID, std::filesystem::path(top + "/.Trash-" + UID)}) {
-                    std::error_code ec;
-                    if (std::filesystem::is_directory(T / "files", ec) && std::ranges::find(out, T) == out.end())
-                        out.push_back(T);
-                }
-            }
+            char   buf[4096];
+            size_t n = 0;
+            while ((n = std::fread(buf, 1, sizeof(buf), m)) > 0)
+                table.append(buf, n);
             std::fclose(m);
+        }
+        // Decoded by TrashDirs (the \ooo escapes, in one pass): a drive whose
+        // label holds a backslash used to make the decode here throw.
+        const std::string UID = std::to_string(getuid());
+        for (const auto& M : TrashDirs::parseMounts(table)) {
+            if (!M.device.starts_with("/dev/") || networkFs(M.type.c_str()))
+                continue;
+            const std::string TOP = M.dir == "/" ? std::string{} : M.dir;
+            for (const auto& T : {std::filesystem::path(TOP + "/.Trash") / UID, std::filesystem::path(TOP + "/.Trash-" + UID)}) {
+                std::error_code ec;
+                if (std::filesystem::is_directory(T / "files", ec) && std::ranges::find(out, T) == out.end())
+                    out.push_back(T);
+            }
         }
         return out;
     }
