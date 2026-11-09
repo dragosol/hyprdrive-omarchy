@@ -308,6 +308,10 @@ namespace {
     // daemon dropped stays dead, and Show in Files now rides this one rather
     // than a gdbus process of its own: a closed one is let go and another
     // opened, at most once per 5 s while there is no bus to be had.
+    // A connection of its own (sd_bus_open_user), not the thread's default:
+    // Quick Look (OmarchySearch.cpp) keeps a reference to that one, so letting
+    // it go here did not free it, and asking for the default again handed the
+    // same dead connection back.
     sd_bus* userBus() {
         static sd_bus* bus      = nullptr;
         static auto    failedAt = std::chrono::steady_clock::time_point{};
@@ -315,7 +319,7 @@ namespace {
             bus = sd_bus_flush_close_unref(bus);
         const auto NOW = std::chrono::steady_clock::now();
         if (!bus && (failedAt == std::chrono::steady_clock::time_point{} || NOW - failedAt >= std::chrono::seconds(5))) {
-            if (sd_bus_default_user(&bus) < 0) {
+            if (sd_bus_open_user(&bus) < 0) {
                 bus      = nullptr;
                 failedAt = NOW;
             } else

@@ -24,6 +24,9 @@ namespace {
     SStates          g_states; // per sender (LauncherStates.hpp)
     sd_bus*          g_bus    = nullptr;
     wl_event_source* g_source = nullptr;
+    // A connect that failed, or a connection the bus dropped: start() tries
+    // again 5 s later, not on the next dock frame.
+    std::chrono::steady_clock::time_point g_failedAt{};
 
     // "application://org.gnome.Nautilus.desktop" -> "org.gnome.Nautilus".
     // Anything that is not that shape is not addressed at an app we can draw.
@@ -205,11 +208,15 @@ namespace {
         // event loop watches a DUPLICATE (wl_event_loop_add_fd dups it), which
         // stays readable at end-of-file for good -- so this ran on every turn
         // of the compositor's loop, at 100% CPU, and every call failed. Drop
-        // the dead connection instead: stop() removes this source, and the
-        // next start() (Dock::damageIfChanged asks on every pointer motion)
-        // connects again, at most once per 5 s while there is no bus at all.
-        if (r < 0 || (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)))
+        // the dead connection instead: stop() removes this source, and a
+        // start() (Dock::damageIfChanged asks on every dock frame) connects
+        // again 5 s later -- not on the next frame, which a bus that accepts
+        // and then drops would turn into a connect per frame -- and at most
+        // once per 5 s while there is no bus at all.
+        if (r < 0 || (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR))) {
             stop();
+            g_failedAt = std::chrono::steady_clock::now();
+        }
         return 0;
     }
 
@@ -243,8 +250,7 @@ void start() {
     // socket(), a failed connect() and an allocation -- per frame, on the
     // render thread, forever. One attempt per 5 s instead; a bus that comes up
     // later (a session started before its bus) is still picked up.
-    static auto failedAt = std::chrono::steady_clock::time_point{};
-    if (failedAt != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() - failedAt < std::chrono::seconds(5))
+    if (g_failedAt != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() - g_failedAt < std::chrono::seconds(5))
         return;
 
     // NOTHING HERE WAITS FOR THE BUS (review 2026-11-09). sd_bus_open_user
@@ -255,11 +261,11 @@ void start() {
     // a blocking AddMatch would wait for it. A match the bus refuses closes
     // the connection (sd-bus's default), and onBusReadable drops it.
     if (sd_bus_open_user(&g_bus) < 0) {
-        g_bus    = nullptr;
-        failedAt = std::chrono::steady_clock::now();
+        g_bus      = nullptr;
+        g_failedAt = std::chrono::steady_clock::now();
         return;
     }
-    failedAt = {};
+    g_failedAt = {};
 
     // Senders leaving the bus FIRST: the bus installs matches in order, so no
     // Update can arrive from a sender whose leaving would then be missed. Every
