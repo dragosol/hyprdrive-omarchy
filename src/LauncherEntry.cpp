@@ -4,6 +4,7 @@
 #include <wayland-server.h>
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <unordered_map>
 
@@ -220,13 +221,24 @@ void start() {
     if (g_bus)
         return;
 
+    // NO SESSION BUS (native port, 2026-10-14): damageIfChanged() calls this
+    // every dock frame, so without a bus it used to re-try the connect -- a
+    // socket(), a failed connect() and an allocation -- per frame, on the
+    // render thread, forever. One attempt per 5 s instead; a bus that comes up
+    // later (a session started before its bus) is still picked up.
+    static auto failedAt = std::chrono::steady_clock::time_point{};
+    if (failedAt != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() - failedAt < std::chrono::seconds(5))
+        return;
+
     // Blocking, but only here: sd_bus_open_user's handshake and AddMatch are
     // both round trips on a local socket, and this runs once, when the dock is
     // first drawn.
     if (sd_bus_open_user(&g_bus) < 0) {
-        g_bus = nullptr;
+        g_bus    = nullptr;
+        failedAt = std::chrono::steady_clock::now();
         return;
     }
+    failedAt = {};
 
     // No well-known name is taken: this only LISTENS. Taking
     // com.canonical.Unity would make the dock the Unity API's owner, which is a

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
@@ -220,6 +221,23 @@ namespace SearchProviders {
         std::thread                               g_worker;
         std::atomic<bool>                         g_running{false};
         int                                       g_wakeFd[2] = {-1, -1};
+
+        // NO SESSION BUS (native port, 2026-10-14). The worker is the only
+        // thread in this plugin that ENDS ON ITS OWN: when sd_bus_open_user
+        // fails it returns at once. It used to return leaving g_worker
+        // joinable, and the next overview open assigned a new std::thread over
+        // it -- assigning to a joinable std::thread is std::terminate, which
+        // took the compositor down (first headless run on fedora, no bus).
+        // ensureWorker() now joins a finished worker before starting another,
+        // and this stamp keeps a session with no bus at all from re-trying the
+        // connect on every keystroke: one attempt per g_busRetryNs (5 s).
+        std::atomic<int64_t>                      g_busRetryNs{std::chrono::nanoseconds(std::chrono::seconds(5)).count()};
+        std::atomic<int64_t>                      g_busFailedAt{0}; // steady_clock ns, 0 = never failed
+        std::atomic<uint64_t>                     g_busFailures{0};
+
+        int64_t                                   steadyNs() {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
 
         void                                      wake() {
             if (g_wakeFd[1] >= 0) {
@@ -587,8 +605,20 @@ namespace SearchProviders {
         void workerMain() {
             sd_bus* bus = nullptr;
             if (sd_bus_open_user(&bus) < 0) {
-                g_running = false;
-                return;
+                // Nothing queued can ever run without a bus: an ActivateResult
+                // or a warm-up left in g_actions would fire against the NEXT
+                // bus, minutes later, for a query nobody is looking at.
+                {
+                    std::lock_guard lock(g_mutex);
+                    g_actions.clear();
+                    for (auto& R : g_results)
+                        R.stale = false; // nothing will answer; do not leave rows "pending" forever
+                }
+                if (g_busFailures.fetch_add(1) == 0)
+                    std::fprintf(stderr, "[hyprdrive] search providers: no session bus (sd_bus_open_user failed); GNOME search providers are off\n");
+                g_busFailedAt = steadyNs();
+                g_running     = false;
+                return; // ensureWorker() joins this thread before it starts another
             }
 
             while (true) {
@@ -645,10 +675,28 @@ namespace SearchProviders {
         }
 
         void ensureWorker() {
+            if (g_running.load())
+                return;
+            // No bus a moment ago: do not spin a thread up per keystroke to find
+            // out again. The overview simply has no provider rows meanwhile.
+            if (const auto FAILED = g_busFailedAt.load(); FAILED != 0 && steadyNs() - FAILED < g_busRetryNs.load())
+                return;
             if (g_running.exchange(true))
                 return;
+            // A worker that ended on its own (no bus) is finished or finishing:
+            // g_running goes false as its very last act, so this join is
+            // immediate. Without it the assignment below is std::terminate.
+            if (g_worker.joinable())
+                g_worker.join();
+            // ...and its wake pipe goes with it, or every retry leaks two fds.
+            for (int& fd : g_wakeFd) {
+                if (fd >= 0)
+                    close(fd);
+                fd = -1;
+            }
             if (pipe(g_wakeFd) < 0) {
-                g_running = false;
+                g_wakeFd[0] = g_wakeFd[1] = -1;
+                g_running                 = false;
                 return;
             }
             // Non-blocking read end, so draining never parks the worker.
@@ -737,18 +785,30 @@ namespace SearchProviders {
     }
 
     void shutdown() {
-        if (!g_worker.joinable())
-            return;
-        {
-            std::lock_guard lock(g_mutex);
-            g_stop = true;
+        if (g_worker.joinable()) {
+            {
+                std::lock_guard lock(g_mutex);
+                g_stop = true;
+            }
+            wake();
+            g_worker.join();
         }
-        wake();
-        g_worker.join();
-        close(g_wakeFd[0]);
-        close(g_wakeFd[1]);
-        g_wakeFd[0] = g_wakeFd[1] = -1;
-        g_running                 = false;
+        // Also when the worker already ended on its own (no bus): its pipe is
+        // still open until ensureWorker or this closes it.
+        for (int& fd : g_wakeFd) {
+            if (fd >= 0)
+                close(fd);
+            fd = -1;
+        }
+        g_running = false;
+    }
+
+    uint64_t busFailures() {
+        return g_busFailures.load();
+    }
+
+    void setBusRetry(std::chrono::milliseconds retry) {
+        g_busRetryNs = std::chrono::nanoseconds(retry).count();
     }
 }
 

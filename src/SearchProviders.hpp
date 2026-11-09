@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,16 @@ namespace SearchProviders {
     // ActivateResult on the owning provider. Detached, like AppSearch::launch.
     void activate(const SResult& result, const std::string& queryText);
 
-    // Stops the worker. Idempotent; safe if never started.
+    // Stops the worker. Idempotent; safe if never started, and safe after a
+    // worker that ended on its own because there was no session bus.
     void shutdown();
+
+    // How many times the worker found no session bus (sd_bus_open_user
+    // failed). With no bus there are simply no provider rows; nothing throws.
+    uint64_t busFailures();
+
+    // After a failed connect, the next attempt waits this long (default 5 s).
+    // For scripts/search_providers_nobus_test.cpp, which sets 0 to drive the
+    // worker through many start/fail/join cycles in a second.
+    void setBusRetry(std::chrono::milliseconds retry);
 }

@@ -15,6 +15,8 @@
 #   thumbs_test       Thumbs.cpp against a stand-in thumbnailer: a file still
 #                     being written waits until it settles and keeps the
 #                     thumbnail it had meanwhile; a future mtime gets one.
+#   search_providers_nobus_test  the GNOME search worker with no session bus
+#                     (the std::terminate that took the compositor down).
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -75,5 +77,7 @@ run omarchy_search_test scripts/omarchy_search_test.cpp src/OmarchySearch.cpp $(
 run icon_size_test scripts/icon_size_test.cpp $(pkg-config --cflags --libs cairo)
 # shellcheck disable=SC2046
 run thumbs_test scripts/thumbs_test.cpp src/Thumbs.cpp -DTHUMBS_SETTLE_MS=250 -pthread $(pkg-config --cflags --libs glib-2.0)
+# shellcheck disable=SC2046
+run search_providers_nobus_test scripts/search_providers_nobus_test.cpp src/SearchProviders.cpp $(pkg-config --cflags --libs libsystemd)
 
 exit $fail
