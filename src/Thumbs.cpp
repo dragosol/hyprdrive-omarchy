@@ -201,6 +201,10 @@ namespace ScrollOverview::Thumbs {
                     const auto      NOW  = std::chrono::steady_clock::now();
                     const auto      WALL = std::filesystem::file_time_type::clock::now();
                     lock.lock();
+                    // shutdown() ran during the stat: no thumbnailer now, or
+                    // unload waits out its run.
+                    if (g_stop)
+                        break;
                     const auto IT = g_jobs.find(path);
                     if (IT == g_jobs.end())
                         continue;
