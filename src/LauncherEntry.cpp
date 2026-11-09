@@ -247,9 +247,13 @@ void start() {
     if (failedAt != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() - failedAt < std::chrono::seconds(5))
         return;
 
-    // Blocking, but only here: sd_bus_open_user's handshake and AddMatch are
-    // both round trips on a local socket, and this runs once, when the dock is
-    // first drawn.
+    // NOTHING HERE WAITS FOR THE BUS (review 2026-11-09). sd_bus_open_user
+    // only connects and queues its handshake, and both matches go out with
+    // sd_bus_add_match_async, answered on the event loop below. They were
+    // round trips on the render thread, once a session; now a bus that went
+    // away is reconnected from here, possibly while it is still starting, and
+    // a blocking AddMatch would wait for it. A match the bus refuses closes
+    // the connection (sd-bus's default), and onBusReadable drops it.
     if (sd_bus_open_user(&g_bus) < 0) {
         g_bus    = nullptr;
         failedAt = std::chrono::steady_clock::now();
@@ -257,20 +261,18 @@ void start() {
     }
     failedAt = {};
 
-    // Senders leaving the bus FIRST, so no Update can arrive from a sender
-    // whose leaving this would then miss. Every NameOwnerChanged, filtered in
-    // onOwnerChanged: only departures matter, and on a desktop they come a
-    // handful a minute.
-    if (sd_bus_add_match(g_bus, nullptr, "type='signal',sender='org.freedesktop.DBus',path='/org/freedesktop/DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'",
-                         onOwnerChanged, nullptr) < 0) {
-        stop();
-        return;
-    }
-
+    // Senders leaving the bus FIRST: the bus installs matches in order, so no
+    // Update can arrive from a sender whose leaving would then be missed. Every
+    // NameOwnerChanged, filtered in onOwnerChanged: only departures matter,
+    // and on a desktop they come a handful a minute.
+    //
     // No well-known name is taken: this only LISTENS. Taking
     // com.canonical.Unity would make the dock the Unity API's owner, which is a
     // claim about the whole session, not about drawing a badge.
-    if (sd_bus_add_match(g_bus, nullptr, "type='signal',interface='com.canonical.Unity.LauncherEntry',member='Update'", onUpdate, nullptr) < 0) {
+    if (sd_bus_add_match_async(g_bus, nullptr,
+                               "type='signal',sender='org.freedesktop.DBus',path='/org/freedesktop/DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'",
+                               onOwnerChanged, nullptr, nullptr) < 0 ||
+        sd_bus_add_match_async(g_bus, nullptr, "type='signal',interface='com.canonical.Unity.LauncherEntry',member='Update'", onUpdate, nullptr, nullptr) < 0) {
         stop();
         return;
     }
