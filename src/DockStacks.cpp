@@ -618,10 +618,17 @@ namespace {
         return sc<size_t>(std::ranges::count_if(mtimes, [&](int64_t m) { return StackModel::partialLive(m, NOW); }));
     }
 
-    // List every folder that holds a partial file again; onReaderReady() sees
-    // the fresh mtimes when the reads land, redraws, and re-arms this.
+    // List the folders holding a partial file again; onReaderReady() sees the
+    // fresh mtimes when the reads land, redraws, and re-arms this. While a
+    // download grows, only the folders it grows in: a folder being re-read is
+    // unready, and a listing landing meanwhile for another one blanks the
+    // re-read folder's pile until its own read lands (newestFour, StackIcon).
     int onPartialTimer(void*) {
+        const bool ANYLIVE = std::ranges::any_of(g_partialMtimes, [](const auto& kv) { return livePartials(kv.second) > 0; });
         for (const auto& [PATH, COUNT] : g_downloads) {
+            const auto IT = g_partialMtimes.find(PATH);
+            if (ANYLIVE && (IT == g_partialMtimes.end() || livePartials(IT->second) == 0))
+                continue;
             StackReader::invalidate(PATH);
             StackReader::status(PATH); // queues the read
         }
