@@ -1,4 +1,5 @@
 #include "LauncherEntry.hpp"
+#include "LauncherStates.hpp"
 
 #include <systemd/sd-bus.h>
 #include <wayland-server.h>
@@ -20,9 +21,9 @@ namespace ScrollOverview::LauncherEntry {
 
 namespace {
 
-    std::unordered_map<std::string, SState> g_states;
-    sd_bus*                                 g_bus    = nullptr;
-    wl_event_source*                        g_source = nullptr;
+    SStates          g_states; // per sender (LauncherStates.hpp)
+    sd_bus*          g_bus    = nullptr;
+    wl_event_source* g_source = nullptr;
 
     // "application://org.gnome.Nautilus.desktop" -> "org.gnome.Nautilus".
     // Anything that is not that shape is not addressed at an app we can draw.
@@ -113,9 +114,28 @@ namespace {
         return OK;
     }
 
+    // An idle desktop produces no frames, so the dock would not notice a badge
+    // change until something else happened to repaint -- measured 2026-08-03:
+    // an urgent app did not pull the dock out until an unrelated config reload
+    // damaged the screen. The dock's own damageIfChanged decides what actually
+    // changes; this only guarantees it gets asked.
+    //
+    // Through damageIfChanged and not a bare damageMonitor (user, 2026-09-14):
+    // a count that moved on an app NOT on the dock, or one whose badge is
+    // switched off, used to repaint both whole outputs anyway. damageIfChanged
+    // compares the pill's appearance and damages only the monitors where
+    // something actually changed.
+    void askDocks() {
+        for (const auto& MONITOR : State::monitorState()->monitors()) {
+            if (MONITOR)
+                Dock::damageIfChanged(MONITOR);
+        }
+    }
+
     // Update(s app_uri, a{sv} properties). A sender may send ONE property, so
-    // this starts from what is already known rather than from a blank state --
-    // an app that pushes only `count` must not have its `urgent` cleared.
+    // this starts from what that sender published before rather than from a
+    // blank state -- an app that pushes only `count` must not have its
+    // `urgent` cleared.
     int onUpdate(sd_bus_message* m, void*, sd_bus_error*) {
         const char* uri = nullptr;
         if (sd_bus_message_read_basic(m, 's', &uri) < 0)
@@ -125,8 +145,9 @@ namespace {
         if (ID.empty())
             return 0;
 
-        SState       state  = g_states.contains(ID) ? g_states[ID] : SState{};
-        const SState BEFORE = state;
+        const char*       SENDER = sd_bus_message_get_sender(m);
+        const std::string FROM   = SENDER ? SENDER : "";
+        SState            state  = g_states.of(FROM, ID);
 
         if (sd_bus_message_enter_container(m, 'a', "{sv}") <= 0)
             return 0;
@@ -158,28 +179,21 @@ namespace {
         }
         sd_bus_message_exit_container(m);
 
-        if (BEFORE.count == state.count && BEFORE.countVisible == state.countVisible && BEFORE.urgent == state.urgent && BEFORE.progress == state.progress &&
-            BEFORE.progressVisible == state.progressVisible)
+        if (g_states.set(FROM, ID, state))
+            askDocks();
+        return 0;
+    }
+
+    // NameOwnerChanged(name, old, new) with no new owner: `name` left the bus,
+    // and the badges, urgency and progress it published go with it (review
+    // 2026-11-09). A killed browser's download bar no longer freezes at its
+    // last value, and an app restarted after a crash starts clean.
+    int onOwnerChanged(sd_bus_message* m, void*, sd_bus_error*) {
+        const char *name = nullptr, *from = nullptr, *to = nullptr;
+        if (sd_bus_message_read(m, "sss", &name, &from, &to) < 0 || !name || (to && *to))
             return 0;
-
-        g_states[ID] = state;
-
-        // An idle desktop produces no frames, so the dock would not notice this
-        // until something else happened to repaint -- measured 2026-08-03: an
-        // urgent app did not pull the dock out until an unrelated config reload
-        // damaged the screen. The dock's own damageIfChanged decides what
-        // actually changes; this only guarantees it gets asked.
-        //
-        // Through damageIfChanged and not a bare damageMonitor (user,
-        // 2026-09-14): a count that moved on an app NOT on the dock, or one
-        // whose badge is switched off, used to repaint both whole outputs
-        // anyway. damageIfChanged compares the pill's appearance and damages
-        // only the monitors where something actually changed.
-        for (const auto& MONITOR : State::monitorState()->monitors()) {
-            if (MONITOR)
-                Dock::damageIfChanged(MONITOR);
-        }
-
+        if (g_states.drop(name))
+            askDocks();
         return 0;
     }
 
@@ -202,21 +216,13 @@ namespace {
 }
 
 std::optional<double> anyProgress() {
-    std::optional<double> out;
-    for (const auto& [ID, S] : g_states)
-        if (S.progressVisible)
-            out = std::max(out.value_or(0.0), std::clamp(S.progress, 0.0, 1.0));
-    return out;
+    return g_states.anyProgress();
 }
 
 SState state(const std::string& desktopId) {
     if (desktopId.empty())
         return {};
-
-    if (const auto IT = g_states.find(desktopId); IT != g_states.end())
-        return IT->second;
-
-    return {};
+    return g_states.app(desktopId);
 }
 
 sd_bus* sessionBus() {
@@ -251,6 +257,16 @@ void start() {
     }
     failedAt = {};
 
+    // Senders leaving the bus FIRST, so no Update can arrive from a sender
+    // whose leaving this would then miss. Every NameOwnerChanged, filtered in
+    // onOwnerChanged: only departures matter, and on a desktop they come a
+    // handful a minute.
+    if (sd_bus_add_match(g_bus, nullptr, "type='signal',sender='org.freedesktop.DBus',path='/org/freedesktop/DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'",
+                         onOwnerChanged, nullptr) < 0) {
+        stop();
+        return;
+    }
+
     // No well-known name is taken: this only LISTENS. Taking
     // com.canonical.Unity would make the dock the Unity API's owner, which is a
     // claim about the whole session, not about drawing a badge.
@@ -281,7 +297,7 @@ void stop() {
         g_bus = nullptr;
     }
 
-    g_states.clear();
+    g_states = {};
 }
 
 }

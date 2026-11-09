@@ -27,6 +27,8 @@
 #                     reconnects (skipped without dbus-daemon).
 #   file_uri_test     FileUri.hpp: file names with ' \ # % ? and spaces as
 #                     URIs, and Show in Files reaching a stand-in FileManager1.
+#   launcher_states_test  LauncherStates.hpp: badge and progress state is its
+#                     sender's, and goes when the sender leaves the bus.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -95,5 +97,7 @@ run store_file_test scripts/store_file_test.cpp
 run search_providers_deadbus_test scripts/search_providers_deadbus_test.cpp src/SearchProviders.cpp $(pkg-config --cflags --libs libsystemd)
 # shellcheck disable=SC2046
 run file_uri_test scripts/file_uri_test.cpp $(pkg-config --cflags --libs glib-2.0 libsystemd)
+# shellcheck disable=SC2046
+run launcher_states_test scripts/launcher_states_test.cpp $(pkg-config --cflags libsystemd)
 
 exit $fail
