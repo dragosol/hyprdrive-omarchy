@@ -25,6 +25,8 @@
 #   search_providers_deadbus_test  the search worker when a private
 #                     dbus-daemon dies under it: no 100% CPU spin, and it
 #                     reconnects (skipped without dbus-daemon).
+#   file_uri_test     FileUri.hpp: file names with ' \ # % ? and spaces as
+#                     URIs, and Show in Files reaching a stand-in FileManager1.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -91,5 +93,7 @@ run trash_dirs_test scripts/trash_dirs_test.cpp
 run store_file_test scripts/store_file_test.cpp
 # shellcheck disable=SC2046
 run search_providers_deadbus_test scripts/search_providers_deadbus_test.cpp src/SearchProviders.cpp $(pkg-config --cflags --libs libsystemd)
+# shellcheck disable=SC2046
+run file_uri_test scripts/file_uri_test.cpp $(pkg-config --cflags --libs glib-2.0 libsystemd)
 
 exit $fail

@@ -6,6 +6,7 @@
 #include "GvfsMount.hpp"
 #include "StackModel.hpp"
 #include "TrashDirs.hpp"
+#include "FileUri.hpp"
 
 #include <gio/gio.h>
 #include <gio/gunixmounts.h>
@@ -278,7 +279,7 @@ namespace {
             GIcon* icon  = g_unix_mount_point_guess_icon(point);
 
             SLocation loc;
-            loc.uri       = std::string{"file://"} + PATH;
+            loc.uri       = FileUri::of(PATH); // as Nautilus reports it: openWindows() compares the two
             loc.mountPath = PATH;
             loc.name      = label ? std::string{label} : std::string{PATH};
             loc.icon      = iconName(icon);
@@ -302,12 +303,24 @@ namespace {
     // One connection for the lifetime of the process. Opening a user bus means
     // a connect and an auth handshake, and doing that once a second on the
     // render thread is a cost with no reason to exist.
+    //
+    // ...unless the bus went away (review 2026-11-09). A connection the bus
+    // daemon dropped stays dead, and Show in Files now rides this one rather
+    // than a gdbus process of its own: a closed one is let go and another
+    // opened, at most once per 5 s while there is no bus to be had.
     sd_bus* userBus() {
-        static sd_bus* bus = [] {
-            sd_bus* b = nullptr;
-            return sd_bus_default_user(&b) < 0 ? nullptr : b;
-        }();
-
+        static sd_bus* bus      = nullptr;
+        static auto    failedAt = std::chrono::steady_clock::time_point{};
+        if (bus && sd_bus_is_open(bus) <= 0)
+            bus = sd_bus_flush_close_unref(bus);
+        const auto NOW = std::chrono::steady_clock::now();
+        if (!bus && (failedAt == std::chrono::steady_clock::time_point{} || NOW - failedAt >= std::chrono::seconds(5))) {
+            if (sd_bus_default_user(&bus) < 0) {
+                bus      = nullptr;
+                failedAt = NOW;
+            } else
+                failedAt = {};
+        }
         return bus;
     }
 
@@ -747,7 +760,7 @@ void activate(const std::string& uri) {
     std::string target = uri;
     if (app && uri == TRASH_URI && !opensTrashUri(app))
         if (const auto DIR = trashFilesDir(); !DIR.empty())
-            target = "file://" + DIR;
+            target = FileUri::of(DIR);
     const bool OK = app && launchWith(app, target);
     if (app)
         g_object_unref(app);
@@ -764,13 +777,12 @@ void reveal(const std::string& path) {
         return;
     GAppInfo* app = fileManagerApp();
     // Nautilus (or nothing chosen at all): FileManager1.ShowItems, the parent
-    // folder with this one selected.
+    // folder with this one selected. Over sd-bus, not as gdbus's GVariant text,
+    // which a ' or \ in the name broke (FileUri.hpp).
     if (!app || isNautilus(app)) {
         if (app)
             g_object_unref(app);
-        Hyprutils::OS::CProcess("gdbus", {"call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method",
-                                          "org.freedesktop.FileManager1.ShowItems", "['file://" + path + "']", ""})
-            .runAsync();
+        FileUri::showItems(userBus(), FileUri::of(path));
         return;
     }
     // Another file manager: Dolphin selects it (--select); the rest open the
@@ -780,10 +792,10 @@ void reveal(const std::string& path) {
     std::ranges::transform(id, id.begin(), [](unsigned char c) { return std::tolower(c); });
     const bool        DOLPHIN = id.find("dolphin") != std::string::npos;
     const std::string PARENT  = std::filesystem::path(path).parent_path().string();
-    const bool        OK      = DOLPHIN ? launchWith(app, "file://" + path, {"--select"}) : launchWith(app, "file://" + (PARENT.empty() ? path : PARENT));
+    const bool        OK      = DOLPHIN ? launchWith(app, FileUri::of(path), {"--select"}) : launchWith(app, FileUri::of(PARENT.empty() ? path : PARENT));
     g_object_unref(app);
     if (!OK)
-        activate("file://" + (PARENT.empty() ? path : PARENT));
+        activate(FileUri::of(PARENT.empty() ? path : PARENT));
 }
 
 // Every trash this user has (the spec's home trash, and each mount's
