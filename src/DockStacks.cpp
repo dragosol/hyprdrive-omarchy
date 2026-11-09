@@ -17,6 +17,7 @@
 #include "AppSearch.hpp"
 #include "Compat.hpp"
 #include "Config.hpp"
+#include "Launch.hpp"
 #include "LauncherEntry.hpp"
 #include "OverviewRender.hpp"
 #include "OverviewPassElement.hpp"
@@ -56,6 +57,7 @@
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprutils/os/Process.hpp>
 
 using namespace ScrollOverview;
 
@@ -1135,18 +1137,25 @@ namespace {
         stack.label      = stack.customLabel.empty() ? BASE : stack.customLabel;
     }
 
+    // A file opens in the app the desktop has for it -- GIO's choice, made by
+    // `gio open` in a process of its own, started through Launch::wrap like
+    // every other launch (review 2026-11-09). g_app_info_launch_default_for_uri
+    // in here spawned a handler that is not D-Bus activated as a child of
+    // Hyprland, inside its unit under uwsm, and never told Intent a launch was
+    // coming, so with quiet_new_windows a slow app opened without the focus.
+    // `gio open` keeps the same handler choice, terminal apps and D-Bus
+    // activation included.
     void launchPath(const std::string& path) {
         if (path.empty())
             return;
-        GError* err  = nullptr;
-        char*   uri  = g_filename_to_uri(path.c_str(), nullptr, &err);
-        if (!uri) {
-            if (err)
-                g_error_free(err);
+        char* uri = g_filename_to_uri(path.c_str(), nullptr, nullptr);
+        if (!uri)
             return;
-        }
-        g_app_info_launch_default_for_uri(uri, nullptr, nullptr);
+        std::string              binary = "gio";
+        std::vector<std::string> args   = {"open", uri};
         g_free(uri);
+        Launch::wrap(binary, args);
+        Hyprutils::OS::CProcess(binary, args).runAsync();
     }
 
     // ---------------------------------------------------------- the preview --
