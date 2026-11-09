@@ -591,6 +591,60 @@ namespace {
     // Stack path -> browser partial files in it at the last listing. Only
     // folders with a download in flight are kept.
     std::unordered_map<std::string, size_t> g_downloads;
+
+    // A PARTIAL FILE IS A DOWNLOAD ONLY WHILE IT GROWS (review 2026-11-09). A
+    // `.part` left behind by a browser that crashed or was killed counted for
+    // as long as it sat there: its bar slid on the cell, and animating() kept
+    // the dock repainting at full rate, forever. Now only a partial file
+    // written in the last few seconds (StackModel::partialLive) draws a bar or
+    // asks for frames. Nothing reports a file growing (the inotify watch is on
+    // the folder, not on writes into its files -- a download is thousands of
+    // them), so a folder holding one is listed again, by StackReader off this
+    // thread, on g_partialTimer: every 2 s while a download grows, backing off
+    // to once a minute for a file nobody writes.
+    //
+    // Stack path -> the mtime (unix s) of each partial file at the last listing.
+    std::unordered_map<std::string, std::vector<int64_t>> g_partialMtimes;
+    wl_event_source*                                      g_partialTimer = nullptr;
+
+    int64_t unixNow() {
+        return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    size_t livePartials(const std::vector<int64_t>& mtimes) {
+        const int64_t NOW = unixNow();
+        return sc<size_t>(std::ranges::count_if(mtimes, [&](int64_t m) { return StackModel::partialLive(m, NOW); }));
+    }
+
+    // List every folder that holds a partial file again; onReaderReady() sees
+    // the fresh mtimes when the reads land, redraws, and re-arms this.
+    int onPartialTimer(void*) {
+        for (const auto& [PATH, COUNT] : g_downloads) {
+            StackReader::invalidate(PATH);
+            StackReader::status(PATH); // queues the read
+        }
+        return 0;
+    }
+
+    void armPartialTimer() {
+        if (g_downloads.empty()) {
+            if (g_partialTimer)
+                wl_event_source_timer_update(g_partialTimer, 0);
+            return;
+        }
+        if (!g_partialTimer && g_pCompositor && g_pCompositor->m_wlEventLoop)
+            g_partialTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, onPartialTimer, nullptr);
+        if (!g_partialTimer)
+            return;
+        // 2 s while one grows, so a bar whose download stalls goes a few
+        // seconds after it stops counting; a minute for one written long ago.
+        int64_t newest = 0;
+        for (const auto& [PATH, MTIMES] : g_partialMtimes)
+            for (const int64_t M : MTIMES)
+                newest = std::max(newest, M);
+        wl_event_source_timer_update(g_partialTimer, StackModel::partialRecheckMs(newest, unixNow()));
+    }
+
     // Stack path -> the entry names its folder had at the last listing (for the
     // arrival bounce).
     std::unordered_map<std::string, std::unordered_set<std::string>> g_seenNames;
@@ -1645,8 +1699,13 @@ namespace ScrollOverview::Stacks {
                 if (L.ready && !L.missing) {
                     std::unordered_set<std::string> now;
                     now.reserve(L.entries.size());
-                    for (const auto& E : L.entries)
+                    auto& partial = g_partialMtimes[S.path];
+                    partial.clear();
+                    for (const auto& E : L.entries) {
                         now.insert(E.name);
+                        if (StackModel::isPartialDownload(E.name))
+                            partial.push_back(E.mtime);
+                    }
                     auto [IT, FIRST] = g_seenNames.try_emplace(S.path);
                     if (!FIRST) {
                         for (const auto& N : now) {
@@ -1663,7 +1722,10 @@ namespace ScrollOverview::Stacks {
                 LauncherEntry::start(); // Chromium's progress arrives on the session bus
             was = ST.downloads;
         }
-        std::erase_if(g_downloads, [](const auto& kv) { return kv.second == 0; });
+        // A folder unpinned mid-download is not the dock's to watch any more.
+        std::erase_if(g_downloads, [](const auto& kv) { return kv.second == 0 || !find(kv.first); });
+        std::erase_if(g_partialMtimes, [](const auto& kv) { return !g_downloads.contains(kv.first); });
+        armPartialTimer();
 
         ++g_storeGeneration; // the dock's item cache (and the pile) key on this
         for (const auto& M : State::monitorState()->monitors())
@@ -1676,6 +1738,10 @@ namespace ScrollOverview::Stacks {
         if (g_inotifySource) {
             wl_event_source_remove(g_inotifySource);
             g_inotifySource = nullptr;
+        }
+        if (g_partialTimer) {
+            wl_event_source_remove(g_partialTimer);
+            g_partialTimer = nullptr;
         }
         g_sushiOpen.reset();
         g_sushiResize.reset();
@@ -1960,8 +2026,10 @@ namespace ScrollOverview::Stacks {
     }
 
     size_t downloadsIn(const std::string& stackPath) {
-        const auto IT = g_downloads.find(canonical(stackPath));
-        return IT == g_downloads.end() ? 0 : IT->second;
+        // Still being written: a partial file nobody writes any more is not a
+        // download (g_partialMtimes).
+        const auto IT = g_partialMtimes.find(canonical(stackPath));
+        return IT == g_partialMtimes.end() ? 0 : livePartials(IT->second);
     }
 
     std::string tooltipSuffix(const std::string& stackPath) {
@@ -2379,7 +2447,7 @@ namespace ScrollOverview::Stacks {
     }
 
     bool anyDownloading() {
-        return !g_downloads.empty();
+        return std::ranges::any_of(g_partialMtimes, [](const auto& kv) { return livePartials(kv.second) > 0; });
     }
 
     bool animating() {

@@ -228,7 +228,8 @@ namespace ScrollOverview::Stacks {
     std::string pickIcon(const std::string& names);
     // Is this stack's fan/pane open or closing? (its pile items are in flight)
     bool popupShowsStack(const std::string& stackPath);
-    // Browser downloads in flight in this stack's folder (dock stacks, 2026-09-24).
+    // Browser downloads in flight in this stack's folder (dock stacks, 2026-09-24):
+    // partial files written in the last few seconds, not every one that exists.
     size_t downloadsIn(const std::string& stackPath);
     // While the pointer rests on a stack's cell: build what its popup will draw.
     void warm(const std::string& stackPath, float scale); // scale: the monitor the fan will open on

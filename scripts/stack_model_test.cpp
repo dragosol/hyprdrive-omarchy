@@ -143,6 +143,17 @@ int main() {
     // Browser partial downloads (2026-09-24).
     check(isPartialDownload("movie.mkv.part") && isPartialDownload("Unconfirmed 1234.crdownload") && isPartialDownload("a.crdownload"), "partials recognised");
     check(!isPartialDownload(".part") && !isPartialDownload("part") && !isPartialDownload("spare.parts") && !isPartialDownload("x.partial"), "non-partials refused");
+    // Review 2026-11-09: a .part nobody writes any more is not a download, or
+    // a browser killed mid-download left the dock animating forever.
+    {
+        constexpr int64_t NOW = 1'762'700'000;
+        check(partialLive(NOW, NOW) && partialLive(NOW - 3, NOW), "a partial written just now is downloading");
+        check(!partialLive(NOW - 3600, NOW), "a partial left an hour ago is not");
+        check(!partialLive(NOW + 3600, NOW), "nor one an hour in the future (a share's clock running ahead)");
+        check(partialRecheckMs(NOW, NOW) == 2000, "a growing download is looked at every 2 s");
+        check(partialRecheckMs(NOW - 20, NOW) == 10000, "a quiet one half as often as it has been quiet");
+        check(partialRecheckMs(NOW - 86400, NOW) == 60000 && partialRecheckMs(NOW + 86400, NOW) == 2000, "bounded either way: 2 s .. 60 s");
+    }
 
     // View as Fan (2026-09-24): capacity agrees with fanFits, the name round-trips.
     {

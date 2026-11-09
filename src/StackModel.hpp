@@ -34,6 +34,16 @@ namespace ScrollOverview::StackModel {
     // Chromium-family browsers `name.crdownload` (dock stacks, 2026-09-24).
     bool isPartialDownload(const std::string& name);
 
+    // ...and only while it is still being written (review 2026-11-09): its
+    // mtime within PARTIAL_LIVE_S of `nowSec`, either way round -- a `.part` a
+    // killed browser left behind is not a download, and neither is one from a
+    // share whose clock runs ahead. Unix seconds.
+    inline constexpr int64_t PARTIAL_LIVE_S = 10;
+    bool                     partialLive(int64_t mtimeSec, int64_t nowSec);
+    // How long before a folder holding partial files is listed again: half as
+    // long as the newest one has been quiet, 2 s to 60 s.
+    int partialRecheckMs(int64_t newestMtimeSec, int64_t nowSec);
+
     // Directories first, then: Name (natural), Added (btime, newest first),
     // Modified (mtime, newest first), Kind (content type, then name). Stable.
     void sortEntries(std::vector<SEntry>& entries, ESort sort);

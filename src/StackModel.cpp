@@ -47,6 +47,15 @@ namespace ScrollOverview::StackModel {
         return false;
     }
 
+    bool partialLive(int64_t mtimeSec, int64_t nowSec) {
+        return std::abs(nowSec - mtimeSec) <= PARTIAL_LIVE_S;
+    }
+
+    int partialRecheckMs(int64_t newestMtimeSec, int64_t nowSec) {
+        const int64_t QUIET_S = std::max<int64_t>(0, nowSec - newestMtimeSec);
+        return static_cast<int>(std::clamp<int64_t>(QUIET_S * 500, 2000, 60000));
+    }
+
     bool naturalLess(const std::string& a, const std::string& b) {
         size_t i = 0, j = 0;
         while (i < a.size() && j < b.size()) {
