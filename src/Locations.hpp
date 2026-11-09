@@ -56,6 +56,9 @@ namespace ScrollOverview::Locations {
     // "Show in Files": the folder holding `path`, with it selected where the
     // file manager can (Nautilus, Dolphin). Same file manager as activate().
     void reveal(const std::string& path);
+    // The file manager's icon theme: GNOME's org.gnome.desktop.interface
+    // icon-theme (what Nautilus draws with), "" when there is none.
+    std::string nautilusIconTheme();
 
     // The reference's one trash action, and it asks NAUTILUS to do it, with the
     // confirmation dialog: this plugin never deletes the user's files itself.

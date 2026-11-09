@@ -123,7 +123,10 @@ namespace ScrollOverview::Thumbs {
             gint status = -1;
             const bool RAN = g_spawn_sync(nullptr, argv.data(), nullptr, static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL), nullptr, nullptr,
                                           nullptr, nullptr, &status, nullptr);
-            if (!RAN || !std::filesystem::exists(TMP, ec)) {
+            // An empty or failed result is no thumbnail (2026-11-08: a
+            // recording thumbnailed while still being written left 0-byte
+            // PNGs that stood in for its preview for good).
+            if (!RAN || !g_spawn_check_wait_status(status, nullptr) || !std::filesystem::exists(TMP, ec) || std::filesystem::file_size(TMP, ec) == 0 || ec) {
                 std::filesystem::remove(TMP, ec);
                 return false;
             }
@@ -159,19 +162,37 @@ namespace ScrollOverview::Thumbs {
         const auto MD5 = md5Uri(path);
         if (MD5.empty())
             return {};
+        // A thumbnail is good when it has something in it and is not older
+        // than the file (a download or recording still being written when it
+        // was made). A stale one of our own is made again.
+        std::error_code ec;
+        const auto      SRC  = std::filesystem::last_write_time(path, ec);
+        const bool      HAVE = !ec;
+        const auto      good = [&](const std::string& p) {
+            std::error_code e;
+            if (std::filesystem::file_size(p, e) == 0 || e)
+                return false;
+            const auto T = std::filesystem::last_write_time(p, e);
+            return !e && (!HAVE || T >= SRC);
+        };
         const std::string BASE = std::string(g_get_user_cache_dir()) + "/thumbnails/";
         for (const char* SIZE : {"x-large", "large", "xx-large", "normal"}) {
             const auto P = BASE + SIZE + "/" + MD5 + ".png";
-            if (g_file_test(P.c_str(), G_FILE_TEST_EXISTS))
+            if (g_file_test(P.c_str(), G_FILE_TEST_EXISTS) && good(P))
                 return P;
         }
         const auto OWN = ownDir() + "/" + MD5 + ".png";
-        if (g_file_test(OWN.c_str(), G_FILE_TEST_EXISTS))
-            return OWN;
+        if (g_file_test(OWN.c_str(), G_FILE_TEST_EXISTS)) {
+            if (good(OWN))
+                return OWN;
+            std::filesystem::remove(OWN, ec);
+        }
 
         if (kind.starts_with("image/") || kind.starts_with("video/") || kind == "application/pdf") {
             std::scoped_lock lock(g_mutex);
-            if (!g_stop && g_queued.insert(path).second) {
+            // Per path AND mtime: a file that changed since is asked again.
+            const std::string KEY = path + "|" + std::to_string(HAVE ? SRC.time_since_epoch().count() : 0);
+            if (!g_stop && g_queued.insert(KEY).second) {
                 g_queue.emplace_back(path, kind);
                 if (!g_worker.joinable())
                     g_worker = std::thread(workerMain);

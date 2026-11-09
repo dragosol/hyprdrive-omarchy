@@ -423,7 +423,7 @@ namespace {
 // while Nautilus drew arcticons-dark -> breeze-dark. A dconf read is a mapped
 // file, not a round trip. The schema is looked up first: g_settings_new()
 // ABORTS the process on a schema that is not installed.
-static std::string nautilusIconTheme() {
+std::string nautilusIconTheme() {
     static GSettings* settings = [] {
         GSettingsSchemaSource* SRC = g_settings_schema_source_get_default();
         GSettingsSchema*       SCH = SRC ? g_settings_schema_source_lookup(SRC, "org.gnome.desktop.interface", TRUE) : nullptr;
@@ -435,10 +435,17 @@ static std::string nautilusIconTheme() {
     }();
     if (!settings)
         return {};
-    gchar*      v   = g_settings_get_string(settings, "icon-theme");
-    std::string out = v ? v : "";
+    // Asked per dock icon per frame now (themePrefix): read at most every 2 s.
+    static std::string                           cached;
+    static std::chrono::steady_clock::time_point at{};
+    const auto                                   NOW = std::chrono::steady_clock::now();
+    if (at != std::chrono::steady_clock::time_point{} && NOW - at < std::chrono::seconds(2))
+        return cached;
+    at              = NOW;
+    gchar* v        = g_settings_get_string(settings, "icon-theme");
+    cached          = v ? v : "";
     g_free(v);
-    return out;
+    return cached;
 }
 
 static void readGvfsMounts(std::vector<SLocation>& out, bool network) {

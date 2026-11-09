@@ -1203,7 +1203,7 @@ SItemsKey itemsKey() {
         (Config::getValue<bool>(KEY_FOLDERS_ANYWHERE) ? 32U : 0U);
     // The icon themes and the Trash's look are strings; a change of any of them
     // is a different item list.
-    key.themes = std::hash<std::string>{}(AppSearch::omarchyIconTheme() + "|" + Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme") + "|" +
+    key.themes = std::hash<std::string>{}(AppSearch::omarchyIconTheme() + "|" + Locations::nautilusIconTheme() + "|" + Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme") + "|" +
                                           Config::getValue<std::string>(KEY_TRASH_ICON) + "|" + Config::getValue<std::string>("plugin:hyprdrive:dock:trash_style") + "|" +
                                           Config::getValue<std::string>("plugin:hyprdrive:dock:trash_papers"));
 

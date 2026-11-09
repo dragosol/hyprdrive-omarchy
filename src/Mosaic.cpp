@@ -363,6 +363,19 @@ namespace ScrollOverview::Mosaic {
     };
     static SEdgePanLatch g_edgePan;
     constexpr auto       EDGE_PAN_HOLD = std::chrono::milliseconds(250);
+    // PRESSURE FIRST (user, 2026-11-08: "a light push on the bottom should do
+    // nothing except show the dock, it's if i push more"): a push starts only
+    // once the hand has pushed PUSH_PRESSURE past the edge in one go -- the
+    // dock (or a bar) reveals on the touch, the canvas on the push. A pause of
+    // EDGE_PAN_HOLD, or turning, starts the count again.
+    struct SEdgePressure {
+        const void*                           who  = nullptr;
+        int                                   axis = 0;
+        double                                sign = 0, sum = 0;
+        std::chrono::steady_clock::time_point at{};
+    };
+    static SEdgePressure g_edgePressure;
+    constexpr double     PUSH_PRESSURE = 150.0; // logical px past the edge
     // A window sliding under the pointer while it pushes is not a hover.
     static bool edgePanRecent() {
         return g_edgePan.who && std::chrono::steady_clock::now() - g_edgePan.at < EDGE_PAN_HOLD;
@@ -586,6 +599,7 @@ namespace ScrollOverview::Mosaic {
         // `animate`: pan there (focus moved); otherwise only aim the view, for
         // the layout pass that follows.
         void revealWindow(const PHLWINDOW& w, bool animate, const PHLWINDOW& from = {}) {
+            m_pushedAway = false;
             const auto WANT = revealOffset(w, panTarget(), from);
             if (!WANT)
                 return;
@@ -658,8 +672,8 @@ namespace ScrollOverview::Mosaic {
         // The view moves by exactly that -- only as far as the hand moves --
         // and stops where the canvas ends, which is the last window and its
         // padding. A push STARTS only where there is something to see: a
-        // window wholly past that edge, and none but the focused one showing
-        // on that side of it (one that peeks can be hovered instead).
+        // window wholly past that edge, and only after a firm push
+        // (PUSH_PRESSURE): a light touch is the dock's.
         bool pushThrough(const Vector2D& lost) {
             if (!m_asCanvas || m_zoomed || !shownNow())
                 return false;
@@ -678,8 +692,18 @@ namespace ScrollOverview::Mosaic {
                 const double SIGN    = D > 0 ? 1.0 : -1.0;
                 const double LATCHED = axis ? g_edgePan.dir.y : g_edgePan.dir.x;
                 const bool   GOING   = g_edgePan.who == this && LATCHED == SIGN && NOW - g_edgePan.at < EDGE_PAN_HOLD;
-                if (!GOING && !pushMayStart(axis, SIGN, CUR, *AREA))
-                    continue;
+                if (!GOING) {
+                    if (!pushMayStart(axis, SIGN, CUR, *AREA))
+                        continue;
+                    auto& P = g_edgePressure;
+                    if (P.who != this || P.axis != axis || P.sign != SIGN || NOW - P.at >= EDGE_PAN_HOLD)
+                        P = {this, axis, SIGN, 0.0, NOW};
+                    P.sum += std::abs(D);
+                    P.at = NOW;
+                    if (P.sum < PUSH_PRESSURE)
+                        continue;
+                    P = {};
+                }
                 const double MAX = axis ? VIEW->maxY : VIEW->maxX;
                 double&      w   = axis ? want.y : want.x;
                 w                = std::clamp(w + D, 0.0, MAX);
@@ -691,7 +715,30 @@ namespace ScrollOverview::Mosaic {
             if (std::abs(want.x - CUR.x) < 0.01 && std::abs(want.y - CUR.y) < 0.01)
                 return true; // at the canvas's end: held there
             setCanvasOffset(want, true);
+            m_pushedAway = true;
             return true;
+        }
+        // BACK ON THE WINDOW (user, 2026-11-08: "if I push but then put my
+        // mouse back on the window, it should re-center/refocus on that window
+        // such that the whole window is visible"): once the push is over, the
+        // hand moving on the focused window -- off the edge it pushed -- brings
+        // that window back into view, as a click would. Hovering another
+        // window already does (the focus hook); the focused one is no focus
+        // change, so it is done here.
+        void backFromPush(const Vector2D& p, const CBox& screen) {
+            if (!m_pushedAway || edgePanRecent() || !m_asCanvas || m_zoomed || !shownNow())
+                return;
+            if (p.x <= screen.x + 3 || p.y <= screen.y + 3 || p.x >= screen.x + screen.w - 4 || p.y >= screen.y + screen.h - 4)
+                return; // still at an edge: maybe pushing on
+            const auto F = Desktop::focusState()->window();
+            if (!F || !holds(F))
+                return;
+            const CBox FB{F->positionAnimation()->value(), F->sizeAnimation()->value()};
+            if (!FB.containsPoint(p))
+                return;
+            m_pushedAway = false;
+            trace("back on the window after a push: reveal");
+            clickReveal(F);
         }
         bool pushMayStart(int axis, double sign, const Vector2D& cur, const CBox& area) const {
             const auto F  = Desktop::focusState()->window();
@@ -699,22 +746,17 @@ namespace ScrollOverview::Mosaic {
             if (!FR)
                 return false;
             const double VL = axis ? cur.y : cur.x, VR = VL + (axis ? area.h : area.w);
-            const double OL = axis ? cur.x : cur.y, OR = OL + (axis ? area.w : area.h);
             const double FC = axis ? FR->y + FR->h / 2.0 : FR->x + FR->w / 2.0;
-            bool         hidden = false;
             for (const auto& Q : m_canvas.rects) {
                 if (std::abs(Q.x - FR->x) < 0.5 && std::abs(Q.y - FR->y) < 0.5)
                     continue;
                 const double QL = axis ? Q.y : Q.x, QR = QL + (axis ? Q.h : Q.w);
-                const double PL = axis ? Q.x : Q.y, PR = PL + (axis ? Q.w : Q.h);
                 if ((QL + QR) / 2.0 * sign <= FC * sign)
                     continue; // not on that side of the focused window
-                const bool SHOWING = QL < VR - 0.5 && QR > VL + 0.5 && PL < OR - 0.5 && PR > OL + 0.5;
-                if (SHOWING)
-                    return false;
-                hidden |= sign > 0 ? QL >= VR - 0.5 : QR <= VL + 0.5;
+                if (sign > 0 ? QL >= VR - 0.5 : QR <= VL + 0.5)
+                    return true;
             }
-            return hidden;
+            return false;
         }
         // Where `w` sits on the canvas.
         std::optional<MosaicPack::SRect> canvasRectOf(const PHLWINDOW& w) const {
@@ -2562,6 +2604,7 @@ namespace ScrollOverview::Mosaic {
         } m_morph;
         bool                      m_zoomed = false; // some window is drawn off its layout box
         bool                      m_revealPending = false;
+        bool                                  m_pushedAway = false; // the view was pushed off the focused window (backFromPush)
         std::chrono::steady_clock::time_point m_rearrangedAt{}; // the canvas's last new arrangement (revealWindow)
         CHyprSignalListener       m_focusHook;
         CHyprSignalListener       m_reloadHook;
@@ -3365,12 +3408,18 @@ namespace ScrollOverview::Mosaic {
     // resize reaches past the edge by. Held still, nothing grows.
     void onPointerDelta(const Vector2D& delta, const Vector2D& moved) {
         const Vector2D LOST = delta - moved;
-        if (std::abs(LOST.x) < 0.01 && std::abs(LOST.y) < 0.01)
+        const bool     NONE = std::abs(LOST.x) < 0.01 && std::abs(LOST.y) < 0.01;
+        if (NONE && (std::abs(moved.x) < 0.01 && std::abs(moved.y) < 0.01))
             return;
         const Vector2D P   = g_pInputManager->getMouseCoordsInternal();
         const auto     MON = State::monitorState()->query().vec(P).run();
         if (!MON || MON->m_activeSpecialWorkspace)
             return;
+        if (NONE) {
+            if (auto* C = canvasOf(MON->m_activeWorkspace))
+                C->backFromPush(P, MON->logicalBox());
+            return;
+        }
         auto* A = reachingOn(MON->m_activeWorkspace);
         // No resize reaching: a canvas desktop may be pushed through instead
         // (pushThrough) -- not under a Super+drag, which pans by the clock
