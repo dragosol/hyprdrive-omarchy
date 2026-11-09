@@ -19,6 +19,7 @@
 #include "MosaicPack.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -779,4 +780,35 @@ namespace ScrollOverview::MosaicPack {
             target = std::clamp(target, plo, phi);
         return CLAMP(std::clamp(target, std::min(lo, hi), std::max(lo, hi)));
     }
+
+    // PRESSURE FIRST (Mosaic.cpp pushThrough): a push through the screen's
+    // edge starts only once the hand has pushed `need` px past it in one go.
+    // A pause of `hold`, a turn, or another canvas starts the count again.
+    // ONE COUNT PER AXIS (2026-11-09): a push into a corner loses motion on
+    // both axes in every event, and the one count the two used to share was
+    // started again by each axis in turn -- it never reached `need`, so a
+    // corner never gave way (canvas_directions "all" is the default).
+    struct SEdgePressure {
+        struct SCount {
+            const void*                           who  = nullptr;
+            double                                sign = 0, sum = 0;
+            std::chrono::steady_clock::time_point at{};
+        };
+        SCount count[2]; // x, y
+        // `lost` px pushed past the edge on `axis` (0 = x, 1 = y) toward
+        // `sign`, on `who`'s canvas: true when the push gives way, and that
+        // axis counts from zero again.
+        bool press(int axis, const void* who, double sign, double lost, double need, std::chrono::steady_clock::time_point now,
+                   std::chrono::steady_clock::duration hold) {
+            auto& C = count[axis ? 1 : 0];
+            if (C.who != who || C.sign != sign || now - C.at >= hold)
+                C = {who, sign, 0.0, now};
+            C.sum += std::abs(lost);
+            C.at = now;
+            if (C.sum < need)
+                return false;
+            C = {};
+            return true;
+        }
+    };
 }

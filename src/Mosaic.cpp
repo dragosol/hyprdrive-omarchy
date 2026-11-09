@@ -367,14 +367,9 @@ namespace ScrollOverview::Mosaic {
     // nothing except show the dock, it's if i push more"): a push starts only
     // once the hand has pushed PUSH_PRESSURE past the edge in one go -- the
     // dock (or a bar) reveals on the touch, the canvas on the push. A pause of
-    // EDGE_PAN_HOLD, or turning, starts the count again.
-    struct SEdgePressure {
-        const void*                           who  = nullptr;
-        int                                   axis = 0;
-        double                                sign = 0, sum = 0;
-        std::chrono::steady_clock::time_point at{};
-    };
-    static SEdgePressure g_edgePressure;
+    // EDGE_PAN_HOLD, or turning, starts the count again. One count per axis,
+    // or a push into a corner never gives way (MosaicCanvas.hpp).
+    static MosaicPack::SEdgePressure g_edgePressure;
     // How far (logical px) the hand pushes past the edge before the canvas
     // gives way: mosaic:edge_push_resistance (user, 2026-11-09: "too easy to
     // push through, especially going down"), half again at the bottom, where
@@ -766,14 +761,8 @@ namespace ScrollOverview::Mosaic {
                 if (!GOING) {
                     if (!pushMayStart(axis, SIGN, CUR, *AREA))
                         continue;
-                    auto& P = g_edgePressure;
-                    if (P.who != this || P.axis != axis || P.sign != SIGN || NOW - P.at >= EDGE_PAN_HOLD)
-                        P = {this, axis, SIGN, 0.0, NOW};
-                    P.sum += std::abs(D);
-                    P.at = NOW;
-                    if (P.sum < pushPressure(axis, SIGN))
+                    if (!g_edgePressure.press(axis, this, SIGN, D, pushPressure(axis, SIGN), NOW, EDGE_PAN_HOLD))
                         continue;
-                    P = {};
                 }
                 const double MAX = axis ? VIEW->maxY : VIEW->maxX;
                 double&      w   = axis ? want.y : want.x;

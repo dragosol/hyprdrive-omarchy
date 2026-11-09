@@ -783,6 +783,49 @@ int main() {
             expect(PEEKS <= 2990 - 48 + 0.5 || PEEKS + VW >= 4510 + 48 - 0.5, "smart pan: a neighbour's edge shows where there is room");
             expect(PEEKS <= 3000 - G + 0.5 && PEEKS + VW >= 4500 + G - 0.5, "smart pan: the focused window stays whole");
         }
+
+        // PUSH THROUGH THE EDGE, PRESSURE FIRST (SEdgePressure): one count per
+        // axis, events 8 ms apart as a mouse sends them.
+        {
+            using namespace std::chrono;
+            const auto T0   = steady_clock::time_point{} + hours(1);
+            const auto HOLD = milliseconds(250); // Mosaic.cpp's EDGE_PAN_HOLD
+            const int  ME = 0, OTHER = 0;
+            const auto AT = [&](int i) { return T0 + milliseconds(8 * i); };
+            // Straight at the right edge: it gives way at `need` px, not before.
+            SEdgePressure S;
+            int           n = 0;
+            while (n < 100 && !S.press(0, &ME, 1.0, 4.0, 60.0, AT(n), HOLD))
+                ++n;
+            expect(n == 14, "edge push: a straight push gives way once it has pushed `need` px");
+            // INTO A CORNER (2026-11-09): both axes lose motion in every event,
+            // x then y as pushThrough asks them. Each gives way on its own
+            // count -- the bottom's at 1.5x, as pushPressure asks.
+            SEdgePressure C;
+            int           gaveX = -1, gaveY = -1;
+            for (int i = 0; i < 100 && (gaveX < 0 || gaveY < 0); ++i) {
+                if (C.press(0, &ME, 1.0, 3.0, 60.0, AT(i), HOLD) && gaveX < 0)
+                    gaveX = i;
+                if (C.press(1, &ME, 1.0, 3.0, 90.0, AT(i), HOLD) && gaveY < 0)
+                    gaveY = i;
+            }
+            expect(gaveX == 19 && gaveY == 29, "edge push: a push into a corner gives way on both axes");
+            // A pause of HOLD, a turn, or another canvas: the count starts again.
+            SEdgePressure P;
+            P.press(0, &ME, 1.0, 50.0, 60.0, T0, HOLD);
+            expect(!P.press(0, &ME, 1.0, 20.0, 60.0, T0 + HOLD, HOLD), "edge push: a pause starts the count again");
+            SEdgePressure U;
+            U.press(0, &ME, 1.0, 50.0, 60.0, T0, HOLD);
+            expect(!U.press(0, &ME, -1.0, 20.0, 60.0, AT(1), HOLD), "edge push: turning starts the count again");
+            SEdgePressure O;
+            O.press(1, &ME, 1.0, 50.0, 60.0, T0, HOLD);
+            expect(!O.press(1, &OTHER, 1.0, 20.0, 60.0, AT(1), HOLD), "edge push: another canvas starts the count again");
+            // Nor does pushing the other edge in between start this one again.
+            SEdgePressure B;
+            B.press(0, &ME, 1.0, 50.0, 60.0, T0, HOLD);
+            B.press(1, &ME, 1.0, 5.0, 90.0, AT(1), HOLD);
+            expect(B.press(0, &ME, 1.0, 10.0, 60.0, AT(2), HOLD), "edge push: the other axis does not reset this one's count");
+        }
     }
 
     std::printf("mosaic_pack_test: %d checks, %d failed\n", checks, failed);
