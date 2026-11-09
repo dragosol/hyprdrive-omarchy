@@ -253,12 +253,16 @@ def approved_release(revalidate=False):
     data = fetch(REGISTRY_URL, REGISTRY_MAX, cached.get("etag") if usable else None)
     if data is None:
         return cached.get("approved")
+    # THE REGISTRY'S ETAG, TAKEN NOW (review, 2026-11-09): manifest_version_at
+    # below fetches too, and fetch.etag then holds the manifest's. Cached as the
+    # registry's, it never matched again: every check read the whole ~14 MB.
+    etag = fetch.etag
     sha = published_snapshot(json.loads(data.decode("utf-8")))
     approved = {"sha": sha, "version": manifest_version_at(sha)} if sha else None
     try:
         CACHE.mkdir(parents=True, exist_ok=True)
         tmp = SNAPSHOT_CACHE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "etag": fetch.etag, "approved": approved}))
+        tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "etag": etag, "approved": approved}))
         tmp.replace(SNAPSHOT_CACHE)
     except OSError:
         pass
@@ -366,7 +370,7 @@ def checkout_dir(info):
     if info.get("source"):
         candidates.append(pathlib.Path(info["source"]))
     if FLAVOR == "omarchy":
-        candidates.append(HOME / ".config/omarchy/plugins" / PLUGIN_ID)
+        candidates.append(pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "omarchy/plugins" / PLUGIN_ID)
     candidates.append(CLONE_DIR)
     for c in candidates:
         url = git(c, "remote", "get-url", "origin", capture=True) if (c / ".git").exists() else None
@@ -434,29 +438,65 @@ def install(target_ref, label, yes, info, rebuild=False):
         return 1
 
     prefix = info.get("prefix") or str(HOME / ".local")
+    so = pathlib.Path(prefix) / "lib/hyprdrive/hyprdrive.so"
+
+    def so_stamp():
+        try:
+            st = so.stat()
+            return (st.st_ino, st.st_mtime_ns)
+        except OSError:
+            return None
+    before = so_stamp()
+
+    def build_failed(what):
+        # A PARTIAL INSTALL IS NOT ROLLED BACK (review, 2026-11-09): make install
+        # copies the new .so before it writes the config fragments, so when a
+        # later step fails the new plugin is already in place. Checking the old
+        # version out then would put old settings over the new plugin -- the very
+        # mismatch failed() exists to prevent -- so say what happened instead.
+        if so_stamp() != before:
+            print("The new plugin was installed, but a later install step failed (see above).")
+            print("Fix that, then run `make install` in %s again." % src)
+            return 1
+        return failed(what)
+
     # FROM SCRATCH, EVERY TIME (2026-11-09): nothing an older build left in
     # .build/ is trusted. Its .d files stopped every update across 1.9.50 (the
     # sources moved into src/), and make does not notice a Hyprland update (the
     # README's "Version mismatch"), so an incremental build can link objects
     # made against two Hyprlands. Updates are rare enough to afford it.
+    # make install builds and runs the checks itself: a `make all` before it ran
+    # every check twice (Clement, 2026-11-09).
     clean = ["make", "clean"]
     if FLAVOR == "omarchy":
-        if run(clean, cwd=src) != 0 or run(["make", "all"], cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
-            return failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
+        if run(clean, cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
+            return build_failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
     elif run(clean, cwd=src) != 0 or run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
-        return failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
-    so = pathlib.Path(prefix) / "lib/hyprdrive/hyprdrive.so"
+        return build_failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
     try:
         CHECK_CACHE.unlink()
     except OSError:
         pass
     if shutil.which("hyprctl") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        # NO RELOAD INTO A REPLACED HYPRLAND (review, 2026-11-09): after a
+        # Hyprland upgrade under this session no plugin can load until the next
+        # login, so the unload below would leave the session without Hyprdrive.
+        # `hyprdrive reload` already refused this; the update did not ask.
+        if hyprland_replaced():
+            print("Installed. Hyprland was updated since you logged in, so the new version starts")
+            print("at your next login; the running one stays until then.")
+            return 0
         if ask("Reload the plugin now? (Keep your hands off the trackpad for a second.)", yes):
             run(["hyprctl", "plugin", "unload", str(so)])
             run(["hyprctl", "plugin", "load", str(so)])
             run(["hyprctl", "reload"])
+            run(["hyprctl", "configerrors"])
             if FLAVOR == "omarchy" and shutil.which("omarchy"):
                 run(["omarchy", "restart", "shell"])
+            henv = hypr_env()
+            if henv is not None and not loaded(henv):
+                print("The new plugin did not load (see above). Log out and back in to start it.")
+                return 1
             print("Done: Hyprdrive %s is running." % label)
             return 0
     print("Installed. Log out and back in to start the new version.")

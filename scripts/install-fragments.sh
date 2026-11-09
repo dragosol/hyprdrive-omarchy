@@ -10,11 +10,15 @@
 #   scripts/install-fragments.sh DIR        fragments only, for tests
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-DEST=${1:-$HOME/.config/hypr/hyprdrive}
+# $XDG_CONFIG_HOME, as the loader, the binds, the panel copy and uninstall
+# already did (review, 2026-11-09): with it set, these landed in ~/.config,
+# where nothing loaded them, and uninstall then missed them.
+CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}
+DEST=${1:-$CONFIG/hypr/hyprdrive}
 SRC=$ROOT/config/hyprdrive
 LOADER_SRC=$ROOT/config/hyprdrive.lua
-LOADER_DEST=$HOME/.config/hypr/hyprdrive.lua
-HYPRLAND_LUA=$HOME/.config/hypr/hyprland.lua
+LOADER_DEST=$CONFIG/hypr/hyprdrive.lua
+HYPRLAND_LUA=$CONFIG/hypr/hyprland.lua
 LIBDIR=$HOME/.local/lib/hyprdrive
 
 [ -d "$SRC" ] || { echo "install-fragments: no $SRC" >&2; exit 1; }
@@ -85,10 +89,14 @@ elif [ -d "$PLUGIN_SRC" ]; then
     # manifest.json near the top, so the copied panel's is generated from the
     # root one, with the entry point moved to where Panel.qml lands here.
     python3 - "$ROOT/manifest.json" "$PLUGIN_DEST/manifest.json" <<'PY'
-import json, sys
+import json, os, sys
 m = json.load(open(sys.argv[1]))
 m["entryPoints"] = {k: v.split("/")[-1] for k, v in m.get("entryPoints", {}).items()}
-open(sys.argv[2], "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+# Atomic (review, 2026-11-09): the shell reads this manifest whenever it likes.
+tmp = sys.argv[2] + ".tmp"
+with open(tmp, "w") as fh:
+    fh.write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+os.replace(tmp, sys.argv[2])
 PY
     install -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
     install -Dm644 "$PLUGIN_SRC/HyprdrivePanel.qml" "$PLUGIN_DEST/HyprdrivePanel.qml"

@@ -184,7 +184,6 @@ from that same checkout -- this is the manual step.
 ```bash
 omarchy plugin add https://github.com/dragosol/hyprdrive-omarchy
 cd ~/.config/omarchy/plugins/dragos.hyprdrive
-make all
 make install
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl reload
@@ -192,8 +191,7 @@ hyprctl reload
 
 Enable the panel with `omarchy plugin enable dragos.hyprdrive` (or answer yes when
 `plugin add` asks). To update: `omarchy plugin update dragos.hyprdrive`, then run
-`make clean && make all && make install` in that folder again and log out and
-back in.
+`make clean && make install` in that folder again and log out and back in.
 
 ### From source
 
@@ -201,7 +199,6 @@ back in.
 git clone https://github.com/dragosol/hyprdrive-omarchy.git ~/Projects/hyprdrive-omarchy
 cd ~/Projects/hyprdrive-omarchy
 git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"   # the latest release
-make all
 make install
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl reload
@@ -224,18 +221,25 @@ By hand:
 cd ~/Projects/hyprdrive-omarchy
 git fetch --tags
 git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"
-make clean && make all && make install
+make clean && make install   # builds, checks and installs; the running plugin is untouched
+hyprctl plugin unload ~/.local/lib/hyprdrive/hyprdrive.so
+hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
+hyprctl reload
 omarchy restart shell
+hyprctl configerrors
 ```
 
-Then log out and back in to load the new plugin (or, with your hands off the
-trackpad, `hyprctl plugin unload ~/.local/lib/hyprdrive/hyprdrive.so && hyprctl
-plugin load ~/.local/lib/hyprdrive/hyprdrive.so`). `omarchy restart shell` makes
-the Hyprdrive settings panel pick up rows a release added; the shell's own plugin
-reload keeps the old ones.
+Build first, then reload (keep your hands off the trackpad for that second):
+`make install` replaces the plugin file without disturbing the copy that is
+running, so nothing needs unloading or deleting beforehand, and a failed build
+leaves you with the plugin you had. If Hyprland itself was updated since you
+logged in, stop after `make install` and log out and back in instead: no plugin
+can be loaded into a Hyprland whose binary was replaced. `omarchy restart shell`
+makes the Hyprdrive settings panel pick up rows a release added; the shell's own
+plugin reload keeps the old ones.
 
 After a Hyprland update the plugin may refuse to load with `[he] Version mismatch`.
-Rebuild from scratch: `make clean && make all && make install`.
+Rebuild from scratch: `make clean && make install`.
 
 ## Removal
 
@@ -272,7 +276,6 @@ make_preview.py --shot overview.png --icon omarchy-plugin/hyprdrive-icon.png \
 For development, on whatever is checked out:
 
 ```bash
-make all
 make install
 ```
 
@@ -285,12 +288,10 @@ in `~/.config/hypr/hyprdrive/`, and adds `require("hypr.hyprdrive")` to
 session needs the explicit `hyprctl plugin load` (or a compositor restart). After
 that the fragment keeps it loaded across reboots.
 
-If the compositor has `hyprdrive.so` mapped, delete it before rebuilding:
-
-```bash
-rm -f hyprdrive.so ~/.local/lib/hyprdrive/hyprdrive.so
-make all && make install
-```
+Rebuilding while the plugin runs is safe: the linker and `make install` both
+write a new file rather than overwriting the one the compositor has mapped, so
+neither copy needs deleting first -- and deleting the installed one before a
+build that then fails leaves no plugin to load at the next login.
 
 An undefined symbol is not a link error (`-shared` never complains). `make all`
 runs `scripts/symcheck.sh` for that reason. Never ship a build whose symcheck

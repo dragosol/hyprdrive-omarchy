@@ -39,8 +39,10 @@ def replace_file(path, data, fsync=False):
 
     The temp file is CREATED with the destination's mode -- 0600 when there is
     no destination yet -- so a private file is never, even for an instant,
-    replaced by a umask-default 0644 one. Every config and state writer in
-    scripts/ goes through here. `data` is str or bytes."""
+    replaced by a umask-default 0644 one. The Python config and state writers
+    in scripts/ go through here; the shell scripts' inline Python (uninstall's
+    hyprland.lua edit, the panel manifest) does its own temp file and
+    os.replace. `data` is str or bytes."""
     path = pathlib.Path(path)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
@@ -62,15 +64,23 @@ END   = "-- END raw-snippet"
 
 
 def split(text):
-    """-> (machine, raw). A file with no markers is all machine, empty raw."""
+    """-> (machine, raw). A file with no markers is all machine, empty raw.
+
+    NOTHING BELOW BEGIN IS DROPPED (review, 2026-11-09). Everything under the
+    BEGIN line is the person's: with the END line gone the raw block runs to the
+    end of the file, and lines found after END stay in it too -- compose() then
+    writes both back inside the markers. This used to refuse a missing END
+    (which stopped make install) and to drop whatever followed END, silently.
+    hdpanel's compose_fragment keeps the same rule; fragment_test holds them to it."""
     lines = text.splitlines()
     b = next((i for i, l in enumerate(lines) if l.strip().startswith("-- BEGIN raw-snippet")), None)
     if b is None:
         return text, ""
     e = next((i for i in range(b + 1, len(lines)) if lines[i].strip() == END), None)
     if e is None:
-        raise SystemExit("fragment: %s has a BEGIN marker and no END -- refusing to guess where the raw block stops")
-    return "\n".join(lines[:b]), "\n".join(lines[b + 1:e])
+        return "\n".join(lines[:b]), "\n".join(lines[b + 1:])
+    tail = lines[e + 1:]
+    return "\n".join(lines[:b]), "\n".join(lines[b + 1:e] + (tail if any(l.strip() for l in tail) else []))
 
 
 def compose(machine, raw):
@@ -91,6 +101,9 @@ def main(argv):
         machine, raw = split(old)
         if BEGIN not in old:
             print("fragment: %s has no raw-snippet block" % path, file=sys.stderr)
+            return 1
+        if not any(l.strip() == END for l in old.splitlines()):
+            print("fragment: %s has no END line; the next write puts it back at the end of the file" % path, file=sys.stderr)
             return 1
         print("%s: %d machine lines, %d raw lines" % (path, len(machine.splitlines()), len(raw.splitlines())))
         return 0

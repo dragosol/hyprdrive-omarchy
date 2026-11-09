@@ -71,11 +71,19 @@ check: hyprdrive.so
 	python3 scripts/private_modes_test.py
 	python3 scripts/hdicons_test.py
 	python3 scripts/update_cli_test.py
+	python3 scripts/fragment_test.py
 	python3 scripts/keybind_editor_test.py
 	python3 scripts/agent_run_test.py
 	python3 scripts/tool_scripts_test.py
 
-PREFIX ?= $(HOME)/.local
+# ONE PREFIX ON OMARCHY (review, 2026-11-09): the config fragments, the loader
+# fragment and uninstall all look in ~/.local, so a PREFIX= here moved only the
+# .so and agent-run -- the agent launch then failed, and uninstall left them.
+# The native build supports PREFIX end to end; this one installs to ~/.local.
+ifeq ($(origin PREFIX),command line)
+$(warning PREFIX is ignored on Omarchy: Hyprdrive installs to ~/.local, where its config and uninstall look)
+endif
+override PREFIX := $(HOME)/.local
 
 # check, not just hyprdrive.so: `make install` used to skip symcheck entirely,
 # which is how an undefined-symbol .so reached ~/.local/lib and killed every

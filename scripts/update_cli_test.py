@@ -147,6 +147,9 @@ with contextlib.redirect_stdout(shown), tempfile.TemporaryDirectory() as tmp:
         if url.endswith("/releases/latest"):
             return {"tag_name": "v1.9.38"}
         if url.endswith("/%s/manifest.json" % A):
+            # The real fetch_json goes through fetch(), which sets fetch.etag:
+            # the registry's own must be the one cached (review, 2026-11-09).
+            o.fetch.etag = "W/manifest"
             return {"version": "1.9.37"}
         raise AssertionError("unexpected json " + url)
     o.fetch = fake_fetch
@@ -251,6 +254,58 @@ with contextlib.redirect_stdout(shown), tempfile.TemporaryDirectory() as tmp:
         mod.run = real_run
         makes = [c for c in ran if c[0] == "make"]
         expect(rc == 0 and len(makes) > 1 and makes[0] == ["make", "clean"], "%s: an update runs make clean before it builds" % mod.FLAVOR)
+
+        # NO RELOAD INTO A REPLACED HYPRLAND (review, 2026-11-09): the unload
+        # could not be undone this session. Otherwise: unload, load, reload,
+        # and the config's errors shown. hyprctl itself is never run here.
+        import types as _ty
+        mod.shutil = _ty.SimpleNamespace(which=lambda n: "/usr/bin/" + n)
+        os.environ["HYPRLAND_INSTANCE_SIGNATURE"] = "test"
+        mod.hypr_env = lambda: None
+        mod.run = lambda cmd, cwd=None, env=None: ran.append(cmd) or 0
+        ran.clear()
+        mod.hyprland_replaced = lambda: True
+        rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+        expect(rc == 0 and not [c for c in ran if c[:3] == ["hyprctl", "plugin", "unload"]],
+               "%s: Hyprland replaced under the session: installed, nothing unloaded" % mod.FLAVOR)
+        ran.clear()
+        mod.hyprland_replaced = lambda: False
+        rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+        hy = [c[1:3] for c in ran if c[0] == "hyprctl"]
+        expect(rc == 0 and hy[:4] == [["plugin", "unload"], ["plugin", "load"], ["reload"], ["configerrors"]],
+               "%s: the reload is unload, load, reload, configerrors (%r)" % (mod.FLAVOR, hy))
+        mod.hypr_env = lambda: {"HYPRLAND_INSTANCE_SIGNATURE": "test"}
+        mod.loaded = lambda env: False
+        rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+        expect(rc == 1, "%s: a plugin that did not load after the reload is reported" % mod.FLAVOR)
+        os.environ.pop("HYPRLAND_INSTANCE_SIGNATURE", None)
+
+        # A PARTIAL INSTALL IS NOT ROLLED BACK (review, 2026-11-09): once make
+        # install has copied the new .so, checking the old version out would put
+        # old settings over the new plugin. A plain build failure still goes back.
+        pfx = home / ("prefix-" + mod.FLAVOR)
+        so = pfx / "lib/hyprdrive/hyprdrive.so"
+
+        def make_install_fails(copied):
+            def fake(cmd, cwd=None, env=None):
+                ran.append(cmd)
+                if cmd[:2] == ["make", "install"]:
+                    if copied:
+                        so.parent.mkdir(parents=True, exist_ok=True)
+                        so.write_bytes(b"new")
+                    return 2
+                return 0
+            return fake
+        for copied, want_back in ((True, False), (False, True)):
+            so.unlink(missing_ok=True)
+            ran.clear()
+            mod.run = make_install_fails(copied)
+            rc = mod.install("v9.9.9", "x", True, {"source": str(co), "prefix": str(pfx)})
+            went_back = any(c[:2] == ["git", "-C"] and c[3:5] == ["checkout", "-q"] for c in ran)
+            expect(rc == 1 and went_back == want_back,
+                   "%s: make install failed %s the .so was copied: checkout %s" % (
+                       mod.FLAVOR, "after" if copied else "before", "goes back" if want_back else "stays"))
+        mod.run = real_run
 
     # the terminal
     os.environ["PATH"] = str(home / "bin")
