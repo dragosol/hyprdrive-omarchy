@@ -2227,7 +2227,9 @@ namespace ScrollOverview::Mosaic {
                 // The window just moved is the one you are working with: it has
                 // focus, and letting go of Super zooms in on it (the hover on
                 // the way had handed focus to whatever the pointer crossed).
-                Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
+                // A drop is the hand's choice, not a hover: CLICK, so the
+                // hover veto never refuses it (vetoHoverFocus).
+                Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_CLICK);
                 if (m_asCanvas && m_zoomed) {
                     // The new places go to the layout at once (unseen: every
                     // window is drawn zoomed), then the glide.
@@ -3562,9 +3564,11 @@ namespace ScrollOverview::Mosaic {
             auto*          A = liveZoomed();
             const Vector2D P = g_pInputManager->getMouseCoordsInternal();
             // A right click that never moved resizes nothing: still zoomed out.
+            // A click picks, as CLICK: passed as a hover it met the dock band's
+            // veto, and a pick below the dock's top edge was refused (2026-11-09).
             if (A && !A->zoomRelease(P) && e.button == BTN_LEFT) {
                 if (const auto W = A->zoomedWindowAt(P))
-                    Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
+                    Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_CLICK);
                 superEnd(true);
             }
             return true;
@@ -3572,7 +3576,7 @@ namespace ScrollOverview::Mosaic {
         if (PRESSED && g_super == ESuper::ZOOMED) {
             if (auto* A = liveZoomed()) {
                 if (const auto W = A->zoomedWindowAt(g_pInputManager->getMouseCoordsInternal()))
-                    Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
+                    Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_CLICK);
             }
             superEnd(true);
             g_swallowRelease = true;
@@ -3684,8 +3688,13 @@ namespace ScrollOverview::Mosaic {
     // only peeks in at the screen's edge, nor to anything while the pointer is
     // on the dock, a dock menu or a folder's fan. A click, a key or the dock
     // still focuses it.
+    // ZOOMED OUT, NONE OF IT APPLIES (2026-11-09): the pointer is the zoom's
+    // (zoomOwnsPointer), and its hover picks a window drawn small, not the
+    // one under the pointer at full size. The dock still reveals over the
+    // zoomed canvas, and its band refused every pick below the pill's top
+    // edge -- the zoom then came back in on the window focused before.
     bool vetoHoverFocus(const PHLWINDOW& w) {
-        if (!w || g_cursorRiding)
+        if (!w || g_cursorRiding || zoomOwnsPointer())
             return false;
         if (pointerOnChrome(g_pInputManager->getMouseCoordsInternal()) || pointerInDockBand(g_pInputManager->getMouseCoordsInternal())) {
             g_hoverStale = true;
