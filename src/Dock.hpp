@@ -5,6 +5,7 @@
 #include "globals.hpp"
 
 #include <hyprland/src/helpers/time/Time.hpp>  // Time::steady_tp: the frame clock a flight draw is stamped with
+#include <hyprland/src/desktop/state/FocusState.hpp> // Desktop::eFocusReason: noteFocus
 
 #include <string>
 #include <vector>
@@ -159,8 +160,9 @@ bool    occupiesPointer(PHLMONITOR monitor, const Vector2D& point);
 
 // Every focus change (main.cpp's window.active listener): the dock's idea of
 // "the app you are in" skips windows the pointer only passed over on its way
-// down to the dock (activateItem's switch-back).
-void    noteFocus(const PHLWINDOW& window);
+// down to the dock (activateItem's switch-back). Only a hover (FOCUS_REASON_FFM)
+// can be one of those; any other reason is where the user went.
+void    noteFocus(const PHLWINDOW& window, Desktop::eFocusReason reason);
 
 // While the pointer is on the dock, seat focus leaves the window underneath
 // so wheel/touchpad scroll cycles that icon's windows instead of scrolling

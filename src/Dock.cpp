@@ -2987,29 +2987,38 @@ void restoreDockSeat() {
 // the dock, so by the click the focus was on one of those, and the click read
 // as "take me back to this app". A focus that has not lasted PASSING is a
 // pass-over: the one before it, which did last, is the app you were in.
+// ONLY A HOVER PASSES OVER (2026-11-09): a focus by a key, Alt+Tab, a click or
+// the dock is where the user went, settled the moment it lands. Read as a
+// pass-over, clicking that app's icon within PASSING of it switched "back" to
+// the window already focused -- nothing happened, instead of a minimize.
 namespace {
     constexpr auto                        PASSING = std::chrono::milliseconds(700);
     PHLWINDOWREF                          g_focusNow, g_focusSettled;
     std::chrono::steady_clock::time_point g_focusSince{};
+    bool                                  g_focusMeant = false; // g_focusNow came by a key, a click, the dock: no pass-over
 }
 
 } // namespace (anonymous): noteFocus is Dock.hpp's
 
-void noteFocus(const PHLWINDOW& window) {
-    const auto NOW = std::chrono::steady_clock::now();
-    if (window == g_focusNow.lock())
+void noteFocus(const PHLWINDOW& window, Desktop::eFocusReason reason) {
+    const auto NOW   = std::chrono::steady_clock::now();
+    const bool MEANT = reason != Desktop::FOCUS_REASON_FFM;
+    if (window == g_focusNow.lock()) {
+        g_focusMeant |= MEANT;
         return;
-    if (g_focusNow.lock() && NOW - g_focusSince >= PASSING)
+    }
+    if (g_focusNow.lock() && (g_focusMeant || NOW - g_focusSince >= PASSING))
         g_focusSettled = g_focusNow;
     g_focusNow   = window;
     g_focusSince = NOW;
+    g_focusMeant = MEANT;
 }
 
 namespace {
 
 static PHLWINDOW intentFocus() {
     const auto CUR = Desktop::focusState()->window();
-    if (CUR && CUR == g_focusNow.lock() && std::chrono::steady_clock::now() - g_focusSince < PASSING)
+    if (CUR && CUR == g_focusNow.lock() && !g_focusMeant && std::chrono::steady_clock::now() - g_focusSince < PASSING)
         if (const auto SETTLED = g_focusSettled.lock(); SETTLED && Desktop::View::validMapped(SETTLED))
             return SETTLED;
     return CUR;

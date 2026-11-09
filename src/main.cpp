@@ -2297,7 +2297,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         ScrollOverview::Mosaic::onWindowClose(w); // its mosaic size, remembered per app
     });
     g_pMembKillHook  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
-    g_pDockFocusHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason) { ScrollOverview::Dock::noteFocus(w); });
+    g_pDockFocusHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason reason) { ScrollOverview::Dock::noteFocus(w, reason); });
     g_pMembGoneHook  = Event::bus()->m_events.window.destroy.listen([](PHLWINDOWREF) { Membership::bump("window.destroy"); });
     g_pMembPinHook   = Event::bus()->m_events.window.pin.listen([](PHLWINDOW) { Membership::bump("window.pin"); });
     g_pMembFloatHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW) { Membership::bump("window.floating"); });
