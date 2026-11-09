@@ -55,7 +55,8 @@ namespace ScrollOverview::Thumbs {
 
         std::mutex                            g_mutex;
         std::condition_variable               g_cv;
-        std::deque<std::string>               g_queue; // paths waiting their turn
+        std::deque<std::string>               g_queue;    // paths waiting their turn
+        uint64_t                              g_pushed = 0; // paths lookup queued: a new one ends the worker's nap
         std::unordered_map<std::string, SJob> g_jobs;
         std::thread                           g_worker;
         bool                                  g_stop = false;
@@ -186,8 +187,9 @@ namespace ScrollOverview::Thumbs {
                 // One pass over the paths waiting: each file that has settled
                 // is made, one still being written goes round again, and with
                 // nothing made the worker sleeps until the first could settle.
-                std::chrono::steady_clock::duration nap  = SETTLE;
-                bool                                made = false;
+                std::chrono::steady_clock::duration nap    = SETTLE;
+                bool                                made   = false;
+                const uint64_t                      PUSHED = g_pushed;
                 for (size_t n = g_queue.size(); n > 0 && !g_stop && !g_queue.empty(); --n) {
                     std::string path = std::move(g_queue.front());
                     g_queue.pop_front();
@@ -251,8 +253,10 @@ namespace ScrollOverview::Thumbs {
                             g_queue.push_back(path);
                     }
                 }
+                // A path queued during the pass was notified before this wait
+                // began: the count, not the notify, ends the nap for it.
                 if (!made && !g_stop && !g_queue.empty())
-                    g_cv.wait_for(lock, nap);
+                    g_cv.wait_for(lock, nap, [&] { return g_stop || g_pushed != PUSHED; });
             }
         }
     }
@@ -307,6 +311,7 @@ namespace ScrollOverview::Thumbs {
                 if (!(J.done && J.made == SRC) && !J.queued) {
                     J.queued = true;
                     g_queue.push_back(path);
+                    ++g_pushed;
                     g_cv.notify_one();
                 }
                 // No thread now (out of resources): the next lookup tries
