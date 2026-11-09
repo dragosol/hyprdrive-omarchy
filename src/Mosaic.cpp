@@ -350,6 +350,10 @@ namespace ScrollOverview::Mosaic {
     // under the pointer must not pull the view back to it mid-pan.
     static bool g_canvasPanning = false;
     // rideCursor is warping the pointer: that motion is not the hand's.
+    // ONE FLAG (2026-11-09): a class member of the same name used to hide
+    // this one inside CMosaicAlgorithm, so rideCursor set the member and the
+    // checks out here (superMove, focusUnderBar, hoverRefresh) never saw a
+    // ride, from the day each was written.
     static bool g_cursorRiding = false;
     // PUSH THROUGH THE EDGE (user, 2026-11-06): the hand pushing at an outer
     // screen edge pans the canvas by the motion the edge swallows, when the
@@ -2796,7 +2800,6 @@ namespace ScrollOverview::Mosaic {
         Vector2D                  m_lastLaid;       // the offset the windows were last laid out at
         PHLWINDOWREF              m_lastFocus;      // this desktop's last focused window (smart pan's "from")
         PHLWINDOWREF              m_prevFocus;      // the one before it
-        bool                      g_cursorRiding = false; // rideCursor is warping the pointer
         double                    m_zoomZ  = 0.0;   // 0 = the layout, 1 = the whole canvas on screen
         Vector2D                  m_zoomShift;      // zooming in toward a view this far from the layout's
         // A DRAG IN THE ZOOMED-OUT VIEW (zoomPress/Move/Release).
@@ -3696,8 +3699,13 @@ namespace ScrollOverview::Mosaic {
     // one under the pointer at full size. The dock still reveals over the
     // zoomed canvas, and its band refused every pick below the pill's top
     // edge -- the zoom then came back in on the window focused before.
+    // NO PASS FOR A RIDE (2026-11-09): a focus that rideCursor's warp caused
+    // is the hand's even less than a hover is, so the ride does not let it
+    // past the dock and the edge rules. (The old `g_cursorRiding` pass here
+    // never fired: the flag it read was shadowed. Hyprland's warpTo sends no
+    // motion, so today no focus comes of a ride at all.)
     bool vetoHoverFocus(const PHLWINDOW& w) {
-        if (!w || g_cursorRiding || zoomOwnsPointer())
+        if (!w || zoomOwnsPointer())
             return false;
         if (pointerOnChrome(g_pInputManager->getMouseCoordsInternal()) || pointerInDockBand(g_pInputManager->getMouseCoordsInternal())) {
             g_hoverStale = true;
