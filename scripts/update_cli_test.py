@@ -2,8 +2,10 @@
 """omarchy-plugin/bin/hyprdrive: versions, the bounded no-redirect fetch, the
 marketplace reading, the check's cache and the update decision -- offline (the
 network calls are replaced)."""
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -36,7 +38,11 @@ def expect(ok, what):
         print("FAIL", what)
 
 
-with tempfile.TemporaryDirectory() as tmp:
+# What the CLI prints is a report for a user, and in a build log its made-up
+# versions ("installed v1.9.36", "Waiting for marketplace approval: v1.9.38")
+# read as a real one that is out of date (2026-11-09). Shown when a check fails.
+shown = io.StringIO()
+with contextlib.redirect_stdout(shown), tempfile.TemporaryDirectory() as tmp:
     home = pathlib.Path(tmp)
     m = load("native", home)
 
@@ -229,6 +235,23 @@ with tempfile.TemporaryDirectory() as tmp:
     expect(picked == [], "the registry cannot be read at install time: nothing installed")
     o.check = real_check
 
+    # AN UPDATE BUILDS FROM SCRATCH (2026-11-09): what an older build left in
+    # .build/ stopped every update across 1.9.50, so make clean comes first.
+    # A real (empty) checkout, since install() asks git about it; run() is replaced.
+    import subprocess as _sp
+    os.environ.pop("HYPRLAND_INSTANCE_SIGNATURE", None)  # nothing is reloaded here
+    for mod in (load("native", home), load("omarchy", home)):  # fresh: install() is replaced above
+        co = home / ("checkout-" + mod.FLAVOR)
+        _sp.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(co)], check=True)
+        _sp.run(["git", "-C", str(co), "remote", "add", "origin", "https://github.com/%s.git" % mod.REPO], check=True)
+        (co / "manifest.json").write_text('{"version": "9.9.9"}')
+        ran, real_run = [], mod.run
+        mod.run = lambda cmd, cwd=None, env=None: ran.append(cmd) or 0
+        rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+        mod.run = real_run
+        makes = [c for c in ran if c[0] == "make"]
+        expect(rc == 0 and len(makes) > 1 and makes[0] == ["make", "clean"], "%s: an update runs make clean before it builds" % mod.FLAVOR)
+
     # the terminal
     os.environ["PATH"] = str(home / "bin")
     (home / "bin").mkdir()
@@ -241,5 +264,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (home / "bin" / "kitty").unlink()
     expect(o.terminal_command(["x"]) is None, "no terminal: None (the settings open GitHub instead)")
 
+if failed:
+    sys.stdout.write(shown.getvalue())
 print("update_cli_test: %d checks, %d failed" % (checks, failed))
 sys.exit(1 if failed else 0)

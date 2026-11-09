@@ -92,4 +92,11 @@ uninstall:
 clean:
 	rm -rf .build hyprdrive.so
 
+# 1.9.50 moved the sources into src/, and a .build/ left by an older release holds
+# .d files that name ./AppInfo.cpp and the rest. Reading them stopped every update
+# across 1.9.50 at "No rule to make target 'AppInfo.cpp'" until a make clean
+# (2026-11-09). An empty rule for each old name lets make rebuild those objects
+# from src/ instead, the way -MP already treats a header that is gone.
+$(notdir $(SRCS)):
+
 -include $(DEPS)

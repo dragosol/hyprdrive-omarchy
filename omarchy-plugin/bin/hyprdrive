@@ -31,7 +31,7 @@ has no marketplace: `update` installs the newest GitHub release.
 
 Installing = the README's own steps in your checkout (the one `make install` ran
 from; a fresh clone in ~/.local/share/hyprdrive/src when there is none): fetch,
-check out the release, build, install, reload the plugin. A checkout with local
+check out the release, build it from scratch, install, reload the plugin. A checkout with local
 changes is left alone.
 
 NETWORK. Only HTTPS to api.github.com and raw.githubusercontent.com (no
@@ -434,10 +434,16 @@ def install(target_ref, label, yes, info, rebuild=False):
         return 1
 
     prefix = info.get("prefix") or str(HOME / ".local")
+    # FROM SCRATCH, EVERY TIME (2026-11-09): nothing an older build left in
+    # .build/ is trusted. Its .d files stopped every update across 1.9.50 (the
+    # sources moved into src/), and make does not notice a Hyprland update (the
+    # README's "Version mismatch"), so an incremental build can link objects
+    # made against two Hyprlands. Updates are rare enough to afford it.
+    clean = ["make", "clean"]
     if FLAVOR == "omarchy":
-        if run(["make", "all"], cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
+        if run(clean, cwd=src) != 0 or run(["make", "all"], cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
             return failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
-    elif run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
+    elif run(clean, cwd=src) != 0 or run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
         return failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
     so = pathlib.Path(prefix) / "lib/hyprdrive/hyprdrive.so"
     try:

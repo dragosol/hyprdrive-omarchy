@@ -192,7 +192,8 @@ hyprctl reload
 
 Enable the panel with `omarchy plugin enable dragos.hyprdrive` (or answer yes when
 `plugin add` asks). To update: `omarchy plugin update dragos.hyprdrive`, then run
-`make all && make install` in that folder again and log out and back in.
+`make clean && make all && make install` in that folder again and log out and
+back in.
 
 ### From source
 
@@ -223,8 +224,7 @@ By hand:
 cd ~/Projects/hyprdrive-omarchy
 git fetch --tags
 git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"
-rm -f hyprdrive.so ~/.local/lib/hyprdrive/hyprdrive.so
-make all && make install
+make clean && make all && make install
 omarchy restart shell
 ```
 
