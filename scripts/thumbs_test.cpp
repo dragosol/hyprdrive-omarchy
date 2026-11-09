@@ -2,8 +2,9 @@
 // logs every run, in a private XDG tree. Built with a short settle time
 // (-DTHUMBS_SETTLE_MS, host_tests.sh) so it waits a fraction of a second, not
 // two: a file still being written, one that fails to thumbnail while it
-// grows, a rewrite of a file whose thumbnail is on show, and a file dated in
-// the future.
+// grows, a rewrite of a file whose thumbnail is on show, a file dated in the
+// future, and one put back to an older copy (our thumbnails carry the mtime
+// of the version they show).
 #include "../src/Thumbs.hpp"
 
 #include <chrono>
@@ -124,6 +125,11 @@ int main() {
     check(waitRuns(FUTURE, 1), "a file dated tomorrow is thumbnailed");
     check(!lookup(FUTURE).empty(), "...and the thumbnail is shown");
     check(!lookup(FUTURE).empty(), "...still, asked again");
+    {
+        std::error_code e;
+        const auto      T = fs::last_write_time(lookup(FUTURE), e);
+        check(!e && T == fs::last_write_time(FUTURE), "...stamped with the file's own date, so it is current, not out of date");
+    }
 
     // A file last written an hour ago goes at once: no settle wait.
     const auto OLD = ROOT / "files" / "old-photo.png";
@@ -132,6 +138,18 @@ int main() {
     (void)lookup(OLD);
     check(waitRuns(OLD, 1, 150ms), "a file written long ago is made without waiting");
     check(!lookup(OLD).empty(), "...and shown");
+
+    // PUT BACK TO AN OLDER COPY (cp -p, a backup restored): the thumbnail is
+    // made again. Made later than the copy's date, the old one used to pass.
+    const auto OLDER = HOUR_AGO - 1h;
+    fs::last_write_time(OLD, OLDER);
+    check(!lookup(OLD).empty(), "a file put back to an older copy keeps its thumbnail meanwhile");
+    check(waitRuns(OLD, 2) && runsOf(OLD) == 2, "...and gets a new one");
+    {
+        std::error_code e;
+        const auto      T = fs::last_write_time(lookup(OLD), e);
+        check(!e && T == OLDER, "...stamped with the copy's date");
+    }
 
     ScrollOverview::Thumbs::shutdown();
     std::error_code ec;

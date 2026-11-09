@@ -124,7 +124,9 @@ namespace ScrollOverview::Thumbs {
             return map;
         }
 
-        bool generate(const std::string& path, const std::string& kind) {
+        // `made`: the file's mtime, read before the thumbnailer runs -- the
+        // version the thumbnail shows, which it is stamped with (lookup).
+        bool generate(const std::string& path, const std::string& kind, std::filesystem::file_time_type made) {
             const auto& MAP = thumbnailers();
             const auto  IT  = MAP.find(kind);
             if (IT == MAP.end())
@@ -160,6 +162,15 @@ namespace ScrollOverview::Thumbs {
                 std::filesystem::remove(TMP, ec);
                 return false;
             }
+            // STAMPED WITH ITS VERSION (2026-11-09), before it is in place. A
+            // thumbnail used to pass while it was no older than the file: one
+            // for a file dated in the future never passed (it was removed as
+            // it landed, and the file had no preview), and one made from an
+            // older version passed for the file as it is now when the file
+            // changed while it was being made, or was put back to an older
+            // copy. Unstamped (the stamp failed), it is shown as out of date.
+            std::error_code stamp;
+            std::filesystem::last_write_time(TMP, made, stamp);
             std::filesystem::rename(TMP, OUT, ec);
             return !ec;
         }
@@ -221,7 +232,7 @@ namespace ScrollOverview::Thumbs {
                     }
                     const std::string KIND = J.kind;
                     lock.unlock();
-                    generate(path, KIND); // a failure is not tried again until the file changes
+                    generate(path, KIND, MT); // a failure is not tried again until the file changes
                     ++g_gen;
                     std::function<void()> cb;
                     {
@@ -250,23 +261,25 @@ namespace ScrollOverview::Thumbs {
         const auto MD5 = md5Uri(path);
         if (MD5.empty())
             return {};
-        // A thumbnail is good when it has something in it and is not older
-        // than the file (a download or recording still being written when it
-        // was made). A stale one of our own is made again, and shown until then.
+        // A thumbnail is good when it has something in it and shows the file
+        // as it is: one of ours carries the mtime of the version it was made
+        // from (generate's stamp), so that is the file's mtime now; someone
+        // else's (the freedesktop cache) is not older than the file. A stale
+        // one of our own is made again, and shown until then.
         std::error_code ec;
         const auto      SRC  = std::filesystem::last_write_time(path, ec);
         const bool      HAVE = !ec;
-        const auto      good = [&](const std::string& p) {
+        const auto      good = [&](const std::string& p, bool ours) {
             std::error_code e;
             if (std::filesystem::file_size(p, e) == 0 || e)
                 return false;
             const auto T = std::filesystem::last_write_time(p, e);
-            return !e && (!HAVE || T >= SRC);
+            return !e && (!HAVE || (ours ? T == SRC : T >= SRC));
         };
         const std::string BASE = std::string(g_get_user_cache_dir()) + "/thumbnails/";
         for (const char* SIZE : {"x-large", "large", "xx-large", "normal"}) {
             const auto P = BASE + SIZE + "/" + MD5 + ".png";
-            if (g_file_test(P.c_str(), G_FILE_TEST_EXISTS) && good(P))
+            if (g_file_test(P.c_str(), G_FILE_TEST_EXISTS) && good(P, false))
                 return P;
         }
         // One of ours that is out of date stays on show until the new one
@@ -274,7 +287,7 @@ namespace ScrollOverview::Thumbs {
         const auto  OWN = ownDir() + "/" + MD5 + ".png";
         std::string meanwhile;
         if (g_file_test(OWN.c_str(), G_FILE_TEST_EXISTS)) {
-            if (good(OWN))
+            if (good(OWN, true))
                 return OWN;
             std::error_code e;
             if (std::filesystem::file_size(OWN, e) > 0 && !e)
