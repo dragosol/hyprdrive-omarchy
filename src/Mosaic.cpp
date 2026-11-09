@@ -3717,14 +3717,11 @@ namespace ScrollOverview::Mosaic {
         // Only while the pointer is pressed against an outer edge -- pushing.
         // A window showing a strip at the side is hovered as any other
         // (user, 2026-11-09: the left-edge windows could not be focused).
-        const Vector2D P   = g_pInputManager->getMouseCoordsInternal();
-        const auto     MON = State::monitorState()->query().vec(P).run();
-        if (!MON)
-            return false;
-        const CBox B    = MON->logicalBox();
-        const bool EDGE = P.x <= B.x + 1 || P.y <= B.y + 1 || P.x >= B.x + B.w - 2 || P.y >= B.y + B.h - 2;
-        const auto* C   = EDGE && w->m_workspace ? canvasOf(w->m_workspace) : nullptr;
-        const bool  V   = C && C->isSliver(w);
+        // The edge hoverRefresh and the focus hook's push test use too
+        // (pointerAtOuterEdge), so the three cannot drift apart.
+        const bool  EDGE = pointerAtOuterEdge(g_pInputManager->getMouseCoordsInternal());
+        const auto* C    = EDGE && w->m_workspace ? canvasOf(w->m_workspace) : nullptr;
+        const bool  V    = C && C->isSliver(w);
         g_hoverStale |= V;
         return V;
     }
