@@ -12,6 +12,9 @@
 #                     UTF-8 split, prefix/suffix diff, animator state.
 #   icon_size_test    IconSize.hpp: icon texture sizes (the drawn size,
 #                     never upscaled) and a downscale that filters.
+#   thumbs_test       Thumbs.cpp against a stand-in thumbnailer: a file still
+#                     being written waits until it settles and keeps the
+#                     thumbnail it had meanwhile; a future mtime gets one.
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -70,5 +73,7 @@ run stack_reader_test scripts/stack_reader_test.cpp src/StackReader.cpp src/Stac
 run omarchy_search_test scripts/omarchy_search_test.cpp src/OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 # shellcheck disable=SC2046
 run icon_size_test scripts/icon_size_test.cpp $(pkg-config --cflags --libs cairo)
+# shellcheck disable=SC2046
+run thumbs_test scripts/thumbs_test.cpp src/Thumbs.cpp -DTHUMBS_SETTLE_MS=250 -pthread $(pkg-config --cflags --libs glib-2.0)
 
 exit $fail

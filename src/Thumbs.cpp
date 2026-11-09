@@ -3,7 +3,9 @@
 
 #include <glib.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -12,10 +14,15 @@
 #include <sstream>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <sys/resource.h>
+
+// How long a file's mtime must stand still before it is thumbnailed (SETTLE,
+// below). scripts/thumbs_test.cpp builds this file with a shorter one.
+#ifndef THUMBS_SETTLE_MS
+#define THUMBS_SETTLE_MS 2000
+#endif
 
 namespace ScrollOverview::Thumbs {
     namespace {
@@ -23,14 +30,37 @@ namespace ScrollOverview::Thumbs {
             std::vector<std::string> exec; // argv with %i %u %o %s
         };
 
-        std::mutex                      g_mutex;
-        std::condition_variable         g_cv;
-        std::deque<std::pair<std::string, std::string>> g_queue; // path, kind
-        std::unordered_set<std::string> g_queued;                // paths queued, running, or failed
-        std::thread                     g_worker;
-        bool                            g_stop = false;
-        std::atomic<uint64_t>           g_gen{1};
-        std::function<void()>           g_ready;
+        // A FILE STILL BEING WRITTEN WAITS (2026-11-09). A download or a
+        // recording changes its mtime all the time: every thumbnail made of
+        // it was out of date as it landed, so the next lookup removed it and
+        // queued the file again under its new mtime -- thumbnailer runs back
+        // to back for as long as the file grew, no preview the whole time,
+        // and one more queue key per run (a failed run looped the same way).
+        // Now a file is made once its mtime has stood still for SETTLE (the
+        // worker watches it; a file it never made, last written longer ago
+        // than that, goes at once). Until then the thumbnail it had stays on
+        // show (lookup).
+        constexpr auto SETTLE = std::chrono::milliseconds(THUMBS_SETTLE_MS);
+
+        // ONE JOB PER PATH, whatever mtimes the file goes through.
+        struct SJob {
+            std::string                           kind;
+            std::filesystem::file_time_type       asked{}; // the version lookup last saw
+            std::filesystem::file_time_type       seen{};  // the version the worker last saw...
+            std::chrono::steady_clock::time_point since{}; // ...and since when
+            std::filesystem::file_time_type       made{};  // the version last made (or failed)
+            bool                                  done   = false; // `made` is set
+            bool                                  queued = false; // in g_queue, or being made
+        };
+
+        std::mutex                            g_mutex;
+        std::condition_variable               g_cv;
+        std::deque<std::string>               g_queue; // paths waiting their turn
+        std::unordered_map<std::string, SJob> g_jobs;
+        std::thread                           g_worker;
+        bool                                  g_stop = false;
+        std::atomic<uint64_t>                 g_gen{1};
+        std::function<void()>                 g_ready;
 
         std::string md5Uri(const std::string& path) {
             char* uri = g_filename_to_uri(path.c_str(), nullptr, nullptr);
@@ -138,22 +168,80 @@ namespace ScrollOverview::Thumbs {
             ::setpriority(PRIO_PROCESS, 0, 10); // it can wait; the desktop cannot
             std::unique_lock lock(g_mutex);
             while (!g_stop) {
-                g_cv.wait(lock, [] { return g_stop || !g_queue.empty(); });
-                if (g_stop)
-                    break;
-                auto job = std::move(g_queue.front());
-                g_queue.pop_front();
-                lock.unlock();
-                generate(job.first, job.second); // a failure stays in g_queued: never retried this session
-                ++g_gen;
-                std::function<void()> cb;
-                {
-                    std::scoped_lock l(g_mutex);
-                    cb = g_ready;
+                if (g_queue.empty()) {
+                    g_cv.wait(lock, [] { return g_stop || !g_queue.empty(); });
+                    continue;
                 }
-                if (cb)
-                    cb();
-                lock.lock();
+                // One pass over the paths waiting: each file that has settled
+                // is made, one still being written goes round again, and with
+                // nothing made the worker sleeps until the first could settle.
+                std::chrono::steady_clock::duration nap  = SETTLE;
+                bool                                made = false;
+                for (size_t n = g_queue.size(); n > 0 && !g_stop && !g_queue.empty(); --n) {
+                    std::string path = std::move(g_queue.front());
+                    g_queue.pop_front();
+                    // Never under the lock: lookup takes it on the render
+                    // thread, and a stat can hang on a dead mount.
+                    lock.unlock();
+                    std::error_code ec;
+                    const auto      MT   = std::filesystem::last_write_time(path, ec);
+                    const auto      NOW  = std::chrono::steady_clock::now();
+                    const auto      WALL = std::filesystem::file_time_type::clock::now();
+                    lock.lock();
+                    const auto IT = g_jobs.find(path);
+                    if (IT == g_jobs.end())
+                        continue;
+                    SJob& J = IT->second;
+                    if (ec) {
+                        g_jobs.erase(IT); // gone: nothing to make
+                        continue;
+                    }
+                    if (J.done && J.made == MT) {
+                        J.queued = false; // this version is made already
+                        continue;
+                    }
+                    if (J.seen != MT) {
+                        J.seen  = MT;
+                        J.since = NOW;
+                    }
+                    // Settled: seen unchanged for SETTLE -- or, for a file
+                    // never made before, last written longer ago than that.
+                    // Only then: a file that keeps changing while it looks
+                    // old (a share whose clock runs behind) is still being
+                    // written. Compared, never subtracted: a far-future mtime
+                    // would overflow the difference.
+                    const bool RECENT  = MT > WALL - SETTLE; // written under SETTLE ago, or dated ahead
+                    const auto WATCHED = NOW - J.since;
+                    if (WATCHED < SETTLE && (RECENT || J.done)) {
+                        g_queue.push_back(std::move(path));
+                        nap = std::min(nap, std::chrono::duration_cast<std::chrono::steady_clock::duration>(SETTLE - WATCHED));
+                        if (!J.done && MT <= WALL)
+                            nap = std::min(nap, std::chrono::duration_cast<std::chrono::steady_clock::duration>(SETTLE - (WALL - MT)));
+                        continue;
+                    }
+                    const std::string KIND = J.kind;
+                    lock.unlock();
+                    generate(path, KIND); // a failure is not tried again until the file changes
+                    ++g_gen;
+                    std::function<void()> cb;
+                    {
+                        std::scoped_lock l(g_mutex);
+                        cb = g_ready;
+                    }
+                    if (cb)
+                        cb();
+                    lock.lock();
+                    made = true;
+                    if (const auto JT = g_jobs.find(path); JT != g_jobs.end()) {
+                        JT->second.made   = MT;
+                        JT->second.done   = true;
+                        JT->second.queued = JT->second.asked != MT; // asked for another version meanwhile: round again
+                        if (JT->second.queued)
+                            g_queue.push_back(path);
+                    }
+                }
+                if (!made && !g_stop && !g_queue.empty())
+                    g_cv.wait_for(lock, nap);
             }
         }
     }
@@ -164,7 +252,7 @@ namespace ScrollOverview::Thumbs {
             return {};
         // A thumbnail is good when it has something in it and is not older
         // than the file (a download or recording still being written when it
-        // was made). A stale one of our own is made again.
+        // was made). A stale one of our own is made again, and shown until then.
         std::error_code ec;
         const auto      SRC  = std::filesystem::last_write_time(path, ec);
         const bool      HAVE = !ec;
@@ -181,25 +269,43 @@ namespace ScrollOverview::Thumbs {
             if (g_file_test(P.c_str(), G_FILE_TEST_EXISTS) && good(P))
                 return P;
         }
-        const auto OWN = ownDir() + "/" + MD5 + ".png";
+        // One of ours that is out of date stays on show until the new one
+        // replaces it (A FILE STILL BEING WRITTEN WAITS, above).
+        const auto  OWN = ownDir() + "/" + MD5 + ".png";
+        std::string meanwhile;
         if (g_file_test(OWN.c_str(), G_FILE_TEST_EXISTS)) {
             if (good(OWN))
                 return OWN;
-            std::filesystem::remove(OWN, ec);
+            std::error_code e;
+            if (std::filesystem::file_size(OWN, e) > 0 && !e)
+                meanwhile = OWN;
         }
 
-        if (kind.starts_with("image/") || kind.starts_with("video/") || kind == "application/pdf") {
+        if (HAVE && (kind.starts_with("image/") || kind.starts_with("video/") || kind == "application/pdf")) {
             std::scoped_lock lock(g_mutex);
-            // Per path AND mtime: a file that changed since is asked again.
-            const std::string KEY = path + "|" + std::to_string(HAVE ? SRC.time_since_epoch().count() : 0);
-            if (!g_stop && g_queued.insert(KEY).second) {
-                g_queue.emplace_back(path, kind);
-                if (!g_worker.joinable())
-                    g_worker = std::thread(workerMain);
-                g_cv.notify_one();
+            if (!g_stop) {
+                if (g_jobs.size() > 4096)
+                    std::erase_if(g_jobs, [](const auto& KV) { return !KV.second.queued; });
+                // A file that changed since its last thumbnail (or failed
+                // run) is asked again: the same job, the newer version.
+                auto& J = g_jobs[path];
+                J.asked = SRC;
+                J.kind  = kind;
+                if (!(J.done && J.made == SRC) && !J.queued) {
+                    J.queued = true;
+                    g_queue.push_back(path);
+                    g_cv.notify_one();
+                }
+                // No thread now (out of resources): the next lookup tries
+                // again. Nothing may throw out of here, on the render thread.
+                if (!g_queue.empty() && !g_worker.joinable()) {
+                    try {
+                        g_worker = std::thread(workerMain);
+                    } catch (...) {}
+                }
             }
         }
-        return {};
+        return meanwhile;
     }
 
     uint64_t generation() {
