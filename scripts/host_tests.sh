@@ -22,6 +22,9 @@
 #                     Trash's walk, which never follows a disk's symlinks.
 #   store_file_test   StoreFile.hpp: the stacks store survives a full disk
 #                     (a short write, /dev/full) byte for byte.
+#   search_providers_deadbus_test  the search worker when a private
+#                     dbus-daemon dies under it: no 100% CPU spin, and it
+#                     reconnects (skipped without dbus-daemon).
 #
 # Anything that needs a running Hyprland is a GATE (scripts/gates/), not a host
 # test, and lives in scripts/suite.sh instead.
@@ -86,5 +89,7 @@ run thumbs_test scripts/thumbs_test.cpp src/Thumbs.cpp -DTHUMBS_SETTLE_MS=250 -p
 run search_providers_nobus_test scripts/search_providers_nobus_test.cpp src/SearchProviders.cpp $(pkg-config --cflags --libs libsystemd)
 run trash_dirs_test scripts/trash_dirs_test.cpp
 run store_file_test scripts/store_file_test.cpp
+# shellcheck disable=SC2046
+run search_providers_deadbus_test scripts/search_providers_deadbus_test.cpp src/SearchProviders.cpp $(pkg-config --cflags --libs libsystemd)
 
 exit $fail

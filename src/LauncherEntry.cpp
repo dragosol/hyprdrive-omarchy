@@ -183,8 +183,19 @@ namespace {
         return 0;
     }
 
-    int onBusReadable(int, uint32_t, void*) {
-        while (sd_bus_process(g_bus, nullptr) > 0) { }
+    int onBusReadable(int, uint32_t mask, void*) {
+        int r = 0;
+        while ((r = sd_bus_process(g_bus, nullptr)) > 0) { }
+        // THE BUS WENT AWAY (review 2026-11-09): the session bus restarted, or
+        // the session is ending. sd-bus closes its own descriptor, but the
+        // event loop watches a DUPLICATE (wl_event_loop_add_fd dups it), which
+        // stays readable at end-of-file for good -- so this ran on every turn
+        // of the compositor's loop, at 100% CPU, and every call failed. Drop
+        // the dead connection instead: stop() removes this source, and the
+        // next start() (Dock::damageIfChanged asks on every pointer motion)
+        // connects again, at most once per 5 s while there is no bus at all.
+        if (r < 0 || (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)))
+            stop();
         return 0;
     }
 

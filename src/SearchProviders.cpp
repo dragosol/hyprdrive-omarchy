@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -646,6 +647,26 @@ namespace SearchProviders {
                 do {
                     r = sd_bus_process(bus, nullptr);
                 } while (r > 0);
+
+                // THE BUS WENT AWAY (review 2026-11-09): sd_bus_process fails
+                // once a lost connection is closed. Nothing on it can answer
+                // again, and the loop below used to spin on it at 100% CPU:
+                // the closed bus has no fd for poll() to wait on and no
+                // timeout (deadline stayed 0), so poll() returned at once,
+                // forever. Ended like a worker that never had a bus --
+                // queued actions dropped, rows no longer pending -- and the
+                // next query after the retry delay connects again.
+                if (r < 0) {
+                    {
+                        std::lock_guard lock(g_mutex);
+                        g_actions.clear();
+                        for (auto& R : g_results)
+                            R.stale = false;
+                    }
+                    std::fprintf(stderr, "[hyprdrive] search providers: lost the session bus (%s); reconnecting on a later search\n", std::strerror(-r));
+                    g_busFailedAt = steadyNs();
+                    break;
+                }
 
                 uint64_t deadline = 0;
                 sd_bus_get_timeout(bus, &deadline);
