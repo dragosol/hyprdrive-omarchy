@@ -24,6 +24,7 @@
 #include "ShowDesktopMath.hpp"
 #include "Config.hpp"
 #include "DebugPaths.hpp"
+#include "IOverview.hpp"
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
@@ -308,6 +309,10 @@ namespace ScrollOverview::ShowDesktop {
             arg = "toggle";
         const auto MON = Desktop::focusState()->monitor();
         if (!MON)
+            return {};
+        // In the overview the windows are its tiles: the key has nothing to do
+        // there, and hiding them would take the tiles with them.
+        if (!::scrollOverviews().empty())
             return {};
         // Shown on another screen or desktop: that one back at once, so this
         // press is about the desktop in front of you.
