@@ -206,6 +206,18 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "desktop"); },
         },
         {
+            // ShowDesktop.hpp: Super+D's slide of the desktop's windows out of
+            // view and back (the Keybinds switch binds it, on by default):
+            // hl.plugin.hyprdrive.show_desktop().
+            .name            = "show_desktop",
+            .argPattern      = std::regex{"^(toggle|on|off)$"},
+            .defaultArg      = "toggle",
+            .typeArgError    = "expected an optional string argument; did you forget quotes around it?",
+            .invalidArgError = "expected toggle, on or off",
+            .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "show_desktop"); },
+            .luaLegacy       = [](lua_State* L) { return dispatcherFactoryLua(L, "show_desktop"); },
+        },
+        {
             .name            = "window",
             .argPattern      = std::regex{"^(select|close|click)$"},
             .typeArgError    = "expected a string argument",

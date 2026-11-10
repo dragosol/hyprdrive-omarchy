@@ -342,7 +342,9 @@ var sections = [
         { type: "keybind", id: "overview", key: P + "tap_super", label: "Overview",
           desc: "Tap Super on its own, with no other key, to open or close the overview." },
         { type: "keybind", id: "minimize", bind: "minimize", label: "Minimize", chordEdit: true,
-          desc: "Minimizes the focused window into the dock. Takes its key (Super+H unless you change it) from anything else bound to it." }
+          desc: "Minimizes the focused window into the dock. Takes its key (Super+H unless you change it) from anything else bound to it." },
+        { type: "keybind", id: "show_desktop", bind: "show_desktop", label: "Show desktop", chordEdit: true,
+          desc: "Slides every window on the current desktop off the screen, each by its nearest edge, so the desktop shows. Press it again at any point, even halfway, and they turn round and come back to their places; so does switching desktops, opening the overview or a new window, or picking one of them in the dock. Takes its key (Super+D unless you change it) from anything else bound to it." }
       ]},
       { title: "Desktops", rows: [
         { type: "keybind", id: "scroll_desktops", key: P + "binds:scroll_desktops", modsKey: P + "binds:scroll_desktops_mods", label: "Scroll through desktops",

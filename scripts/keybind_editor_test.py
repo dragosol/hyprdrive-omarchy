@@ -296,6 +296,39 @@ console.log(JSON.stringify(out));
         for k in ("superK", "superShift1", "ctrlAltDel", "superComma", "f9", "cyrillic"):
             check("js -> hdpanel round trip: %s" % k, hd.canon_chord(o[k]["chord"]) == o[k]["chord"])
 
+# SHOW DESKTOP (user, 2026-11-10: "a super + d keybind ... leave it on by
+# default"): untouched settings bind Super+D to it; off, nothing; and `refresh`
+# (make install's) writes 40-panel.lua from the saved settings without touching
+# them, so the default reaches an install nobody opened the settings on.
+import contextlib, io
+sd = tmp / "showdesktop"
+(sd / "frag").mkdir(parents=True)
+hd.FRAGDIR, hd.STORE = sd / "frag", sd / "panel.json"
+txt = "\n".join(hd.keybinds_lua({}))
+check("show desktop: on by default, a guarded unbind-then-bind of Super+D",
+      "pcall(function() return hl.plugin.hyprdrive.show_desktop() end)" in txt and "hl.unbind('SUPER + D')" in txt
+      and "hl.bind('SUPER + D', a0, { description = 'Show desktop' })" in txt)
+check("show desktop: off, not bound", "show_desktop" not in "\n".join(hd.keybinds_lua({"binds": {"show_desktop": False}})))
+check("show desktop: a chord of its own is the one bound",
+      "hl.bind('SUPER + ALT + D'" in "\n".join(hd.keybinds_lua({"bindChords": {"show_desktop": "SUPER + ALT + D"}})))
+BINDS[:] = [{"modmask": 64, "key": "D", "description": "Show desktop", "dispatcher": "__lua", "arg": "1"}]
+row = next((r for r in hd.keybind_rows({}, hd.live_keys() if hasattr(hd, "live_keys") else {}) if r["id"] == "show_desktop"), None)
+check("show desktop: its Keybinds row, on, bound to Super+D", bool(row) and row["enabled"] and row["chords"] == ["SUPER + D"]
+      and row["defaultChord"] == "SUPER + D", row)
+BINDS[:] = []
+with contextlib.redirect_stdout(io.StringIO()):
+    hd.cmd_refresh([])
+frag = (sd / "frag" / hd.PANEL_FRAG).read_text()
+check("refresh, settings never touched: 40-panel.lua binds Super+D", "hl.bind('SUPER + D', a0, { description = 'Show desktop' })" in frag)
+check("refresh: panel.json not written", not hd.STORE.exists())
+hd.STORE.write_text('{"binds": {"show_desktop": false, "minimize": true}}')
+before = hd.STORE.read_text()
+with contextlib.redirect_stdout(io.StringIO()):
+    hd.cmd_refresh([])
+frag = (sd / "frag" / hd.PANEL_FRAG).read_text()
+check("refresh: a switch turned off stays off, one turned on stays on", "SUPER + D" not in frag and "hl.bind('SUPER + H'" in frag)
+check("refresh: panel.json byte for byte as it was", hd.STORE.read_text() == before)
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("keybind_editor_test: %s" % ("OK" if not fails else "%d FAILED" % fails))
 sys.exit(1 if fails else 0)

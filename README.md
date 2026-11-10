@@ -385,6 +385,7 @@ one above it.
 | `minimize` | `window`, `restore` | Minimize into the dock, or restore |
 | `hotkey` | `overlay`, or `1`–`10` | Dock slot (unbound here; Super+digit is workspaces, unless the panel's Keybinds section turns dock hotkeys on) |
 | `desktop` | `next`, `prev` | One desktop along the focused monitor's row (`binds:scroll_desktops_stop_at_empty` / `_populated_only`; no wrap); with the overview open, its focused desktop card |
+| `show_desktop` | `toggle`, `on`, `off` | Slide the desktop's windows out of view and back (Super+D) |
 | `stack` | `pin`/`unpin`/`toggle`/`open` `<path>`, `view auto\|fan\|grid <path>`, `sort name\|added\|modified\|kind <path>`, `clear` | Pin and configure dock stacks |
 
 ```lua
@@ -402,6 +403,13 @@ blur and all. `binds:scroll_desktops_smooth`, `_ticks`, `_sticky`,
 and `animation:desktop_jump_through` are the row's two animation switches. Once
 the settings panel's Keybinds section has written 40-panel.lua it owns this bind
 and 30-keybinds.lua's default steps aside.
+
+Super+D is `show_desktop`, on by default (the panel's Keybinds section turns it
+off or moves it): every window on the desktop slides off the screen, each by its
+nearest edge, and a second press brings them back -- at any point, even
+halfway, where they turn round on the same spring. Nothing is retiled, so they
+come back to the places they left; switching desktops, opening the overview or
+a new window, or picking one of them in the dock brings them back too.
 
 Tap Super is not a bind (`tap_super`, default true). Three-finger swipe up on
 the trackpad is the same overview, registered as `hl.plugin.hyprdrive.gesture`

@@ -71,6 +71,7 @@ run submap_borrow_test scripts/submap_borrow_test.cpp
 run mount_sort_test scripts/mount_sort_test.cpp
 run gvfs_mount_test scripts/gvfs_mount_test.cpp
 run mosaic_pack_test scripts/mosaic_pack_test.cpp
+run show_desktop_test scripts/show_desktop_test.cpp
 run preview_grid_test scripts/preview_grid_test.cpp
 run motion_spacing_test scripts/motion_spacing_test.cpp
 run icon_overrides_test scripts/icon_overrides_test.cpp

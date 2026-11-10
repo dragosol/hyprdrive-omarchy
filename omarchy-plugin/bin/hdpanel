@@ -248,10 +248,16 @@ TAP_SUPER = PLUGIN + "tap_super"
 # panel.json under "binds" and written to 40-panel.lua. id -> default.
 BIND_SWITCHES = {
     "minimize": False,      # Super+H minimizes the focused window into the dock
+    # On by default (user, 2026-11-10: "a super + d keybind that moves all
+    # windows in the active workspace completely out of view ... leave it on by
+    # default"): ShowDesktop.hpp. Omarchy does not bind Super+D; a config that
+    # does lends it while this is on.
+    "show_desktop": True,   # Super+D slides the desktop's windows out of view and back
     "mosaic_cycle": True,   # with Mosaic on: Super+L cycles three layouts
     "mosaic_focus": True,   # with Mosaic on: Super(+Shift)+arrows focus/swap by position
 }
 MINIMIZE_CHORD = "SUPER + H"
+SHOW_DESKTOP_CHORD = "SUPER + D"
 # What 30-keybinds.lua looks for: present, the panel owns the Super+scroll bind
 # and the shipped default steps aside.
 BINDS_OWNED = "-- hyprdrive:binds owned"
@@ -822,6 +828,7 @@ def keybinds_lua(store):
     switches = bind_switches(store)
     scroll_on, mods, hot_keys, _, _ = keybinds_state(store)
     minimize = bind_chords(store)["minimize"]
+    show_desktop = bind_chords(store)["show_desktop"]
     lines = [
         "",
         BINDS_OWNED + " -- the Keybinds section's binds. 30-keybinds.lua's Super+scroll",
@@ -840,6 +847,11 @@ def keybinds_lua(store):
             "",
             "-- Minimize the focused window into the dock (%s)." % minimize,
         ] + guarded_binds([(minimize, "hl.plugin.hyprdrive.minimize('window')", "Minimize window")])
+    if switches["show_desktop"]:
+        lines += [
+            "",
+            "-- Show the desktop: its windows slide out of view and back (%s)." % show_desktop,
+        ] + guarded_binds([(show_desktop, "hl.plugin.hyprdrive.show_desktop()", "Show desktop")])
     if hot_keys:
         lines += [
             "",
@@ -898,6 +910,8 @@ def keybind_rows(store, live):
     # off, or Mosaic off, it is what turning them on binds) and the default.
     rows.append({"id": "minimize", "enabled": switches["minimize"], "chords": find("Minimize window"),
                  "chord": chords["minimize"], "defaultChord": CHORD_DEFAULTS["minimize"]})
+    rows.append({"id": "show_desktop", "enabled": switches["show_desktop"], "chords": find("Show desktop"),
+                 "chord": chords["show_desktop"], "defaultChord": CHORD_DEFAULTS["show_desktop"]})
     rows.append({"id": "mosaic_cycle", "enabled": switches["mosaic_cycle"], "active": mosaic_on,
                  "chords": find("Cycle workspace layout"),
                  "chord": chords["mosaic_cycle"], "defaultChord": CHORD_DEFAULTS["mosaic_cycle"]})
@@ -1145,11 +1159,13 @@ def cmd_capture(args):
 # panel.json "bindChords" (only when not the default); on/off stays "binds".
 CHORD_DEFAULTS = {
     "minimize": MINIMIZE_CHORD,
+    "show_desktop": SHOW_DESKTOP_CHORD,
     "mosaic_cycle": "SUPER + L",
 }
 # Which row a bind of ours is, by the description 40-panel.lua gave it.
 OWN_DESCS = {
     "Minimize window": "minimize",
+    "Show desktop": "show_desktop",
     "Cycle workspace layout": "mosaic_cycle",
     "Next desktop (empty ones too)": "scroll_desktops",
     "Previous desktop (empty ones too)": "scroll_desktops",
@@ -1162,6 +1178,7 @@ SWAP_DESCS = {desc for _, _, desc in SWAP_BINDS}
 
 ROW_NAMES = {
     "minimize": "Minimize",
+    "show_desktop": "Show desktop",
     "mosaic_cycle": "Layout cycle",
     "mosaic_focus": "Mosaic-aware focus and swap",
     "scroll_desktops": "Scroll through desktops",
@@ -1783,6 +1800,27 @@ def dump():
     }
 
 
+def cmd_refresh(_args):
+    """make install's: 40-panel.lua as this version writes it, from the
+    settings already saved -- panel.json is not touched. A switch a release
+    turns on by default (Super+D's show desktop, user 2026-11-10: "leave it on
+    by default") is bound without a visit to the settings. Hyprland reads the
+    fragment at its next config reload (`hyprdrive reload` does one)."""
+    store = load_store()
+    path = FRAGDIR / PANEL_FRAG
+    try:
+        before = path.read_text()
+    except OSError:
+        before = None
+    write_panel_fragment(store)
+    try:
+        after = path.read_text()
+    except OSError:
+        after = None
+    print(json.dumps({"ok": True, "changed": before != after}))
+    return 0
+
+
 def cmd_dump(_args):
     json.dump(dump(), sys.stdout, indent=1)
     sys.stdout.write("\n")
@@ -2122,7 +2160,7 @@ def migrate_gesture_fallbacks():
 
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
-        print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|default|CHORD [--replace]|bind-check CHORD [ID]|capture on|off|gestures-set|profile-save|profile-apply|profile-mode|shell-stale")
+        print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|default|CHORD [--replace]|bind-check CHORD [ID]|capture on|off|gestures-set|profile-save|profile-apply|profile-mode|refresh|shell-stale")
         return 0
     cmd = argv[1]
     args = argv[2:]
@@ -2143,6 +2181,7 @@ def main(argv):
         "bind-set": cmd_bind_set,
         "bind-check": cmd_bind_check,
         "capture": cmd_capture,
+        "refresh": cmd_refresh,
     }.get(cmd)
     if not fn:
         raise SystemExit("hdpanel: unknown command %s" % cmd)

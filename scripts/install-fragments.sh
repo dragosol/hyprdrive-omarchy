@@ -170,6 +170,16 @@ if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" &
 else
     PANEL_CTL=$PLUGIN_DEST/bin/hdpanel
 fi
+# This version's 40-panel.lua, from the settings already saved (hdpanel
+# refresh, which changes none of them): a switch a release turns on by default
+# -- Super+D's show desktop -- is bound without a visit to them.
+if [ -x "$PANEL_CTL" ]; then
+    if "$PANEL_CTL" refresh >/dev/null 2>&1; then
+        echo "keybinds: 40-panel.lua rewritten from your settings (show desktop on Super+D unless you turned it off)"
+    else
+        echo "keybinds: could not rewrite 40-panel.lua (hdpanel refresh failed)" >&2
+    fi
+fi
 if [ "${HYPRDRIVE_SHELL_RESTART:-1}" != 0 ] && [ -x "$PANEL_CTL" ] &&
    command -v omarchy-restart-shell >/dev/null 2>&1 && why=$("$PANEL_CTL" shell-stale); then
     echo "shell restart: $why"

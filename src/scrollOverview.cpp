@@ -6,6 +6,7 @@
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
+#include "ShowDesktop.hpp"
 #include "OverviewInternal.hpp"
 #include "DebugPaths.hpp"
 #include "Mosaic.hpp"
@@ -342,6 +343,8 @@ static bool currentBindIsWheel() {
 }
 
 CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
+    // A shown desktop's windows back first: the overview shows the real ones.
+    ScrollOverview::ShowDesktop::restoreNow();
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
     pMonitor                     = PMONITOR;
     adoptWallpaperStash();
