@@ -1858,6 +1858,8 @@ namespace ScrollOverview::Mosaic {
                     m_zoom.on = false;
                     if (m_zoom.to <= 0.0)
                         endZoomNow();
+                    else
+                        m_zoomShift = {}; // all the way out: no zoom in is aimed now
                 } else
                     busy = true;
             }
@@ -2012,10 +2014,13 @@ namespace ScrollOverview::Mosaic {
                     endZoomNow();
                 return;
             }
+            // Out again from a zoom in begun: its aim (aimZoomIn) still shapes
+            // the boxes on the way, so it goes only once all the way out.
             const double MS = canvasPanMs() * std::clamp(1.0 - m_zoomZ, 0.25, 1.0);
             m_zoom          = SZoom{.on = MS >= 1.0, .from = m_zoomZ, .to = 1.0, .start = std::chrono::steady_clock::now(), .ms = MS};
             if (!m_zoom.on) {
-                m_zoomZ = 1.0;
+                m_zoomZ     = 1.0;
+                m_zoomShift = {};
                 drawZoom();
             } else
                 armCanvasTick();
@@ -2032,20 +2037,24 @@ namespace ScrollOverview::Mosaic {
             const auto VIEW = canvasViewNow();
             return VIEW && (VIEW->maxX > 1.0 || VIEW->maxY > 1.0);
         }
-        // Super let go: back in, with the view on the focused window.
-        void zoomIn() {
-            if (!m_zoomed)
-                return;
-            // Aimed at the focused window. The LAYOUT moves there only when the
-            // zoom is over (endZoomNow): moving it now, under windows drawn
-            // zoomed out, put their shadows and borders at the new boxes for
-            // a frame -- a dark flash of every window (2026-10-26 recording).
+        // Where a zoom back in lands: the view on the focused window. The LAYOUT
+        // moves there only when the zoom is over (endZoomNow): moving it now,
+        // under windows drawn zoomed out, put their shadows and borders at the
+        // new boxes for a frame -- a dark flash of every window (2026-10-26
+        // recording). Until then zoomBoxOf draws toward it.
+        void aimZoomIn() {
             m_zoomShift = {};
             if (const auto F = Desktop::focusState()->window(); F && holds(F))
                 if (const auto WANT = revealOffset(F, m_canvasOffset); WANT && (std::abs(WANT->x - m_canvasOffset.x) > 0.5 || std::abs(WANT->y - m_canvasOffset.y) > 0.5)) {
                     if (const auto VIEW = canvasViewNow())
                         m_zoomShift = Vector2D{std::clamp(WANT->x, 0.0, VIEW->maxX), std::clamp(WANT->y, 0.0, VIEW->maxY)} - m_canvasOffset;
                 }
+        }
+        // Super let go: back in, with the view on the focused window.
+        void zoomIn() {
+            if (!m_zoomed)
+                return;
+            aimZoomIn();
             const double MS = canvasPanMs();
             m_zoom          = SZoom{.on = MS >= 1.0, .from = m_zoomZ, .to = 0.0, .start = std::chrono::steady_clock::now(), .ms = MS};
             if (!m_zoom.on)
@@ -3399,8 +3408,18 @@ namespace ScrollOverview::Mosaic {
         auto* A = canvasOf(MON->m_activeWorkspace);
         if (!A)
             return 0;
-        if (g_fingerZoom && liveZoomed() == A && g_super == ESuper::ZOOMED)
-            return A->zoomFollowStart() ? -1 : 0;
+        if (g_fingerZoom && liveZoomed() == A && g_super == ESuper::ZOOMED) {
+            if (!A->zoomFollowStart())
+                return 0;
+            // BACK IN ON THE WINDOW THE POINTER PICKED (user, 2026-11-09:
+            // "does not zoom back in to the location of my cursor it zooms back
+            // in to where I zoomed out from"). Its hover gave it the focus
+            // (superMove), but the zoom in was aimed only as the fingers
+            // lifted: they drew the canvas in on the old view, and then it
+            // jumped. Aimed now, the fingers draw it in toward that window.
+            A->aimZoomIn();
+            return -1;
+        }
         if (g_super != ESuper::IDLE || !A->zoomFollowStart())
             return 0;
         g_super       = ESuper::ZOOMED;
