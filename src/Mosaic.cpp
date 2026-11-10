@@ -3275,7 +3275,7 @@ namespace ScrollOverview::Mosaic {
         uint32_t          g_zoomButton     = 0;     // which: BTN_LEFT carries or resizes, BTN_RIGHT resizes
         constexpr double  SUPER_SLOP = 32.0;
         PHLWINDOWREF      g_labelHover; // the window whose title the hover shows (mosaic:zoom_labels)
-        bool              g_superLabels = false; // Super held and the pointer moved: titles up
+        bool              g_superLabels = false; // titles up: Super held and the pointer moved, or the fingers' zoom-out
 
         // THE TITLES FADE (user, 2026-11-01: "those labels should adopt the
         // same fade in/out animations as the rest of the labels in
@@ -3425,8 +3425,15 @@ namespace ScrollOverview::Mosaic {
         g_super       = ESuper::ZOOMED;
         g_superCanvas = A;
         g_fingerZoom  = true;
+        // THE TITLES, AS FOR SUPER'S ZOOM (user, 2026-11-09: "zooming out with 3
+        // fingers should show labels on mouseovered windows or all windows").
+        // mosaic:zoom_labels picks which; they fade in over the zoom's second
+        // half (zoomLabelAlpha) and out when it ends (superEnd).
+        g_superLabels = true;
+        g_labelHover.reset();
         g_pSeatManager->setPointerFocus(nullptr, {});
         g_canvasPanning = true;
+        g_pHyprRenderer->damageMonitor(MON);
         return 1;
     }
     void fingerZoomFollow(double z) {
@@ -4248,7 +4255,16 @@ namespace ScrollOverview::Mosaic {
             }
             if (pickerOpen() || blocked)
                 return;
-            if (const auto W = A->zoomedWindowAt(P); W && W != Desktop::focusState()->window())
+            const auto W = A->zoomedWindowAt(P);
+            // The hovered title (mosaic:zoom_labels "hover"): a new one redraws,
+            // so the last one's pill goes with it.
+            if (W != g_labelHover.lock()) {
+                g_labelHover = W;
+                if (const auto WS = A->workspace())
+                    if (const auto MON = WS->m_monitor.lock())
+                        g_pHyprRenderer->damageMonitor(MON);
+            }
+            if (W && W != Desktop::focusState()->window())
                 Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
             return;
         }
