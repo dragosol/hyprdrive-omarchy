@@ -547,6 +547,19 @@ Item {
   readonly property int missingCount: ((hd.plugin && hd.plugin.missing) || []).length
   readonly property bool pluginOff: !!(hd.plugin && hd.plugin.reachable && !hd.plugin.loaded)
   readonly property bool pluginBehind: missingCount > 0 || pluginOff
+  // THE PANEL BEHIND ITS FILES (user, 2026-11-10: "the setting is not
+  // visible"). The Omarchy shell compiled this panel when it started, and its
+  // plugin reload keeps that copy (omacom/omarchy#6981), so after an update the
+  // panel on screen is older than its files until the shell restarts: a new
+  // release's rows are missing, its fixes not running. hdpanel compares the
+  // files with the shell process (dump.ui); the card at the top restarts it.
+  readonly property bool panelStale: !!(hd.ui && hd.ui.stale)
+  function restartShell() {
+    // Detached: the restart ends this process. Omarchy's own script refuses
+    // while the session is locked; `omarchy restart shell` before it existed.
+    Quickshell.execDetached(["bash", "-lc",
+      "if command -v omarchy-restart-shell >/dev/null; then exec omarchy-restart-shell; else exec omarchy restart shell; fi"])
+  }
   readonly property string updPath: ctlPath === "" ? "" : ctlPath.replace(/[^\/]*$/, "hyprdrive")
   readonly property bool updAvailable: !!(upd && upd.available)
   readonly property bool updOmarchy: !!(upd && upd.flavor === "omarchy")
@@ -2388,12 +2401,70 @@ Item {
         }
 
 
+        // PANEL BEHIND ITS FILES: Hyprdrive was updated after the shell started,
+        // and the shell keeps running the panel it loaded then. First, since
+        // nothing else on this panel can be trusted to be current until then.
+        Rectangle {
+          id: staleCard
+          anchors.top: brand.bottom
+          anchors.topMargin: root.panelStale ? Style.space(10) : 0
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.leftMargin: Style.space(14)
+          anchors.rightMargin: Style.space(14)
+          height: root.panelStale ? staleCol.implicitHeight + Style.space(20) : 0
+          visible: root.panelStale
+          clip: true
+          radius: Style.space(10)
+          color: root.tint(root.accent, 0.10)
+          border.width: 1
+          border.color: root.tint(root.accent, 0.35)
+          Column {
+            id: staleCol
+            x: Style.space(10); y: Style.space(10)
+            width: parent.width - Style.space(20)
+            spacing: Style.space(6)
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              textFormat: Text.PlainText
+              text: "Restart the shell to finish updating"
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.weight: Font.Bold
+            }
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              textFormat: Text.PlainText
+              text: "Hyprdrive was updated after the Omarchy shell started, and the shell keeps showing these settings as they were until it restarts. The bar disappears for a moment while it does."
+              color: root.tint(root.fg, 0.75)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              lineHeight: 1.15
+            }
+            Rectangle {
+              width: parent.width
+              height: Style.space(28)
+              radius: Style.space(8)
+              color: staleMouse.containsMouse ? root.accent : root.tint(root.accent, 0.22)
+              Text { anchors.centerIn: parent; textFormat: Text.PlainText
+                     text: "Restart the shell"
+                     color: staleMouse.containsMouse ? root.bg : root.accent
+                     font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.weight: Font.DemiBold }
+              MouseArea { id: staleMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                          onClicked: root.restartShell() }
+            }
+          }
+        }
+
         // THE UPDATE CARD (Omarchy, user 2026-10-24): which version the
         // marketplace approved, whether the newest one is still waiting for it,
         // the command for the approved one, or the newest straight from GitHub.
         Rectangle {
           id: updCard
-          anchors.top: brand.bottom
+          anchors.top: staleCard.bottom
           anchors.topMargin: root.updOpen ? Style.space(10) : 0
           anchors.left: parent.left
           anchors.right: parent.right

@@ -92,24 +92,33 @@ elif [ -d "$PLUGIN_SRC" ]; then
 import json, os, sys
 m = json.load(open(sys.argv[1]))
 m["entryPoints"] = {k: v.split("/")[-1] for k, v in m.get("entryPoints", {}).items()}
+text = json.dumps(m, indent=2, ensure_ascii=False) + "\n"
+# Unchanged, untouched: a rewrite is a plugin reload in the shell for nothing.
+try:
+    if open(sys.argv[2]).read() == text:
+        sys.exit(0)
+except OSError:
+    pass
 # Atomic (review, 2026-11-09): the shell reads this manifest whenever it likes.
 tmp = sys.argv[2] + ".tmp"
 with open(tmp, "w") as fh:
-    fh.write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+    fh.write(text)
 os.replace(tmp, sys.argv[2])
 PY
-    install -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
-    install -Dm644 "$PLUGIN_SRC/HyprdrivePanel.qml" "$PLUGIN_DEST/HyprdrivePanel.qml"
-    install -Dm644 "$PLUGIN_SRC/Schema.js" "$PLUGIN_DEST/Schema.js"
-    install -Dm644 "$PLUGIN_SRC/Model.js" "$PLUGIN_DEST/Model.js"
-    install -Dm644 "$PLUGIN_SRC/README.md" "$PLUGIN_DEST/README.md"
-    install -Dm644 "$PLUGIN_SRC/hyprdrive-icon.png" "$PLUGIN_DEST/hyprdrive-icon.png"
-    install -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
-    install -Dm755 "$PLUGIN_SRC/bin/hdicons" "$PLUGIN_DEST/bin/hdicons"
-    install -Dm755 "$PLUGIN_SRC/bin/hyprdrive" "$PLUGIN_DEST/bin/hyprdrive"
+    # -C: a file whose content did not change keeps its time, so a reinstall
+    # of the same panel does not read as a newer one (hdpanel shell-stale).
+    install -C -Dm644 "$PLUGIN_SRC/Panel.qml" "$PLUGIN_DEST/Panel.qml"
+    install -C -Dm644 "$PLUGIN_SRC/HyprdrivePanel.qml" "$PLUGIN_DEST/HyprdrivePanel.qml"
+    install -C -Dm644 "$PLUGIN_SRC/Schema.js" "$PLUGIN_DEST/Schema.js"
+    install -C -Dm644 "$PLUGIN_SRC/Model.js" "$PLUGIN_DEST/Model.js"
+    install -C -Dm644 "$PLUGIN_SRC/README.md" "$PLUGIN_DEST/README.md"
+    install -C -Dm644 "$PLUGIN_SRC/hyprdrive-icon.png" "$PLUGIN_DEST/hyprdrive-icon.png"
+    install -C -Dm755 "$PLUGIN_SRC/bin/hdpanel" "$PLUGIN_DEST/bin/hdpanel"
+    install -C -Dm755 "$PLUGIN_SRC/bin/hdicons" "$PLUGIN_DEST/bin/hdicons"
+    install -C -Dm755 "$PLUGIN_SRC/bin/hyprdrive" "$PLUGIN_DEST/bin/hyprdrive"
     # Super+L's layout cycle while the panel's Mosaic switch is on; 40-panel.lua
     # binds it by this path (hdpanel's LAYOUT_CYCLE, beside hdpanel itself).
-    install -Dm755 "$PLUGIN_SRC/bin/hd-layout-cycle" "$PLUGIN_DEST/bin/hd-layout-cycle"
+    install -C -Dm755 "$PLUGIN_SRC/bin/hd-layout-cycle" "$PLUGIN_DEST/bin/hd-layout-cycle"
     echo "omarchy plugin: $PLUGIN_DEST"
 
     if [ -n "$RELOAD_PAUSE" ]; then
@@ -147,3 +156,26 @@ tmp = state / "install.json.tmp"
 tmp.write_text(json.dumps({"version": version, "source": root, "prefix": prefix}) + "\n")
 tmp.replace(state / "install.json")
 PY
+
+# A PANEL OLDER THAN ITS FILES (user, 2026-11-10: "the setting is not
+# visible"). The Omarchy shell compiles the settings panel once and keeps it:
+# its plugin reload on the copy above rebuilds from that old copy
+# (omacom/omarchy#6981), so a new panel shows only after the shell restarts.
+# Restart it now when it started before the panel's QML/JS last changed, with
+# Omarchy's own omarchy-restart-shell (it refuses while the session is locked).
+# `hyprdrive update` sets HYPRDRIVE_SHELL_RESTART=0 and restarts it after the
+# plugin reload instead, so the new panel and the new plugin start together.
+if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ]; then
+    PANEL_CTL=$ROOT/omarchy-plugin/bin/hdpanel
+else
+    PANEL_CTL=$PLUGIN_DEST/bin/hdpanel
+fi
+if [ "${HYPRDRIVE_SHELL_RESTART:-1}" != 0 ] && [ -x "$PANEL_CTL" ] &&
+   command -v omarchy-restart-shell >/dev/null 2>&1 && why=$("$PANEL_CTL" shell-stale); then
+    echo "shell restart: $why"
+    if omarchy-restart-shell; then
+        echo "shell restart: done -- the settings panel is the new one"
+    else
+        echo "shell restart: not done (see above); run omarchy-restart-shell to see the new settings" >&2
+    fi
+fi

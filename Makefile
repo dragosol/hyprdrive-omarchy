@@ -72,6 +72,7 @@ check: hyprdrive.so
 	python3 scripts/hdicons_test.py
 	python3 scripts/update_cli_test.py
 	python3 scripts/fragment_test.py
+	python3 scripts/shell_restart_test.py
 	python3 scripts/keybind_editor_test.py
 	python3 scripts/agent_run_test.py
 	python3 scripts/tool_scripts_test.py

@@ -278,6 +278,36 @@ with contextlib.redirect_stdout(shown), tempfile.TemporaryDirectory() as tmp:
         mod.loaded = lambda env: False
         rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
         expect(rc == 1, "%s: a plugin that did not load after the reload is reported" % mod.FLAVOR)
+
+        # THE PANEL IS COMPILED ONCE (user, 2026-11-10: "the setting is not
+        # visible"): make install leaves the Omarchy shell alone here
+        # (HYPRDRIVE_SHELL_RESTART=0) and the update restarts it after the
+        # plugin reload -- on Omarchy, when the shell shows an older panel, and
+        # not when Hyprland was replaced (nothing was reloaded then).
+        envs = []
+
+        def rec(cmd, cwd=None, env=None):
+            ran.append(cmd)
+            envs.append((cmd, env))
+            return 0
+        mod.run = rec
+        mod.hypr_env = lambda: None
+        for stale, replaced in ((True, False), (False, False), (True, True)):
+            ran.clear()
+            envs.clear()
+            mod.shell_stale = lambda s=stale: s
+            mod.hyprland_replaced = lambda r=replaced: r
+            rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+            want = stale and not replaced and mod.FLAVOR == "omarchy"
+            expect(rc == 0 and (["omarchy-restart-shell"] in ran) == want,
+                   "%s: shell %s, Hyprland %s: the shell is %srestarted after the reload" % (
+                       mod.FLAVOR, "stale" if stale else "current", "replaced" if replaced else "running",
+                       "" if want else "not "))
+        menv = next((e for c, e in envs if c[:2] == ["make", "install"]), None) or {}
+        expect(menv.get("HYPRDRIVE_SHELL_RESTART") == ("0" if mod.FLAVOR == "omarchy" else None),
+               "%s: %s (%r)" % (mod.FLAVOR, "make install leaves the shell restart to the update" if mod.FLAVOR == "omarchy"
+                                else "make install restarts a stale shell itself", menv))
+        mod.hyprland_replaced = lambda: False
         os.environ.pop("HYPRLAND_INSTANCE_SIGNATURE", None)
 
         # A PARTIAL INSTALL IS NOT ROLLED BACK (review, 2026-11-09): once make

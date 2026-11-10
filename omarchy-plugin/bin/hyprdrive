@@ -339,9 +339,37 @@ def check(refresh=False):
 
 
 # ---- installing ---------------------------------------------------------------
-def run(cmd, cwd=None):
+def run(cmd, cwd=None, env=None):
+    """cmd, shown first; env: variables added to this process's."""
     print("$ " + " ".join(shlex.quote(c) for c in cmd), flush=True)
-    return subprocess.call(cmd, cwd=cwd)
+    return subprocess.call(cmd, cwd=cwd, env=dict(os.environ, **env) if env else None)
+
+
+def shell_stale():
+    """Whether the running Omarchy shell is showing an older settings panel
+    than the one installed: hdpanel beside this file decides (shell-stale)."""
+    hd = pathlib.Path(__file__).resolve().parent / "hdpanel"
+    if not hd.is_file():
+        return False
+    try:
+        return subprocess.run([str(hd), "shell-stale"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def restart_shell_if_stale():
+    """THE PANEL IS COMPILED ONCE (user, 2026-11-10: "the setting is not
+    visible"): the Omarchy shell's plugin reload keeps running the panel it
+    loaded at startup (omacom/omarchy#6981), so the shell restarts when the
+    panel installed is newer -- and only then, so a rebuild of the version
+    already running leaves the bar alone. omarchy-restart-shell is Omarchy's
+    own and refuses while the session is locked."""
+    if FLAVOR != "omarchy" or not shell_stale():
+        return
+    if shutil.which("omarchy-restart-shell"):
+        run(["omarchy-restart-shell"])
+    elif shutil.which("omarchy"):
+        run(["omarchy", "restart", "shell"])
 
 
 def git(src, *args, capture=False):
@@ -469,7 +497,10 @@ def install(target_ref, label, yes, info, rebuild=False):
     # every check twice (Clement, 2026-11-09).
     clean = ["make", "clean"]
     if FLAVOR == "omarchy":
-        if run(clean, cwd=src) != 0 or run(["make", "install"], cwd=src) != 0:
+        # make install restarts the Omarchy shell when the panel changed; here
+        # that waits for the plugin reload below, so the new panel and the new
+        # plugin start together (and a reload not done keeps the old pair).
+        if run(clean, cwd=src) != 0 or run(["make", "install"], cwd=src, env={"HYPRDRIVE_SHELL_RESTART": "0"}) != 0:
             return build_failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
     elif run(clean, cwd=src) != 0 or run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
         return build_failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
@@ -491,8 +522,7 @@ def install(target_ref, label, yes, info, rebuild=False):
             run(["hyprctl", "plugin", "load", str(so)])
             run(["hyprctl", "reload"])
             run(["hyprctl", "configerrors"])
-            if FLAVOR == "omarchy" and shutil.which("omarchy"):
-                run(["omarchy", "restart", "shell"])
+            restart_shell_if_stale()
             henv = hypr_env()
             if henv is not None and not loaded(henv):
                 print("The new plugin did not load (see above). Log out and back in to start it.")

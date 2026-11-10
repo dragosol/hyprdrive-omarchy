@@ -225,7 +225,6 @@ make clean && make install   # builds, checks and installs; the running plugin i
 hyprctl plugin unload ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl reload
-omarchy restart shell
 hyprctl configerrors
 ```
 
@@ -234,9 +233,16 @@ Build first, then reload (keep your hands off the trackpad for that second):
 running, so nothing needs unloading or deleting beforehand, and a failed build
 leaves you with the plugin you had. If Hyprland itself was updated since you
 logged in, stop after `make install` and log out and back in instead: no plugin
-can be loaded into a Hyprland whose binary was replaced. `omarchy restart shell`
-makes the Hyprdrive settings panel pick up rows a release added; the shell's own
-plugin reload keeps the old ones.
+can be loaded into a Hyprland whose binary was replaced.
+
+The Omarchy shell keeps running the settings panel it loaded when it started:
+its own plugin reload does not pick up changed files
+([omacom/omarchy#6981](https://github.com/omacom/omarchy/issues/6981)). So
+`make install` restarts the shell when the panel changed, and `hyprdrive update`
+does after reloading the plugin; the bar disappears for a moment. Neither
+restarts it while the screen is locked: run `omarchy restart shell` later, as
+after `omarchy plugin update`. A panel from this release on also says itself when
+it is out of date, with a button for the restart.
 
 After a Hyprland update the plugin may refuse to load with `[he] Version mismatch`.
 Rebuild from scratch: `make clean && make install`.

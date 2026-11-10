@@ -1581,6 +1581,149 @@ def plugin_version():
     return ""
 
 
+# ---- the panel against the shell running it ----------------------------------
+# A PANEL OLDER THAN ITS FILES (user, 2026-11-10: "the setting is not visible").
+# The Omarchy shell compiles a plugin's QML/JS once and keeps it: its reload on
+# a file change rebuilds from that copy, because the cache clear it relies on
+# (Qt.clearComponentCache) does not exist in Quickshell 0.3.2
+# (omacom/omarchy#6981). So after an update -- make install, `omarchy plugin
+# update` -- the panel on screen stays the old one until the shell restarts;
+# general:open_tiled's row was missing from it that way. QML/JS changed after
+# the shell process started is the sign: the dump's "ui" tells the panel (which
+# then offers the restart), and `shell-stale` tells make install and `hyprdrive
+# update` (which restart it themselves).
+QS_COMMS = ("quickshell", "qs")
+
+
+def ui_dir():
+    """The settings UI's own QML/JS: $HYPRDRIVE_UI_DIR when a launcher says so,
+    else the directory above this bin/ when it is the Omarchy panel (the copied
+    panel, or omarchy-plugin/ in a checkout)."""
+    env = os.environ.get("HYPRDRIVE_UI_DIR")
+    if env:
+        return pathlib.Path(env)
+    here = pathlib.Path(__file__).resolve().parent.parent
+    return here if (here / "HyprdrivePanel.qml").is_file() else None
+
+
+def ui_newest(d):
+    """(mtime, name) of the newest .qml/.js in d -- what a shell compiles -- or
+    None. A symlinked file counts with its target's time."""
+    best = None
+    try:
+        entries = list(os.scandir(d)) if d else []
+    except OSError:
+        return None
+    for e in entries:
+        if not e.name.endswith((".qml", ".js")):
+            continue
+        try:
+            m = e.stat().st_mtime
+        except OSError:
+            continue
+        if best is None or m > best[0]:
+            best = (m, e.name)
+    return best
+
+
+def proc_stat(pid):
+    """(ppid, start time in clock ticks after boot) from /proc/PID/stat, or None."""
+    try:
+        s = pathlib.Path("/proc/%d/stat" % pid).read_text()
+        f = s[s.rindex(")") + 2:].split()  # f[0] is field 3 (state)
+        return int(f[1]), int(f[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def proc_comm(pid):
+    try:
+        return pathlib.Path("/proc/%d/comm" % pid).read_text().strip()
+    except OSError:
+        return ""
+
+
+def proc_started(pid):
+    """When PID started, in epoch seconds to ~10 ms. The boot time comes from
+    /proc/uptime: /proc/stat's btime is whole seconds, and a shell restarted a
+    second after the files were written would then look older than them."""
+    st = proc_stat(pid)
+    if st is None:
+        return None
+    try:
+        up = float(pathlib.Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return time.time() - up + st[1] / os.sysconf("SC_CLK_TCK")
+
+
+def host_shell(pid=None):
+    """The Quickshell process this hdpanel runs under -- the Omarchy shell for
+    the panel's dump -- searched up from the parent; None from a terminal."""
+    pid = os.getppid() if pid is None else pid
+    for _ in range(8):
+        if pid <= 1:
+            return None
+        if proc_comm(pid) in QS_COMMS:
+            return pid
+        st = proc_stat(pid)
+        if st is None:
+            return None
+        pid = st[0]
+    return None
+
+
+def ui_state(shell_pid, d=None):
+    """{"stale": bool, "newest": file} for the UI's QML/JS against the shell
+    process that compiled it, or None (no shell, no files)."""
+    newest = ui_newest(ui_dir() if d is None else d)
+    started = proc_started(shell_pid) if shell_pid else None
+    if newest is None or started is None:
+        return None
+    return {"stale": newest[0] > started, "newest": newest[1]}
+
+
+def omarchy_shells():
+    """This user's running Omarchy shells: quickshell -p $OMARCHY_PATH/shell
+    (omarchy-launch-shell), or any .../omarchy/shell when OMARCHY_PATH is not
+    in the environment (over ssh it is not)."""
+    want = (os.environ.get("OMARCHY_PATH") or "").rstrip("/")
+    uid = os.getuid()
+    out = []
+    for e in os.scandir("/proc"):
+        if not e.name.isdigit():
+            continue
+        pid = int(e.name)
+        try:
+            if e.stat().st_uid != uid or proc_comm(pid) not in QS_COMMS:
+                continue
+            argv = [a.decode("utf-8", "replace") for a in pathlib.Path(e.path, "cmdline").read_bytes().split(b"\0")]
+        except OSError:
+            continue
+        path = ""
+        for i, a in enumerate(argv):
+            if a in ("-p", "--path") and i + 1 < len(argv):
+                path = argv[i + 1]
+            elif a.startswith("--path="):
+                path = a[len("--path="):]
+        path = path.rstrip("/")
+        if path and (path == want + "/shell" if want else path.endswith("/omarchy/shell")):
+            out.append(pid)
+    return out
+
+
+def cmd_shell_stale(_args):
+    """Exit 0, saying why, when a running Omarchy shell started before the
+    panel's QML/JS last changed (so it shows an older panel); 1 otherwise."""
+    d = ui_dir()
+    for pid in omarchy_shells():
+        st = ui_state(pid, d)
+        if st and st["stale"]:
+            print("the Omarchy shell (pid %d) started before %s changed" % (pid, st["newest"]))
+            return 0
+    return 1
+
+
 def dump():
     store = load_store()
     live = live_keys()
@@ -1622,6 +1765,7 @@ def dump():
     return {
         "version": version,
         "plugin": {"loaded": bool(running), "reachable": bool(live), "missing": missing},
+        "ui": ui_state(host_shell()),
         "keys": live,
         "owned": store.get("keys", {}),
         "gestures": gestures,
@@ -1978,10 +2122,12 @@ def migrate_gesture_fallbacks():
 
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
-        print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|default|CHORD [--replace]|bind-check CHORD [ID]|capture on|off|gestures-set|profile-save|profile-apply|profile-mode")
+        print("hdpanel dump|set|preview|reset GROUP|bind-set ID on|off|default|CHORD [--replace]|bind-check CHORD [ID]|capture on|off|gestures-set|profile-save|profile-apply|profile-mode|shell-stale")
         return 0
     cmd = argv[1]
     args = argv[2:]
+    if cmd == "shell-stale":  # make install's question; nothing of the store's
+        return cmd_shell_stale(args)
     migrate_gestures()
     migrate_gesture_fallbacks()
     fn = {
