@@ -156,14 +156,25 @@ with tempfile.TemporaryDirectory() as tmp:
             shutil.copy2(ROOT / f, root / f)
         shutil.copytree(ROOT / "config/hyprdrive", root / "config/hyprdrive")
         shutil.copytree(ROOT / "omarchy-plugin", root / "omarchy-plugin", ignore=shutil.ignore_patterns("__pycache__"))
+        # The native tree's install also reads these, and copies the panel only
+        # on a desktop it takes for Omarchy: an install ($OMARCHY_PATH, below)
+        # and Omarchy's state directory.
+        if (ROOT / "scripts/hyprdrive-integration").exists():
+            shutil.copy2(ROOT / "scripts/hyprdrive-integration", root / "scripts/hyprdrive-integration")
+        if (ROOT / "settings").is_dir():
+            shutil.copytree(ROOT / "settings", root / "settings")
         home = tmp / "home"
-        home.mkdir()
+        (home / ".local/state/omarchy/current").mkdir(parents=True)
         stub = tmp / "stub"
         stub.mkdir()
         log = tmp / "restarts.log"
         (stub / "omarchy-restart-shell").write_text('#!/bin/sh\necho restart >> "$RESTARTS"\n')
         (stub / "omarchy-restart-shell").chmod(0o755)
-        ienv = {k: v for k, v in os.environ.items() if k not in ("HYPRDRIVE_SHELL_RESTART", "HYPRDRIVE_UI_DIR")}
+        # Nothing of the session's: no Hyprland to ask (the native install's
+        # Omarchy check would ask the running plugin), no forced integration.
+        ienv = {k: v for k, v in os.environ.items() if k not in (
+            "HYPRDRIVE_SHELL_RESTART", "HYPRDRIVE_UI_DIR", "HYPRLAND_INSTANCE_SIGNATURE",
+            "HYPRDRIVE_INTEGRATION", "HYPRDRIVE_NO_OMARCHY")}
         ienv.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), XDG_STATE_HOME=str(home / ".local/state"),
                     PATH="%s:/usr/bin:/bin" % stub, OMARCHY_PATH=str(tmp / "omarchy"), RESTARTS=str(log))
 
