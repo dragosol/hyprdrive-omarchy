@@ -123,6 +123,7 @@ KEY_META = [
     # General
     _k(PLUGIN + "general:file_manager", "str", "general", ""),  # options: file_manager_options(), per dump
     _k(PLUGIN + "general:fullscreen_desktop", "enum", "general", "next", options=FULLSCREEN_DESKTOPS),
+    _k(PLUGIN + "general:open_tiled", "bool", "general", False),
     # Overview
     _k(PLUGIN + "tap_super", "bool", "overview", True),
     _k(PLUGIN + "mission_control", "bool", "overview", True),

@@ -4708,6 +4708,12 @@ namespace ScrollOverview::Mosaic {
     // then back when it closed): a preview or a picker is a passing overlay,
     // not a member of the desktop. 25-rules.lua tags Sushi; a user tags any
     // other app the same way.
+    //
+    // EVERY DESKTOP WITH general:open_tiled (user, 2026-11-10: "add an option
+    // to never load windows in floating mode to general"). The same windows,
+    // by the same rules, tile into the desktop's own layout (dwindle,
+    // scrolling) as they join a mosaic. Off by default, so a float rule still
+    // does what it says.
     static CHyprSignalListener g_openLateHook;
     static CHyprSignalListener g_floatingHook; // g_windowSizes: a window floated
 
@@ -4719,8 +4725,15 @@ namespace ScrollOverview::Mosaic {
         return onMosaicWorkspace(ws);
     }
 
+    static bool openTiled() {
+        return ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:general:open_tiled");
+    }
+
     static void adoptFloating(const PHLWINDOW& w) {
-        if (!w || !w->m_isMapped || !w->m_isFloating || !onMosaicWorkspace(w->m_workspace))
+        if (!w || !w->m_isMapped || !w->m_isFloating || !w->m_workspace)
+            return;
+        const bool MOSAIC = onMosaicWorkspace(w->m_workspace);
+        if (!MOSAIC && !openTiled())
             return;
         if (w->parent() || w->isModal() || w->m_pinned || Fullscreen::controller()->isFullscreen(w) || (w->m_isX11 && (w->isX11OverrideRedirect() || w->x11Parent())))
             return;
@@ -4737,8 +4750,17 @@ namespace ScrollOverview::Mosaic {
             trace(std::format("floating window {:x} is fixed-size ({}x{}): stays floating", (uintptr_t)w.get(), MIN->x, MIN->y));
             return;
         }
-        trace(std::format("adopt floating window {:x} into the mosaic", (uintptr_t)w.get()));
+        trace(std::format("adopt floating window {:x} into the {}", (uintptr_t)w.get(), MOSAIC ? "mosaic" : "desktop's layout (general:open_tiled)"));
         (void)::Config::Actions::floatWindow(::Config::Actions::TOGGLE_ACTION_DISABLE, w);
+        // The open animation, again, from the tile. onMap started it from the
+        // FLOATING box before openLate, so the window grew out of the spot it
+        // would have floated in and slid across into its tile (rig, 2026-11-10:
+        // a rule-floated kitty came out of the screen's centre into the right
+        // half). Tiling sets the tile as the goal at once (setFloating ->
+        // moveTarget -> recalculate), and no frame has been drawn since onMap,
+        // so this is the same popin a window that opened tiled gets.
+        if (!MOSAIC && !w->m_isFloating)
+            w->m_animationController.apply(w->m_animationController.animateIn());
     }
 
     static CHyprSignalListener g_desktopShownHook; // a held Super's zoom follows the desktop

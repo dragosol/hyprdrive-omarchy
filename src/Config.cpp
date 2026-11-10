@@ -531,6 +531,12 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CStringValue>(KEY("general:file_manager"),
                                     "the file manager folders open in: a desktop entry such as org.kde.dolphin.desktop, or empty for the system's default for folders",
                                     Hyprlang::STRING{""}));
+    // NO WINDOW OPENS FLOATING (Mosaic.cpp adoptFloating; user, 2026-11-10:
+    // "add an option to never load windows in floating mode to general").
+    addKey(makeShared<CBoolValue>(KEY("general:open_tiled"),
+                                  "a window that would open floating (a window rule, or the app asking) opens tiled instead, on every desktop, as it always does on a "
+                                  "Mosaic desktop; dialogs, pinned and fixed-size windows and windows tagged hyprdrive-float still float",
+                                  false));
     addKey(makeShared<CBoolValue>(KEY("mosaic:enabled"), "mosaic: Super+L cycles Dwindle -> Scrolling -> Mosaic (the panel asks before turning it on)", false));
     addKey(makeShared<CBoolValue>(KEY("mosaic:default"), "mosaic: new desktops use the Mosaic layout (needs mosaic:enabled)", false));
     // THE INFINITE CANVAS (MosaicCanvas.hpp, user 2026-10-26). Opt-in; once on, all

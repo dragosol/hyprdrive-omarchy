@@ -39,6 +39,10 @@ var sections = [
         { type: "choice", key: P + "general:fullscreen_desktop", label: "Fullscreen apps",
           desc: "Its own desktop: a fullscreen app gets the desktop right after yours, the others move along a place, and it comes back when you leave fullscreen. An app alone on its desktop keeps it." }
       ]},
+      { title: "Windows", rows: [
+        { type: "toggle", key: P + "general:open_tiled", label: "Never open windows floating",
+          desc: "A window that would open floating, by a window rule or because the app asks, opens tiled instead. Mosaic desktops always do this. Dialogs, pinned windows and windows that cannot be resized still float, and you can still float a window yourself once it is open. To keep an app floating, give it the hyprdrive-float tag in a window rule." }
+      ]},
       { title: "Apps", rows: [
         { type: "choice", dropdown: true, key: P + "general:file_manager", label: "File manager",
           desc: "Where the dock's folders and stacks, Open in Files and Show in Files open. System default follows your desktop's default for folders." }

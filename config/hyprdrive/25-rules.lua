@@ -12,7 +12,8 @@
 -- opacity and blur to Omarchy's window rules so a preview is not the one
 -- surface that ignores the theme. The `hyprdrive-float` tag keeps it out of a
 -- Mosaic desktop: a passing preview, not a member that re-packs the rest.
--- (Tag any other app the same way to keep it floating over a mosaic.)
+-- (Tag any other app the same way to keep it floating over a mosaic, and
+-- with general:open_tiled on, over any desktop.)
 o.window({ class = [[^(org\.gnome\.NautilusPreviewer)$]] }, {
     float = true,
     center = true,
