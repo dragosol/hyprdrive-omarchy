@@ -19,9 +19,31 @@
 // hooked, the one function every float toggle reaches (Super+T, hyprctl,
 // Omarchy's menu, the window pill's double-click). Any other window passes
 // straight through.
+//
+// A tile smaller than the window must not squeeze it either (Hyprland scales a
+// pseudotiled window down to fit): place() grows that one window's tile for
+// the one call that sizes it. Not misc:size_limits_tiled, which 20-layout.lua
+// set for this on 2026-11-10: under it Hyprland also clamps EVERY tiled
+// window's position into the screen's work area, which piled the infinite
+// canvas's windows -- the ones it keeps past the screen's edge -- on top of
+// each other (user: "something is wrong with infinite canvas ... you broke it").
+namespace Layout {
+    struct STargetBox;
+}
+
 namespace ScrollOverview::OwnSizeTile {
+    using PlaceFn = void (*)(void* target, const Layout::STargetBox& box, uint8_t flags);
+
     void init();
     void shutdown();
+
+    // CWindowTarget::setPositionGlobal's hook body (main.cpp, inside
+    // DockRoom::place): `next` places the target. An own-size tile smaller
+    // than its window is placed through a grown copy of its box -- the window
+    // centred where the tile is, at its own size, kept on screen while the tile
+    // is -- and the layout's own box is put back after. Everything else goes
+    // straight to `next`.
+    void place(void* target, const Layout::STargetBox& box, uint8_t flags, PlaceFn next);
 
     // `w` fixes its own size; `size` gets it in layout px.
     bool fixedSize(const PHLWINDOW& w, Vector2D& size);

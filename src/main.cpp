@@ -228,10 +228,13 @@ static void           hkOnAck(void* thisptr, uint32_t serial) {
 }
 
 // DockRoom.hpp: tiled windows make room for a dock that does not hide.
+// OwnSizeTile.hpp, inside it: a fixed-size window's tile has room for it.
 static CFunctionHook* g_pTargetPlaceHook = nullptr;
 static void hkTargetPlace(void* thisptr, const Layout::STargetBox& box, uint8_t flags) {
     ScrollOverview::DockRoom::place(thisptr, box, flags, [](void* t, const Layout::STargetBox& b, uint8_t f) {
-        rc<void (*)(void*, const Layout::STargetBox&, uint8_t)>(g_pTargetPlaceHook->m_original)(t, b, f);
+        ScrollOverview::OwnSizeTile::place(t, b, f, [](void* t2, const Layout::STargetBox& b2, uint8_t f2) {
+            rc<void (*)(void*, const Layout::STargetBox&, uint8_t)>(g_pTargetPlaceHook->m_original)(t2, b2, f2);
+        });
     });
 }
 

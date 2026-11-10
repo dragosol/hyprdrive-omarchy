@@ -122,5 +122,14 @@ with tempfile.TemporaryDirectory() as tmp:
     expect(bak.exists() and "require('hypr.hyprdrive')" in bak.read_text(),
            "uninstall keeps a backup of the original beside the hyprland.lua it was given")
 
+# misc:size_limits_tiled clamps EVERY tiled window's position into the screen's
+# work area, not only the size of windows with size rules: 20-layout.lua set it
+# for Super+T's own-size tiles on 2026-11-10 and it piled the infinite canvas's
+# windows on top of each other (user: "something is wrong with infinite canvas
+# ... you broke it"). OwnSizeTile::place does that job for those windows alone.
+shipped = sorted((ROOT / "config").rglob("*.lua")) + [ROOT / "omarchy-plugin" / "bin" / "hdpanel"]
+setters = [str(p.relative_to(ROOT)) for p in shipped if p.exists() and "size_limits_tiled" in p.read_text()]
+expect(not setters, "no shipped config turns on misc:size_limits_tiled (%s)" % setters)
+
 print("fragment_test: %d checks, %d failed" % (checks, failed))
 sys.exit(1 if failed else 0)

@@ -1,13 +1,16 @@
 #include "OwnSizeTile.hpp"
 #include "DebugPaths.hpp"
 
+#include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/desktop/rule/windowRule/WindowRuleApplicator.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/types/OverridableVar.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/protocols/XDGShell.hpp>
 #include <hyprland/src/xwayland/XSurface.hpp>
 
@@ -60,10 +63,9 @@ namespace ScrollOverview::OwnSizeTile {
             w->m_ruleApplicator->noMaxSize().set(true, Desktop::Types::PRIORITY_SET_PROP);
             // And never under it: a tile smaller than the window (a mosaic
             // packed tight, a crowded dwindle) shrank the pseudo box, and the
-            // program fought the smaller size at ~3600/s (rig). With
-            // misc:size_limits_tiled (20-layout.lua) the layout clamps a tile
-            // to its window's min size, centred -- it overflows its slot, it
-            // is never squeezed.
+            // program fought the smaller size at ~3600/s (rig). place() gives
+            // such a tile room -- it overflows its slot, it is never squeezed;
+            // this min size keeps a resize (scrolling's, a drag) above it too.
             w->m_ruleApplicator->minSize().set(size, Desktop::Types::PRIORITY_SET_PROP);
             if (!owned(w))
                 g_owned.emplace_back(w);
@@ -132,6 +134,53 @@ namespace ScrollOverview::OwnSizeTile {
             }
             rc<TOnX11Configure>(g_configureHook->m_original)(thisptr, box);
         }
+
+        // `b` grown about its centre to at least `size`, then moved by `by`.
+        CBox grown(const CBox& b, const Vector2D& size, const Vector2D& by) {
+            const double W = std::max(b.w, size.x);
+            const double H = std::max(b.h, size.y);
+            return CBox{b.x - (W - b.w) / 2.0 + by.x, b.y - (H - b.h) / 2.0 + by.y, W, H};
+        }
+
+        // The box a too-small own-size tile is placed through, or `box` itself
+        // when it has the room: grown about its centre until the window's
+        // pseudo box fits in what updatePos keeps of it (a logical box loses
+        // gaps_in on its inner sides; a visual box is used as it is), plus
+        // `extra`. While the tile is on screen the window is kept inside the
+        // work area (a crowded dwindle's corner tile); a tile past the screen's
+        // edge -- the infinite canvas's, a scrolled-away column -- keeps its
+        // window out there with it.
+        Layout::STargetBox roomFor(Layout::ITarget* T, const PHLWINDOW& W, const Layout::STargetBox& box, const Vector2D& extra) {
+            static auto    PGAPSIN = CConfigValue<Config::IComplexConfigValue>("general:gaps_in");
+            const auto*    GAPS    = sc<Config::CCssGapData*>(PGAPSIN.ptr());
+            const bool     VISUAL  = !box.visualBox.empty();
+            const CBox     TILE    = VISUAL ? box.visualBox : box.logicalBox;
+            const Vector2D PSEUDO  = T->pseudoSize();
+            const Vector2D GAPROOM =
+                VISUAL || !GAPS ? Vector2D{} : Vector2D{sc<double>(GAPS->m_left + GAPS->m_right), sc<double>(GAPS->m_top + GAPS->m_bottom)};
+            const Vector2D NEED = PSEUDO + GAPROOM + extra;
+            if (TILE.w >= NEED.x && TILE.h >= NEED.y)
+                return box;
+
+            Vector2D by;
+            if (const auto SPACE = T->space()) {
+                const CBox&      WA    = SPACE->workArea();
+                constexpr double SLACK = 2.0;
+                if (TILE.x >= WA.x - SLACK && TILE.y >= WA.y - SLACK && TILE.x + TILE.w <= WA.x + WA.w + SLACK && TILE.y + TILE.h <= WA.y + WA.h + SLACK) {
+                    // Where updatePos puts it: the pseudo box centred in the
+                    // grown tile, less the border.
+                    const auto     R   = W->getFullWindowReservedArea();
+                    const Vector2D OWN = PSEUDO - (R.topLeft + R.bottomRight);
+                    const Vector2D AT  = TILE.middle() - PSEUDO / 2.0 + R.topLeft;
+                    by = Vector2D{std::clamp(AT.x, WA.x, std::max(WA.x, WA.x + WA.w - OWN.x)), std::clamp(AT.y, WA.y, std::max(WA.y, WA.y + WA.h - OWN.y))} - AT;
+                }
+            }
+            Layout::STargetBox big = box;
+            big.logicalBox         = grown(box.logicalBox, NEED, by);
+            if (VISUAL)
+                big.visualBox = grown(box.visualBox, NEED, by);
+            return big;
+        }
     }
 
     bool fixedSize(const PHLWINDOW& w, Vector2D& size) {
@@ -159,6 +208,30 @@ namespace ScrollOverview::OwnSizeTile {
 
     bool owned(const PHLWINDOW& w) {
         return w && std::ranges::any_of(g_owned, [&](const PHLWINDOWREF& r) { return r && r.lock() == w; });
+    }
+
+    void place(void* target, const Layout::STargetBox& box, uint8_t flags, PlaceFn next) {
+        auto* const T = sc<Layout::ITarget*>(target);
+        const auto  W = T && !g_owned.empty() ? T->window() : PHLWINDOW{};
+        if (!W || T->floating() || !T->isPseudo() || !owned(W) || Fullscreen::controller()->isFullscreen(W)) {
+            next(target, box, flags);
+            return;
+        }
+        const Layout::STargetBox BIG = roomFor(T, W, box, {});
+        next(target, BIG, flags);
+        if (BIG.logicalBox == box.logicalBox && BIG.visualBox == box.visualBox)
+            return;
+        // Squeezed even so (a workspace rule's own gaps, an aspect-ratio pad):
+        // again, with its whole size to spare. Inside DockRoom's ConfigureHold,
+        // so the program hears only the last size.
+        const auto     R   = W->getFullWindowReservedArea();
+        const Vector2D OWN = T->pseudoSize() - (R.topLeft + R.bottomRight);
+        const Vector2D GOT = W->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+        if (GOT.x < OWN.x - 0.5 || GOT.y < OWN.y - 0.5)
+            next(target, roomFor(T, W, box, T->pseudoSize()), flags);
+        // The layout's own tile back (no updatePos): what it and Mosaic read.
+        T->Layout::ITarget::setPositionGlobal(box, flags);
+        trace(std::format("{} placed at its own size in a {:.0f}x{:.0f} tile", W->m_class, box.logicalBox.w, box.logicalBox.h));
     }
 
     void init() {
