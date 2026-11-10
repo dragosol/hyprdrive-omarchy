@@ -101,6 +101,9 @@ override PREFIX := $(HOME)/.local
 # login until the plugin was moved aside (2026-09-15).
 install: hyprdrive.so check
 	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
+ifeq ($(KEEP_DEBUG),)
+	strip --strip-debug $(PREFIX)/lib/hyprdrive/hyprdrive.so
+endif
 	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
 	install -Dm755 ui/bin/agent-run $(PREFIX)/lib/hyprdrive/agent-run
 	bash scripts/install-fragments.sh
