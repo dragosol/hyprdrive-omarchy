@@ -67,6 +67,7 @@ using namespace Hyprutils::String;
 #include "GameApps.hpp"
 #include "FullscreenDesktop.hpp"
 #include "ShowDesktop.hpp"
+#include "OwnSizeTile.hpp"
 #include "Mosaic.hpp"
 #include <hyprland/src/managers/SessionLockManager.hpp>
 
@@ -2652,6 +2653,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     ScrollOverview::XGeometry::installStateRequestFix();
     ScrollOverview::FullscreenGuard::installFocusHook();
     ScrollOverview::ShowDesktop::init();
+    // Super+T on a fixed-size window: a tile at its own size (OwnSizeTile.hpp).
+    ScrollOverview::OwnSizeTile::init();
     // The animation:curve preset onto Hyprland's named house beziers -- only
     // now that the key exists (Config.hpp: an earlier read aborts Hyprland).
     ScrollOverview::Motion::sync();
@@ -2731,6 +2734,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 APICALL EXPORT void PLUGIN_EXIT() {
     // First: no window may stay hidden behind a plugin that is gone.
     ScrollOverview::ShowDesktop::shutdown();
+    ScrollOverview::OwnSizeTile::shutdown();
     // FIRST: Hyprland hands every mosaic desktop back to its default layout and
     // destroys our algorithm objects -- while their code is still mapped.
     ScrollOverview::Intent::shutdown();

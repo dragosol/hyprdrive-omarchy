@@ -411,6 +411,14 @@ halfway, where they turn round on the same spring. Nothing is retiled, so they
 come back to the places they left; switching desktops, opening the overview or
 a new window, or picking one of them in the dock brings them back too.
 
+Super+T, Omarchy's floating toggle, tiles a window that cannot be resized -- a
+Wine login, a game in a window -- at exactly its own size, centred in its tile,
+and floats it again on the next press. Dwindle used to refuse such a window and
+Mosaic stretched it, which a Wine program answers with a storm of resizes
+(Battle.net's login flickering white). A tile smaller than the window lets it
+overflow rather than squeeze it (`misc:size_limits_tiled`, set in
+20-layout.lua; it touches only windows with a min/max size rule).
+
 Tap Super is not a bind (`tap_super`, default true). Three-finger swipe up on
 the trackpad is the same overview, registered as `hl.plugin.hyprdrive.gesture`
 so it follows the fingers; three-finger left/right stay workspace switching.
