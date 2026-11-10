@@ -19,7 +19,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-BAD=$(grep -n '"plugin:scrolloverview:' -- src/*.cpp src/*.hpp 2>/dev/null | grep -v '^src/Compat\.')
+BAD=$(grep -n '"plugin:scrolloverview:' -- src/*/*.cpp src/*/*.hpp 2>/dev/null | grep -v '^src/core/Compat\.')
 if [ -n "$BAD" ]; then
     echo "keycheck: FAIL -- these read a key through the deprecated alias, which"
     echo "silently returns the registered default because nothing ever sets it:"

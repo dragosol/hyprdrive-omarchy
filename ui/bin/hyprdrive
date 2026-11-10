@@ -1,0 +1,816 @@
+#!/usr/bin/env python3
+"""hyprdrive -- the user's command for Hyprdrive itself.
+
+  hyprdrive update                  look for a newer release; offer to install it
+  hyprdrive update --check [--json] only report (the settings' "Update available!")
+  hyprdrive update --refresh        ...asking GitHub again instead of the 6-hour cache
+  hyprdrive update --github         install the newest GitHub release
+  hyprdrive update --approved       install the newest marketplace-approved version (Omarchy)
+  hyprdrive update --rebuild        build and reload the plugin from the version you have
+                                    (the settings are newer than the plugin running)
+  hyprdrive update --yes            do not ask before installing
+  hyprdrive update --terminal [...] run `hyprdrive update [...]` in your terminal
+                                    (the settings' button; exit 3: no terminal found)
+  hyprdrive update --never-check    the settings stop looking for updates on their own
+  hyprdrive update --allow-check    ...and start again
+  hyprdrive version                 the installed version
+  hyprdrive unload | disable        stop Hyprdrive in this session (Hyprland keeps running)
+  hyprdrive load | enable           start it again (and re-apply your plugin settings)
+  hyprdrive reload                  unload, then load: picks up a freshly installed build
+  hyprdrive status                  whether it is loaded
+
+  unload/load last for this session only: the next login starts Hyprdrive
+  as usual. Keep your hands off the trackpad for the second it takes.
+
+ON OMARCHY (the build from dragosol/hyprdrive-omarchy) a release is out on GitHub
+before the Omarchy plugin marketplace approves it. `update` says which version
+the marketplace has approved and whether the newest one is still waiting, and
+installs either: --approved, the version the marketplace reviewed, or --github,
+the newest release without waiting. NATIVE (dragosol/Hyprdrive, plain Hyprland)
+has no marketplace: `update` installs the newest GitHub release.
+
+Installing = the README's own steps in your checkout (the one `make install` ran
+from; a fresh clone in ~/.local/share/hyprdrive/src when there is none): fetch,
+check out the release, build it from scratch, install, reload the plugin. A checkout with local
+changes is left alone.
+
+NETWORK. Only HTTPS to api.github.com and raw.githubusercontent.com (no
+redirects followed, 6 s timeout, every response capped in size), and git
+fetching the repository. The approved version is the marketplace's published
+snapshot, read from its registry.json (asked with the last ETag), never from
+issue text. The settings ask at most once every 6 hours, only while
+they are open; `hyprdrive update --never-check` stops that.
+"""
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# ---- which Hyprdrive this is ------------------------------------------------
+FLAVOR = "omarchy"  # "native" (dragosol/Hyprdrive) or "omarchy" (dragosol/hyprdrive-omarchy)
+
+if FLAVOR == "omarchy":
+    REPO = "dragosol/hyprdrive-omarchy"
+    BRANCH = "new-release"
+    INSTALL_URL = "https://github.com/dragosol/hyprdrive-omarchy#install"
+else:
+    REPO = "dragosol/Hyprdrive"
+    BRANCH = "hyprland-native"
+    INSTALL_URL = "https://github.com/dragosol/Hyprdrive#install"
+PLUGIN_ID = "dragos.hyprdrive"
+MARKET = "omacom/omarchy-plugin-marketplace"
+
+HOME = pathlib.Path(os.environ.get("HOME") or pathlib.Path.home())
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local/state") / "hyprdrive"
+CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME") or HOME / ".cache") / "hyprdrive"
+INSTALL_JSON = STATE / "install.json"  # written by make install (install-fragments.sh)
+NEVER_CHECK = STATE / "no-update-check"
+CHECK_CACHE = CACHE / "update-check.json"
+SNAPSHOT_CACHE = CACHE / "marketplace-snapshot.json"
+# The check cache's format. Before 1.9.40 it held an approval read from issue
+# text; a cache without this exact number is never used, fresh or stale
+# (marketplace review, #11392).
+CACHE_SCHEMA = 2
+CHECK_TTL = 6 * 3600
+CLONE_DIR = HOME / ".local/share/hyprdrive/src"
+
+VERSION_RE = re.compile(r"^\d{1,4}(?:\.\d{1,6}){1,4}$")
+SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+MAX_BODY = 512 * 1024
+# The marketplace's published snapshot (VERIFICATION.md): its registry, ~14 MB,
+# asked with the last ETag so an unchanged one costs a 304.
+REGISTRY_URL = "https://raw.githubusercontent.com/%s/main/registry.json" % MARKET
+REGISTRY_MAX = 64 * 1024 * 1024
+
+
+# ---- versions ---------------------------------------------------------------
+def parse_version(text):
+    """'v1.9.36.7' / '1.9.36' -> (1, 9, 36, 7) / (1, 9, 36); None for anything else."""
+    if not isinstance(text, str):
+        return None
+    v = text.strip()
+    if v[:1] in ("v", "V"):
+        v = v[1:]
+    if not VERSION_RE.match(v):
+        return None
+    return tuple(int(p) for p in v.split("."))
+
+
+def vstr(t):
+    return ".".join(str(p) for p in t) if t else ""
+
+
+def newer(a, b):
+    """a strictly newer than b (missing parts count as 0: 1.9.36 == 1.9.36.0)."""
+    if not a:
+        return False
+    if not b:
+        return True
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
+
+
+# ---- the network: HTTPS to GitHub only, no redirects, bounded ---------------
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # a 3xx surfaces as an HTTPError instead of being followed
+
+
+ALLOWED = ("https://api.github.com/", "https://raw.githubusercontent.com/")
+
+
+def fetch(url, limit=MAX_BODY, etag=None):
+    """The body, or None when `etag` is given and the server says 304."""
+    if not url.startswith(ALLOWED):
+        raise ValueError("refusing to fetch %s" % url)
+    opener = urllib.request.build_opener(_NoRedirect)
+    headers = {"User-Agent": "hyprdrive-update", "Accept": "application/vnd.github+json"}
+    if etag:
+        headers["If-None-Match"] = etag
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with opener.open(req, timeout=6) as r:
+            data = r.read(limit + 1)
+            fetch.etag = r.headers.get("ETag")
+    except urllib.error.HTTPError as e:
+        if etag and e.code == 304:
+            return None
+        raise
+    if len(data) > limit:
+        raise ValueError("response from %s is larger than %d bytes" % (url, limit))
+    return data
+
+
+fetch.etag = None
+
+
+def fetch_json(url, limit=MAX_BODY):
+    return json.loads(fetch(url, limit).decode("utf-8"))
+
+
+# ---- what is installed ------------------------------------------------------
+def install_info():
+    """{'version', 'source', 'prefix'} from make install's record, else the
+    manifest beside this script (a checkout's ui/bin, or a copy of
+    the Omarchy panel with its manifest one folder up)."""
+    info = {}
+    try:
+        d = json.loads(INSTALL_JSON.read_text())
+        if isinstance(d, dict):
+            info = {k: d[k] for k in ("version", "source", "prefix") if isinstance(d.get(k), str)}
+    except (OSError, ValueError):
+        pass
+    here = pathlib.Path(__file__).resolve().parent
+    for mf in (here.parent / "manifest.json", here.parent.parent / "manifest.json"):
+        if "version" in info:
+            break
+        try:
+            v = json.loads(mf.read_text()).get("version")
+            if isinstance(v, str):
+                info["version"] = v
+                if (mf.parent / ".git").exists() and "source" not in info:
+                    info["source"] = str(mf.parent)
+        except (OSError, ValueError):
+            continue
+    return info
+
+
+# ---- what is out there --------------------------------------------------------
+def latest_release():
+    d = fetch_json("https://api.github.com/repos/%s/releases/latest" % REPO)
+    tag = d.get("tag_name") if isinstance(d, dict) else None
+    v = parse_version(tag)
+    if not v:
+        raise ValueError("the latest release has no version tag")
+    return {"version": vstr(v), "tag": "v" + vstr(v),
+            "url": "https://github.com/%s/releases/tag/v%s" % (REPO, vstr(v))}
+
+
+def manifest_version_at(sha):
+    d = fetch_json("https://raw.githubusercontent.com/%s/%s/manifest.json" % (REPO, sha), 64 * 1024)
+    return vstr(parse_version(d.get("version"))) if isinstance(d, dict) else ""
+
+
+def published_snapshot(registry):
+    """The commit the marketplace PUBLISHED for this plugin, from its registry,
+    or None (marketplace review, #11392). Only the registry's own records count:
+    the source for this repository that lists PLUGIN_ID, its
+    `listingValidatedCommit`, and verification evidence bound to that exact
+    commit -- a passed baseline with nothing flagged, or a maintainer review not
+    revoked. Never issue text: an issue body is the author's to edit. Pure."""
+    if not isinstance(registry, dict):
+        return None
+    retired = registry.get("retiredPluginIds")
+    if isinstance(retired, list) and PLUGIN_ID in retired:
+        return None
+    want = "https://github.com/%s" % REPO.lower()
+    for src in registry.get("sources") or []:
+        if not isinstance(src, dict) or not isinstance(src.get("repo"), str):
+            continue
+        if src["repo"].rstrip("/").lower() != want or not isinstance(src.get("plugins"), dict) or PLUGIN_ID not in src["plugins"]:
+            continue
+        sha = src.get("listingValidatedCommit")
+        if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+            return None
+
+        def bound(rec):
+            return (isinstance(rec, dict) and rec.get("commit") == sha and not rec.get("findings")
+                    and PLUGIN_ID in (rec.get("pluginIds") or []) and str(rec.get("repository", "")).lower() == REPO.lower())
+
+        base = src.get("automatedSecurityBaseline")
+        passed = bound(base) and base.get("outcome") == "passed" and not base.get("capabilities")
+        review = src.get("maintainerVerificationReview")
+        revoked = any(isinstance(h, dict) and isinstance(h.get("maintainerVerificationRevocation"), dict)
+                      and h["maintainerVerificationRevocation"].get("commit") == sha
+                      and h["maintainerVerificationRevocation"].get("requestEventId") == (review or {}).get("requestEventId")
+                      for h in src.get("maintainerVerificationReviewHistory") or [])
+        reviewed = bound(review) and not revoked
+        return sha if (passed or reviewed) else None
+    return None
+
+
+def approved_release(revalidate=False):
+    """{'sha', 'version'} for the published snapshot, or None. The registry is
+    asked with the last ETag; an unchanged one reuses the last answer -- for
+    showing it. An install asks with `revalidate`: the whole registry, read and
+    judged again, no cache at all."""
+    cached = {}
+    try:
+        cached = json.loads(SNAPSHOT_CACHE.read_text())
+    except (OSError, ValueError):
+        pass
+    if not isinstance(cached, dict):
+        cached = {}
+    usable = not revalidate and cached.get("schema") == CACHE_SCHEMA and "approved" in cached
+    data = fetch(REGISTRY_URL, REGISTRY_MAX, cached.get("etag") if usable else None)
+    if data is None:
+        return cached.get("approved")
+    # THE REGISTRY'S ETAG, TAKEN NOW (review, 2026-11-09): manifest_version_at
+    # below fetches too, and fetch.etag then holds the manifest's. Cached as the
+    # registry's, it never matched again: every check read the whole ~14 MB.
+    etag = fetch.etag
+    sha = published_snapshot(json.loads(data.decode("utf-8")))
+    approved = {"sha": sha, "version": manifest_version_at(sha)} if sha else None
+    try:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = SNAPSHOT_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "etag": etag, "approved": approved}))
+        tmp.replace(SNAPSHOT_CACHE)
+    except OSError:
+        pass
+    return approved
+
+
+def marketplace():
+    """The version the marketplace published (approved_release: its registry,
+    nothing else) and, for display only, the newest open request for this
+    plugin: its link and the version in its title. A request is never
+    installed from."""
+    approved = approved_release()
+    q = 'repo:%s "%s" in:body is:open' % (MARKET, REPO)
+    url = "https://api.github.com/search/issues?" + urllib.parse.urlencode(
+        {"q": q, "sort": "updated", "order": "desc", "per_page": "10"})
+    d = fetch_json(url, 2 * 1024 * 1024)
+    pending = None
+    for it in (d.get("items", []) if isinstance(d, dict) else []):
+        if not isinstance(it, dict) or it.get("state") != "open" or not isinstance(it.get("number"), int):
+            continue
+        title = it.get("title") if isinstance(it.get("title"), str) else ""
+        m = re.search(r"\b\d+(?:\.\d+){1,4}\b", title)
+        # Built here, never taken from the response.
+        pending = {"issue": it["number"], "url": "https://github.com/%s/issues/%d" % (MARKET, it["number"]),
+                   "version": vstr(parse_version(m.group(0))) if m else ""}
+        break
+    return {"approved": approved, "pending": pending}
+
+
+def check(refresh=False):
+    """The settings' answer, cached for CHECK_TTL. Never raises."""
+    info = install_info()
+    installed = parse_version(info.get("version", ""))
+    out = {"flavor": FLAVOR, "installed": vstr(installed), "installUrl": INSTALL_URL,
+           "disabled": NEVER_CHECK.exists(), "available": False, "latest": None,
+           "marketplace": None, "approvedNewer": False, "error": None}
+    if out["disabled"] and not refresh:
+        return out
+    cached = None
+    try:
+        cached = json.loads(CHECK_CACHE.read_text())
+    except (OSError, ValueError):
+        pass
+    if isinstance(cached, dict) and (cached.get("repo") != REPO or cached.get("schema") != CACHE_SCHEMA):
+        cached = None  # another Hyprdrive's answer (the two share the file), or an older format
+    fresh = (isinstance(cached, dict) and not refresh and time.time() - cached.get("checkedAt", 0) < CHECK_TTL)
+    remote = cached.get("remote") if fresh else None
+    if not remote:
+        remote = {"latest": None, "marketplace": None}
+        try:
+            remote["latest"] = latest_release()
+            if FLAVOR == "omarchy":
+                remote["marketplace"] = marketplace()
+        except (OSError, ValueError, urllib.error.URLError) as e:
+            out["error"] = "could not reach GitHub: %s" % (getattr(e, "reason", None) or e)
+            if isinstance(cached, dict) and cached.get("remote"):
+                remote = cached["remote"]  # stale beats nothing -- to show; update() installs nothing from it
+        else:
+            try:
+                CACHE.mkdir(parents=True, exist_ok=True)
+                tmp = CHECK_CACHE.with_suffix(".tmp")
+                tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "repo": REPO, "checkedAt": time.time(), "remote": remote}))
+                tmp.replace(CHECK_CACHE)
+            except OSError:
+                pass
+    out["latest"] = remote.get("latest")
+    out["marketplace"] = remote.get("marketplace")
+    latest = parse_version((out["latest"] or {}).get("version", ""))
+    approved = parse_version(((out["marketplace"] or {}).get("approved") or {}).get("version", ""))
+    # An unknown installed version is not "out of date": say nothing.
+    out["approvedNewer"] = bool(installed) and newer(approved, installed)
+    out["available"] = bool(installed) and (newer(latest, installed) or out["approvedNewer"])
+    return out
+
+
+# ---- installing ---------------------------------------------------------------
+def run(cmd, cwd=None, env=None):
+    """cmd, shown first; env: variables added to this process's."""
+    print("$ " + " ".join(shlex.quote(c) for c in cmd), flush=True)
+    return subprocess.call(cmd, cwd=cwd, env=dict(os.environ, **env) if env else None)
+
+
+def shell_stale():
+    """Whether the running Omarchy shell is showing an older settings panel
+    than the one installed: hdpanel beside this file decides (shell-stale)."""
+    hd = pathlib.Path(__file__).resolve().parent / "hdpanel"
+    if not hd.is_file():
+        return False
+    try:
+        return subprocess.run([str(hd), "shell-stale"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def restart_shell_if_stale():
+    """THE PANEL IS COMPILED ONCE (user, 2026-11-10: "the setting is not
+    visible"): the Omarchy shell's plugin reload keeps running the panel it
+    loaded at startup (omacom/omarchy#6981), so the shell restarts when the
+    panel installed is newer -- and only then, so a rebuild of the version
+    already running leaves the bar alone. omarchy-restart-shell is Omarchy's
+    own and refuses while the session is locked."""
+    if FLAVOR != "omarchy" or not shell_stale():
+        return
+    if shutil.which("omarchy-restart-shell"):
+        run(["omarchy-restart-shell"])
+    elif shutil.which("omarchy"):
+        run(["omarchy", "restart", "shell"])
+
+
+def git(src, *args, capture=False):
+    if capture:
+        r = subprocess.run(["git", "-C", str(src), *args], capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    return run(["git", "-C", str(src), *args])
+
+
+def ask(prompt, yes):
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Not asking without a terminal: pass --yes.")
+        return False
+    try:
+        return input(prompt + " [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def checkout_dir(info):
+    """The checkout `make install` ran from, if it is this repository's;
+    on Omarchy the marketplace's own copy; else a clone of our own."""
+    candidates = []
+    if info.get("source"):
+        candidates.append(pathlib.Path(info["source"]))
+    if FLAVOR == "omarchy":
+        candidates.append(pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "omarchy/plugins" / PLUGIN_ID)
+    candidates.append(CLONE_DIR)
+    for c in candidates:
+        url = git(c, "remote", "get-url", "origin", capture=True) if (c / ".git").exists() else None
+        if url and REPO.lower() in url.lower().removesuffix(".git"):
+            return c
+    return None
+
+
+def install(target_ref, label, yes, info, rebuild=False):
+    """Check out target_ref, build, install, reload. rebuild: the checkout as
+    it is -- nothing fetched or checked out (`update --rebuild`)."""
+    src = checkout_dir(info)
+    if rebuild and src is None:
+        print("No Hyprdrive checkout found to rebuild from. `hyprdrive update --github` clones and builds the newest release.")
+        return 1
+    if rebuild:
+        # The version checked out now (what the settings are), not the last
+        # one installed.
+        try:
+            label = "the plugin from v%s" % json.loads((src / "manifest.json").read_text())["version"]
+        except (OSError, ValueError, KeyError, TypeError):
+            label = "the plugin"
+    if src is not None:
+        dirty = git(src, "status", "--porcelain", "--untracked-files=no", capture=True)
+        if dirty is None:
+            print("%s is not a usable git checkout." % src)
+            return 1
+        if dirty:
+            print("%s has local changes, so it is left alone:\n%s" % (src, dirty))
+            print("Commit or stash them, then run `hyprdrive update` again.")
+            return 1
+        print("Checkout: %s" % src)
+    else:
+        print("No Hyprdrive checkout found: one will be cloned into %s." % CLONE_DIR)
+    print(("Rebuilding %s." if rebuild else "Installing %s.") % label)
+    # Nothing is fetched, cloned or changed before this answer.
+    if not ask("Go ahead?", yes):
+        print("Nothing changed.")
+        return 0
+    back = None  # where the checkout was, to go back to if the build fails
+    if not rebuild:
+        if src is None:
+            CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
+            if run(["git", "clone", "-b", BRANCH, "https://github.com/%s.git" % REPO, str(CLONE_DIR)]) != 0:
+                return 1
+            src = CLONE_DIR
+        else:
+            back = git(src, "symbolic-ref", "-q", "--short", "HEAD", capture=True) or git(src, "rev-parse", "HEAD", capture=True)
+        if git(src, "fetch", "--tags", "origin") != 0:
+            return 1
+        if SHA_RE.fullmatch(target_ref) and git(src, "fetch", "origin", target_ref) != 0:
+            return 1
+        if git(src, "checkout", "--detach", target_ref) != 0:
+            return 1
+
+    def failed(what):
+        # BUILD FAILED, CHECKOUT GOES BACK (user, 2026-11-09): on Omarchy the
+        # marketplace's checkout IS the settings panel, so a release checked
+        # out and then not built left new settings driving the old plugin --
+        # every change to a newer setting snapped back. Back where it was, the
+        # panel and the plugin it was built with match again.
+        print(what)
+        if back and git(src, "checkout", "-q", back) == 0:
+            print("%s is back where it was, so the settings still match the plugin you have." % src)
+        return 1
+
+    prefix = info.get("prefix") or str(HOME / ".local")
+    so = pathlib.Path(prefix) / "lib/hyprdrive/hyprdrive.so"
+
+    def so_stamp():
+        try:
+            st = so.stat()
+            return (st.st_ino, st.st_mtime_ns)
+        except OSError:
+            return None
+    before = so_stamp()
+
+    def build_failed(what):
+        # A PARTIAL INSTALL IS NOT ROLLED BACK (review, 2026-11-09): make install
+        # copies the new .so before it writes the config fragments, so when a
+        # later step fails the new plugin is already in place. Checking the old
+        # version out then would put old settings over the new plugin -- the very
+        # mismatch failed() exists to prevent -- so say what happened instead.
+        if so_stamp() != before:
+            print("The new plugin was installed, but a later install step failed (see above).")
+            print("Fix that, then run `make install` in %s again." % src)
+            return 1
+        return failed(what)
+
+    # FROM SCRATCH, EVERY TIME (2026-11-09): nothing an older build left in
+    # .build/ is trusted. Its .d files stopped every update across 1.9.50 (the
+    # sources moved into src/), and make does not notice a Hyprland update (the
+    # README's "Version mismatch"), so an incremental build can link objects
+    # made against two Hyprlands. Updates are rare enough to afford it.
+    # make install builds and runs the checks itself: a `make all` before it ran
+    # every check twice (Clement, 2026-11-09).
+    clean = ["make", "clean"]
+    if FLAVOR == "omarchy":
+        # make install restarts the Omarchy shell when the panel changed; here
+        # that waits for the plugin reload below, so the new panel and the new
+        # plugin start together (and a reload not done keeps the old pair).
+        if run(clean, cwd=src) != 0 or run(["make", "install"], cwd=src, env={"HYPRDRIVE_SHELL_RESTART": "0"}) != 0:
+            return build_failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
+    elif run(clean, cwd=src) != 0 or run(["make", "install", "PREFIX=" + prefix], cwd=src) != 0:
+        return build_failed("The build failed. If it says what is missing, install that and run `hyprdrive update` again.")
+    try:
+        CHECK_CACHE.unlink()
+    except OSError:
+        pass
+    if shutil.which("hyprctl") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        # NO RELOAD INTO A REPLACED HYPRLAND (review, 2026-11-09): after a
+        # Hyprland upgrade under this session no plugin can load until the next
+        # login, so the unload below would leave the session without Hyprdrive.
+        # `hyprdrive reload` already refused this; the update did not ask.
+        if hyprland_replaced():
+            print("Installed. Hyprland was updated since you logged in, so the new version starts")
+            print("at your next login; the running one stays until then.")
+            return 0
+        if ask("Reload the plugin now? (Keep your hands off the trackpad for a second.)", yes):
+            run(["hyprctl", "plugin", "unload", str(so)])
+            run(["hyprctl", "plugin", "load", str(so)])
+            run(["hyprctl", "reload"])
+            run(["hyprctl", "configerrors"])
+            restart_shell_if_stale()
+            henv = hypr_env()
+            if henv is not None and not loaded(henv):
+                print("The new plugin did not load (see above). Log out and back in to start it.")
+                return 1
+            print("Done: Hyprdrive %s is running." % label)
+            return 0
+    print("Installed. Log out and back in to start the new version.")
+    return 0
+
+
+# ---- load / unload -------------------------------------------------------------
+def hypr_env():
+    """The environment hyprctl needs: this session's Hyprland, found in
+    $XDG_RUNTIME_DIR/hypr when the shell did not inherit it (an ssh login,
+    a TTY)."""
+    env = dict(os.environ)
+    if env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return env
+    rt = pathlib.Path(env.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()) / "hypr"
+    try:
+        live = [d for d in rt.iterdir() if (d / ".socket.sock").exists()]
+    except OSError:
+        live = []
+    if not live:
+        return None
+    env["HYPRLAND_INSTANCE_SIGNATURE"] = max(live, key=lambda d: d.stat().st_mtime).name
+    env.setdefault("XDG_RUNTIME_DIR", str(rt.parent))
+    return env
+
+
+def hyprctl(env, *args):
+    try:
+        r = subprocess.run(["hyprctl", *args], env=env, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def plugin_so():
+    return pathlib.Path(install_info().get("prefix") or str(HOME / ".local")) / "lib/hyprdrive/hyprdrive.so"
+
+
+def loaded(env):
+    code, out = hyprctl(env, "plugin", "list")
+    return code == 0 and re.search(r"^Plugin hyprdrive\b", out, re.M) is not None
+
+
+def hyprland_replaced():
+    """Hyprland was upgraded under this session: its binary is gone, and a
+    plugin load throws until the next login -- so an unload now could not
+    be undone."""
+    try:
+        pids = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "Hyprland"], capture_output=True, text=True).stdout.split()
+        return any(os.readlink("/proc/%s/exe" % pid).endswith(" (deleted)") for pid in pids)
+    except OSError:
+        return False
+
+
+def cmd_power(verb):
+    if not shutil.which("hyprctl"):
+        print("hyprctl not found: is this a Hyprland session?")
+        return 1
+    env = hypr_env()
+    if env is None:
+        print("No running Hyprland found.")
+        return 1
+    so = plugin_so()
+    on = loaded(env)
+    if verb == "status":
+        print("Hyprdrive is %s (%s)." % ("loaded" if on else "not loaded", so))
+        return 0 if on else 3
+    if verb in ("load", "reload") and not so.exists():
+        print("%s is not there: install Hyprdrive first (make install)." % so)
+        return 1
+    if hyprland_replaced():
+        print("Hyprland was updated since you logged in, and a plugin cannot be loaded into it until you log out and back in.")
+        if verb == "load":
+            return 1
+        print("Leaving Hyprdrive as it is: unloading it now could not be undone this session.")
+        return 1
+    if verb in ("unload", "reload") and on:
+        time.sleep(0.3)
+        code, out = hyprctl(env, "plugin", "unload", str(so))
+        if code != 0 or loaded(env):
+            print("Unloading failed: %s" % out)
+            return 1
+        if verb == "unload":
+            print("Hyprdrive is unloaded. `hyprdrive load` brings it back.")
+            return 0
+    elif verb == "unload":
+        print("Hyprdrive is not loaded.")
+        return 0
+    if verb == "load" and on:
+        print("Hyprdrive is already loaded.")
+        return 0
+    code, out = hyprctl(env, "plugin", "load", str(so))
+    if code != 0 or not loaded(env):
+        print("Loading failed: %s" % out)
+        return 1
+    # Its settings are config keys the plugin registers as it loads: a
+    # config reload hands it the user's values.
+    hyprctl(env, "reload")
+    print("Hyprdrive is loaded.")
+    return 0
+
+
+# ---- the terminal -------------------------------------------------------------
+def terminal_command(argv):
+    """The user's terminal running argv, or None."""
+    if shutil.which("xdg-terminal-exec"):
+        return ["xdg-terminal-exec", *argv]
+    term = os.environ.get("TERMINAL", "")
+    known = [term] if term else []
+    known += ["ghostty", "kitty", "alacritty", "foot", "wezterm", "konsole", "gnome-terminal", "xfce4-terminal", "xterm"]
+    for t in known:
+        exe = shutil.which(t) if t else None
+        if not exe:
+            continue
+        name = os.path.basename(exe)
+        if name == "gnome-terminal":
+            return [exe, "--", *argv]
+        if name == "wezterm":
+            return [exe, "start", "--", *argv]
+        return [exe, "-e", *argv]
+    return None
+
+
+def open_in_terminal(args):
+    me = str(pathlib.Path(__file__).resolve())
+    cmd = terminal_command([me, "update", *args, "--hold"])
+    if not cmd:
+        print("No terminal found.", file=sys.stderr)
+        return 3
+    subprocess.Popen(cmd, start_new_session=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
+
+
+# ---- update -------------------------------------------------------------------
+def describe(r):
+    lines = ["Hyprdrive (%s): installed %s" % (r["flavor"], ("v" + r["installed"]) if r["installed"] else "version unknown")]
+    if r["latest"]:
+        lines.append("Newest release on GitHub: v%s  %s" % (r["latest"]["version"], r["latest"]["url"]))
+    mk = r.get("marketplace")
+    if FLAVOR == "omarchy" and mk is not None:
+        a, p = mk.get("approved"), mk.get("pending")
+        lines.append("Approved on the marketplace: %s" % (("v" + a["version"]) if a and a.get("version") else "nothing yet"))
+        if p:
+            lines.append("Waiting for marketplace approval: %s (%s)" % (("v" + p["version"]) if p.get("version") else "a request", p["url"]))
+    if r["error"]:
+        lines.append(r["error"])
+    return "\n".join(lines)
+
+
+def cmd_update(args):
+    flags = set(a for a in args if a.startswith("--"))
+    unknown = flags - {"--check", "--json", "--refresh", "--github", "--approved", "--yes", "--terminal",
+                       "--never-check", "--allow-check", "--hold", "--rebuild"}
+    if unknown or any(not a.startswith("--") for a in args):
+        print(__doc__)
+        return 2
+    if "--terminal" in flags:
+        return open_in_terminal([a for a in args if a != "--terminal"])
+    rc = update(flags)
+    if "--hold" in flags:
+        try:
+            input("\nPress Enter to close.")
+        except EOFError:
+            pass
+    return rc
+
+
+def update(flags):
+    if "--never-check" in flags:
+        STATE.mkdir(parents=True, exist_ok=True)
+        NEVER_CHECK.write_text("The Hyprdrive settings do not look for updates. `hyprdrive update --allow-check` undoes this.\n")
+        print("The settings will no longer look for updates. `hyprdrive update` still does when you run it.")
+        return 0
+    if "--allow-check" in flags:
+        try:
+            NEVER_CHECK.unlink()
+        except OSError:
+            pass
+        print("The settings will look for updates again (at most every 6 hours, while open).")
+        return 0
+
+    if "--rebuild" in flags:
+        # The plugin, built again from the checkout as it is (the settings'
+        # "Rebuild the plugin": they are newer than the plugin running). No
+        # network: nothing is fetched.
+        return install("", "the plugin", "--yes" in flags, install_info(), rebuild=True)
+
+    checking = "--check" in flags
+    r = check(refresh=("--refresh" in flags) or not checking)
+    if checking:
+        print(json.dumps(r) if "--json" in flags else describe(r))
+        return 0
+    print(describe(r))
+    if r["error"]:
+        # Whatever is shown came from the cache: never install from it.
+        print("Nothing installed: GitHub could not be reached to confirm the versions.")
+        return 1
+    if not r["latest"] and not r["approvedNewer"]:
+        return 0
+    info = install_info()
+    yes = "--yes" in flags
+    installed = parse_version(r["installed"])
+    latest = r["latest"]
+    latest_v = parse_version((latest or {}).get("version", ""))
+    approved = ((r.get("marketplace") or {}).get("approved")) or None
+    approved_v = parse_version((approved or {}).get("version", ""))
+
+    def from_github():
+        return install(latest["tag"], "v%s from GitHub" % latest["version"], yes, info)
+
+    def from_marketplace(label="the version the marketplace approved", ask=yes):
+        # Resolved again from the registry right before building: only the
+        # commit the published snapshot names now is installed, never one from
+        # the check's answer or any cache of it (marketplace review, #11392).
+        try:
+            now = approved_release(revalidate=True)
+        except (OSError, ValueError, urllib.error.URLError) as e:
+            print("Nothing installed: the marketplace's registry could not be read (%s)." % (getattr(e, "reason", None) or e))
+            return 1
+        if not now or not newer(parse_version(now.get("version", "")), installed):
+            print("No marketplace-approved version is newer than yours.")
+            return 0
+        return install(now["sha"], "v%s, %s" % (now["version"], label), ask, info)
+
+    if FLAVOR != "omarchy":
+        if newer(latest_v, installed):
+            return from_github()
+        print("You have the newest version.")
+        return 0
+
+    if "--approved" in flags:
+        if approved and newer(approved_v, installed):
+            return from_marketplace()
+        print("No marketplace-approved version is newer than yours.")
+        return 0
+    if "--github" in flags:
+        if newer(latest_v, installed):
+            return from_github()
+        print("You have the newest release.")
+        return 0
+    if not newer(latest_v, installed) and not newer(approved_v, installed):
+        print("You have the newest version.")
+        return 0
+    print()
+    if newer(approved_v, installed) and not newer(latest_v, approved_v):
+        return from_marketplace()  # the newest release IS the approved one
+    if not newer(approved_v, installed):
+        print("v%s is not approved on the marketplace yet. You can install it straight from GitHub now,"
+              "\nor wait for the marketplace." % latest["version"])
+        return from_github()
+    # Both: an approved version newer than yours, and a newer one still waiting.
+    print("Two choices:\n  a) v%s, the version the marketplace approved\n  g) v%s from GitHub now, without waiting for its approval"
+          % (approved["version"], latest["version"]))
+    if yes or not sys.stdin.isatty():
+        print("Pick one: `hyprdrive update --approved` or `hyprdrive update --github`.")
+        return 0
+    try:
+        pick = input("Install which? [a/g/N] ").strip().lower()
+    except EOFError:
+        pick = ""
+    if pick.startswith("a"):
+        return from_marketplace("approved", True)
+    if pick.startswith("g"):
+        return install(latest["tag"], "v%s from GitHub" % latest["version"], True, info)
+    print("Nothing changed.")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    if argv[0] == "version":
+        print(install_info().get("version") or "unknown")
+        return 0
+    if argv[0] == "update":
+        return cmd_update(argv[1:])
+    verb = {"load": "load", "enable": "load", "unload": "unload", "disable": "unload", "reload": "reload", "status": "status"}.get(argv[0])
+    if verb and len(argv) == 1:
+        return cmd_power(verb)
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

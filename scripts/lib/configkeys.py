@@ -113,7 +113,7 @@ def parse(path):
     # never sees them: expand the table the way the loop does, at the loop.
     if "FlightBlur::SITES" in body:
         import os
-        hdr = open(os.path.join(os.path.dirname(os.path.abspath(path)), "FlightBlur.hpp")).read()
+        hdr = open(os.path.join(os.path.dirname(os.path.abspath(path)), "..", "motion", "FlightBlur.hpp")).read()
         table = hdr.split("inline constexpr SSite SITES[] = {", 1)[1].split("};", 1)[0]
         sites = re.findall(r'\{"(\w+)",\s*"([^"]*)",\s*([0-9.]+)F,\s*"(\w+)"\}', table)
         # Insert where the loop sits: after the key registered just before it.

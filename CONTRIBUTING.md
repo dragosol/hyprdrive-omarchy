@@ -4,6 +4,20 @@ This is a compositor plugin. A mistake here does not throw an exception, it
 takes the user's session down mid-sentence, so the rules below are not style
 preferences — every one of them is a bug that already happened.
 
+## Layout
+
+| folder | what is in it |
+| --- | --- |
+| `src/<area>/` | the plugin, one folder per subsystem (`src/README.md` is the map) |
+| `ui/` | the settings page (QML), its schema, and the command-line back ends in `ui/bin/` |
+| `config/` | the Lua fragments `make install` puts in `~/.config/hypr/hyprdrive/` |
+| `scripts/` | what the build and the installer run, and nothing else |
+| `tests/` | `make check`: host unit tests (`tests/unit/`), tool tests, and the gates that need a compositor (`tests/gates/`, driven by `tests/rig/`) |
+| `docs/` | `CONFIG.md` (generated) and `DEBUG.md` |
+
+Every `#include` is a bare file name: each `src/<area>/` folder is on the include
+path and no two files may share a name (the Makefile stops if they do).
+
 ## Build
 
 ```bash
@@ -11,8 +25,8 @@ make all
 ```
 
 - `all` is the build **and** `make check`: `scripts/symcheck.sh`,
-  `scripts/keycheck.sh`, `gen_keys_table.sh --check`, `gen_schema.py --check`
-  and `scripts/host_tests.sh`, in that order. The symcheck line must read
+  `scripts/keycheck.sh`, `gen_keys_table.sh --check`, `tests/host_tests.sh`
+  and the tool tests in `tests/`, in that order. The symcheck line must read
   `symcheck: OK -- every undefined symbol has a provider (~563 checked)`, and
   the run ends on the host tests rather than on it.
   A `-shared` link never complains about an undefined symbol and `dlopen` binds
@@ -30,13 +44,13 @@ make all
 
 ## Gates
 
-`scripts/gates/<name>/run.sh` runs one; `scripts/suite.sh` runs the table and
-exits nonzero on red. `scripts/MANIFEST.md` maps each gate to the clause it
-defends — update it whenever you add or change one.
+`tests/gates/<name>/run.sh` runs one gate against a headless Hyprland started by
+`tests/rig/headless/hl.sh` (its own user, its own socket; never the session you
+are sitting in). A gate states what it defends in its header.
 
-The suite has a known red baseline. A change is clean when it moves **zero**
-gates, in either direction: a red turning green without you intending it means
-you changed observed behaviour and did not notice.
+A change is clean when it moves **zero** gates, in either direction: a red
+turning green without you intending it means you changed observed behaviour and
+did not notice.
 
 ### Pixel doctrine
 
@@ -71,8 +85,7 @@ the evidence is an A/B against the parent commit:
    cross-build residual only means something below it.
 4. Report the numbers, not the verdict.
 
-`scripts/p8_ab.sh` + `scripts/p8_diff.py` are a worked example, and
-`scripts/drop_table_test.cpp` is the other half of the same idea: pull the
+`tests/unit/drop_table_test.cpp` is the other half of the same idea: pull the
 decision out as a pure function and check it exhaustively off the compositor.
 
 ## Changing behaviour-preserving code
@@ -117,14 +130,16 @@ drifts between the two names is a compat layer that lies. Then:
 ```bash
 scripts/gen_keys_table.sh          # rewrite docs/CONFIG.md
 scripts/gen_keys_table.sh --check  # fails if it is stale
-python3 scripts/gen_schema.py      # rewrite docs/schema.json -- the key count
-python3 scripts/gen_schema.py --check
 ```
 
-**Both** generators, not just the first: a new key changes `docs/schema.json`
-too, `make all` runs `gen_schema.py --check`, and stopping after the CONFIG.md
-line leaves the build red. `docs/EXTENDING.md` covers what else a schema row
-can carry.
+A key the settings page shows is written in two more places, and `make check`
+holds them together:
+
+- `ui/bin/hdpanel`, `KEY_META`: its type, the section whose "Restore defaults"
+  owns it, and the default again. `tests/config_defaults_test.py` fails when
+  that default differs from Config.cpp's.
+- `ui/Schema.js`: the row (label, control, range). `tests/schema_keys_test.py`
+  fails when a row names a key `KEY_META` does not have.
 
 The hand-maintained table this fork inherited had two wrong defaults and covered
 six of them. Do not reintroduce one.
@@ -169,7 +184,7 @@ outside it — `OVERVIEW_SUBMAP_LEGACY` in `OverviewInternal.hpp`, the
 and the legacy thunks, the `scrolloverview-gesture` keyword and the second
 registration pass in `Config.cpp`. When the release expires, delete
 `Compat.{hpp,cpp}` and every one of those, plus the second IPC event,
-`adoptLegacyFavorites()`, and `scripts/gates/x53_compat_alias` — that gate is
+`adoptLegacyFavorites()`, and `tests/gates/x53_compat_alias` — that gate is
 the checklist that proves you got them all.
 
 ## Commits

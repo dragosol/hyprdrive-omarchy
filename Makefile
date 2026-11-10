@@ -17,19 +17,27 @@ OPT ?= -O2
 PKGS := pixman-1 libdrm hyprland pangocairo libinput libudev wayland-server \
         xkbcommon libsystemd gio-2.0 gio-unix-2.0 $(LUA_PC)
 
-CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build -Isrc --embed-dir=. \
+# The sources live in src/<area>/ (one folder per subsystem; see src/README.md).
+# Every #include is still a bare name: each folder is on the include path, and no
+# two files share a name, so the objects stay flat in .build/. --embed-dir=. is
+# for BuiltinIcons.cpp's #embed "assets/icons/...", which resolves from the root.
+SRC_DIRS := $(sort $(dir $(wildcard src/*/*.cpp src/*/*.hpp)))
+SRC_INC  := $(addprefix -I,$(SRC_DIRS:/=))
+SRCS := $(wildcard src/*/*.cpp)
+OBJS := $(addprefix .build/,$(notdir $(SRCS:.cpp=.o)))
+DEPS := $(OBJS:.o=.d)
+vpath %.cpp $(SRC_DIRS)
+ifneq ($(words $(SRCS)),$(words $(sort $(notdir $(SRCS)))))
+$(error two source files share a name: $(filter-out $(sort $(notdir $(SRCS))),$(notdir $(SRCS))) -- objects are flat in .build/)
+endif
+
+CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build $(SRC_INC) --embed-dir=. \
             $(shell pkg-config --cflags $(PKGS))
 LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0 xcb)
 
 ifeq ($(CXX),g++)
     CXXFLAGS += -fno-gnu-unique
 endif
-
-# The sources live in src/ (flat: every #include is a bare name). --embed-dir=. is for
-# BuiltinIcons.cpp's #embed "assets/icons/...", which resolves from the root.
-SRCS := $(wildcard src/*.cpp)
-OBJS := $(SRCS:src/%.cpp=.build/%.o)
-DEPS := $(OBJS:.o=.d)
 
 VERSION_HEADER = .build/PluginVersion.hpp
 VERSION_SCRIPT = scripts/generate-plugin-version.sh
@@ -51,7 +59,7 @@ hyprdrive.so: $(OBJS)
 # dock stacks C: the icons are #embed-ded, so their object depends on them.
 .build/BuiltinIcons.o: $(wildcard assets/icons/*.svg)
 
-.build/%.o: src/%.cpp | $(VERSION_HEADER)
+.build/%.o: %.cpp | $(VERSION_HEADER)
 	@mkdir -p .build
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
@@ -66,16 +74,18 @@ check: hyprdrive.so
 	bash scripts/symcheck.sh
 	bash scripts/keycheck.sh
 	bash scripts/gen_keys_table.sh --check
-	bash scripts/host_tests.sh
-	python3 scripts/manifest_check.py
-	python3 scripts/private_modes_test.py
-	python3 scripts/hdicons_test.py
-	python3 scripts/update_cli_test.py
-	python3 scripts/fragment_test.py
-	python3 scripts/shell_restart_test.py
-	python3 scripts/keybind_editor_test.py
-	python3 scripts/agent_run_test.py
-	python3 scripts/tool_scripts_test.py
+	bash tests/host_tests.sh
+	python3 tests/manifest_check.py
+	python3 tests/schema_keys_test.py
+	python3 tests/config_defaults_test.py
+	python3 tests/private_modes_test.py
+	python3 tests/hdicons_test.py
+	python3 tests/update_cli_test.py
+	python3 tests/fragment_test.py
+	python3 tests/shell_restart_test.py
+	python3 tests/keybind_editor_test.py
+	python3 tests/agent_run_test.py
+	python3 tests/tool_scripts_test.py
 
 # ONE PREFIX ON OMARCHY (review, 2026-11-09): the config fragments, the loader
 # fragment and uninstall all look in ~/.local, so a PREFIX= here moved only the
@@ -92,7 +102,7 @@ override PREFIX := $(HOME)/.local
 install: hyprdrive.so check
 	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
 	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
-	install -Dm755 libexec/agent-run $(PREFIX)/lib/hyprdrive/agent-run
+	install -Dm755 ui/bin/agent-run $(PREFIX)/lib/hyprdrive/agent-run
 	bash scripts/install-fragments.sh
 
 uninstall:
@@ -107,5 +117,6 @@ clean:
 # (2026-11-09). An empty rule for each old name lets make rebuild those objects
 # from src/ instead, the way -MP already treats a header that is gone.
 $(notdir $(SRCS)):
+$(addprefix src/,$(notdir $(wildcard src/*/*.cpp src/*/*.hpp))):
 
 -include $(DEPS)

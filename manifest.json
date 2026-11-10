@@ -11,7 +11,7 @@
   ],
   "activation": "on-demand",
   "entryPoints": {
-    "barWidget": "omarchy-plugin/Panel.qml"
+    "barWidget": "ui/Panel.qml"
   },
   "barWidget": {
     "displayName": "Hyprdrive",

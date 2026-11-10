@@ -8,5 +8,5 @@ __pycache__/
 *.pyc
 
 # gate run artifacts
-scripts/gates/*/last.log
-scripts/gates/*/slate.log
+tests/gates/*/last.log
+tests/gates/*/slate.log

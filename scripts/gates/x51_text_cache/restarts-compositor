@@ -1,2 +1,0 @@
-x51 restarts the compositor on purpose: frame A needs a COLD glyph cache,
-so a changed instance signature across this gate is expected, not a death.

@@ -22,7 +22,7 @@ OUT=$ROOT/docs/CONFIG.md
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
 
-PYTHONPATH=$ROOT/scripts/lib python3 - "$ROOT/src/Config.cpp" > "$TMP" <<'PY'
+PYTHONPATH=$ROOT/scripts/lib python3 - "$ROOT/src/core/Config.cpp" > "$TMP" <<'PY'
 import sys
 from configkeys import parse
 

@@ -271,7 +271,7 @@ to unload the running plugin.
 the overview frame of the Hyprdrive film (`C00-v3t1` at 6.5 s, full 2880×1800) and the panel icon:
 
 ```bash
-make_preview.py --shot overview.png --icon omarchy-plugin/hyprdrive-icon.png \
+make_preview.py --shot overview.png --icon ui/hyprdrive-icon.png \
   --name Hypr --name2 drive --accent '#7aa2f7' \
   --tagline 'Mission control,|a real dock and|Mosaic for Omarchy.' \
   --features 'overview · dock|stacks · mosaic' --shot-width 980 --out preview.png

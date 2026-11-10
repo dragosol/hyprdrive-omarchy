@@ -153,7 +153,7 @@ Prefix: `plugin:hyprdrive:search:`
 | --- | --- | --- | --- | --- |
 | `dictionary` | bool | `false` |  | `define <word>` in the overview search looks the word up on Wiktionary (sends the word to en.wiktionary.org) |
 | `browse_on_click` | bool | `false` |  | clicking the overview's search pill with nothing typed opens the results: the menu, folder shortcuts and AI & Tools rows |
-| `easter_egg` | bool | `true` |  | overview search: type a letter and backspace five times in four seconds and the pill plays search:easter_egg_video |
+| `easter_egg` | bool | `false` |  | overview search: type a letter and backspace five times in four seconds and the pill plays search:easter_egg_video (off unless you turn it on) |
 | `easter_egg_video` | string | `"~/.local/share/hyprdrive/easter-egg.mp4"` |  | the video the overview's easter egg plays, with its sound (needs ffmpeg); a missing file turns the egg off |
 | `translate` | bool | `false` |  | `tr <lang> <text>` in the overview search translates it (sends the text to the translate endpoint) |
 | `translate_endpoint` | string | `""` |  | LibreTranslate-compatible base URL for `tr`; empty uses the free MyMemory API |

@@ -60,12 +60,12 @@ else
     echo "install-fragments: no hyprdrive.so -- run make all first, then re-run this" >&2
 fi
 
-PLUGIN_SRC=$ROOT/omarchy-plugin
+PLUGIN_SRC=$ROOT/ui
 PLUGIN_DEST=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/dragos.hyprdrive
 # INSTALLED FROM THE MARKETPLACE: `omarchy plugin add` cloned this very
 # repository into $PLUGIN_DEST, and its root manifest.json points the shell at
-# omarchy-plugin/Panel.qml. The panel is already installed -- it IS this
-# checkout -- and copying omarchy-plugin/ over the clone's root would dirty it
+# ui/Panel.qml. The panel is already installed -- it IS this
+# checkout -- and copying ui/ over the clone's root would dirty it
 # and break `omarchy plugin update`.
 if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ]; then
     echo "omarchy plugin: $PLUGIN_DEST is this checkout (marketplace install) -- panel already in place"
@@ -137,7 +137,7 @@ fi
 # marketplace install's own checkout, or the copied panel), and install.json --
 # the version, this checkout -- for it to read.
 if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ]; then
-    CLI_SRC=$ROOT/omarchy-plugin/bin/hyprdrive
+    CLI_SRC=$ROOT/ui/bin/hyprdrive
 else
     CLI_SRC=$PLUGIN_DEST/bin/hyprdrive
 fi
@@ -166,7 +166,7 @@ PY
 # `hyprdrive update` sets HYPRDRIVE_SHELL_RESTART=0 and restarts it after the
 # plugin reload instead, so the new panel and the new plugin start together.
 if [ -d "$PLUGIN_DEST" ] && [ "$(cd "$PLUGIN_DEST" && pwd -P)" = "$(cd "$ROOT" && pwd -P)" ]; then
-    PANEL_CTL=$ROOT/omarchy-plugin/bin/hdpanel
+    PANEL_CTL=$ROOT/ui/bin/hdpanel
 else
     PANEL_CTL=$PLUGIN_DEST/bin/hdpanel
 fi
