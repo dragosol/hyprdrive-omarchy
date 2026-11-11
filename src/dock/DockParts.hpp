@@ -1121,6 +1121,40 @@ struct SRow {
     bool oneWindow = false;
 };
 
+// THE PLATE'S MOTION, one implementation for the dock's hover pane (SPanel)
+// and the app menu's row preview (SMenu::SRowPeek; owner, 2026-11-11: "have
+// them transition and fade away the same way they transform/transition when
+// im moving my cursor over to the next app on the dock"). It grows out of the
+// edge it belongs to (the pane: the dock's top; the row preview: the menu's
+// side), decelerating and fading in; given another target it glides there
+// from where it is drawn (PANEL_SLIDE_MS, velocity-matched: B6) while the
+// contents swap at once and ride the box; with nothing wanted it waits
+// PANEL_GRACE_MS (crossing a gap) and then shrinks back to its edge,
+// accelerating and fading out. DockPreview.cpp: plateEnter / plateShow /
+// plateAway / plateBoxAt / plateAlpha.
+struct SPlateTravel {
+    CBox            target;                          // where it settles
+    CBox            from;                            // where the current move started
+    Time::steady_tp moveSince = Time::steadyNow();
+    float           moveMs    = PANEL_IN_MS;
+    bool            decel     = true;                // entrances decelerate, exits do not
+    // B6: moved on while still moving, the plate leaves at the speed it had
+    // (MotionRetarget.hpp); none for a move that started from rest.
+    Hyprdrive::Motion::SBoxKick kick{};
+    bool            out       = false;
+    bool            leaving   = false;               // inside the grace period
+    Time::steady_tp leftAt    = Time::steadyNow();
+    // The plate's fade, on its own clock (user, 2026-10-16: the preview
+    // panel's padding "glitching on overview reveal/close"). It used to ride
+    // the move clock above, and every retarget restarts that clock: the dock
+    // moving under an overview reveal or close retargets the panel every
+    // frame, so the plate sat at alpha 0 -- previews with no plate under them.
+    // In on the entrance, out on the dismissal, from wherever it was; a slide
+    // leaves it alone.
+    Hyprdrive::Motion::STween<Time::steady_tp> fade{.from = 0.F, .to = 1.F, .start = Time::steadyNow()};
+    float                                      fadeMs = PANEL_IN_MS;
+};
+
 struct SMenu {
     MONITORID monitor = MONITOR_INVALID;
 
@@ -1174,19 +1208,20 @@ struct SMenu {
 
     // THE ROW'S PREVIEW (user, 2026-11-11: "if I hover over a context menu row
     // for a particular window ... show me the window preview next to the
-    // row"). One SLitSet over windows (key = peekKey), so a move to another
-    // window's row turns both from the alpha they have; each keeps the row it
-    // was last beside, so one fading out stays where it was.
-    struct SPeek {
-        long         key = -1;
-        PHLWINDOWREF window;
-        CBox         row;
+    // row"), moving as the hover pane does between apps (owner: "it should
+    // behave the same way when i hover another window entry in the context
+    // menu"): ONE plate (SPlateTravel) that glides from row to row. peekWant
+    // is the window of the row the pointer is on (none: the pane's grace,
+    // then it leaves), set by the menu's hover; renderRowPeek moves and draws
+    // it.
+    struct SRowPeek : SPlateTravel {
+        PHLWINDOWREF window;       // shown (the last row's while it waits or leaves)
+        CBox         row;          // the row it is beside
+        bool         left = false; // the side: picked as it appears, kept until it is gone
+        CBox         drawn;        // this frame's plate (debug dockmenu)
     };
-    Hyprdrive::Motion::SLitSet<Time::steady_tp> peek;
-    std::vector<SPeek>                          peeks;
-    static long peekKey(const PHLWINDOW& w) {
-        return w ? static_cast<long>(reinterpret_cast<intptr_t>(w.get())) : Hyprdrive::Motion::SLitSet<Time::steady_tp>::NONE;
-    }
+    PHLWINDOWREF            peekWant;
+    std::optional<SRowPeek> rowPeek;
 
     // Dock stacks A: Rename in Dock turns the menu into a one-line field.
     bool        editing = false;
@@ -1203,12 +1238,9 @@ inline bool menuHoverRunning(const SMenu& menu) {
     const auto RUNNING = [](const Hyprdrive::Motion::STween<Time::steady_tp>& fade) { return elapsedMs(fade.start) < MENU_HOVER_MS + 20.F; };
     return menu.lit.anyRunning(RUNNING) || menu.lift.anyRunning(RUNNING);
 }
-// The row preview's fade: the hover pane's own -- in over PANEL_IN_MS,
-// decelerating; out over PANEL_OUT_MS, accelerating -- from where it was.
-float peekEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade);
-// Frames while a row preview is fading, or shown at all (it is live).
+// Frames while the row preview is on screen at all (it is live, and moves).
 inline bool menuPeekShowing(const SMenu& menu) {
-    return std::ranges::any_of(menu.peeks, [&](const SMenu::SPeek& p) { return menu.peek.level(p.key, peekEased) > 0.001F; });
+    return menu.rowPeek.has_value();
 }
 // Whether the menu's row buttons answer the pointer at `point` (its render
 // px); clears an expired guard.
@@ -1236,7 +1268,7 @@ extern std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor)
 extern std::vector<SRow> buildWindowRows(const SItem& item, const PHLWINDOW& window, const PHLMONITOR& monitor);
 // One window's preview beside a menu row, as the hover pane draws a cell
 // (DockPreview.cpp). Never hit-tested: nothing records where it is.
-extern void renderRowPeek(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& row, const CBox& menu, float alpha, const Time::steady_tp& now);
+extern void renderRowPeek(PHLMONITOR monitor, SMenu& menu, const CBox& plate, bool live, const Time::steady_tp& now);
 extern std::vector<SRow> infoRows(const SItem& item);
 extern void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row);
 extern void renderMenu(PHLMONITOR monitor, const SLayout& layout);
@@ -1448,11 +1480,12 @@ namespace DockDetail {
 constexpr float                                            PREVIEWING_MS = 250.F;
 extern std::vector<std::pair<PHLWINDOWREF, Time::steady_tp>> g_previewed;
 
+
 // The panel GROWS OUT OF THE ICON rather than fading in on the spot -- the same
 // trick X54's flight uses, and it is why this needs no alpha on the window
 // content: renderOverviewWindow has no alpha parameter, but it scales, so the
 // entrance is a box lerp and the previews ride it.
-struct SPanel {
+struct SPanel : SPlateTravel {
     std::string     wmClass;
     std::string     desktopId;
     // Non-empty when the panel belongs to the SCRATCHPAD's slot rather than an
@@ -1467,27 +1500,8 @@ struct SPanel {
     // (user, 2026-09-14). Only this monitor touches it now.
     MONITORID       monitor = MONITOR_INVALID;
     CBox            anchor;                          // the icon it belongs to
-    CBox            target;                          // where it settles
-    CBox            from;                            // where the current move started
-    Time::steady_tp moveSince = Time::steadyNow();
-    float           moveMs    = PANEL_IN_MS;
-    bool            decel     = true;                // entrances decelerate, exits do not
-    // B6: moved on while still moving, the plate leaves at the speed it had
-    // (MotionRetarget.hpp); none for a move that started from rest.
-    Hyprdrive::Motion::SBoxKick kick{};
-    bool            out       = false;
-    bool            leaving   = false;               // inside the grace period
-    Time::steady_tp leftAt    = Time::steadyNow();
-    // The plate's fade, on its own clock (user, 2026-10-16: the preview
-    // panel's padding "glitching on overview reveal/close"). It used to ride
-    // the move clock above, and every retarget restarts that clock: the dock
-    // moving under an overview reveal or close retargets the panel every
-    // frame, so the plate sat at alpha 0 -- previews with no plate under them.
-    // In on the entrance, out on the dismissal, from wherever it was; a slide
-    // leaves it alone.
-    Hyprdrive::Motion::STween<Time::steady_tp> fade{.from = 0.F, .to = 1.F, .start = Time::steadyNow()};
-    float                                      fadeMs = PANEL_IN_MS;
 };
+
 
 // How far a parked window's preview is darkened, and the label's point size.
 // The dim is deep enough to read as "not here" against the live thumbnails

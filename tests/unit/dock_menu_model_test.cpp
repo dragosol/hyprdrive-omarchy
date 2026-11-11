@@ -151,6 +151,9 @@ int main() {
         CHECK(!N.left && N.box.x == 900.0 - 12.0 - 240.0);
         // A row near the top or bottom: clamped, not off the screen.
         CHECK(peekPlacement(MENU, 20.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.y == 12.0);
+        // a side asked for is kept, even where the other would be picked
+        CHECK(peekPlacement(MENU, 500.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0, 1).left);
+        CHECK(!peekPlacement(EDGE, 500.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0, 0).left);
         CHECK(peekPlacement(MENU, 1075.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.y == 1080.0 - 12.0 - 150.0);
         // Guarded.
         CHECK(peekPlacement(MENU, std::numeric_limits<double>::quiet_NaN(), 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.w == 0);

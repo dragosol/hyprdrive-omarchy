@@ -170,7 +170,9 @@ namespace Hyprdrive::Dock::MenuModel {
         SRect box;
         bool  left = false;
     };
-    inline SPeekPlace peekPlacement(const SRect& menu, double rowCenterY, double w, double h, double gap, double edge, double monW, double monH) {
+    // `side`: -1 picks (right, left when only that has room); 0 right, 1 left
+    // -- a preview already showing keeps its side while it travels.
+    inline SPeekPlace peekPlacement(const SRect& menu, double rowCenterY, double w, double h, double gap, double edge, double monW, double monH, int side = -1) {
         for (const double V : {menu.x, menu.y, menu.w, menu.h, rowCenterY, w, h, gap, edge, monW, monH})
             if (!std::isfinite(V))
                 return {};
@@ -179,7 +181,7 @@ namespace Hyprdrive::Dock::MenuModel {
         const double RIGHTX = menu.x + menu.w + gap, LEFTX = menu.x - gap - w;
         const double ROOMR = monW - edge - (RIGHTX + w), ROOML = LEFTX - edge;
         SPeekPlace   out;
-        out.left  = ROOMR < 0.0 && ROOML > ROOMR;
+        out.left  = side < 0 ? ROOMR < 0.0 && ROOML > ROOMR : side == 1;
         double x  = out.left ? LEFTX : RIGHTX;
         x         = std::clamp(x, edge, std::max(edge, monW - edge - w));
         double y  = std::clamp(rowCenterY - h / 2.0, edge, std::max(edge, monH - edge - h));

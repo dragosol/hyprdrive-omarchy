@@ -181,40 +181,100 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
     }
 }
 
+bool sameBox(const CBox& a, const CBox& b);
+
+// THE PLATE'S MOTION (SPlateTravel, DockParts.hpp): the hover pane's, and the
+// app menu's row preview's -- one implementation.
+//
 // Entrances decelerate, exits accelerate (the house rule), from wherever the
 // fade was when it turned.
-static float panelAlpha(const SPanel& panel) {
-    const float T = std::clamp(elapsedMs(panel.fade.start) / std::max(1.F, panel.fadeMs), 0.F, 1.F);
-    const float E = houseEase(panel.fade.rising(), T);
-    return panel.fade.at(E);
+static float plateAlpha(const SPlateTravel& plate) {
+    const float T = std::clamp(elapsedMs(plate.fade.start) / std::max(1.F, plate.fadeMs), 0.F, 1.F);
+    const float E = houseEase(plate.fade.rising(), T);
+    return plate.fade.at(E);
+}
+
+// How far the current move is, 0..1.
+static float plateT(const SPlateTravel& plate) {
+    return std::clamp(elapsedMs(plate.moveSince) / std::max(1.F, plate.moveMs), 0.F, 1.F);
 }
 
 // Where the plate is drawn at progress T of its move: the move's curve, plus
 // its kick when it was turned while moving.
-static CBox panelBoxAt(const SPanel& panel, float t) {
-    return Motion::withBoxKick(Motion::lerp(panel.from, panel.target, houseEase(panel.decel, t)), panel.kick, t);
+static CBox plateBoxAt(const SPlateTravel& plate, float t) {
+    return Motion::withBoxKick(Motion::lerp(plate.from, plate.target, houseEase(plate.decel, t)), plate.kick, t);
 }
 
 // A new move for the plate, from where it is drawn, at the speed it had (B6).
 constexpr double PANEL_CARRY_PX = 16.0;
-static void panelMove(SPanel& panel, const CBox& target, float ms, bool decel, const Time::steady_tp& now) {
-    const float T     = std::clamp(elapsedMs(panel.moveSince) / std::max(1.F, panel.moveMs), 0.F, 1.F);
-    const CBox  CUR   = panelBoxAt(panel, T);
-    const bool  OLDD  = panel.decel;
+static void plateMove(SPlateTravel& plate, const CBox& target, float ms, bool decel, const Time::steady_tp& now) {
+    const float T     = plateT(plate);
+    const CBox  CUR   = plateBoxAt(plate, T);
+    const bool  OLDD  = plate.decel;
     const auto  OLDC  = [OLDD](float t) { return houseEase(OLDD, t); };
     const auto  NEWC  = [decel](float t) { return houseEase(decel, t); };
-    panel.kick        = Motion::matchBoxKick2(OLDC, NEWC, panel.from, panel.target, panel.kick, T, static_cast<double>(std::max(1.F, ms)) / std::max(1.F, panel.moveMs), CUR,
+    plate.kick        = Motion::matchBoxKick2(OLDC, NEWC, plate.from, plate.target, plate.kick, T, static_cast<double>(std::max(1.F, ms)) / std::max(1.F, plate.moveMs), CUR,
                                               target, Motion::SKickLimits{.legMs = std::max(1.F, ms), .maxCarry = PANEL_CARRY_PX, .arrive = 2.0});
-    panel.from        = CUR;
-    panel.target      = target;
-    panel.moveSince   = now;
-    panel.moveMs      = ms;
-    panel.decel       = decel;
+    plate.from        = CUR;
+    plate.target      = target;
+    plate.moveSince   = now;
+    plate.moveMs      = ms;
+    plate.decel       = decel;
 }
 
-static void panelFade(SPanel& panel, float to, float ms, const Time::steady_tp& now) {
-    panel.fade.retarget(panelAlpha(panel), to, now);
-    panel.fadeMs = ms;
+static void plateFade(SPlateTravel& plate, float to, float ms, const Time::steady_tp& now) {
+    plate.fade.retarget(plateAlpha(plate), to, now);
+    plate.fadeMs = ms;
+}
+
+// Appears: rises off its edge (`origin`), decelerating into `target`, fading in.
+static void plateEnter(SPlateTravel& plate, const CBox& origin, const CBox& target, const Time::steady_tp& now) {
+    plate.from      = origin;
+    plate.target    = target;
+    plate.moveSince = now;
+    plate.moveMs    = PANEL_IN_MS;
+    plate.decel     = true;
+    plate.kick      = {};
+    plate.out       = false;
+    plate.leaving   = false;
+    plate.fade      = {.from = 0.F, .to = 1.F, .start = now};
+    plate.fadeMs    = PANEL_IN_MS;
+}
+
+// Wanted at `target`: caught mid-dismissal, or moved to another target, the
+// move restarts from WHERE IT IS, which is what makes it read as one plate
+// following the pointer rather than two swapping.
+static void plateShow(SPlateTravel& plate, const CBox& target, const Time::steady_tp& now) {
+    plate.leaving = false;
+    if (plate.out || !sameBox(plate.target, target)) {
+        if (plate.out)
+            plateFade(plate, 1.F, PANEL_IN_MS, now);
+        plateMove(plate, target, plate.out ? PANEL_IN_MS : PANEL_SLIDE_MS, true, now);
+        plate.out = false;
+    }
+}
+
+// Wanted nowhere: the grace (`grace` false: none), then it shrinks back to its
+// edge (`origin`), accelerating, fading out. Wall-clock, not animElapsedMs: at
+// anim_scale 0 that clock is already finished, so leaving an icon for the 8px
+// gap above the pill dismissed the panel in the same frame and the dock hid
+// under the previews.
+static void plateAway(SPlateTravel& plate, const CBox& origin, bool grace, const Time::steady_tp& now) {
+    if (!plate.out && !plate.leaving) {
+        plate.leaving = true;
+        plate.leftAt  = now;
+    }
+    if (plate.leaving && (!grace || Hyprdrive::Config::realElapsedMs(plate.leftAt) >= PANEL_GRACE_MS)) {
+        plateMove(plate, origin, PANEL_OUT_MS, false, now);
+        plateFade(plate, 0.F, PANEL_OUT_MS, now);
+        plate.out     = true;
+        plate.leaving = false;
+    }
+}
+
+// Gone: dismissed, and the shrink is over.
+static bool plateGone(const SPlateTravel& plate) {
+    return plate.out && plateT(plate) >= 1.F;
 }
 
 // [FLIGHT] dismissHoverPanelNow moved out of the anonymous namespace -- the
@@ -589,41 +649,25 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         if (!g_hover.panel) {
             // Rises off the dock's top edge, decelerating into place. Growing
             // from the icon box itself painted the live thumbnails over the pill.
-            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .scratchpadName = scratchpadName, .monitor = monitor->m_id, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true, .fade = {.from = 0.F, .to = 1.F, .start = now}};
+            g_hover.panel = SPanel{};
+            g_hover.panel->wmClass        = wmClass;
+            g_hover.panel->desktopId      = desktopId;
+            g_hover.panel->scratchpadName = scratchpadName;
+            g_hover.panel->monitor        = monitor->m_id;
+            g_hover.panel->anchor         = anchor;
+            plateEnter(*g_hover.panel, panelRiseOrigin(layout, anchor), TARGET, now);
         } else {
-            g_hover.panel->leaving = false;
             g_hover.panel->wmClass = wmClass;
             g_hover.panel->desktopId = desktopId;
             g_hover.panel->scratchpadName = scratchpadName;
             g_hover.panel->anchor  = anchor;
-
-            // Caught mid-dismissal, or moved to another icon: in both cases the
-            // move restarts from WHERE IT IS, which is what makes it read as one
-            // panel following the pointer rather than two panels swapping.
-            if (g_hover.panel->out || !sameBox(g_hover.panel->target, TARGET)) {
-                if (g_hover.panel->out)
-                    panelFade(*g_hover.panel, 1.F, PANEL_IN_MS, now);
-
-                panelMove(*g_hover.panel, TARGET, g_hover.panel->out ? PANEL_IN_MS : PANEL_SLIDE_MS, true, now);
-                g_hover.panel->out = false;
-            }
+            // Moved to another icon, or caught mid-dismissal: one panel
+            // following the pointer (plateShow).
+            plateShow(*g_hover.panel, TARGET, now);
         }
     } else if (g_hover.panel) {
-        if (!g_hover.panel->out && !g_hover.panel->leaving) {
-            g_hover.panel->leaving = true;
-            g_hover.panel->leftAt  = now;
-        }
-
         // The grace expires: shrink back to the dock's top edge, accelerating.
-        // Wall-clock, not animElapsedMs: at anim_scale 0 that clock is already
-        // finished, so leaving an icon for the 8px gap above the pill dismissed
-        // the panel in the same frame and the dock hid under the previews.
-        if (g_hover.panel->leaving && Hyprdrive::Config::realElapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
-            panelMove(*g_hover.panel, panelRiseOrigin(layout, g_hover.panel->anchor), PANEL_OUT_MS, false, now);
-            panelFade(*g_hover.panel, 0.F, PANEL_OUT_MS, now);
-            g_hover.panel->out       = true;
-            g_hover.panel->leaving   = false;
-        }
+        plateAway(*g_hover.panel, panelRiseOrigin(layout, g_hover.panel->anchor), true, now);
 
         // The panel keeps drawing the LAST app's windows while it dismisses --
         // the pointer has already left, so nothing else names them.
@@ -638,14 +682,14 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         return;
     }
 
-    const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
-    if (g_hover.panel->out && T >= 1.F) {
+    const float T = plateT(*g_hover.panel);
+    if (plateGone(*g_hover.panel)) {
         g_hover.panel.reset();
         forgetPanelGeometry();
         return;
     }
 
-    CBox        DRAWN = panelBoxAt(*g_hover.panel, T);
+    CBox        DRAWN = plateBoxAt(*g_hover.panel, T);
     const float SCALE = std::max(monitor->m_scale, 0.01F);
     // Never let the growing plate (or its live window thumbnails) eat the pill.
     // The rise origin sits on the dock's top edge; this is the belt.
@@ -660,7 +704,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
 
     // The plate fades with the growth so the frost does not slam on at full
     // strength over the icon it is still the size of.
-    const float ALPHA   = panelAlpha(*g_hover.panel);
+    const float ALPHA   = plateAlpha(*g_hover.panel);
     // CONCENTRIC CORNERS (user, 2026-09-30: "rounding on the app preview only
     // goes so far... an upper limit of 24px outer border radius with an inner
     // border radius to match on the actual window preview"). The plate follows
@@ -832,25 +876,103 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
 // row (MenuModel::peekPlacement). It is drawn and nothing else: no box of it is
 // recorded anywhere a pointer test reads, so it can never be hovered, hold the
 // menu open or reach past the menu's own hit area.
-void renderRowPeek(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& row, const CBox& menu, float alpha, const Time::steady_tp& now) {
-    if (!monitor || !window || !window->m_isMapped || alpha <= 0.001F || !Stacks::drawableBox(row) || !Stacks::drawableBox(menu))
+//
+// IT MOVES AS THE PANE DOES BETWEEN APPS (owner, 2026-11-11: "have them
+// transition and fade away the same way they transform/transition when im
+// moving my cursor over to the next app on the dock"): ONE plate, the pane's
+// own motion (SPlateTravel: plateEnter / plateShow / plateAway). The first row
+// grows it out of the menu's side, decelerating and fading in; another
+// window's row glides it there (PANEL_SLIDE_MS, its size morphing to that
+// window's) with the new window inside at once, fitted to the moving plate as
+// the pane fits its cells; a gap between rows or a non-window row is the
+// pane's grace (PANEL_GRACE_MS), and past it the plate shrinks back into the
+// menu's side, accelerating and fading out. The SIDE is picked when it
+// appears and kept until it is gone: the menu does not move between rows, so
+// only a wider window could tip it, and a side change mid-air would fly the
+// plate across the menu. The closing menu (not `live`) sends it away at once.
+void renderRowPeek(PHLMONITOR monitor, SMenu& menu, const CBox& plate, bool live, const Time::steady_tp& now) {
+    auto& P = menu.rowPeek;
+    if (!monitor || !Stacks::drawableBox(plate)) {
+        P.reset();
         return;
+    }
     const float SCALE = std::max(monitor->m_scale, 0.01F);
-    const float CELLH = panelRows(monitor, {window}).cellH;
-    const float CELLW = CELLH * previewAspect(window);
     const float PAD   = PANEL_PAD * SCALE;
-    const auto  PLACE = MenuModel::peekPlacement({menu.x, menu.y, menu.width, menu.height}, row.y + row.height / 2.0, CELLW + 2.F * PAD, CELLH + 2.F * PAD,
-                                                 PANEL_GAP * SCALE, std::round(MENU_EDGE_MARGIN * SCALE), monitor->m_size.x * SCALE, monitor->m_size.y * SCALE);
-    const CBox PLATE{PLACE.box.x, PLACE.box.y, PLACE.box.w, PLACE.box.h};
-    const CBox CELL = CBox{PLATE.x + PAD, PLATE.y + PAD, PLATE.width - 2.0 * PAD, PLATE.height - 2.0 * PAD}.round();
-    if (!Stacks::drawableBox(PLATE) || !Stacks::drawableBox(CELL))
+    // The edge it grows out of and shrinks back into: the menu's side, the
+    // row's height (the pane's: the dock's top, the icon's width).
+    const auto ORIGIN = [&](const CBox& row, bool left) {
+        CBox o{left ? plate.x - 1.0 : plate.x + plate.width, row.y, 1.0, std::max(1.0, row.height)};
+        return o.round();
+    };
+    const auto ROWOF = [&](const PHLWINDOW& w) {
+        const auto R = std::ranges::find_if(menu.rows, [&](const SRow& r) { return r.kind == ERow::Window && r.window.lock() == w; });
+        return R != menu.rows.end() ? R->box : CBox{};
+    };
+    // Where the plate settles beside `row` for `w`, on `side` (-1: pick).
+    const auto PLACE = [&](const PHLWINDOW& w, const CBox& row, int side) {
+        const float CELLH = panelRows(monitor, {w}).cellH;
+        const float CELLW = CELLH * previewAspect(w);
+        return MenuModel::peekPlacement({plate.x, plate.y, plate.width, plate.height}, row.y + row.height / 2.0, CELLW + 2.F * PAD, CELLH + 2.F * PAD, PANEL_GAP * SCALE,
+                                        std::round(MENU_EDGE_MARGIN * SCALE), monitor->m_size.x * SCALE, monitor->m_size.y * SCALE, side);
+    };
+
+    const auto WANT = live ? menu.peekWant.lock() : PHLWINDOW{};
+    const CBox WROW = WANT && WANT->m_isMapped ? ROWOF(WANT) : CBox{};
+    if (WANT && Stacks::drawableBox(WROW)) {
+        const auto PL = PLACE(WANT, WROW, P && !P->out ? (P->left ? 1 : 0) : -1);
+        const CBox TARGET{PL.box.x, PL.box.y, PL.box.w, PL.box.h};
+        if (Stacks::drawableBox(TARGET)) {
+            if (!P || plateGone(*P)) {
+                P = SMenu::SRowPeek{};
+                P->left = PL.left;
+                plateEnter(*P, ORIGIN(WROW, PL.left), TARGET, now);
+            } else {
+                if (P->out)
+                    P->left = PL.left; // caught shrinking into its edge: that side again
+                plateShow(*P, TARGET, now);
+            }
+            P->window = WANT;
+            P->row    = WROW;
+        }
+    } else if (P) {
+        // The last row's window, where it was (its row followed while it is
+        // still in the list: a list that scrolls or reflows).
+        if (const auto W = P->window.lock(); W && live)
+            if (const CBox R = ROWOF(W); Stacks::drawableBox(R))
+                P->row = R;
+        plateAway(*P, ORIGIN(P->row, P->left), live, now);
+    }
+    if (!P)
+        return;
+    const auto W = P->window.lock();
+    if (!W || !W->m_isMapped || plateGone(*P)) {
+        P.reset();
+        return;
+    }
+
+    CBox DRAWN = plateBoxAt(*P, plateT(*P));
+    DRAWN.round();
+    P->drawn = DRAWN;
+    if (DRAWN.width < 2.0 || DRAWN.height < 2.0)
+        return;
+    // The window fitted to the plate on screen this frame, as the pane fits
+    // its cells: the settled cell scaled by the smaller of the two fits,
+    // centred, riding the box at full strength while the plate fades.
+    const float CELLH = panelRows(monitor, {W}).cellH;
+    const float CELLW = CELLH * previewAspect(W);
+    const float FIT   = std::min((sc<float>(DRAWN.height) - 2.F * PAD) / std::max(CELLH, 1.F), (sc<float>(DRAWN.width) - 2.F * PAD) / std::max(CELLW, 1.F));
+    if (FIT <= 0.F || CELLH * FIT < 1.F)
+        return;
+    const CBox CELL = CBox{DRAWN.x + (DRAWN.width - CELLW * FIT) / 2.0, DRAWN.y + (DRAWN.height - CELLH * FIT) / 2.0, CELLW * FIT, CELLH * FIT}.round();
+    if (!Stacks::drawableBox(CELL))
         return;
     // CONCENTRIC CORNERS, the pane's: the plate follows decoration:rounding
     // out by its padding, the window inside it that padding less.
     const float OUTERL = std::clamp(sc<float>(Hyprdrive::Config::themeRounding()) + PANEL_PAD, PANEL_RADIUS, PANEL_RADIUS_MAX);
     const float INNERL = std::clamp(std::min(sc<float>(Hyprdrive::Config::themeRounding()), OUTERL - PANEL_PAD), 0.F, OUTERL);
-    frostedPlate(monitor, PLATE, sc<int>(std::round(OUTERL * SCALE)), alpha, {}, Hyprdrive::Config::themeRoundingPower(), true);
-    drawPreviewCell(monitor, window, CELL, alpha, alpha, INNERL, true, true, 0xD1, now);
+    const float ALPHA  = plateAlpha(*P);
+    frostedPlate(monitor, DRAWN, sc<int>(std::round(OUTERL * SCALE)), ALPHA, {}, Hyprdrive::Config::themeRoundingPower(), true);
+    drawPreviewCell(monitor, W, CELL, ALPHA, 1.F, INNERL, true, true, 0xD1, now);
 }
 
 // Y1. The autohide's question, answered against the plate on screen. Declared

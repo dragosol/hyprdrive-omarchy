@@ -877,9 +877,11 @@ std::string debugMenuReport(PHLMONITOR monitor) {
             if (B.kind != ERow::Separator && !B.box.empty())
                 out += std::format(" | {} {}", B.label, BOX(B.box));
     }
-    for (const auto& P : g_menu->peeks)
-        if (const auto W = P.window.lock())
-            out += std::format("\n peek \"{}\" {:.2f}{}", W->m_title, g_menu->peek.level(P.key, peekEased), P.key == g_menu->peek.lit ? " lit" : "");
+    // The row preview: its window, the plate as drawn this frame, its side and
+    // state (shown / waiting out the grace / leaving).
+    if (const auto& P = g_menu->rowPeek; P)
+        if (const auto W = P->window.lock())
+            out += std::format("\n peek \"{}\" {} {}{}", W->m_title, BOX(P->drawn), P->left ? "left" : "right", P->out ? " (out)" : P->leaving ? " (grace)" : "");
     return out + icons;
 }
 
