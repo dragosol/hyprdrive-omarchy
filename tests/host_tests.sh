@@ -37,6 +37,9 @@
 #                     it would put two desktops on one number or one below 1
 #                     (shift(0, -1)); heal pulls apart desktops sharing one;
 #                     compactMoves numbers the desktops with windows 1..N.
+#   strip_cleanup_test  StripCleanupModel.hpp: the strip's Clean Up button --
+#                     when it shows, its place and glide, the bump under it,
+#                     and what a click removes through compactMoves.
 #   row_test          Row.hpp / RowsFile.hpp: a monitor's row of desktops (the
 #                     implicit row, an Omarchy block and its overflow) and the
 #                     parse of Omarchy's monitor-workspaces(-merged) files.
@@ -162,6 +165,7 @@ run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
 run row_test tests/unit/row_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
+run strip_cleanup_test tests/unit/strip_cleanup_test.cpp
 run desktop_rows_test tests/unit/desktop_rows_test.cpp
 run fullscreen_book_test tests/unit/fullscreen_book_test.cpp
 run fullscreen_carry_test tests/unit/fullscreen_carry_test.cpp
