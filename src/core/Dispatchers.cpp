@@ -1,4 +1,5 @@
 #include "PluginParts.hpp"
+#include "HoverTarget.hpp"
 using namespace PluginDetail;
 
 namespace PluginDetail {
@@ -149,8 +150,20 @@ SDispatchResult onMinimizeDispatcher(std::string arg) {
     // was. Windows minimized from other desktops stay in the dock, and with
     // nothing to minimize or restore the press does nothing, quietly: the old
     // "no focused window" error was the Lua runtime error.
+    // SUPER+H ON A HOVERED WINDOW (owner, 2026-11-11: the Super+key actions
+    // follow the hover target, HoverActions.hpp): the overview tile or dock
+    // preview under the pointer is minimized instead of the focused window --
+    // or, a minimized window's preview, brought back. This dispatcher is the
+    // plugin's own code (SOwnCall), so it asks the rule itself.
     const auto MONITOR = Desktop::focusState()->monitor();
-    const auto WINDOW  = Desktop::focusState()->window();
+    auto       WINDOW  = Desktop::focusState()->window();
+    if (const auto HOVERED = Hyprdrive::HoverTarget::window(); Hyprdrive::HoverTarget::retarget(false, false, false, !!HOVERED, HOVERED == WINDOW)) {
+        if (Hyprdrive::Minimize::isMinimized(HOVERED)) {
+            Hyprdrive::Dock::restoreWithFlight(MONITOR, HOVERED);
+            return {};
+        }
+        WINDOW = HOVERED;
+    }
     if (WINDOW && WINDOW->m_workspace && !Hyprdrive::Minimize::isStash(WINDOW->m_workspace)) {
         Hyprdrive::Dock::minimizeWithFlight(MONITOR, WINDOW);
         return {};

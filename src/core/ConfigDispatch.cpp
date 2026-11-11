@@ -1,5 +1,6 @@
 #include "ConfigParts.hpp"
 #include "Rows.hpp"
+#include "HoverActions.hpp"
 using namespace ConfigDetail;
 
 namespace {
@@ -176,7 +177,12 @@ int runDispatcherNow(lua_State* L, const SDispatcher& dispatcher, const char* ar
     if (!dispatcher.dispatcher)
         return luaL_error(L, "%s: dispatcher is not registered", dispatcher.name.data());
 
-    const auto result = dispatcher.dispatcher(arg);
+    // The plugin's own code: no action it calls is given the hover target
+    // (HoverActions::SOwnCall; it names the window it means).
+    const auto result = [&] {
+        Hyprdrive::HoverActions::SOwnCall own;
+        return dispatcher.dispatcher(arg);
+    }();
     if (!result.success)
         return luaL_error(L, "%s: %s", dispatcher.name.data(), result.error.c_str());
 
@@ -361,13 +367,19 @@ namespace Hyprdrive::Config {
 using namespace ConfigPart;
 
 void registerDispatcher(const std::string& name, TDispatcher dispatcher) {
-    HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, std::string{Compat::NAME} + ":" + name, dispatcher);
+    // Held as the plugin's own code (HoverActions::SOwnCall), as in
+    // runDispatcherNow.
+    HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, std::string{Compat::NAME} + ":" + name, [dispatcher](std::string arg) {
+        HoverActions::SOwnCall own;
+        return dispatcher(std::move(arg));
+    });
 
     // ONE RELEASE. The old spelling dispatches into the very same handler; the
     // wrapper exists only to notice that it was used.
     const std::string LEGACY = std::string{Compat::LEGACY_NAME} + ":" + name;
     HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, LEGACY, [dispatcher, LEGACY](std::string arg) {
         Compat::noteLegacyUse(Compat::ELegacy::DISPATCHER, LEGACY);
+        HoverActions::SOwnCall own;
         return dispatcher(std::move(arg));
     });
 

@@ -1,5 +1,6 @@
 #include "OwnSizeTile.hpp"
 #include "FunctionHooks.hpp"
+#include "HoverActions.hpp"
 #include "DebugPaths.hpp"
 
 #include <hyprland/src/config/ConfigValue.hpp>
@@ -84,6 +85,10 @@ namespace Hyprdrive::OwnSizeTile {
         }
 
         ActionResult hkFloatWindow(eTogglableAction action, std::optional<PHLWINDOW> w) {
+            // Super+T on a hovered overview tile or dock preview floats THAT
+            // one: the address's one hook is this one, so the hover swap
+            // (HoverActions::target, the same rule as Super+F's) is asked here.
+            w = HoverActions::target(w);
             // The window floatWindow acts on: the one named, else the focused
             // one (Actions' xtract, exactly).
             const PHLWINDOW WINDOW = w.value_or(Desktop::focusState()->window());
@@ -101,7 +106,10 @@ namespace Hyprdrive::OwnSizeTile {
             if (WINDOW && WINDOW->m_isMapped && WINDOW->m_isFloating && !wantFloat && fixedSize(WINDOW, size))
                 own(WINDOW, size);
 
-            const auto RESULT = rc<TFloatWindow>(g_hook->m_original)(action, w);
+            const auto RESULT = [&] {
+                HoverActions::SOwnCall own;
+                return rc<TFloatWindow>(g_hook->m_original)(action, w);
+            }();
 
             // Floated by this call -- or the tile turned it away after all.
             if (WINDOW && WINDOW->m_isFloating && owned(WINDOW))
