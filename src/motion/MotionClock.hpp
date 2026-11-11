@@ -57,6 +57,14 @@ namespace Hyprdrive::Motion {
     // in the plugin. The value Config::animElapsedMs always returned there.
     inline constexpr float SNAP_MS = 1e9F;
 
+    // The effective scale from its two settings: anim_scale (clamped to >= 0)
+    // and Hyprland's animations:enabled, which at 0 makes it 0.
+    inline float effectiveScale(float animScale, bool animationsEnabled) {
+        if (!animationsEnabled)
+            return 0.F;
+        return animScale > 0.F ? animScale : 0.F;
+    }
+
     // Scale 0 (or NaN): every animation is at its end.
     inline bool snapsAt(float scale) {
         return !(scale > 0.F);

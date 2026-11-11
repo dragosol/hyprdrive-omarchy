@@ -1202,6 +1202,40 @@ static void testB3() {
     M::Clock::g_scaleSource = nullptr;
 }
 
+// ============================================================================
+// B4 -- animations:enabled = 0 folds into the clock: the effective scale is 0
+// and every animation is finished at once, whatever anim_scale says. With
+// animations on it is anim_scale exactly as Config::animScale read it.
+// ============================================================================
+static void testB4() {
+    namespace M = Hyprdrive::Motion;
+    using clock = std::chrono::steady_clock;
+    using ns    = std::chrono::nanoseconds;
+    long n = 0, badOn = 0, badOff = 0;
+    for (float s : {-5.F, -0.F, 0.F, 1e-6F, 0.01F, 0.5F, 1.F, 1.0001F, 2.F, 10.F, 100.F, std::nanf("")}) {
+        ++n;
+        badOn += !sameBits(M::effectiveScale(s, true), std::max(0.F, s)); // core/Config.cpp animScale, verbatim
+        badOff += !sameBits(M::effectiveScale(s, false), 0.F) + !M::snapsAt(M::effectiveScale(s, false));
+    }
+    report("B4 animations on: the scale is anim_scale as before, bit for bit", n, badOn);
+    report("B4 animations off: scale 0 whatever anim_scale is", n, badOff);
+
+    // Through the clock: off = finished immediately (elapsed and step), and a
+    // pending delay still waits in real time.
+    static float s_off;
+    s_off                   = M::effectiveScale(1.F, false);
+    M::Clock::g_scaleSource = [] { return s_off; };
+    const clock::time_point T0{ns{259'200'123'456'789LL}};
+    long bad = 0;
+    bad += !(M::Clock::animMsBetween(T0, T0) >= M::SNAP_MS); // elapsed 0, at the start, is already past every duration
+    bad += !(M::Clock::animMsBetween(T0 + std::chrono::milliseconds(1), T0) >= M::SNAP_MS);
+    bad += !M::isSnapDt(M::Clock::animDt(0.016F));
+    bad += !sameBits(M::Clock::animMsBetween(T0, T0 + std::chrono::milliseconds(2000)), -2000.F);
+    bad += M::Clock::enabled();
+    M::Clock::g_scaleSource = nullptr;
+    report("B4 animations off through the clock: snapped, delays real", 5, bad);
+}
+
 int main() {
     testA1();
     testA2();
@@ -1212,6 +1246,7 @@ int main() {
     testA7();
     testA8();
     testB3();
+    testB4();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

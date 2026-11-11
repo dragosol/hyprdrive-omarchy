@@ -697,7 +697,10 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::opti
     }
 
     const int  DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
-    const bool ANIMATE  = monitor && window && DURATION > 0 && !Minimize::isMinimized(window);
+    // A snapping animation clock (speed 0, or animations:enabled = 0) is the
+    // no-flight path: minimized and focus handed off at once, as a landed
+    // flight leaves it -- not a flight that finishes on the next frame.
+    const bool ANIMATE  = monitor && window && DURATION > 0 && Hyprdrive::Motion::Clock::enabled() && !Minimize::isMinimized(window);
 
     // Must be read before the stash, which moves the window off its workspace and
     // so destroys both the tile and the real box.
@@ -778,7 +781,7 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
     const int DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
     zdbg("restoreImpl dur=%d mon=%d min=%d\n", DURATION, (int)(bool)monitor, window ? (int)Minimize::isMinimized(window) : -9);
 
-    if (!monitor || !window || DURATION <= 0 || !Minimize::isMinimized(window)) {
+    if (!monitor || !window || DURATION <= 0 || !Hyprdrive::Motion::Clock::enabled() || !Minimize::isMinimized(window)) {
         Minimize::restore(window);
         return;
     }
