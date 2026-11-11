@@ -4,6 +4,7 @@
 #include "DesktopRowModel.hpp"
 #include "DesktopStepModel.hpp"
 #include "DesktopStrip.hpp"
+#include "FunctionHooks.hpp"
 #include "IOverview.hpp"
 #include "Mosaic.hpp"
 #include "globals.hpp"
@@ -85,18 +86,16 @@ namespace Hyprdrive::DesktopSwitch {
             return result;
         }
 
-        void* findFn(const std::string& name, const std::string& demangledNeedle) {
-            for (const auto& FN : HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, name)) {
-                if (FN.demangled.find(demangledNeedle) != std::string::npos)
-                    return FN.address;
-            }
-            throw std::runtime_error(std::format("[hyprdrive] No fns for hook {}", name));
-        }
-
-        CFunctionHook* hookOrThrow(void* address, void* hook, const char* name) {
-            auto* h = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, address, hook);
+        // The FIRST function of `name` whose demangled signature contains
+        // `demangledNeedle`, hooked. None found -> throw (no toast); found but
+        // not created, or hook() failed -> throw. Same texts as before.
+        CFunctionHook* hookOrThrow(const std::string& name, const std::string& demangledNeedle, void* hook, const char* label) {
+            bool found = false;
+            auto* h    = FunctionHooks::firstMatch("DesktopSwitch", name, hook, demangledNeedle, &found);
+            if (!found)
+                throw std::runtime_error(std::format("[hyprdrive] No fns for hook {}", name));
             if (!h || !h->hook())
-                throw std::runtime_error(std::format("[hyprdrive] Could not hook {}", name));
+                throw std::runtime_error(std::format("[hyprdrive] Could not hook {}", label));
             return h;
         }
 
@@ -371,9 +370,9 @@ namespace Hyprdrive::DesktopSwitch {
         Hyprdrive::Config::registerDispatcher("desktop", onDesktopDispatcher);
         DesktopStrip::init(rowOn, [](const PHLMONITOR&, int id) { (void)::Config::Actions::changeWorkspace(std::to_string(id)); });
 
-        g_focusHook = hookOrThrow(findFn("rawWindowFocus", "CFocusState::rawWindowFocus("), rc<void*>(hkRawWindowFocus), "rawWindowFocus");
+        g_focusHook = hookOrThrow("rawWindowFocus", "CFocusState::rawWindowFocus(", rc<void*>(hkRawWindowFocus), "rawWindowFocus");
         g_focusActionHook =
-            hookOrThrow(findFn("focus", "Config::Actions::focus(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"), rc<void*>(hkFocusAction), "Config::Actions::focus");
+            hookOrThrow("focus", "Config::Actions::focus(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)", rc<void*>(hkFocusAction), "Config::Actions::focus");
 
         g_axisHook   = Event::bus()->m_events.input.mouse.axis.listen([](IPointer::SAxisEvent e, Event::SCallbackInfo& info) { onAxis(e, info); });
         g_activeHook = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE workspace) { onActive(workspace); });

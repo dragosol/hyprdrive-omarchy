@@ -1,4 +1,5 @@
 #include "OwnSizeTile.hpp"
+#include "FunctionHooks.hpp"
 #include "DebugPaths.hpp"
 
 #include <hyprland/src/config/ConfigValue.hpp>
@@ -235,18 +236,17 @@ namespace Hyprdrive::OwnSizeTile {
     }
 
     void init() {
-        const auto FNS = HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, FLOAT_WINDOW);
-        if (FNS.empty()) {
+        bool found = false;
+        g_hook     = FunctionHooks::firstMatch("OwnSizeTile", FLOAT_WINDOW, rc<void*>(hkFloatWindow), {}, &found);
+        if (!found) {
             trace("floatWindow not found: Hyprland's own toggle stands");
             return;
         }
-        g_hook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FNS[0].address, rc<void*>(hkFloatWindow));
         if (g_hook && !g_hook->hook())
             g_hook = nullptr;
         // Only with the toggle hooked: no own-size tile exists without it.
-        const auto CFG = g_hook ? HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, ON_X11_CONFIGURE) : std::vector<SFunctionMatch>{};
-        if (!CFG.empty()) {
-            g_configureHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, CFG[0].address, rc<void*>(hkOnX11Configure));
+        if (g_hook) {
+            g_configureHook = FunctionHooks::firstMatch("OwnSizeTile", ON_X11_CONFIGURE, rc<void*>(hkOnX11Configure));
             if (g_configureHook && !g_configureHook->hook())
                 g_configureHook = nullptr;
         }

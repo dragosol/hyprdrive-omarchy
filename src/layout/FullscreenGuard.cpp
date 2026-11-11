@@ -1,5 +1,6 @@
 // See FullscreenGuard.hpp.
 #include "FullscreenGuard.hpp"
+#include "FunctionHooks.hpp"
 #include "Config.hpp"
 #include "IOverview.hpp"
 #include "Minimize.hpp"
@@ -101,11 +102,11 @@ namespace Hyprdrive::FullscreenGuard {
     }
 
     void installFocusHook() {
-        const auto FNS = HyprlandAPI::findFunctionsByName(
-            HYPRDRIVE_HANDLE, "_ZN7Desktop11CFocusState15fullWindowFocusEN9Hyprutils6Memory14CSharedPointerINS_4View7CWindowEEENS_12eFocusReasonENS3_I18CWLSurfaceResourceEEb");
-        if (FNS.empty())
+        g_focusHook = FunctionHooks::firstMatch(
+            "FullscreenGuard", "_ZN7Desktop11CFocusState15fullWindowFocusEN9Hyprutils6Memory14CSharedPointerINS_4View7CWindowEEENS_12eFocusReasonENS3_I18CWLSurfaceResourceEEb",
+            rc<void*>(hkFullWindowFocus));
+        if (!g_focusHook)
             return; // no game guard: Hyprland's own exit-fullscreen stands
-        g_focusHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FNS[0].address, rc<void*>(hkFullWindowFocus));
         if (g_focusHook && !g_focusHook->hook())
             g_focusHook = nullptr;
     }

@@ -1,4 +1,5 @@
 #include "Intent.hpp"
+#include "FunctionHooks.hpp"
 #include "Launch.hpp"
 #include "Mosaic.hpp"
 #include "Config.hpp"
@@ -256,14 +257,10 @@ namespace Hyprdrive::Intent {
         });
         // Not fatal when missing: then only Hyprdrive's own launches and
         // launchers grant.
-        for (const auto& FN : HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, "spawnRawProc")) {
-            if (FN.demangled.find("CExecutor::spawnRawProc(") == std::string::npos)
-                continue;
-            g_spawnHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FN.address, rc<void*>(hkSpawn));
-            if (g_spawnHook && !g_spawnHook->hook())
-                g_spawnHook = nullptr;
-            break;
-        }
+        // The first spawnRawProc that is CExecutor's.
+        g_spawnHook = FunctionHooks::firstMatch("Intent", "spawnRawProc", rc<void*>(hkSpawn), "CExecutor::spawnRawProc(");
+        if (g_spawnHook && !g_spawnHook->hook())
+            g_spawnHook = nullptr;
     }
 
     void shutdown() {

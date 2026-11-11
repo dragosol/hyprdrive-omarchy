@@ -1,5 +1,6 @@
 // See XGeometry.hpp.
 #include "XGeometry.hpp"
+#include "FunctionHooks.hpp"
 #include "ConfigureHold.hpp"
 
 #include <chrono>
@@ -345,11 +346,10 @@ namespace Hyprdrive::XGeometry {
     }
 
     void installStateRequestFix() {
-        const auto FNS = HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, "_ZN4CXWM19handleClientMessageEP26xcb_client_message_event_t");
-        if (FNS.empty())
-            return; // Hyprland's own handling stands
-        g_clientMessageHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FNS[0].address, rc<void*>(hkHandleClientMessage));
-        if (g_clientMessageHook && !g_clientMessageHook->hook())
+        g_clientMessageHook = FunctionHooks::firstMatch("XGeometry", "_ZN4CXWM19handleClientMessageEP26xcb_client_message_event_t", rc<void*>(hkHandleClientMessage));
+        if (!g_clientMessageHook)
+            return; // not found: Hyprland's own handling stands
+        if (!g_clientMessageHook->hook())
             g_clientMessageHook = nullptr;
     }
 
