@@ -131,7 +131,7 @@ class IOverview : public IOverviewFramePolicy, public IOverviewGeometry {
 
     // The tile the overview shows as selected -- under the pointer, or the
     // keyboard's after the arrows -- when it is a window it shows; else none.
-    // What Super+F acts on while it is open (OverviewFullscreen.hpp).
+    // What Super+F and Super+W act on while it is open (HoverTarget.hpp).
     virtual PHLWINDOW actionTile() = 0;
 
     // X28. Commit the overview's selection to one window and close, the way a

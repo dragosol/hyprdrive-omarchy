@@ -76,7 +76,7 @@ using namespace Hyprutils::String;
 #include "Rows.hpp"
 #include "ShowDesktop.hpp"
 #include "OwnSizeTile.hpp"
-#include "OverviewFullscreen.hpp"
+#include "HoverActions.hpp"
 #include "Mosaic.hpp"
 #include <hyprland/src/managers/SessionLockManager.hpp>
 

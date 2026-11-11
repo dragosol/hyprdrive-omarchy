@@ -1,6 +1,7 @@
 #include "OverviewInternal.hpp"
 #include "DockInput.hpp"
 #include "DockStacks.hpp"
+#include "HoverTarget.hpp"
 using namespace OvInternal; // opted in here rather than leaked from the header
 
 // For main.cpp's click dispatcher, which does not include OverviewInternal.hpp.
@@ -880,17 +881,13 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
         // after the arrows it is the keyboard's tile; after the mouse it is the
         // tile under the pointer; and over empty space it is nothing at all --
         // closing whatever closeOnWindow still pointed at would be a window
-        // vanishing that the user was not looking at.
+        // vanishing that the user was not looking at. Asked of HoverTarget,
+        // the one answer Super+F gets too: the tile, else the dock preview
+        // under the pointer (the dock is drawn over the overview), else none.
         if ((KEYSYM == XKB_KEY_w || KEYSYM == XKB_KEY_W) && MODS == HL_MODIFIER_META) {
-            PHLWINDOW target;
-            if (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile)
-                target = getOverviewWindowToShow(closeOnWindow.lock());
-            else {
-                lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
-                target            = windowAtOverviewCursor();
-            }
+            const auto target = Hyprdrive::HoverTarget::window();
 
-            if (target && shouldShowOverviewWindow(target)) {
+            if (target) {
                 target->sendClose();
                 damage();
             }

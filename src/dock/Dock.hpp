@@ -200,6 +200,18 @@ bool    panelClick(PHLMONITOR monitor, const Vector2D& point, bool release);
 // overview asks this before refusing.
 bool    isPreviewing(const PHLWINDOW& window);
 
+// THE HOVERED PREVIEW (HoverTarget.hpp's second source): the window whose cell
+// in the hover pane is under the pointer right now, else null -- the pane
+// hidden or leaving, the pointer on a dock menu's plate over the pane, a
+// preview being torn out, or no cell there (a gap, the pane's edge, the row
+// preview beside the app menu, which is not a cell).
+PHLWINDOW previewUnderPointer();
+
+// `window select|close` on that cell (Dispatchers.cpp), when no overview
+// tile took it: select is the cell's own click (to the window on its desktop,
+// the pointer with it), close asks the window to close. False: no cell.
+bool    previewWindowAction(const std::string& action);
+
 // A window retiled onto a workspace NOBODY IS LOOKING AT. It has a new size,
 // but its client has not drawn at that size yet and the overview refuses its
 // frame callbacks (its tile is off screen), so the strip preview shows the old

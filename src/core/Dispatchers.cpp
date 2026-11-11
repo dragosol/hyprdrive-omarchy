@@ -16,8 +16,14 @@ SDispatchResult onNavigateDispatcher(std::string arg) {
 
 SDispatchResult onWindowDispatcher(std::string arg) {
     const auto OVERVIEW = activeScrollOverview();
-    if (!OVERVIEW)
+    // No overview, or no tile there to act on: the dock preview under the
+    // pointer, as for Super+F and Super+W (HoverTarget.hpp) -- select is the
+    // preview's click, close closes it. Neither there: nothing, as before.
+    if (!OVERVIEW) {
+        if (arg == "select" || arg == "close")
+            Hyprdrive::Dock::previewWindowAction(arg);
         return {};
+    }
 
     if (arg == "click") {
         // Only reached when onMouseButton let the press through, i.e. over a
@@ -32,7 +38,8 @@ SDispatchResult onWindowDispatcher(std::string arg) {
     if (arg != "select" && arg != "close")
         return {.success = false, .error = "invalid arg. expected select|close|click"};
 
-    OVERVIEW->windowDispatcherAction(arg);
+    if (!OVERVIEW->windowDispatcherAction(arg))
+        Hyprdrive::Dock::previewWindowAction(arg);
     return {};
 }
 

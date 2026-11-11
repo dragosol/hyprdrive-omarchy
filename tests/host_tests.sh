@@ -60,8 +60,9 @@
 #   fullscreen_carry_test  FullscreenCarry.hpp: a window's fullscreen modes kept
 #                     through a layout swap (plugin reload), matched by address
 #                     and desktop only, malformed records skipped.
-#   overview_fullscreen_test  OverviewFullscreen.hpp: when Super+F in the overview
-#                     acts on the selected tile instead of the focused window.
+#   hover_target_test  HoverTargetRule.hpp: what a Super+key action that names
+#                     no window acts on -- the overview's tile, else the dock
+#                     preview under the pointer, else the focused window.
 #   mosaic_trip_hold_test  MosaicTripHold.hpp: a window home from its fullscreen
 #                     trip goes back to its place only if its desktop is unchanged.
 #   motion_math_test  MotionMath.hpp: each shared motion function against
@@ -158,7 +159,7 @@ run fullscreen_book_test tests/unit/fullscreen_book_test.cpp
 run fullscreen_carry_test tests/unit/fullscreen_carry_test.cpp
 run desktop_row_test tests/unit/desktop_row_test.cpp
 run desktop_strip_test tests/unit/desktop_strip_test.cpp
-run overview_fullscreen_test tests/unit/overview_fullscreen_test.cpp
+run hover_target_test tests/unit/hover_target_test.cpp
 run mosaic_trip_hold_test tests/unit/mosaic_trip_hold_test.cpp
 # shellcheck disable=SC2046
 run builtin_icons_test tests/unit/builtin_icons_test.cpp src/apps/BuiltinIcons.cpp --embed-dir=. $(pkg-config --cflags --libs librsvg-2.0)

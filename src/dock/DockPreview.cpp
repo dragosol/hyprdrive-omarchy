@@ -1,6 +1,7 @@
 // The hover-preview panel and live previews, the frosted queue they share,
 // pointer focus over the dock and the retile tracker.
 #include "DockParts.hpp"
+#include "HoverTargetRule.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -1129,6 +1130,8 @@ bool panelDragRelease(PHLMONITOR monitor, const Vector2D& point) {
     return true;
 }
 
+static void goToPreviewWindow(PHLMONITOR monitor, PHLWINDOW WINDOW);
+
 bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
     if (!monitor)
         return false;
@@ -1160,7 +1163,54 @@ bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
     if (!CELL)
         return true;
 
-    const auto WINDOW = CELL->second;
+    goToPreviewWindow(monitor, CELL->second);
+    return true;
+}
+
+PHLWINDOW previewUnderPointer() {
+    if (!g_hover.panel || !g_pInputManager)
+        return {};
+    PHLMONITOR monitor;
+    for (const auto& MON : State::monitorState()->monitors())
+        if (MON && MON->m_id == g_hover.panel->monitor)
+            monitor = MON;
+    const auto POINTER = g_pInputManager->getMouseCoordsInternal();
+    if (!monitor || !monitor->logicalBox().containsPoint(POINTER))
+        return {};
+    const auto LOCAL = (POINTER - monitor->m_position) * monitor->m_scale;
+    // Hidden with the dock (autohide, a fullscreen window): the pane's boxes
+    // are the last ones drawn, nothing is on screen there.
+    const bool SHOWN    = panelContains(monitor, LOCAL) && !layout(monitor).pill.empty();
+    const auto CELL     = SHOWN ? panelCellAt(monitor, LOCAL) : std::nullopt;
+    const bool TEAROUT  = g_dockDrag.panel && g_dockDrag.panel->live;
+    const auto WINDOW   = CELL ? CELL->second : PHLWINDOW{};
+    if (!Hyprdrive::HoverTarget::dockCellCounts(SHOWN, menuContains(monitor, LOCAL), TEAROUT, WINDOW && WINDOW->m_isMapped))
+        return {};
+    return WINDOW;
+}
+
+bool previewWindowAction(const std::string& action) {
+    const auto WINDOW = previewUnderPointer();
+    if (!WINDOW)
+        return false;
+    if (action == "close") {
+        WINDOW->sendClose();
+        return true;
+    }
+    if (action != "select")
+        return false;
+    for (const auto& MON : State::monitorState()->monitors())
+        if (MON && g_hover.panel && MON->m_id == g_hover.panel->monitor) {
+            goToPreviewWindow(MON, WINDOW);
+            return true;
+        }
+    return false;
+}
+
+// A preview's click: to the window on its own desktop, the pointer with it.
+static void goToPreviewWindow(PHLMONITOR monitor, PHLWINDOW WINDOW) {
+    if (!monitor || !WINDOW)
+        return;
 
     // Always go to the window on its own desktop. A restore-flight from here
     // would pull it onto the current desktop from the dock (below the screen);
@@ -1178,8 +1228,6 @@ bool panelClick(PHLMONITOR monitor, const Vector2D& point, bool release) {
         if (pointerFollowsClick())
             pointerToWindow(WINDOW);
     }
-
-    return true;
 }
 
 // Y5. The flight is a real window at real SIZE, not a thumbnail, so where it is
