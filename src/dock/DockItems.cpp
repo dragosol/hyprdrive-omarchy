@@ -1,6 +1,7 @@
 // The item model: which icons the dock shows (buildDockItems, the cached
 // dockItems), publishing them, badges, urgency and the urgent-hop timer.
 #include "DockParts.hpp"
+#include "IdentityLive.hpp"
 #include "MotionClock.hpp"
 
 namespace Hyprdrive::Dock {
@@ -62,7 +63,7 @@ std::vector<std::string> runningClasses() {
         if (!interesting(WINDOW, CFG) || WINDOW->m_class.empty())
             continue;
 
-        const auto CLASS = AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title);
+        const auto CLASS = Hyprdrive::AppIdentity::groupKey(WINDOW);
         if (seen.insert(CLASS).second)
             out.emplace_back(CLASS);
     }
@@ -136,7 +137,7 @@ std::vector<SItem> buildDockItems() {
             // a second profile of the same app (another class, same desktop id).
             // itemWindows then finds every window of those classes.
             for (size_t i = 0; i < RUNNING.size(); ++i) {
-                if (runningIds[i] != ID || claimed.contains(i))
+                if (!Hyprdrive::AppIdentity::sameApp(runningIds[i], ID) || claimed.contains(i))
                     continue;
 
                 claimed.insert(i);
@@ -545,7 +546,7 @@ float elapsedMs(const Time::steady_tp& since) {
 // and the reference reads both.
 bool classUrgent(const std::string& wmClass) {
     for (const auto& WINDOW : Desktop::windowState()->windows()) {
-        if (WINDOW && WINDOW->m_isMapped && WINDOW->m_isUrgent && AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title) == wmClass)
+        if (WINDOW && WINDOW->m_isMapped && WINDOW->m_isUrgent && Hyprdrive::AppIdentity::groupKey(WINDOW) == wmClass)
             return true;
     }
 
@@ -560,7 +561,7 @@ STally buildTally() {
         if (!WINDOW || !WINDOW->m_isMapped)
             continue;
 
-        const auto CLASS = AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title);
+        const auto CLASS = Hyprdrive::AppIdentity::groupKey(WINDOW);
 
         if (WINDOW->m_isUrgent)
             out.urgent.insert(CLASS);

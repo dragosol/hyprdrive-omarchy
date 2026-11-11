@@ -1,4 +1,5 @@
 // The context menu: its rows (ERow, buildRows, info rows) and drawing.
+#include "IdentityLive.hpp"
 #include "DockParts.hpp"
 #include "MotionCurves.hpp"
 
@@ -323,7 +324,7 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
         if (!rows.empty())
             rows.emplace_back(SRow{.kind = ERow::Separator});
 
-        const bool FAV = std::ranges::contains(favorites(), ID);
+        const bool FAV = std::ranges::any_of(favorites(), [&](const std::string& F) { return Hyprdrive::AppIdentity::sameApp(F, ID); });
         rows.emplace_back(SRow{.kind = ERow::Favorite, .label = FAV ? "Remove from Favorites" : "Add to Favorites", .glyph = FAV ? MenuGlyph::FAV_DEL : MenuGlyph::FAV_ADD});
         rows.emplace_back(SRow{.kind = ERow::Details, .label = "Get Info", .glyph = MenuGlyph::DETAILS});
     }
@@ -473,8 +474,18 @@ std::vector<SRow> infoRows(const SItem& item) {
     if (ENTRY) {
         line(MenuGlyph::TAG, "Name", ENTRY->name);
         line(MenuGlyph::TEXT, "About", ENTRY->comment.empty() ? ENTRY->generic : ENTRY->comment);
-    } else
+    } else if (const auto* ID = Hyprdrive::AppIdentity::forKey(item.wmClass); ID && item.wmClass.starts_with("hd:"))
+        line(MenuGlyph::TAG, "Name", ID->displayName);
+    else
         line(MenuGlyph::TAG, "Class", item.wmClass);
+    // A Wine, Proton, Steam or Lutris app (AppIdentity): what it is and where.
+    if (const auto* ID = item.wmClass.starts_with("hd:") ? Hyprdrive::AppIdentity::forKey(item.wmClass) : nullptr) {
+        line(MenuGlyph::SOURCE, "Kind", std::string{Hyprdrive::AppIdentity::familyName(ID->family)});
+        if (!ID->exePath.empty())
+            line(MenuGlyph::DISK, "Program", ID->exePath);
+        if (!ID->prefix.empty())
+            line(MenuGlyph::DISK, "Prefix", ID->prefix);
+    }
 
     rows.emplace_back(SRow{.kind = ERow::Separator});
 

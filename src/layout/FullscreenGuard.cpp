@@ -5,6 +5,7 @@
 #include "IOverview.hpp"
 #include "Minimize.hpp"
 #include "Mosaic.hpp"
+#include "IdentityLive.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -38,6 +39,10 @@ namespace Hyprdrive::FullscreenGuard {
         if (!w)
             return false;
         if (w->getContentType() == NContentType::CONTENT_TYPE_GAME)
+            return true;
+        // A Steam, Proton or Lutris game AppIdentity recognised (whatever its
+        // class); the class rule below stays the floor.
+        if (Hyprdrive::AppIdentity::of(w).isGame)
             return true;
         for (const auto& CLASS : {w->m_class, w->m_initialClass}) {
             if (startsWith(CLASS, "steam_app_") || CLASS == "gamescope")

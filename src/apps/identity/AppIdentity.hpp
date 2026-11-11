@@ -39,6 +39,8 @@ namespace Hyprdrive::AppIdentity {
         bool        isGame = false, placeable = true;
         std::string evidence;    // "env SteamAppId=2357570 -> appmanifest" (the debug dump)
         std::string resolver;    // which resolver answered
+        std::string exePath;     // the program's unix path, when known (Get Info)
+        std::string prefix;      // its Wine prefix, when it has one (Get Info)
     };
 
     // One desktop entry as the resolvers see it (AppSearch::SEntry's fields
@@ -85,6 +87,10 @@ namespace Hyprdrive::AppIdentity {
     // window a desktop file claims -- so nothing changes for normal apps --
     // else "hd:<key>".
     std::string groupKeyOf(const Identity& id, const WindowFacts& w);
+
+    // Does a group key / stored id name the same app as another (both
+    // through canonicalKey)?
+    bool sameApp(std::string_view a, std::string_view b, const InventoryView& inv);
 
     // What one launch's processes share: "steam:<SteamAppId>", else
     // "lutris:<LUTRIS_GAME_UUID>", else "wine:<WINEPREFIX>|<top ancestor

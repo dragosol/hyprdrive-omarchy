@@ -25,6 +25,7 @@
 #undef private
 
 #include "Locations.hpp"
+#include "IdentityLive.hpp"
 #include "MotionClock.hpp"
 #include "DebugPaths.hpp"
 #include "FlightController.hpp"
@@ -824,7 +825,7 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::opti
         // the ACKNOWLEDGEMENT of the drop, so it fires now, while the window is
         // still flying in -- not at the landing.
         if (bounceOnLand)
-            Hyprdrive::Dock::armBounce(AppSearch::identityClass(window->m_class, window->m_title));
+            Hyprdrive::Dock::armBounce(Hyprdrive::AppIdentity::groupKey(window));
         std::erase_if(g_flights, [&window](const SFlight& f) { return f.window.lock() == window; });
         SFlight next{.id = g_nextId++, .window = window, .monitor = monitor->m_id, .from = from, .kind = EFlightKind::MinimizeProxy, .startedAt = Time::steadyNow()};
         if (startBox && startBox->width >= 1 && startBox->height >= 1)
@@ -987,7 +988,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
 
         const auto  WINDOW = it->window.lock();
         const float T      = flightProgress(*it);
-        const auto  CLASS  = WINDOW ? AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title) : std::string{};
+        const auto  CLASS  = WINDOW ? Hyprdrive::AppIdentity::groupKey(WINDOW) : std::string{};
         // A file manager window showing a dock LOCATION (the Trash) flies to
         // that location's icon, not to the file manager's: the location's own
         // windows are what its icon minimizes and restores (Dock.cpp,

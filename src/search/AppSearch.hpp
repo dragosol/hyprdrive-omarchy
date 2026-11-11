@@ -153,6 +153,17 @@ namespace AppSearch {
     // asked before anything else. Plain pointers: nothing to link without them.
     inline void (*extraEntries)(std::vector<SEntry>&)             = nullptr;
     inline std::string (*aliasForClass)(const std::string& lower) = nullptr;
+    // A dock group key "hd:<key>" (AppIdentity::groupKey: a Wine, Proton,
+    // Steam or Lutris window) is answered by AppIdentity (IdentityLive.cpp),
+    // not by class matching: its name, icon and desktop id ("" when no
+    // entry backs it; the key is then its id).
+    struct SIdentityAnswer {
+        std::string name, icon, desktopId;
+    };
+    inline bool (*identityForKey)(const std::string& key, SIdentityAnswer& out) = nullptr;
+    // extraEntries again, over the entries already scanned: no disk walk
+    // (a game AppIdentity just learnt, Lutris's index arriving).
+    void refreshExtras();
     // An alias changed: class lookups start over (no rescan).
     void invalidate();
 

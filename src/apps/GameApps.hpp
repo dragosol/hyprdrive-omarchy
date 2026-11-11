@@ -25,9 +25,22 @@
 //     it ran (the same Wine, prefix and Wine settings, in its own folder).
 //     Remembered across sessions ($XDG_STATE_HOME/hyprdrive/wine-apps.tsv).
 //
-// AppSearch asks through two hooks (AppSearch.hpp): extra inventory entries,
-// and a window class -> app id map.
+// 2026-11-11: WHICH APP A WINDOW IS is AppIdentity's now (src/apps/identity/,
+// resolved on its worker; IdentityLive.hpp). What stays here is the
+// inventory side: Lutris's games (from the worker's published index) and the
+// Wine programs and Steam games AppIdentity has met, as entries AppSearch
+// lists (AppSearch::extraEntries), so they can be pinned, searched and
+// launched. record() runs on the identity worker; the files are
+// $XDG_STATE_HOME/hyprdrive/wine-apps.tsv (v1, 4 columns, unchanged: an older
+// Hyprdrive still reads it) and app-identities.tsv beside it (key, family,
+// name, icon, launch, prefix, exe path, desktop id).
+#include "Engine.hpp"
+
 namespace Hyprdrive::GameApps {
     void init();
     void shutdown();
+    // Identity worker: remember a newly met Wine program or Steam game.
+    void record(const AppIdentity::Result& r);
+    // Compositor thread: something was remembered since the last call.
+    bool takeChanged();
 }

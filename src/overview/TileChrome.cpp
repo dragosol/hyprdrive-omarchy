@@ -1,4 +1,5 @@
 #include "TileChrome.hpp"
+#include "IdentityLive.hpp"
 #include "MotionSites.hpp"
 #include "MotionClock.hpp"
 #include "MotionTween.hpp"
@@ -478,7 +479,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
     // does not crawl out of a corner. Below one device pixel there is nothing
     // honest to draw -- a rounded box of zero width is not a small icon, it is a
     // no-op with a texture bound -- so the draw starts when the box does.
-    if (const auto TEX = OverviewRender::appIcon(AppSearch::iconForClass(AppSearch::identityClass(window->m_class, window->m_title)))) {
+    if (const auto TEX = OverviewRender::appIcon(AppSearch::iconForClass(Hyprdrive::AppIdentity::groupKey(window)))) {
         const float SIDE = std::clamp(shortSide(tileBox) * ICON_FRACTION, ICON_MIN * SCALE, ICON_MAX * SCALE) * FADE;
 
         CBox iconBox = CBox{sc<float>(tileBox.x + tileBox.w / 2.0) - SIDE / 2.F, sc<float>(tileBox.y + tileBox.h) - SIDE / 2.F, SIDE, SIDE};

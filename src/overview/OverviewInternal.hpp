@@ -12,6 +12,7 @@
 // when compile time starts to hurt.
 
 #include "FramePacing.hpp"
+#include "IdentityLive.hpp"
 #include "MotionClock.hpp"
 #include "MotionMath.hpp"
 #include "Overview.hpp"
@@ -818,7 +819,7 @@ inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
         if (SearchBackend::isOverviewSushiWindow(WINDOW->m_class, WINDOW->getPID()))
             continue;
 
-        const auto CLASS = AppSearch::identityClass(WINDOW->m_class, WINDOW->m_title);
+        const auto CLASS = Hyprdrive::AppIdentity::groupKey(WINDOW);
 
         bool match = false;
         if (!entry.wmClass.empty() && CLASS == entry.wmClass)
@@ -1092,7 +1093,7 @@ inline bool overviewSearchMatches(const PHLWINDOW& window) {
     std::string haystack = window->m_workspace ? std::format("{}: ", window->m_workspace->m_id) : "";
     haystack += window->m_title + " " + window->m_class;
 
-    if (const auto APPNAME = AppSearch::appNameForClass(AppSearch::identityClass(window->m_class, window->m_title)); !APPNAME.empty())
+    if (const auto APPNAME = AppSearch::appNameForClass(Hyprdrive::AppIdentity::groupKey(window)); !APPNAME.empty())
         haystack += " " + APPNAME;
 
     const bool MATCHED       = AppSearch::strictMatch(CACHE.text, haystack);

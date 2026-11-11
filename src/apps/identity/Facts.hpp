@@ -60,6 +60,9 @@ namespace Hyprdrive::AppIdentity {
         std::string comm, argv0, exe; // exe: /proc/<pid>/exe resolved through /proc/<pid>/root
         // The allow-listed environment (ENV_ALLOW), as at exec.
         std::vector<std::pair<std::string, std::string>> env;
+        // The Wine settings a relaunch needs (ProcFacts::keepForLaunch), for
+        // a Wine program's remembered Exec; empty for anything else.
+        std::vector<std::pair<std::string, std::string>> launchEnv;
         struct Hop {
             pid_t       pid = 0;
             std::string comm, cmdline; // cmdline: argv joined with spaces, capped

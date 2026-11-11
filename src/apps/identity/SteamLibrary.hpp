@@ -21,6 +21,7 @@
 #include "Acf.hpp"
 #include "Sources.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -41,6 +42,7 @@ namespace Hyprdrive::AppIdentity::SteamLibrary {
         std::unordered_map<uint32_t, App>      apps;
         std::unordered_map<uint32_t, Shortcut> shortcuts;
         std::vector<std::string>               roots, libraries; // what was looked at
+        std::vector<std::string>               skipped;          // libraries `reachable` refused (a sleeping removable disk)
         int64_t                                builtAtNs = 0;    // steady clock
 
         const App*      app(uint32_t id) const;
@@ -53,21 +55,21 @@ namespace Hyprdrive::AppIdentity::SteamLibrary {
     // Reads everything (bounded: Caps::VDF per manifest, Caps::SHORTCUTS per
     // shortcuts.vdf, Caps::DIR_ENTRIES per folder). Writes at most one PNG per
     // game whose only icon is Steam's .ico (Sources::storeIcon, kept). Never
-    // throws; a library that cannot be read is simply absent.
-    std::shared_ptr<const Snapshot> rebuild(const Sources& src);
+    // throws; a library that cannot be read is simply absent. `reachable`
+    // (null: all are) is asked before each library is listed: the identity
+    // worker answers false for a removable disk that did not answer a stat in
+    // time, so one sleeping disk costs a skipped library, not a stalled index.
+    using Reachable = std::function<bool(const std::string& libraryPath)>;
+    std::shared_ptr<const Snapshot> rebuild(const Sources& src, const Reachable& reachable = {});
 
     // The published index (null until the first publish). Thread-safe.
     std::shared_ptr<const Snapshot> current();
     void                            publish(std::shared_ptr<const Snapshot> s);
 
-    // STOPGAP until the identity worker exists (next part): the old
-    // AppSearch timing. The index is rebuilt here, synchronously, when there is
-    // none yet, or when `want` is not in it and the last build is at least
-    // 30 s old (a game mid-install shows up within 30 s, a miss costs one
-    // rebuild per 30 s at most). Returns current(). `nowNs` is the steady
-    // clock, injectable for tests (0 = now).
-    std::shared_ptr<const Snapshot> ensure(const Sources& src, Steam::GameId want, int64_t nowNs = 0);
-    inline constexpr int64_t        NEGATIVE_TTL_NS = 30'000'000'000LL;
+    // A miss (an id not in the index) is rebuilt for at most once per this
+    // long: a game mid-install shows up within 30 s, and a class nothing
+    // installed names costs one rebuild per 30 s at most.
+    inline constexpr int64_t NEGATIVE_TTL_NS = 30'000'000'000LL;
 
     // The roots Steam keeps its files under (native, the ~/.steam link,
     // Flatpak), for a home.

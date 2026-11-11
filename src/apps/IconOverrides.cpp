@@ -1,3 +1,4 @@
+#include "IdentityLive.hpp"
 #include "IconOverrides.hpp"
 #include "Compat.hpp"
 
@@ -71,8 +72,17 @@ namespace Hyprdrive::IconOverrides {
             return nullptr;
         refresh();
         const auto& M  = store().map;
-        const auto  IT = M.find(desktopId);
-        return IT == M.end() ? nullptr : &IT->second;
+        if (const auto IT = M.find(desktopId); IT != M.end())
+            return &IT->second;
+        // An override saved under another id of the same app (a Steam
+        // shortcut's desktop id for the running game, StoreIds.hpp).
+        if (M.empty())
+            return nullptr;
+        const std::string WANT = Hyprdrive::AppIdentity::canonical(desktopId);
+        for (const auto& [ID, ICON] : M)
+            if (Hyprdrive::AppIdentity::canonical(ID) == WANT)
+                return &ICON;
+        return nullptr;
     }
 
     uint64_t generation() {

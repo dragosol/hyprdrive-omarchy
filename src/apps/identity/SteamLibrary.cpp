@@ -106,7 +106,7 @@ namespace Hyprdrive::AppIdentity::SteamLibrary {
         return {env.home + "/.local/share/Steam", env.home + "/.steam/steam", env.home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam"};
     }
 
-    std::shared_ptr<const Snapshot> rebuild(const Sources& src) {
+    std::shared_ptr<const Snapshot> rebuild(const Sources& src, const Reachable& reachable) {
         auto s = std::make_shared<Snapshot>();
         try {
             s->builtAtNs = steadyNs();
@@ -137,7 +137,11 @@ namespace Hyprdrive::AppIdentity::SteamLibrary {
                         s->shortcuts.try_emplace(e.appid, Shortcut{.id32 = e.appid, .name = e.name, .exe = e.exe, .startDir = e.startDir, .icon = e.icon, .launchOptions = e.launchOptions});
                 }
             }
-            for (const auto& LIB : s->libraries)
+            for (const auto& LIB : s->libraries) {
+                if (reachable && !reachable(LIB)) {
+                    s->skipped.push_back(LIB);
+                    continue;
+                }
                 for (const auto& N : src.list(LIB)) {
                     if (!isManifestName(N))
                         continue;
@@ -147,6 +151,7 @@ namespace Hyprdrive::AppIdentity::SteamLibrary {
                     if (auto m = Steam::parseManifest(*ACF); m && !s->apps.contains(m->appid))
                         s->apps.emplace(m->appid, App{.appid = m->appid, .name = m->name, .installdir = m->installdir, .library = LIB});
                 }
+            }
             for (auto& [ID, a] : s->apps)
                 findIcon(src, s->roots, a);
         } catch (...) {
@@ -165,18 +170,5 @@ namespace Hyprdrive::AppIdentity::SteamLibrary {
     void publish(std::shared_ptr<const Snapshot> s) {
         std::lock_guard lock(g_mutex);
         g_current = std::move(s);
-    }
-
-    std::shared_ptr<const Snapshot> ensure(const Sources& src, Steam::GameId want, int64_t nowNs) {
-        const int64_t NOW  = nowNs ? nowNs : steadyNs();
-        auto          snap = current();
-        const bool    HAVE = snap && (want.kind == Steam::GameId::Kind::App ? snap->app(want.id) != nullptr : snap->shortcut(want.id) != nullptr);
-        if (snap && (HAVE || NOW - snap->builtAtNs < NEGATIVE_TTL_NS))
-            return snap;
-        auto fresh = rebuild(src);
-        if (nowNs) // a test's clock: the build is dated by it
-            std::const_pointer_cast<Snapshot>(fresh)->builtAtNs = nowNs;
-        publish(fresh);
-        return fresh;
     }
 }

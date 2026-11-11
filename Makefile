@@ -34,7 +34,7 @@ endif
 
 CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build $(SRC_INC) --embed-dir=. \
             $(shell pkg-config --cflags $(PKGS))
-LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0 xcb)
+LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0 xcb xcb-res)
 
 ifeq ($(CXX),g++)
     CXXFLAGS += -fno-gnu-unique

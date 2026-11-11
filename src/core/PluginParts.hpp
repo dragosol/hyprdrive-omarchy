@@ -72,6 +72,7 @@ using namespace Hyprutils::String;
 #include "KeyboardCat.hpp"
 #include "Intent.hpp"
 #include "GameApps.hpp"
+#include "IdentityLive.hpp"
 #include "FullscreenDesktop.hpp"
 #include "Rows.hpp"
 #include "ShowDesktop.hpp"

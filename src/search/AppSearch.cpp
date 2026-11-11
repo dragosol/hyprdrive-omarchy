@@ -276,6 +276,7 @@ namespace AppSearch {
         }
 
         uint64_t g_inventoryGen = 1;
+        size_t   g_diskEntries  = 0; // g_entries[0, this) came from the disk walk, the rest from extraEntries
 
         void scan() {
             Prof::Timer PROF{Prof::scanNs, Prof::scanCalls};
@@ -325,6 +326,7 @@ namespace AppSearch {
                     g_entries.emplace_back(std::move(entry));
                 }
             }
+            g_diskEntries = g_entries.size();
             if (extraEntries)
                 extraEntries(g_entries);
         }
@@ -791,6 +793,17 @@ namespace AppSearch {
         ++g_inventoryGen;
     }
 
+    void refreshExtras() {
+        if (!g_scanned) {
+            inventory();
+            return;
+        }
+        ++g_inventoryGen;
+        g_entries.resize(std::min(g_diskEntries, g_entries.size()));
+        if (extraEntries)
+            extraEntries(g_entries);
+    }
+
     uint64_t inventoryGeneration() {
         inventory(); // a first call must not report generation 1 for an unscanned list
         return g_inventoryGen;
@@ -1253,6 +1266,15 @@ namespace AppSearch {
     static size_t entryIndexForClass(const std::string& wmClass) {
         if (wmClass.empty())
             return std::string::npos;
+        // An AppIdentity group key: its entry by id, uncached here (the
+        // answer changes when the identity lands, not with the inventory).
+        if (wmClass.starts_with("hd:")) {
+            SIdentityAnswer a;
+            const std::string KEY = wmClass.substr(3);
+            const bool        HAVE = identityForKey && identityForKey(KEY, a);
+            const SEntry*     E    = entryForId(HAVE && !a.desktopId.empty() ? a.desktopId : KEY);
+            return E ? static_cast<size_t>(E - inventory().data()) : std::string::npos;
+        }
 
         // Called from the overview's per-window membership gate, so it runs for
         // every window every frame. The inventory is small but the compare is
@@ -1361,20 +1383,24 @@ namespace AppSearch {
     }
 
     std::string appNameForClass(const std::string& wmClass) {
+        if (SIdentityAnswer a; wmClass.starts_with("hd:") && identityForKey && identityForKey(wmClass.substr(3), a) && !a.name.empty())
+            return a.name;
         const auto IDX = entryIndexForClass(wmClass);
         if (IDX != std::string::npos)
             return inventory()[IDX].name;
         // A Proton game with no Steam shortcut still has a name in its manifest
-        // (SteamLibrary.hpp: the index, rebuilt here until the identity worker
-        // exists, with the old 30 s retry for a miss).
+        // (SteamLibrary.hpp: the index the identity worker builds and
+        // publishes; never built here, on the draw path).
         const auto ID = Hyprdrive::AppIdentity::Steam::fromClass(wmClass);
         if (!ID)
             return "";
-        const auto SNAP = Hyprdrive::AppIdentity::SteamLibrary::ensure(Hyprdrive::AppIdentity::liveSources(), *ID);
+        const auto SNAP = Hyprdrive::AppIdentity::SteamLibrary::current();
         return SNAP ? SNAP->nameFor(*ID) : "";
     }
 
     std::string iconForClass(const std::string& wmClass) {
+        if (SIdentityAnswer a; wmClass.starts_with("hd:") && identityForKey && identityForKey(wmClass.substr(3), a) && !a.icon.empty())
+            return a.icon;
         const auto IDX = entryIndexForClass(wmClass);
         if (IDX != std::string::npos)
             return inventory()[IDX].icon;
@@ -1384,12 +1410,20 @@ namespace AppSearch {
         const auto ID     = Hyprdrive::AppIdentity::Steam::fromClass(wmClass);
         if (DIGITS.empty() || !ID)
             return "";
-        const auto SNAP = Hyprdrive::AppIdentity::SteamLibrary::ensure(Hyprdrive::AppIdentity::liveSources(), *ID);
+        const auto SNAP = Hyprdrive::AppIdentity::SteamLibrary::current();
         const auto ICON = SNAP ? SNAP->iconFor(*ID) : std::string{};
         return ICON.empty() ? "steam_icon_" + DIGITS : ICON;
     }
 
     std::string idForClass(const std::string& wmClass) {
+        // An AppIdentity key: its desktop entry's id, else the key itself
+        // (the identity's own entry, GameApps.hpp).
+        if (wmClass.starts_with("hd:")) {
+            SIdentityAnswer a;
+            if (identityForKey && identityForKey(wmClass.substr(3), a) && !a.desktopId.empty())
+                return a.desktopId;
+            return wmClass.substr(3);
+        }
         const auto IDX = entryIndexForClass(wmClass);
         return IDX == std::string::npos ? "" : inventory()[IDX].id;
     }
@@ -1425,6 +1459,12 @@ namespace AppSearch {
                 break;
             }
         }
+
+        // A canonical Steam key (a favourite written by AppIdentity,
+        // steam-app-<id>) is the shortcut that launches that id, the newest.
+        if (found == std::string::npos && id.starts_with("steam-app-"))
+            found = Hyprdrive::AppIdentity::SteamLibrary::newestShortcut(
+                INV.size(), std::string_view{id}.substr(10), [&](size_t i) { return std::string_view{INV[i].exec}; }, [&](size_t i) { return INV[i].mtimeNs; });
 
         cache[id] = found;
         return found == std::string::npos ? nullptr : &INV[found];

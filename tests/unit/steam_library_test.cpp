@@ -81,17 +81,12 @@ int main() {
         const auto S3 = SteamLibrary::rebuild(sources(copyFixture("steam-native", TMP / "nowriter"), false));
         CHECK(S3->app(3321460) && S3->app(3321460)->iconFrom == "jpg" && S3->app(3321460)->icon.ends_with("/f260267377759a5fea6b651817c9a413c6b562b0.jpg"));
 
-        // The stopgap: built on the first ask, kept while it answers, rebuilt
-        // for a miss only once the build is 30 s old.
-        SteamLibrary::publish(nullptr);
-        const int64_t T0 = 1'000'000'000;
-        const auto    A  = SteamLibrary::ensure(SRC, {K::App, 2357570}, T0);
-        CHECK(A && A == SteamLibrary::current());
-        CHECK(SteamLibrary::ensure(SRC, {K::App, 2357570}, T0 + 60'000'000'000LL) == A); // a hit never rebuilds
-        CHECK(SteamLibrary::ensure(SRC, {K::App, 999}, T0 + 29'000'000'000LL) == A);     // a miss inside 30 s
-        const auto B = SteamLibrary::ensure(SRC, {K::App, 999}, T0 + SteamLibrary::NEGATIVE_TTL_NS);
-        CHECK(B && B != A && B->builtAtNs == T0 + SteamLibrary::NEGATIVE_TTL_NS);
-        SteamLibrary::publish(nullptr);
+        // A library `reachable` refuses (a removable disk that did not answer
+        // in time) is skipped and named, the rest still indexed.
+        size_t asked = 0;
+        const auto R = SteamLibrary::rebuild(SRC, [&](const std::string&) { ++asked; return false; });
+        CHECK(asked == R->libraries.size() && R->skipped.size() == R->libraries.size() && R->apps.empty());
+        CHECK(!R->roots.empty());
     }
     {
         const auto S = SteamLibrary::rebuild(sources(copyFixture("steam-flatpak", TMP), true));

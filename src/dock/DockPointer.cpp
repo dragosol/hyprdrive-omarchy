@@ -1,5 +1,6 @@
 // Pointer and keyboard input: hit tests, drag-reorder, press, click,
 // scroll, the menu's keys and clicks, and the info-poll timer.
+#include "IdentityLive.hpp"
 #include "DockParts.hpp"
 #include "MotionCurves.hpp"
 
@@ -465,7 +466,7 @@ void pinAt(const std::string& desktopId, int index) {
     for (int seen = 0; const auto& ID : FAV) {
         if (!drawnFavorite(ID))
             continue;
-        if (ID == desktopId) {
+        if (Hyprdrive::AppIdentity::sameApp(ID, desktopId)) {
             from = seen;
             break;
         }
@@ -473,7 +474,7 @@ void pinAt(const std::string& desktopId, int index) {
     }
 
     if (from >= 0) {
-        std::erase(FAV, desktopId);
+        std::erase_if(FAV, [&](const std::string& F) { return Hyprdrive::AppIdentity::sameApp(F, desktopId); });
         if (from < index)
             --index;
     }
@@ -501,7 +502,7 @@ void unpin(const std::string& desktopId) {
     if (desktopId.empty())
         return;
 
-    if (std::erase(favorites(), desktopId) > 0)
+    if (std::erase_if(favorites(), [&](const std::string& F) { return Hyprdrive::AppIdentity::sameApp(F, desktopId); }) > 0)
         writeFavorites();
 }
 

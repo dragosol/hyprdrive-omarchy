@@ -650,6 +650,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     Hyprdrive::Mosaic::registerLayout(HYPRDRIVE_HANDLE);
     Hyprdrive::Intent::init();
     Hyprdrive::GameApps::init();
+    // Which app each window is (IdentityLive.hpp): its worker builds the
+    // Steam and Lutris indexes and resolves every window off this thread.
+    Hyprdrive::AppIdentity::init();
     // Each monitor's row of desktops (Omarchy's workspace blocks): before
     // anything renumbers.
     Hyprdrive::Rows::init();
@@ -759,6 +762,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     Hyprdrive::Intent::shutdown();
     Hyprdrive::FullscreenDesktop::shutdown();
     Hyprdrive::Rows::shutdown(); // its inotify fd, timer and listeners
+    Hyprdrive::AppIdentity::shutdown();
     Hyprdrive::GameApps::shutdown();
     Hyprdrive::Mosaic::shutdown();
     Hyprdrive::Mosaic::unregisterLayout(HYPRDRIVE_HANDLE);

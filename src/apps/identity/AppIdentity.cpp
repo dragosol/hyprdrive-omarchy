@@ -120,6 +120,10 @@ namespace Hyprdrive::AppIdentity {
                 if (out.displayName.empty())
                     out.displayName = w.cls;
                 out.placeable = out.placeable && placeable;
+                if (out.exePath.empty())
+                    out.exePath = C.exePath;
+                if (out.prefix.empty())
+                    out.prefix = C.prefix;
                 out.isGame    = out.isGame || w.contentGame || out.family == Family::Steam || out.family == Family::SteamShortcut || out.family == Family::Lutris ||
                     out.family == Family::Proton || oldIsGameClass(w);
                 if (!notes.empty())
@@ -146,7 +150,10 @@ namespace Hyprdrive::AppIdentity {
 
     std::string canonicalKey(std::string_view stored, const InventoryView& inv) {
         try {
-            for (const std::string_view P : {"steam-app-", "steam-shortcut-", "net.lutris.", "hyprdrive-wine-", "hd:"})
+            // A dock group key is its identity's key.
+            if (stored.starts_with("hd:"))
+                stored.remove_prefix(3);
+            for (const std::string_view P : {"steam-app-", "steam-shortcut-", "net.lutris.", "hyprdrive-wine-"})
                 if (stored.starts_with(P))
                     return std::string{stored};
             for (const auto& E : inv.entries)
@@ -157,6 +164,14 @@ namespace Hyprdrive::AppIdentity {
                 }
             return std::string{stored};
         } catch (...) { return std::string{stored}; }
+    }
+
+    bool sameApp(std::string_view a, std::string_view b, const InventoryView& inv) {
+        if (a == b)
+            return !a.empty();
+        if (a.empty() || b.empty())
+            return false;
+        return canonicalKey(a, inv) == canonicalKey(b, inv);
     }
 
     std::string groupKeyOf(const Identity& id, const WindowFacts& w) {

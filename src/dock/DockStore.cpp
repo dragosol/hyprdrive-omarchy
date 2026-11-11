@@ -1,5 +1,7 @@
 // The dock's persistence: the favourites store (polled) and the
 // "Always Open in" app lists.
+#include "StoreIds.hpp"
+#include "IdentityLive.hpp"
 #include "DockParts.hpp"
 
 namespace Hyprdrive::Dock {
@@ -117,6 +119,11 @@ static std::filesystem::path idListPath(const char* name) {
     return FAV.empty() ? FAV : FAV.parent_path() / name;
 }
 
+// Stored ids are compared as AppIdentity keys on both sides (StoreIds.hpp).
+static std::string canonId(std::string_view id) {
+    return Hyprdrive::AppIdentity::canonical(id);
+}
+
 static const std::vector<std::string>& idList(SEmptyDesktopStore& STORE, const char* name) {
     std::error_code ec;
     const auto      PATH = idListPath(name);
@@ -138,7 +145,7 @@ static const std::vector<std::string>& idList(SEmptyDesktopStore& STORE, const c
 static void toggleIdList(SEmptyDesktopStore& STORE, const char* name, const std::string& id) {
     if (id.empty())
         return;
-    const auto IDS  = MenuModel::toggledId(idList(STORE, name), id);
+    const auto IDS  = Hyprdrive::AppIdentity::StoreIds::toggled(idList(STORE, name), id, canonId);
     const auto PATH = idListPath(name);
     if (PATH.empty())
         return;
@@ -156,7 +163,7 @@ static void toggleIdList(SEmptyDesktopStore& STORE, const char* name, const std:
 static SEmptyDesktopStore g_emptyDesktopStore, g_fullscreenStore;
 
 bool opensInEmptyDesktop(const std::string& id) {
-    return !id.empty() && std::ranges::contains(idList(g_emptyDesktopStore, "empty-desktop-apps"), id);
+    return !id.empty() && Hyprdrive::AppIdentity::StoreIds::contains(idList(g_emptyDesktopStore, "empty-desktop-apps"), id, canonId);
 }
 
 void toggleEmptyDesktop(const std::string& id) {
@@ -164,7 +171,7 @@ void toggleEmptyDesktop(const std::string& id) {
 }
 
 bool opensInFullscreen(const std::string& id) {
-    return !id.empty() && std::ranges::contains(idList(g_fullscreenStore, "fullscreen-apps"), id);
+    return !id.empty() && Hyprdrive::AppIdentity::StoreIds::contains(idList(g_fullscreenStore, "fullscreen-apps"), id, canonId);
 }
 
 void toggleOpenFullscreen(const std::string& id) {
@@ -176,10 +183,7 @@ void toggleFavorite(const std::string& id) {
         return;
 
     auto& FAV = favorites();
-    if (const auto IT = std::ranges::find(FAV, id); IT != FAV.end())
-        FAV.erase(IT);
-    else
-        FAV.emplace_back(id);
+    FAV       = Hyprdrive::AppIdentity::StoreIds::toggled(FAV, id, canonId);
 
     writeFavorites();
 }

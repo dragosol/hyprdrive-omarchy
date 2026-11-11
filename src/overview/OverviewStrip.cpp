@@ -1,6 +1,7 @@
 // COverview: top strip, scratchpad cell, alt strips, detent badge.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "IdentityLive.hpp"
 #include "Rows.hpp"
 #include "MotionClock.hpp"
 
@@ -1523,7 +1524,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
         if (!W || !W->m_isMapped)
             continue;
         ++windows;
-        auto NAME = AppSearch::appNameForClass(AppSearch::identityClass(W->m_class, W->m_title));
+        auto NAME = AppSearch::appNameForClass(Hyprdrive::AppIdentity::groupKey(W));
         if (NAME.empty())
             NAME = W->m_class;
         if (!NAME.empty() && std::ranges::find(names, NAME) == names.end())

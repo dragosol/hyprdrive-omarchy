@@ -3,6 +3,7 @@
 // workspace moves. activateRow/hotkey/dragRelease live here because they
 // call launchApp/activateItem with default arguments.
 #include "DockParts.hpp"
+#include "IdentityLive.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -40,7 +41,7 @@ bool windowMatchesItem(const PHLWINDOW& window, const SItem& item, const SIntere
     if (!interesting(window, cfg))
         return false;
 
-    const auto CLASS = AppSearch::identityClass(window->m_class, window->m_title);
+    const auto CLASS = Hyprdrive::AppIdentity::groupKey(window);
 
     if (!item.wmClass.empty() && CLASS == item.wmClass)
         return true;

@@ -1,0 +1,1 @@
+wow.exe	World of Warcraft	/home/user/.local/share/hyprdrive/icons/wine-wow.exe.png	env -C "/home/user/Games/wow/drive_c/Program Files (x86)/World of Warcraft/_retail_" "WINEPREFIX=/home/user/Games/wow" "/usr/bin/wine" "/home/user/Games/wow/drive_c/Program Files (x86)/World of Warcraft/_retail_/Wow.exe"

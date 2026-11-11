@@ -85,6 +85,12 @@
 #   steam_library_test  SteamLibrary: the Steam index from the fixture trees,
 #                     the icon chain (theme -> .ico as PNG -> jpg), the 30 s
 #                     retry for a miss, the newest shortcut; FileSources' caps.
+#   identity_engine_test  the identity worker (Engine.hpp) on the fixtures: its
+#                     own index builds, a full resolution, a helper resolved
+#                     again when its app lands, cancel, a sleeping removable
+#                     library skipped in time, a stop with jobs queued.
+#   identity_live_test  stored ids as AppIdentity keys (StoreIds.hpp) on copies
+#                     of today's store files, and ProcFacts' bounded /proc reads.
 #   app_identity_test  AppIdentity::resolve(): window + process facts against
 #                     the fixture trees -> the Identity (Steam by env, class or
 #                     reaper; shortcuts; umu x2; Battle.net + Overwatch; two
@@ -175,6 +181,12 @@ run steam_library_test tests/unit/steam_library_test.cpp src/apps/identity/Steam
 # shellcheck disable=SC2046
 run app_identity_test tests/unit/app_identity_test.cpp src/apps/identity/AppIdentity.cpp src/apps/identity/Resolvers.cpp src/apps/identity/Facts.cpp \
     src/apps/identity/SteamLibrary.cpp src/apps/identity/LutrisLibrary.cpp src/apps/identity/Sources.cpp $(pkg-config --cflags --libs cairo)
+# shellcheck disable=SC2046
+run identity_engine_test tests/unit/identity_engine_test.cpp src/apps/identity/Engine.cpp src/apps/identity/AppIdentity.cpp src/apps/identity/Resolvers.cpp \
+    src/apps/identity/Facts.cpp src/apps/identity/SteamLibrary.cpp src/apps/identity/LutrisLibrary.cpp src/apps/identity/Sources.cpp src/core/Workers.cpp -pthread $(pkg-config --cflags --libs cairo)
+# shellcheck disable=SC2046
+run identity_live_test tests/unit/identity_live_test.cpp src/apps/identity/ProcFacts.cpp src/apps/identity/AppIdentity.cpp src/apps/identity/Resolvers.cpp \
+    src/apps/identity/Facts.cpp src/apps/identity/SteamLibrary.cpp src/apps/identity/LutrisLibrary.cpp src/apps/identity/Sources.cpp $(pkg-config --cflags --libs cairo)
 run dock_drop_test tests/unit/dock_drop_test.cpp
 run dock_menu_model_test tests/unit/dock_menu_model_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp
