@@ -45,4 +45,8 @@ namespace Hyprdrive::FullscreenDesktop {
     // desktop (`home` false) or back home at the end of that trip (`home`
     // true): Mosaic puts it back where it stood (MosaicTripHold.hpp).
     bool carrying(const PHLWINDOW& w, bool home);
+    // The dock's "Always Open in" Empty Workspace + Fullscreen moves a new
+    // window off `origin` to an empty desktop: closed there, fullscreen, the
+    // view goes back to `origin` (FullscreenDesktop.cpp, SOrigin).
+    void launchedFrom(const PHLWINDOW& w, const PHLWORKSPACE& origin);
 }

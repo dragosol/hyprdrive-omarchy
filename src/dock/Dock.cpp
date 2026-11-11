@@ -2,6 +2,7 @@
 // entry points other modules call. Split from one file; see DockParts.hpp.
 #include "DockParts.hpp"
 #include "MotionSites.hpp"
+#include "FullscreenDesktop.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -859,8 +860,12 @@ void onWindowOpen(const PHLWINDOW& window) {
                 return O && O != W && O->m_isMapped && !O->isHidden() && O->m_workspace == W->m_workspace;
             });
             if (!ALONE)
-                if (const auto MONITOR = W->m_workspace->m_monitor.lock())
+                if (const auto MONITOR = W->m_workspace->m_monitor.lock()) {
+                    // Both chips: closed fullscreen there, the view comes back here.
+                    if (FULL)
+                        Hyprdrive::FullscreenDesktop::launchedFrom(W, W->m_workspace);
                     moveToEmptyWorkspace(MONITOR, W);
+                }
         }
         if (FULL && W->m_isMapped && !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
             (void)::Config::Actions::fullscreenWindow(::Fullscreen::FSMODE_FULLSCREEN, true, W);

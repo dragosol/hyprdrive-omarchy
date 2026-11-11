@@ -61,7 +61,11 @@ namespace Hyprdrive::FullscreenDesktop {
             WORKSPACEID     at   = WORKSPACE_INVALID; // its place (kept up as numbers move: its desktop can go before it is done)
             WORKSPACEID     homeAt = WORKSPACE_INVALID; // its home's place, the same way (every other window there can close)
             bool            owes = false; // its place was made for it: owed back when it is done
+            // Unmapped but not gone (a Wine game's window does that and maps
+            // again): since when. Closed only once that outlasts REMAP_GRACE.
+            std::optional<std::chrono::steady_clock::time_point> unmappedAt;
         };
+        constexpr std::chrono::milliseconds REMAP_GRACE{800};
         struct SDebt {
             PHLWORKSPACEREF space; // the desktop in the owed place, while it lives
             WORKSPACEID     at = WORKSPACE_INVALID; // the owed place (kept up as numbers move)
@@ -377,6 +381,75 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto S = t.space.lock();
             g_debts.push_back({.space = S, .at = placeOf(t), .mon = t.mon, .home = t.home,
                                .cls = w ? w->m_class : std::string{}, .pid = w ? w->getPID() : 0});
+        }
+
+        // Where the view goes when a fullscreen app closes on its own desktop:
+        // its home; HOME GONE MEANWHILE, the desktop now in home's place, else
+        // the populated desktop nearest that place on the same monitor. Not a
+        // new empty desktop: leaving fullscreen re-makes the home for the
+        // window to land on, but a closed app has nothing to land.
+        PHLWORKSPACE backAfterClose(const PHLWORKSPACE& home, WORKSPACEID homeAt, const PHLMONITOR& mon, const PHLWORKSPACE& space) {
+            if (home && home != space && home->m_monitor.lock() == mon)
+                return home;
+            if (const auto E = byId(homeAt); E && E != space && E->m_monitor.lock() == mon)
+                return E;
+            PHLWORKSPACE best;
+            for (const auto& REF : State::workspaceState()->workspaces())
+                if (const auto WS = REF.lock(); DesktopOrder::ordinary(WS) && WS != space && WS->m_monitor.lock() == mon && othersOn(WS, nullptr) > 0 &&
+                    (!best || std::abs(WS->m_id - homeAt) < std::abs(best->m_id - homeAt)))
+                    best = WS;
+            return best;
+        }
+
+        // ALWAYS OPEN IN EMPTY WORKSPACE + FULLSCREEN (the dock's chips): the
+        // app opens on an empty desktop and goes fullscreen there, alone -- no
+        // trip (g_settled). Closed while that desktop is shown, the view goes
+        // back to the desktop it was launched from (launchedFrom), as a trip's
+        // close goes home. Out of fullscreen first, it is just a window there.
+        struct SOrigin {
+            PHLWINDOWREF    win;
+            PHLWORKSPACEREF origin, space;
+            WORKSPACEID     originAt = WORKSPACE_INVALID;
+            PHLMONITORREF   mon;
+            bool            wasFullscreen = false;
+            std::optional<std::chrono::steady_clock::time_point> unmappedAt;
+        };
+        std::vector<SOrigin> g_origins;
+        void origins() {
+            const auto NOW = std::chrono::steady_clock::now();
+            for (auto it = g_origins.begin(); it != g_origins.end();) {
+                auto&      O = *it;
+                const auto W = O.win.lock();
+                if (W && W->m_isMapped) {
+                    O.unmappedAt.reset();
+                    if (W->m_workspace && DesktopOrder::ordinary(W->m_workspace))
+                        O.space = W->m_workspace;
+                    O.wasFullscreen |= fullscreen(W);
+                    // Out of fullscreen (after it was), or on a trip: not ours.
+                    if ((O.wasFullscreen && !fullscreen(W)) || tripOf(W)) {
+                        it = g_origins.erase(it);
+                        continue;
+                    }
+                    ++it;
+                    continue;
+                }
+                if (W && !W->m_isMapped) {
+                    if (!O.unmappedAt)
+                        O.unmappedAt = NOW;
+                    if (NOW - *O.unmappedAt < REMAP_GRACE) {
+                        ++it;
+                        continue;
+                    }
+                }
+                const auto SPACE = O.space.lock();
+                const auto MON   = O.mon.lock();
+                if (O.wasFullscreen && MON && SPACE && MON->m_activeWorkspace == SPACE && othersOn(SPACE, W) == 0) {
+                    trace(std::format("fullscreen app closed on the desktop it opened on: back to {}", O.originAt));
+                    if (const auto BACK = backAfterClose(O.origin.lock(), O.originAt, MON, SPACE))
+                        show(MON, BACK);
+                }
+                it = g_origins.erase(it);
+            }
         }
 
         // Out of fullscreen on its desktop: home, travelling there.
@@ -710,6 +783,7 @@ namespace Hyprdrive::FullscreenDesktop {
             if (const char* WHY = std::exchange(g_healDue, nullptr))
                 (void)DesktopOrder::heal(WHY);
             showBesides();
+            origins();
             std::erase_if(g_settled, [](const PHLWINDOWREF& r) { const auto W = r.lock(); return !W || !W->m_isMapped || !fullscreen(W); });
             // Trips.
             for (auto it = g_trips.begin(); it != g_trips.end();) {
@@ -717,17 +791,37 @@ namespace Hyprdrive::FullscreenDesktop {
                 const auto  W     = T.win.lock();
                 const auto  SPACE = T.space.lock();
                 if (W && W->m_isMapped && SPACE && W->m_workspace == SPACE && fullscreen(W)) {
+                    it->unmappedAt.reset();
                     ++it; // where it belongs
                     continue;
+                }
+                // UNMAPPED, NOT GONE: a Wine/XWayland game unmaps its window
+                // and maps it again (a mode change, a launcher handing over).
+                // That is no close -- the trip waits REMAP_GRACE for it.
+                if (W && !W->m_isMapped && SPACE && W->m_workspace == SPACE) {
+                    const auto NOW = std::chrono::steady_clock::now();
+                    if (!it->unmappedAt)
+                        it->unmappedAt = NOW;
+                    if (NOW - *it->unmappedAt < REMAP_GRACE) {
+                        ++it;
+                        continue;
+                    }
                 }
                 it = g_trips.erase(it);
                 g_leftSpace = T.space;
                 g_leftAt    = std::chrono::steady_clock::now();
                 if (!W || !W->m_isMapped) {
+                    // CLOSED (user, 2026-11-11: "once I've closed an app that was
+                    // sent to another desktop to fullscreen, it should remove
+                    // that desktop and return me to its origin desktop"): still
+                    // looking at its desktop, home -- the trip's way back -- and
+                    // its place is paid back (endTrip below; the app's own
+                    // leftovers there go home first, FullscreenBook). Not looking
+                    // at it: no view change, the place is paid back all the same.
                     trace("fullscreen app closed");
-                    // Still looking at its emptied desktop: home.
-                    if (const auto MON = T.mon.lock(); MON && T.home.lock() && SPACE && MON->m_activeWorkspace == SPACE && T.home.lock()->m_monitor.lock() == MON)
-                        show(MON, T.home.lock());
+                    if (const auto MON = T.mon.lock(); MON && SPACE && MON->m_activeWorkspace == SPACE)
+                        if (const auto BACK = backAfterClose(T.home.lock(), T.homeAt, MON, SPACE))
+                            show(MON, BACK);
                 } else if (SPACE && W->m_workspace == SPACE)
                     goHome(T, W);
                 else if (W->m_workspace) {
@@ -764,7 +858,7 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             // (A beside debt waiting for its windows to go is looked at again
             // when one closes or moves: the hooks below.)
-            int next = watch ? 60 : !g_trips.empty() ? 250 : 0;
+            int next = watch ? 60 : !g_trips.empty() || !g_origins.empty() ? 250 : 0;
             if (COMPACT_MS > 0 && (next == 0 || COMPACT_MS < next))
                 next = COMPACT_MS;
             if (g_timer && next > 0)
@@ -842,6 +936,14 @@ namespace Hyprdrive::FullscreenDesktop {
 
     bool justEntered(const PHLWORKSPACE& ws) {
         return ws && g_enteredSpace.lock() == ws && std::chrono::steady_clock::now() - g_enteredAt < std::chrono::seconds(1);
+    }
+
+    void launchedFrom(const PHLWINDOW& w, const PHLWORKSPACE& origin) {
+        if (!w || !DesktopOrder::ordinary(origin))
+            return;
+        std::erase_if(g_origins, [&](const SOrigin& o) { return !o.win || o.win.lock() == w; });
+        g_origins.push_back({.win = w, .origin = origin, .originAt = origin->m_id, .mon = origin->m_monitor});
+        arm(250);
     }
 
     bool carrying(const PHLWINDOW& w, bool home) {
@@ -984,6 +1086,7 @@ namespace Hyprdrive::FullscreenDesktop {
         g_settled.clear();
         g_compactDue = nullptr;
         g_besides.clear();
+        g_origins.clear();
         g_travels.clear();
     }
 }
