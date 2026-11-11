@@ -271,15 +271,15 @@ void main() {
             if (IT == g_ripples.end())
                 return;
             if (ageOf(*IT) >= LIFE_S) {
-                // One more full frame, drawn clean, then it is gone.
+                // This frame is drawn clean (the pump damaged all of it while the
+                // ring was live), then it is gone.
                 g_ripples.erase(IT);
-                g_pHyprRenderer->damageMonitor(MONITOR);
                 return;
             }
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRipplePassElement>(*IT));
-            // Every pixel again next frame: a partial redraw would bend what this
-            // frame already bent.
-            g_pHyprRenderer->damageMonitor(MONITOR);
+            // Every pixel again next frame (a partial redraw would bend what this
+            // frame already bent): asked by the pumps through activeOn, which
+            // request the whole output -- not from here, inside the pass.
         }
     }
 
@@ -301,6 +301,10 @@ void main() {
             .born        = Time::steadyNow(),
         });
         g_pHyprRenderer->damageMonitor(monitor);
+    }
+
+    bool activeOn(const PHLMONITOR& monitor) {
+        return monitor && std::ranges::any_of(g_ripples, [&](const SRipple& r) { return r.monitor == monitor->m_id; });
     }
 
     void shutdown() {

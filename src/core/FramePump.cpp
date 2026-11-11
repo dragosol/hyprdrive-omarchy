@@ -16,6 +16,7 @@
 #include "DockStacks.hpp"
 #include "FlightController.hpp"
 #include "Mosaic.hpp"
+#include "Ripple.hpp"
 #include "WindowPill.hpp"
 
 namespace Hyprdrive::FramePump {
@@ -94,6 +95,12 @@ constexpr std::array SOURCES{
     // The pill's and the preview rings' border fade (BorderFade.hpp): a
     // pointer resting on the pill emits no motion to repaint it.
     SSource{"border-fade", [](const PHLMONITOR& monitor) { return BorderFade::animatingOn(monitor); }, ESlot::AFTER_ARRANGE},
+
+    // The hot corner's ripple (Ripple.hpp): the whole output again every frame
+    // while a ring is live, and once more to draw it clean. It used to damage
+    // from RENDER_LAST_MOMENT, inside the pass. (Inside an overview the
+    // overview's pacer asks for it as well.)
+    SSource{"ripple", [](const PHLMONITOR& monitor) { return Ripple::activeOn(monitor); }, ESlot::AFTER_ARRANGE},
 };
 }
 

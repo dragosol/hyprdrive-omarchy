@@ -220,6 +220,9 @@ class COverview : public IOverview {
     bool                                  deskDragMove();
     bool                                  deskMovable(size_t idx) const;
     Time::steady_tp                       deskAnimAt{};
+    // The strip's drag glide was still moving when it was last drawn: the next
+    // onPreRender joins the reflow pacer for it (never a request from the pass).
+    bool                                  deskGlideMoving = false;
     std::unordered_map<WORKSPACEID, CBox> stripDropBoxes; // the next reorder transition starts its cells here
     bool                                  stripSettle    = false; // ...even with the order unchanged (dropped home)
     int                                   stripCellEdges = -1;    // renderStripCell: -1 from its index, else bit0 left, bit1 right

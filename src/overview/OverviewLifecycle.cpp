@@ -1,6 +1,7 @@
 // COverview: constructor/destructor, close, onPreRender, onWorkspaceChange, submap and passthrough binds, pointer handoff, desktop moves, DesktopTape.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "Ripple.hpp"
 
 using namespace OverviewDetail;
 
@@ -614,6 +615,14 @@ void COverview::onPreRender() {
     // the dock pill -- on the same pacer, for the same reason: wall-clock
     // eases, and plain damage is throttled while an overview is open.
     if (Hyprdrive::BorderFade::animatingOn(pMonitor.lock()))
+        gridSetReflowActive(pMonitor.lock());
+
+    // Three that used to ask for their next frame from INSIDE the pass (a
+    // damage asked for there is cleared with the pass): a closed window's tile
+    // shrinking (or still waiting on its unmap), the strip's drag glide (as
+    // last drawn; consumed here so it cannot outlive the frame that set it),
+    // and the hot corner's ripple. They join the pacer like the rest.
+    if (!closingTiles.empty() || std::exchange(deskGlideMoving, false) || Hyprdrive::Ripple::activeOn(pMonitor.lock()))
         gridSetReflowActive(pMonitor.lock());
 
     if (gridTakeReflowActive(pMonitor.lock())) {

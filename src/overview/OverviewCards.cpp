@@ -437,7 +437,6 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
     const float     DURMS    = memoDur;
     constexpr float WAITMS   = 1000.F; // longest a still-mapped window may take to actually go
     constexpr float POPIN    = 0.87F;
-    bool            animating = false;
 
     for (auto& tile : closingTiles) {
         const auto WINDOW = tile.window.lock();
@@ -473,8 +472,6 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
         // The animation clock: the speed setting stretches it, 0 snaps it.
         const float ELAPSED = Hyprdrive::Motion::Clock::animMsBetween(now, tile.start);
         const float T       = DURMS <= 0.F ? 1.F : std::clamp(ELAPSED / DURMS, 0.F, 1.F);
-        if (T < 1.F)
-            animating = true; // keep frames coming even from the cards that do not draw it
         if (tile.cardIdx != cardIdx || T >= 1.F || !tile.fb || !tile.fb->isAllocated())
             continue;
         const auto TEX = tile.fb->getTexture();
@@ -516,10 +513,9 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
         return SINCE >= DURMS || !t.fb || !t.fb->isAllocated();
     });
 
-    // The pass does not schedule itself: keep frames coming while anything is
-    // animating OR still waiting on its unmap.
-    if (animating || !closingTiles.empty())
-        damage();
+    // The pass does not schedule itself, and must not ask from inside: while
+    // anything is animating OR still waiting on its unmap (closingTiles is not
+    // empty), onPreRender keeps the reflow pacer running for it.
 }
 
 float COverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {

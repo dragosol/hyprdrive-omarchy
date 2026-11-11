@@ -1483,11 +1483,10 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor
-    // will not schedule the rest of the pop on its own.
-    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()) || Hyprdrive::KeyboardCat::busy()) {
-        damage();
-        requestInputFrame();
-    }
+    // will not schedule the rest of the pop on its own. Its frames come from
+    // the letter tick (SearchInput.cpp letterTickCb, off the render pass, armed
+    // by the edit), which damages every overview while the letters or the easter
+    // egg are busy -- never from inside this pass.
 }
 
 static const std::string* searchPreviewPath(const std::vector<SSearchRow>& results, int index) {

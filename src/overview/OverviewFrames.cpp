@@ -1,6 +1,7 @@
 // COverview: frame diagnostics, frame pacing, live-preview scheduling, surface frame/damage policy.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "Ripple.hpp"
 
 using namespace OverviewDetail;
 
@@ -538,6 +539,12 @@ bool COverview::needsIdleRepaint() const {
         return true;
 
     if (WindowPill::animating() && isOverviewPointerOnMonitor(pMonitor.lock()))
+        return true;
+
+    // The ones onPreRender paces that no test above can see (B1): a closing
+    // tile, the strip's drag glide, the ripple, and the easter egg's video
+    // (pumped by the letter tick, which the idle pulse must not undercut).
+    if (!closingTiles.empty() || deskGlideMoving || Hyprdrive::Ripple::activeOn(pMonitor.lock()) || Hyprdrive::KeyboardCat::busy())
         return true;
 
     return false;

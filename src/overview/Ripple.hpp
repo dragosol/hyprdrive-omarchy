@@ -25,6 +25,11 @@ namespace Hyprdrive::Ripple {
     // Launch one from `originGlobal` (global logical px, usually a screen
     // corner) on `monitor`. A second one on the same monitor restarts it.
     void trigger(const PHLMONITOR& monitor, const Vector2D& originGlobal);
+    // A ring is live on `monitor` (or has just ended and not yet been drawn
+    // clean): it needs the whole output again next frame. Asked by the frame
+    // pumps (FramePump's table on the desktop, the overview's pacer), never
+    // from inside the pass.
+    bool activeOn(const PHLMONITOR& monitor);
     // Pass element type name, for the PLUGIN_EXIT purge.
     inline constexpr const char* PASS_NAME = "CRipplePassElement";
 }
