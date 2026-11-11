@@ -87,6 +87,7 @@ run mount_sort_test tests/unit/mount_sort_test.cpp
 run gvfs_mount_test tests/unit/gvfs_mount_test.cpp
 run mosaic_pack_test tests/unit/mosaic_pack_test.cpp
 run show_desktop_test tests/unit/show_desktop_test.cpp
+run x_state_request_test tests/unit/x_state_request_test.cpp
 run preview_grid_test tests/unit/preview_grid_test.cpp
 run motion_spacing_test tests/unit/motion_spacing_test.cpp
 # shellcheck disable=SC2046

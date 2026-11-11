@@ -65,6 +65,28 @@ namespace Hyprdrive::XGeometry {
     // stays where it is (user: "attention should make the dock icon jump,
     // when it is hidden, and wiggle when it is shown"). REMOVE takes the
     // urgency back.
+    //
+    // A GAME FLIPPING MAXIMIZED (user, 2026-11-11: World of Warcraft under
+    // Wine went between maximized and windowed ~15 times a second, and before
+    // that between fullscreen and windowed). Hyprland 0.56 reads every
+    // _NET_WM_STATE message naming MAXIMIZED_VERT/HORZ as a TOGGLE
+    // (CWindow::onUpdateState flips on any value), and never tells X a window
+    // is maximized (CXWaylandSurface::m_maximized is never written, so
+    // sendState leaves MAXIMIZED out). Wine reads _NET_WM_STATE back, finds no
+    // MAXIMIZED and adds it again: the add un-maximizes, the state is written
+    // again without it, and round it goes. Three answers, in the same hook:
+    //  - a maximize half that asks for what the window already is (ADD on a
+    //    maximized window, REMOVE on one that is not) is taken out of the
+    //    message before Hyprland reads it; TOGGLE stays a toggle, FULLSCREEN
+    //    (Hyprland already does add/remove right) goes through untouched
+    //    (XStateRequest.hpp);
+    //  - m_maximized follows the window's client mode, and the state is sent
+    //    again when it changes -- after a client message, and on every
+    //    window.fullscreen event (keybinds, the dock, a pill, a gesture);
+    //  - a window whose own messages change its mode more than 6 times in a
+    //    second has its maximize/fullscreen requests ignored for 4 s (logged
+    //    once). What the user does never goes through a client message, so it
+    //    is never blocked.
     // PLUGIN_INIT; Hyprland unhooks at unload.
     void installStateRequestFix();
 

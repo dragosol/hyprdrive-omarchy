@@ -2,11 +2,14 @@
 #include "XGeometry.hpp"
 #include "FunctionHooks.hpp"
 #include "ConfigureHold.hpp"
+#include "XStateRequest.hpp"
 
 #include <chrono>
 #include <format>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <unordered_map>
 #include <vector>
 
 #include <xcb/xcb.h>
@@ -280,46 +283,152 @@ namespace Hyprdrive::XGeometry {
         CFunctionHook* g_clientMessageHook = nullptr;
         using origHandleClientMessage      = void (*)(CXWM*, xcb_client_message_event_t*);
 
-        // The two atoms, from our own X connection (atom ids are the server's):
+        // The atoms, from our own X connection (atom ids are the server's):
         // Hyprland's HYPRATOMS is an inline header map the plugin may hold an
         // unfilled copy of.
-        xcb_atom_t g_atomNetWmState = XCB_ATOM_NONE, g_atomWmChangeState = XCB_ATOM_NONE, g_atomAttention = XCB_ATOM_NONE;
-        bool       stateAtoms() {
+        xcb_atom_t g_atomNetWmState = XCB_ATOM_NONE, g_atomWmChangeState = XCB_ATOM_NONE, g_atomAttention = XCB_ATOM_NONE, g_atomFullscreen = XCB_ATOM_NONE,
+                   g_atomMaxVert = XCB_ATOM_NONE, g_atomMaxHorz = XCB_ATOM_NONE;
+        bool stateAtoms() {
             if (g_atomNetWmState != XCB_ATOM_NONE)
                 return true;
             const auto CONN = connection();
             if (!CONN)
                 return false;
-            auto c1 = xcb_intern_atom(CONN, 1, 13, "_NET_WM_STATE");
-            auto c2 = xcb_intern_atom(CONN, 1, 15, "WM_CHANGE_STATE");
-            auto c3 = xcb_intern_atom(CONN, 1, 31, "_NET_WM_STATE_DEMANDS_ATTENTION");
-            auto* r1 = xcb_intern_atom_reply(CONN, c1, nullptr);
-            auto* r2 = xcb_intern_atom_reply(CONN, c2, nullptr);
-            auto* r3 = xcb_intern_atom_reply(CONN, c3, nullptr);
-            if (r1)
-                g_atomNetWmState = r1->atom;
-            if (r2)
-                g_atomWmChangeState = r2->atom;
-            if (r3)
-                g_atomAttention = r3->atom;
-            free(r1);
-            free(r2);
-            free(r3);
+            const char* const NAMES[] = {"_NET_WM_STATE",           "WM_CHANGE_STATE",
+                                         "_NET_WM_STATE_DEMANDS_ATTENTION", "_NET_WM_STATE_FULLSCREEN",
+                                         "_NET_WM_STATE_MAXIMIZED_VERT",    "_NET_WM_STATE_MAXIMIZED_HORZ"};
+            xcb_atom_t* const OUT[]   = {&g_atomNetWmState, &g_atomWmChangeState, &g_atomAttention, &g_atomFullscreen, &g_atomMaxVert, &g_atomMaxHorz};
+            xcb_intern_atom_cookie_t cookies[6];
+            for (size_t i = 0; i < 6; ++i)
+                cookies[i] = xcb_intern_atom(CONN, 0, std::strlen(NAMES[i]), NAMES[i]);
+            for (size_t i = 0; i < 6; ++i)
+                if (auto* r = xcb_intern_atom_reply(CONN, cookies[i], nullptr)) {
+                    *OUT[i] = r->atom;
+                    free(r);
+                }
             return g_atomNetWmState != XCB_ATOM_NONE;
         }
 
+        // A GAME FLIPPING MAXIMIZED (XGeometry.hpp): the storm guard per X
+        // window, and what the hook did, for `hyprdrive:debug xgeom`.
+        std::unordered_map<xcb_window_t, XStateRequest::CStormGuard> g_storms;
+        struct {
+            uint64_t noop = 0, blocked = 0, storms = 0, flips = 0, told = 0;
+        } g_xs;
+
+        int64_t nowMs() {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+        }
+
+        PHLWINDOW windowOf(const SP<CXWaylandSurface>& xs) {
+            if (!xs)
+                return nullptr;
+            for (const auto& W : Desktop::windowState()->windows())
+                if (W && W->m_isX11 && W->m_xwaylandSurface.lock() == xs)
+                    return W;
+            return nullptr;
+        }
+
+        XStateRequest::eMode clientMode(const PHLWINDOW& w) {
+            if (!w || !w->m_isMapped || !w->m_workspace || !Fullscreen::controller())
+                return XStateRequest::eMode::NONE;
+            const auto C = Fullscreen::controller()->getFullscreenModes(w).client;
+            return (C & Fullscreen::FSMODE_FULLSCREEN) ? XStateRequest::eMode::FULLSCREEN :
+                (C & Fullscreen::FSMODE_MAXIMIZED)     ? XStateRequest::eMode::MAXIMIZED :
+                                                         XStateRequest::eMode::NONE;
+        }
+
+        // Tell X the truth: Hyprland 0.56 never sets CXWaylandSurface::m_maximized,
+        // so _NET_WM_STATE never says MAXIMIZED and a client that reads it back
+        // (Wine) asks again, forever. Kept in step with the window's client mode;
+        // the state is sent again when it changed.
+        void tellMaximized(const PHLWINDOW& w) {
+            if (!w || !w->m_isX11 || !g_pXWayland || !g_pXWayland->m_wm)
+                return;
+            const auto XS = w->m_xwaylandSurface.lock();
+            if (!XS || XS->m_overrideRedirect)
+                return;
+            const bool MAX = clientMode(w) == XStateRequest::eMode::MAXIMIZED;
+            if (XS->m_maximized == MAX)
+                return;
+            XS->m_maximized = MAX;
+            ++g_xs.told;
+            g_pXWayland->m_wm->sendState(XS);
+        }
+
+        CHyprSignalListener g_fsTellHook;
+
         void hkHandleClientMessage(CXWM* wm, xcb_client_message_event_t* e) {
-            if (wm && e && e->format == 32 && stateAtoms() && (e->type == g_atomNetWmState || (g_atomWmChangeState != XCB_ATOM_NONE && e->type == g_atomWmChangeState))) {
-                if (const auto XS = wm->windowForXID(e->window); XS && XS->m_mapped) {
-                    XS->m_state.requestsFullscreen.reset();
-                    XS->m_state.requestsMaximize.reset();
-                    XS->m_state.requestsMinimize.reset();
+            if (!wm || !e || e->format != 32 || !stateAtoms() || !g_clientMessageHook) {
+                if (g_clientMessageHook)
+                    rc<origHandleClientMessage>(g_clientMessageHook->m_original)(wm, e);
+                return;
+            }
+            const bool NETSTATE = e->type == g_atomNetWmState;
+            SP<CXWaylandSurface> xs;
+            if (NETSTATE || (g_atomWmChangeState != XCB_ATOM_NONE && e->type == g_atomWmChangeState)) {
+                if (xs = wm->windowForXID(e->window); xs && xs->m_mapped) {
+                    xs->m_state.requestsFullscreen.reset();
+                    xs->m_state.requestsMaximize.reset();
+                    xs->m_state.requestsMinimize.reset();
                 }
             }
-            rc<origHandleClientMessage>(g_clientMessageHook->m_original)(wm, e);
+
+            // The maximize / fullscreen half of a _NET_WM_STATE message, judged
+            // (XStateRequest.hpp) on a copy: Hyprland reads the atoms it names.
+            xcb_client_message_event_t msg    = *e;
+            PHLWINDOW                  window = NETSTATE && xs && xs->m_mapped ? windowOf(xs) : nullptr;
+            auto                       before = XStateRequest::eMode::NONE;
+            bool                       judged = false;
+            if (window && window->m_isMapped) {
+                auto       names = [&](xcb_atom_t a) { return a != XCB_ATOM_NONE && (msg.data.data32[1] == a || msg.data.data32[2] == a); };
+                const bool MAXI  = names(g_atomMaxVert) || names(g_atomMaxHorz);
+                const bool FULL  = names(g_atomFullscreen);
+                if (MAXI || FULL) {
+                    judged          = true;
+                    before          = clientMode(window);
+                    const auto  NOW = nowMs();
+                    const auto& G   = g_storms[e->window];
+                    const auto  V   = XStateRequest::decide({.action = msg.data.data32[0], .maximize = MAXI, .fullscreen = FULL}, before, G, NOW);
+                    for (size_t i = 1; i <= 2; ++i) {
+                        const xcb_atom_t A = msg.data.data32[i];
+                        if ((V.stripMaximize && A != XCB_ATOM_NONE && (A == g_atomMaxVert || A == g_atomMaxHorz)) ||
+                            (V.stripFullscreen && A != XCB_ATOM_NONE && A == g_atomFullscreen))
+                            msg.data.data32[i] = XCB_ATOM_NONE;
+                    }
+                    if (V.blocked)
+                        ++g_xs.blocked;
+                    else if (V.stripMaximize)
+                        ++g_xs.noop;
+                }
+            }
+
+            rc<origHandleClientMessage>(g_clientMessageHook->m_original)(wm, &msg);
+
+            if (judged) {
+                // The window may have gone in Hyprland's handling of it.
+                if (window && window->m_isMapped) {
+                    const auto AFTER = clientMode(window);
+                    if (AFTER != before) {
+                        ++g_xs.flips;
+                        const auto NOW = nowMs();
+                        if (g_storms[e->window].noteFlip(NOW)) {
+                            ++g_xs.storms;
+                            Log::logger->log(Log::WARN, "[hyprdrive] {} flipped its own maximize/fullscreen more than {} times in {} ms: its requests are ignored for {} ms",
+                                             window->m_class, XStateRequest::CStormGuard::FLIPS, XStateRequest::CStormGuard::WINDOW,
+                                             XStateRequest::CStormGuard::BLOCK);
+                        }
+                    }
+                    tellMaximized(window);
+                }
+                if (g_storms.size() > 32) {
+                    const auto NOW = nowMs();
+                    std::erase_if(g_storms, [&](const auto& kv) { return kv.second.idle(NOW); });
+                }
+            }
 
             // DEMANDS_ATTENTION, after Hyprland has had the message (it ignores it).
-            if (!wm || !e || e->format != 32 || e->type != g_atomNetWmState || g_atomAttention == XCB_ATOM_NONE)
+            if (!NETSTATE || g_atomAttention == XCB_ATOM_NONE)
                 return;
             if (e->data.data32[1] != g_atomAttention && e->data.data32[2] != g_atomAttention)
                 return;
@@ -349,17 +458,23 @@ namespace Hyprdrive::XGeometry {
         g_clientMessageHook = FunctionHooks::firstMatch("XGeometry", "_ZN4CXWM19handleClientMessageEP26xcb_client_message_event_t", rc<void*>(hkHandleClientMessage));
         if (!g_clientMessageHook)
             return; // not found: Hyprland's own handling stands
-        if (!g_clientMessageHook->hook())
+        if (!g_clientMessageHook->hook()) {
             g_clientMessageHook = nullptr;
+            return;
+        }
+        // Every mode change a keybind, the dock, a pill or a gesture makes
+        // reaches X too (a client message's own is told in the hook).
+        g_fsTellHook = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW w) { tellMaximized(w); });
     }
 
     std::string status() {
         std::string s = std::format("calls={} hold={} window={} anim={} xsurface={} clip: rate={} outside={} conn={} ptr={} agree={} tree={} none={} moved={} refocus={}/{} | ",
                                     g_n.calls, g_n.hold, g_n.window, g_n.anim, g_n.xsurface, g_n.clipRate, g_n.clipOutside, g_n.clipConn, g_n.clipPtr,
                                     g_n.clipAgree, g_n.clipTree, g_n.clipNone, g_n.clipMoved, g_n.refocus, g_n.refocusBack);
-        const auto  W = Desktop::focusState()->window();
+        s += std::format("xstate: noop={} blocked={} storms={} flips={} told={} | ", g_xs.noop, g_xs.blocked, g_xs.storms, g_xs.flips, g_xs.told);
+        const auto W = Desktop::focusState()->window();
         if (!W)
-            return "no focused window";
+            return s + "no focused window";
         s += std::format("focused={} x11={} mapped={} fs={} hold={} posAnim={} sizeAnim={}", W->m_class, W->m_isX11, W->m_isMapped,
                          Fullscreen::controller()->isFullscreen(W), ConfigureHold::held(), W->positionAnimation()->isBeingAnimated(),
                          W->sizeAnimation()->isBeingAnimated());
@@ -388,6 +503,8 @@ namespace Hyprdrive::XGeometry {
     }
 
     void shutdown() {
+        g_fsTellHook.reset();
+        g_storms.clear();
         if (g_refocusTimer)
             wl_event_source_remove(g_refocusTimer);
         g_refocusTimer = nullptr;
