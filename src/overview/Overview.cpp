@@ -446,28 +446,36 @@ void COverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscr
 
     window = getOverviewWindowToShow(window);
 
+    // Once per change: the close and the teardown after it both report the
+    // state the desktop is left in, and focus moving inside the overview
+    // re-reports the same 0.
+    const auto post = [this](bool fullscreen) {
+        if (postedFullscreenState == sc<int>(fullscreen))
+            return;
+        postedFullscreenState = sc<int>(fullscreen);
+        g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = fullscreen ? "1" : "0"});
+    };
+
     if (!validMapped(window) || !window->m_workspace || window->m_monitor != pMonitor) {
-        g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = "0"});
+        post(false);
         return;
     }
 
     if (!hideFullscreen || !Fullscreen::controller()->isFullscreen(window)) {
         Event::bus()->m_events.window.fullscreen.emit(window);
-
-        g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = Fullscreen::controller()->isFullscreen(window) ? "1" : "0"});
-
+        post(Fullscreen::controller()->isFullscreen(window));
         return;
     }
 
-    const auto SAVEDMODES = Fullscreen::controller()->getFullscreenModes(window);
-
-    Fullscreen::controller()->setFullscreenMode(window, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
-
-    Event::bus()->m_events.window.fullscreen.emit(window);
-
-    g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = "0"});
-
-    Fullscreen::controller()->setFullscreenMode(window, SAVEDMODES.internal, SAVEDMODES.client);
+    // The overview covers a fullscreen window, so a bar that hides for one
+    // must show: tell it fullscreen>>0 -- and ONLY tell it (A13). This used to
+    // drop the window out of fullscreen with setFullscreenMode(NONE) and put it
+    // back around the post (the 0.56 port of upstream's raw-field swap), and
+    // setFullscreenMode posts its own events: the open read fullscreen>>0,
+    // fullscreen>>0, fullscreen>>1, so the last word a bar heard was 1 and it
+    // stayed hidden -- and the client was sent two configures for nothing. The
+    // window's fullscreen state is not the overview's to touch.
+    post(false);
 }
 
 void COverview::render() {

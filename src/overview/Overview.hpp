@@ -897,6 +897,9 @@ class COverview : public IOverview {
     // once the pointer leaves the surface -- the implicit grab a client expects.
     bool                             layerPointerGrab = false;
     bool                             emittingFullscreenVisibilityState = false;
+    // The fullscreen>> state this overview last posted (-1: none yet), so the
+    // close and the teardown that follows it do not both post the same value.
+    int                              postedFullscreenState = -1;
     bool                             inputConfigOverridden = false;
     bool                             realtimePreviewTimerArmed = false;
     bool                             realtimePreviewFrameQueued = false;
