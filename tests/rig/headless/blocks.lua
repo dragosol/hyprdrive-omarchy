@@ -11,8 +11,8 @@
 -- XDG_STATE_HOME must be a directory hyprtest owns: the emulation writes
 -- omarchy/monitor-workspaces(-merged) there and the plugin watches it. A test
 -- may pre-seed monitor-workspaces to choose each output's block.
--- Without HD_BLOCKS_LUA it is the vanilla test config plus the fragment
--- (blocks off: the implicit row).
+-- Without HD_BLOCKS_LUA (or HD_OMARCHY_MW, below) it is the vanilla test config
+-- plus the fragment (blocks off: the implicit row).
 hl.monitor({ output = "HEADLESS-1", mode = "1920x1080@60", position = "0x0", scale = 1 })
 hl.monitor({ output = "HEADLESS-2", mode = "1920x1080@60", position = "1920x0", scale = 1 })
 hl.monitor({ output = "WL-1", mode = "1920x1080@60", position = "-1920x0", scale = 1 })
@@ -27,8 +27,66 @@ hl.config({
 })
 hl.env("XCURSOR_SIZE", "24")
 
+-- HD_OMARCHY_MW=/abs/monitor-workspaces.lua: Omarchy's REAL script (a copy of
+-- /usr/share/omarchy/default/hypr/monitor-workspaces.lua; Omarchy's file, never
+-- in this repository) instead of the emulation. It needs only what omarchy.lua
+-- gives it: require("default.hypr.paths") (state_home) and the global `o`
+-- (o.workspaces = M; o.bind_expressions for its Super+N actions; o.shell_quote
+-- when the state dir is missing). Loaded as require() would, under its module
+-- name, so the publisher in 00-plugin.lua finds it. The rig's monitors have no
+-- EDID: their identity is the connector, as in the emulation's seeds.
+local real = os.getenv("HD_OMARCHY_MW")
 local emu = os.getenv("HD_BLOCKS_LUA")
-if emu and emu ~= "" then
+if real and real ~= "" then
+    local home = os.getenv("HOME") or ""
+    local state = os.getenv("XDG_STATE_HOME")
+    if not state or state == "" then
+        state = home .. "/.local/state"
+    end
+    package.loaded["default.hypr.paths"] = { home = home, config_home = home .. "/.config", state_home = state, omarchy_path = "/usr/share/omarchy" }
+    o = o or {}
+    o.bind_expressions = o.bind_expressions or {}
+    o.shell_quote = o.shell_quote or function(s)
+        return "'" .. (tostring(s):gsub("'", "'\\''")) .. "'"
+    end
+    -- HD_LUA_ERRLOG=/path: every error raised in the script's hl.on / hl.timer
+    -- callbacks is appended there, then raised again unchanged. Hyprland only
+    -- pops a notification for a runtime error, and any `hyprctl eval` clears
+    -- configerrors, so a gate could not see one otherwise.
+    local errlog = os.getenv("HD_LUA_ERRLOG")
+    local on, timer = hl.on, hl.timer
+    if errlog and errlog ~= "" then
+        local function guarded(what, fn)
+            return function(...)
+                local ok, err = xpcall(fn, function(e)
+                    return debug and debug.traceback and debug.traceback(tostring(e), 2) or tostring(e)
+                end, ...)
+                if not ok then
+                    local f = io.open(errlog, "a")
+                    if f then
+                        f:write(what .. ": " .. tostring(err) .. "\n")
+                        f:close()
+                    end
+                    error(err, 0)
+                end
+            end
+        end
+        hl.on = function(name, fn)
+            return on(name, guarded("hl.on(" .. tostring(name) .. ")", fn))
+        end
+        hl.timer = function(fn, opts)
+            return timer(guarded("hl.timer", fn), opts)
+        end
+    end
+    package.loaded["default.hypr.monitor-workspaces"] = dofile(real)
+    hl.on = on -- the timer wrapper stays: the script arms its timers later
+    -- proof for the gate that THIS ran (the real script sets o.workspaces)
+    local mark = io.open(state .. "/omarchy-real.loaded", "w")
+    if mark then
+        mark:write(real .. (o.workspaces == package.loaded["default.hypr.monitor-workspaces"] and " o.workspaces\n" or " ?\n"))
+        mark:close()
+    end
+elseif emu and emu ~= "" then
     dofile(emu)
 end
 local frag = os.getenv("HD_PLUGIN_LUA")

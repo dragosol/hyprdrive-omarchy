@@ -29,6 +29,16 @@
 #   D. the state the old build left: windows on 1..4 on that output. The first
 #      reload merges them to 21..24 with records (4 events, Omarchy's); then
 #      scale + reload twice -> zero events, 21..24 pinned and kept.
+#   E. Omarchy meets the overflow (an overflow id is a guest to its reconcile:
+#      merge() pulls it into a block with room, origin identity nil, no record):
+#      a slot frees and the config reloads before Hyprdrive compacts -> Omarchy
+#      pulls it in, no Lua error, next reloads quiet; Hyprdrive compacting first
+#      -> the same, quiet; an empty overflow desktop on view at a reload -> no
+#      renumber (Omarchy's own_views puts the monitor back on its home).
+#   With GATE_OMARCHY_MW=/abs/monitor-workspaces.lua (a copy of Omarchy 4.5's
+#   own script; never committed) the REAL script runs instead of the emulation
+#   (blocks.lua), and each case also checks it was the one loaded and that none
+#   of its hl.on / hl.timer callbacks raised.
 # Control: --so 3423fe4 (/home/dragos/Projects/hyprdrive-native/hyprdrive.so,
 # before blocks): the scale change compacts to one global row and every reload
 # renumbers back -- A and C fail (changeworkspaceid > 0, desktops outside their
@@ -39,12 +49,24 @@ control_build "3423fe4, e.g. /home/dragos/Projects/hyprdrive-native/hyprdrive.so
 
 RIG=$ROOT/tests/rig/headless
 seed() { # seed TEXT -- Omarchy's monitor-workspaces before the start
-    SU bash -c "mkdir -p '$ST/state/omarchy' && chmod 755 '$ST' '$ST/state' '$ST/state/omarchy' && rm -f '$ST/state/omarchy/'* && printf '$1' > '$ST/state/omarchy/monitor-workspaces'"
+    SU bash -c "mkdir -p '$ST/state/omarchy' && chmod 755 '$ST' '$ST/state' '$ST/state/omarchy' && rm -f '$ST/state/omarchy/'* '$ST/state/lua-errors.log' '$ST/state/omarchy-real.loaded' && printf '$1' > '$ST/state/omarchy/monitor-workspaces'"
 }
+# GATE_OMARCHY_MW=/abs/monitor-workspaces.lua: run Omarchy's REAL script (a
+# copy from an Omarchy 4.5 machine; never committed) instead of the emulation.
+# Its callbacks' errors go to $ST/state/lua-errors.log (blocks.lua).
 blocks_start() {
-    rig_start --config "$RIG/blocks.lua" --env "HD_BLOCKS_LUA=$RIG/omarchy-blocks.lua" --env "HD_PLUGIN_LUA=$ROOT/config/hyprdrive/00-plugin.lua" \
+    local mw=(--env "HD_BLOCKS_LUA=$RIG/omarchy-blocks.lua")
+    [ -n "${GATE_OMARCHY_MW:-}" ] && mw=(--env "HD_OMARCHY_MW=$GATE_OMARCHY_MW" --env "HD_LUA_ERRLOG=$ST/state/lua-errors.log")
+    rig_start --config "$RIG/blocks.lua" "${mw[@]}" --env "HD_PLUGIN_LUA=$ROOT/config/hyprdrive/00-plugin.lua" \
         --env "HYPRDRIVE_SO=$SO" --env "XDG_STATE_HOME=$ST/state"
     trace_on
+}
+# lua_ok CASE -- no error in Omarchy's callbacks (the real script) so far
+lua_ok() {
+    [ -n "${GATE_OMARCHY_MW:-}" ] || return 0
+    local e; e=$(SU cat "$ST/state/lua-errors.log" 2>/dev/null | head -3 | tr '\n' ' ')
+    check "$1: Omarchy's real script is the one loaded" "$(SU grep -c ' o.workspaces$' "$ST/state/omarchy-real.loaded" 2>/dev/null || echo 0)" "$(SU cat "$ST/state/omarchy-real.loaded" 2>&1)"
+    check "$1: no error in Omarchy's Lua callbacks" "$(is "$e" '')" "$e"
 }
 events_start() { : > "$GOUT/events.log"; SU socat -u "UNIX-CONNECT:$RT/hypr/$SIG/.socket2.sock" - > "$GOUT/events.log" 2>/dev/null & _bg_pids="${_bg_pids:-} $!"; sleep 0.3; }
 ncw() { grep -c '^changeworkspaceid>>' "$GOUT/events.log"; }              # changeworkspaceid so far
@@ -111,6 +133,7 @@ check "A: ... block 0 untouched" "$(is "$(popon HEADLESS-1)" '1 2')" "$(popon HE
 fs "$A11" unset; sleep 1.5; settled
 check "A: out of fullscreen: home 11, 11 12 13 again" "$(is "$(win b11 .workspace.id) $(popon HEADLESS-2)" '11 11 12 13')" "app on $(win b11 .workspace.id), $(popon HEADLESS-2)"
 check "A: no changeworkspaceid all along" "$(is "$(ncw)" 0)" "$(cwlist)"
+lua_ok A
 rig_stop
 
 # ---------------------------------------------------------------- B (11th desktop)
@@ -140,6 +163,61 @@ go 20; kw b20b 500 400; settled
 A20=$(addr_of b20); focus "$A20"; fs "$A20" set; sleep 1.5; settled
 check "B: fullscreen on the block's last desktop: stays on 20, fullscreen, no 21" "$(is "$(win b20 .workspace.id) $(win b20 .fullscreen) $(J workspaces | jq '[.[] | select(.id == 21)] | length')" '20 2 0')" "b20 on $(win b20 .workspace.id) fs $(win b20 .fullscreen); $(ids)"
 fs "$A20" unset; sleep 1; settled
+lua_ok B
+rig_stop
+fi
+
+# ---------------------------------------------------------------- E (overflow meets Omarchy)
+# An overflow id (1000000 + block*1000 + n) is in no block Omarchy knows, so
+# its reconcile treats a populated one as a GUEST: merge() renumbers it into
+# the block when the block has room (append_slot), and its origin identity is
+# identity_of_block(100100) = nil -> no merged record. E1: a slot frees and
+# the config reloads BEFORE Hyprdrive's compaction -> Omarchy pulls the
+# overflow in itself; must not error, and the next reload is quiet. E2: the
+# same, Hyprdrive's compaction first -> it pulls the overflow in; reloads quiet.
+# E3: an EMPTY overflow desktop on view (the spare of a full block) at a
+# reload: Omarchy's own_views() puts the monitor back on its home (a view
+# change, not a renumber).
+if [ "$CONTROL" != 1 ]; then
+full_block() {
+    seed '0\tHEADLESS-1\tHEADLESS-1\n1\tHEADLESS-2\tHEADLESS-2\n'
+    blocks_start
+    focus_mon HEADLESS-1; go 1; kw a1
+    $R mon2 >/dev/null; sleep 1
+    focus_mon HEADLESS-2
+    for n in 11 12 13 14 15 16 17 18 19 20; do go $n; kw "e$n" 500 400; done
+    go 19; kw e19b 500 400; settled
+    A19=$(addr_of e19); focus "$A19"; fs "$A19" set; sleep 1.5; settled
+}
+full_block
+events_start
+check "E1: setup: e20 in the overflow" "$(is "$(win e20 .workspace.id)" 1001001)" "e20 on $(win e20 .workspace.id); $(popon HEADLESS-2)"
+close_win "$(addr_of e15)"; sleep 0.15; reload; sleep 1.5; settled
+E1="$(cwlist)"; E1N=$(ncw)
+echo "      E1 (reload first): changeworkspaceid [$E1]; $(popon HEADLESS-2); e20 on $(win e20 .workspace.id)"
+check "E1: the overflow is back in block 1, nothing outside it" "$(is "$(outside HEADLESS-2 11 20)|$(J workspaces | jq '[.[] | select(.id >= 1000000 and .windows > 0)] | length')" '|0')" "$(ids)"
+c0=$(ncw); reload; sleep 1.5; settled; reload; sleep 1.5; settled
+check "E1: then two reloads: zero events" "$(is "$(( $(ncw) - c0 ))" 0)" "$(cwlist)"
+check "E1: no empty unshown desktops" "$(is "$(empties)" '')" "$(empties)"
+lua_ok E1
+rig_stop
+full_block
+events_start
+close_win "$(addr_of e15)"; sleep 3; settled
+echo "      E2 (Hyprdrive first): changeworkspaceid [$(cwlist)]; $(popon HEADLESS-2); e20 on $(win e20 .workspace.id)"
+check "E2: Hyprdrive compacted: 11..20, no overflow" "$(is "$(popon HEADLESS-2)" '11 12 13 14 15 16 17 18 19 20')" "$(ids)"
+c0=$(ncw); reload; sleep 1.5; settled; reload; sleep 1.5; settled
+check "E2: then two reloads: zero events" "$(is "$(( $(ncw) - c0 ))" 0)" "$(cwlist)"
+lua_ok E2
+fs "$A19" unset; sleep 1.5; settled
+# E3: show an empty desktop in block 1's overflow range
+go 1001009; sleep 0.5
+SH0=$(shown HEADLESS-2)
+c0=$(ncw); reload; sleep 1.5; settled
+echo "      E3: showing $SH0 (empty) at a reload -> shows $(shown HEADLESS-2); events [$(cwlist)]"
+check "E3: a reload with an empty overflow desktop on view renumbers nothing" "$(is "$(( $(ncw) - c0 ))" 0)" "$(cwlist)"
+check "E3: no empty unshown desktops" "$(is "$(empties)" '')" "$(empties)"
+lua_ok E3
 rig_stop
 fi
 
@@ -166,6 +244,7 @@ $R overview >/dev/null; sleep 1.2; settled
 go 21; sleep 0.4
 WALK=""; for _ in 1 2 3 4 5; do wheel next; WALK="$WALK $(shown HEADLESS-1)"; done
 check "C: Super+scroll walks 21..25" "$(is "$WALK" ' 22 23 24 25 25')" "$WALK"
+lua_ok C
 rig_stop
 
 # ---------------------------------------------------------------- D (what the old build left)
@@ -181,6 +260,12 @@ c0=$(ncw)
 N1=$(round 1.25); N2=$(round 1)
 check "D: then two config switches: zero events" "$(is "$N1 $N2" '0 0')" "$N1 $N2: $(cwlist)"
 check "D: 21..24 kept, nothing empty left" "$(is "$(popon HEADLESS-1)|$(empties)" '21 22 23 24|')" "$(popon HEADLESS-1)|$(empties)"
+go 21; sleep 0.4
+$R overview >/dev/null; sleep 1.5
+OVD=$(on HEADLESS-1)
+check "D: its strip: 21..24 and the spare 25, no empties below 21" "$(is "$OVD" '21 22 23 24 25')" "$OVD"
+$R overview >/dev/null; sleep 1.2; settled
+lua_ok D
 fi
 
 gate_end
