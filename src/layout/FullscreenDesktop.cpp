@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <optional>
 #include <tuple>
@@ -79,7 +80,8 @@ namespace Hyprdrive::FullscreenDesktop {
         std::chrono::steady_clock::time_point g_enteredAt;
         int                g_busy  = 0; // our own moves: their fullscreen changes are not the user's
         wl_event_source*   g_timer = nullptr;
-        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook;
+        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook, g_monAddHook, g_monGoneHook;
+        const char*         g_healDue = nullptr; // why desktops sharing a number are pulled apart at the next pass
         void                arm(int ms); // the reconcile timer, below
 
         void trace(const std::string& s) {
@@ -586,6 +588,13 @@ namespace Hyprdrive::FullscreenDesktop {
         // fullscreen to move it and puts it back after, so only the state once
         // the event is done means anything.
         int reconcile(void*) {
+            // TWO DESKTOPS ON ONE NUMBER (left by the old half-applied
+            // renumber, or by anything else): pulled apart at load and when a
+            // monitor comes or goes -- the fuller keeps the number, the other
+            // gets the next free one above the highest. Windows are never
+            // merged nor dropped.
+            if (const char* WHY = std::exchange(g_healDue, nullptr))
+                (void)DesktopOrder::heal(WHY);
             showBesides();
             std::erase_if(g_settled, [](const PHLWINDOWREF& r) { const auto W = r.lock(); return !W || !W->m_isMapped || !fullscreen(W); });
             // Trips.
@@ -719,8 +728,91 @@ namespace Hyprdrive::FullscreenDesktop {
         return ws && isTripSpace(ws);
     }
 
+    namespace {
+        constexpr const char* SAVED_ENV = "HYPRDRIVE_FSDESK_STATE";
+
+        template <class T>
+        std::uintptr_t addr(const T& p) {
+            return reinterpret_cast<std::uintptr_t>(p.get());
+        }
+
+        // A reload hands the trips over (FullscreenBook::SSaved): matched by
+        // address against the live windows, desktops and monitors.
+        void restore() {
+            const char* RAW = std::getenv(SAVED_ENV);
+            if (!RAW)
+                return;
+            const auto SAVED = FullscreenBook::load(RAW);
+            ::unsetenv(SAVED_ENV);
+            if (!SAVED)
+                return;
+            const auto WIN = [](std::uintptr_t p) -> PHLWINDOW {
+                if (p)
+                    for (const auto& W : Desktop::windowState()->windows())
+                        if (W && addr(W) == p)
+                            return W;
+                return nullptr;
+            };
+            const auto WS = [](std::uintptr_t p) -> PHLWORKSPACE {
+                if (p)
+                    for (const auto& REF : State::workspaceState()->workspaces())
+                        if (const auto S = REF.lock(); S && addr(S) == p)
+                            return S;
+                return nullptr;
+            };
+            const auto MON = [](std::uintptr_t p) -> PHLMONITOR {
+                if (p)
+                    for (const auto& M : State::monitorState()->monitors())
+                        if (M && addr(M) == p)
+                            return M;
+                return nullptr;
+            };
+            for (const auto& T : SAVED->trips) {
+                if (const auto W = WIN(T.win))
+                    g_trips.push_back({.win = W, .home = WS(T.home), .space = WS(T.space), .mon = MON(T.mon), .at = T.at, .homeAt = T.homeAt, .owes = T.owes});
+                else if (T.owes) // closed meanwhile: what it owed is still owed
+                    g_debts.push_back({.space = WS(T.space), .at = T.at, .mon = MON(T.mon), .home = WS(T.home)});
+            }
+            for (const auto& D : SAVED->debts)
+                g_debts.push_back({.space = WS(D.space), .at = D.at, .mon = MON(D.mon), .home = WS(D.home), .cls = D.cls, .pid = pid_t(D.pid), .beside = D.beside});
+            for (const auto P : SAVED->settled)
+                if (const auto W = WIN(P))
+                    g_settled.emplace_back(W);
+            trace(std::format("reloaded: {} trips, {} debts, {} settled handed over", g_trips.size(), g_debts.size(), g_settled.size()));
+        }
+
+        void save() {
+            syncPlaces();
+            FullscreenBook::SSaved s;
+            for (const auto& T : g_trips)
+                if (const auto W = T.win.lock())
+                    s.trips.push_back({.win = addr(W), .home = addr(T.home.lock()), .space = addr(T.space.lock()), .mon = addr(T.mon.lock()), .at = T.at, .homeAt = T.homeAt,
+                                       .owes = T.owes});
+            for (const auto& D : g_debts)
+                s.debts.push_back({.space = addr(D.space.lock()), .mon = addr(D.mon.lock()), .home = addr(D.home.lock()), .at = D.at, .pid = D.pid, .beside = D.beside, .cls = D.cls});
+            for (const auto& R : g_settled)
+                if (const auto W = R.lock())
+                    s.settled.push_back(addr(W));
+            if (s.trips.empty() && s.debts.empty() && s.settled.empty())
+                ::unsetenv(SAVED_ENV);
+            else
+                ::setenv(SAVED_ENV, FullscreenBook::save(s).c_str(), 1);
+        }
+    }
+
     void init() {
         DesktopOrder::onRenumbered(syncPlaces);
+        restore();
+        g_healDue = "load";
+        arm(1);
+        g_monAddHook  = Event::bus()->m_events.monitor.added.listen([](PHLMONITOR) {
+            g_healDue = "a monitor came";
+            arm(1);
+        });
+        g_monGoneHook = Event::bus()->m_events.monitor.removed.listen([](PHLMONITOR) {
+            g_healDue = "a monitor went";
+            arm(1);
+        });
         // Every change is looked at once it has fully happened.
         g_fsHook    = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW w) {
             if (!g_busy)
@@ -738,7 +830,11 @@ namespace Hyprdrive::FullscreenDesktop {
     }
 
     void shutdown() {
+        // (Also at Hyprland's exit: the handover then goes with the process.)
+        save();
         DesktopOrder::onRenumbered(nullptr);
+        g_monAddHook.reset();
+        g_monGoneHook.reset();
         g_fsHook.reset();
         g_openHook.reset();
         g_closeHook.reset();

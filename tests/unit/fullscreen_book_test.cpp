@@ -767,6 +767,30 @@ static void randomSequences() {
     }
 }
 
+static void savedAcrossReload() {
+    SSaved S;
+    S.trips.push_back({.win = 0x55aa00, .home = 0x1000, .space = 0x2000, .mon = 0x3000, .at = 2, .homeAt = 1, .owes = true});
+    S.trips.push_back({.win = 7, .at = 9, .homeAt = NO_PLACE});
+    S.debts.push_back({.space = 0, .mon = 0x3000, .home = 0x1000, .at = 4, .pid = 4242, .beside = true, .cls = "org.herdr app\n\x01 \xff"});
+    S.debts.push_back({.at = 3, .cls = ""});
+    S.settled = {0x99, 0x98};
+    const auto L = load(save(S));
+    CHECK(L.has_value());
+    if (L) {
+        CHECK(L->trips.size() == 2 && L->trips[0].win == 0x55aa00 && L->trips[0].home == 0x1000 && L->trips[0].space == 0x2000 && L->trips[0].mon == 0x3000);
+        CHECK(L->trips[0].at == 2 && L->trips[0].homeAt == 1 && L->trips[0].owes && !L->trips[1].owes && L->trips[1].homeAt == NO_PLACE);
+        CHECK(L->debts.size() == 2 && L->debts[0].cls == S.debts[0].cls && L->debts[0].pid == 4242 && L->debts[0].beside && L->debts[0].at == 4);
+        CHECK(L->debts[1].cls.empty() && !L->debts[1].beside);
+        CHECK(L->settled == S.settled);
+    }
+    CHECK(load(save({})).has_value() && load(save({}))->trips.empty());
+    CHECK(!load("").has_value());
+    CHECK(!load("fsdesk0 T 1 2 3 4 5 6 1").has_value()); // another build's format
+    CHECK(!load("fsdesk1 T 1 2").has_value());             // cut short
+    CHECK(!load("fsdesk1 D 1 2 3 4 5 0 zz").has_value());  // bad class
+    CHECK(!load("fsdesk1 X").has_value());
+}
+
 int main() {
     places();
     decisions();
@@ -775,6 +799,7 @@ int main() {
     besideThenClosed();
     monitorGoneMidTrip();
     randomSequences();
+    savedAcrossReload();
     std::printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

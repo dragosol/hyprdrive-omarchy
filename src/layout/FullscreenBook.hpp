@@ -14,7 +14,13 @@
 // number from the desktop alone, -1 when it had already gone, and was paid back
 // at place -1: shift(0, -1).
 
+#include <cstdint>
+#include <cstdio>
+#include <optional>
+#include <sstream>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace Hyprdrive::FullscreenBook {
     using Id                  = long long;
@@ -113,5 +119,112 @@ namespace Hyprdrive::FullscreenBook {
             return EPay::Pay;
         }
         return f.driving ? EPay::WaitScreen : EPay::Pay;
+    }
+
+    // ACROSS A PLUGIN RELOAD (hyprctl plugin unload/load, an update). The trips,
+    // debts and settled windows lived in the plugin's own memory: a reload
+    // forgot them, and an app on a fullscreen trip then stayed on the desktop
+    // made for it for good, the room made for it never given back. They are
+    // handed over through the compositor process's environment (gone with the
+    // process: nothing outlives the session) by identity -- the window's,
+    // desktops' and monitor's addresses, matched against the live ones at load,
+    // never dereferenced -- and the next reconcile checks each against what
+    // Hyprland shows, like any other.
+    struct SSavedTrip {
+        std::uintptr_t win = 0, home = 0, space = 0, mon = 0;
+        Id             at = NO_PLACE, homeAt = NO_PLACE;
+        bool           owes = false;
+    };
+    struct SSavedDebt {
+        std::uintptr_t space = 0, mon = 0, home = 0;
+        Id             at     = NO_PLACE;
+        long long      pid    = 0;
+        bool           beside = false;
+        std::string    cls;
+    };
+    struct SSaved {
+        std::vector<SSavedTrip>     trips;
+        std::vector<SSavedDebt>     debts;
+        std::vector<std::uintptr_t> settled;
+    };
+    inline constexpr std::string_view SAVED_TAG = "fsdesk1";
+
+    inline std::string hexOf(std::string_view s) {
+        std::string out;
+        char        b[3];
+        for (const unsigned char C : s) {
+            std::snprintf(b, sizeof b, "%02x", C);
+            out += b;
+        }
+        return out.empty() ? "-" : out;
+    }
+    inline std::optional<std::string> unhex(std::string_view s) {
+        if (s == "-")
+            return std::string{};
+        if (s.size() % 2)
+            return std::nullopt;
+        std::string out;
+        for (size_t i = 0; i < s.size(); i += 2) {
+            unsigned v = 0;
+            for (size_t j = i; j < i + 2; ++j) {
+                const char C = s[j];
+                v            = v * 16 + (C >= '0' && C <= '9' ? C - '0' : C >= 'a' && C <= 'f' ? C - 'a' + 10 : 99);
+                if (v > 255)
+                    return std::nullopt;
+            }
+            out += char(v);
+        }
+        return out;
+    }
+
+    inline std::string save(const SSaved& s) {
+        std::ostringstream o;
+        o << SAVED_TAG;
+        for (const auto& T : s.trips)
+            o << " T " << T.win << ' ' << T.home << ' ' << T.space << ' ' << T.mon << ' ' << T.at << ' ' << T.homeAt << ' ' << int(T.owes);
+        for (const auto& D : s.debts)
+            o << " D " << D.space << ' ' << D.mon << ' ' << D.home << ' ' << D.at << ' ' << D.pid << ' ' << int(D.beside) << ' ' << hexOf(D.cls);
+        for (const auto W : s.settled)
+            o << " S " << W;
+        return o.str();
+    }
+    // Anything malformed, or another build's format: nothing (a fresh start,
+    // as before).
+    inline std::optional<SSaved> load(std::string_view text) {
+        std::istringstream in{std::string{text}};
+        std::string        tag;
+        if (!(in >> tag) || tag != SAVED_TAG)
+            return std::nullopt;
+        SSaved      out;
+        std::string kind;
+        while (in >> kind) {
+            if (kind == "T") {
+                SSavedTrip T;
+                int        owes = 0;
+                if (!(in >> T.win >> T.home >> T.space >> T.mon >> T.at >> T.homeAt >> owes))
+                    return std::nullopt;
+                T.owes = owes != 0;
+                out.trips.push_back(T);
+            } else if (kind == "D") {
+                SSavedDebt  D;
+                int         beside = 0;
+                std::string cls;
+                if (!(in >> D.space >> D.mon >> D.home >> D.at >> D.pid >> beside >> cls))
+                    return std::nullopt;
+                const auto CLS = unhex(cls);
+                if (!CLS)
+                    return std::nullopt;
+                D.beside = beside != 0;
+                D.cls    = *CLS;
+                out.debts.push_back(D);
+            } else if (kind == "S") {
+                std::uintptr_t W = 0;
+                if (!(in >> W))
+                    return std::nullopt;
+                out.settled.push_back(W);
+            } else
+                return std::nullopt;
+        }
+        return out;
     }
 }
