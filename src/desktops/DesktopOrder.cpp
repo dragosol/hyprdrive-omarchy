@@ -2,6 +2,7 @@
 #include "IOverview.hpp"
 #include "DesktopPlan.hpp"
 #include "DebugPaths.hpp"
+#include "Rows.hpp"
 
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
@@ -69,7 +70,7 @@ namespace Hyprdrive::DesktopOrder {
             std::vector<DesktopPlan::Desk> out;
             out.reserve(all.size());
             for (const auto& WS : all)
-                out.push_back({keyOf(WS), WS->m_id, counted ? windowsOn(WS) : 0});
+                out.push_back({keyOf(WS), WS->m_id, counted ? windowsOn(WS) : 0, Rows::ofWorkspace(WS), Rows::pinned(WS->m_id)});
             return out;
         }
         std::string describe(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves) {
@@ -143,25 +144,50 @@ namespace Hyprdrive::DesktopOrder {
         return true;
     }
 
-    bool shift(WORKSPACEID from, int delta) {
+    bool shift(const Row& row, WORKSPACEID from, int delta) {
+        const auto ALL = desktops();
+        if (row.bounded() && !row.contains(from)) {
+            note(std::format("refused a shift from {} by {}: not in the monitor's row (base {})", from, delta, row.base));
+            return false;
+        }
         std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
-        for (const auto& WS : desktops())
-            if (WS->m_id >= from)
-                moves.emplace_back(WS, WS->m_id + delta);
+        for (const auto& M : DesktopPlan::shiftMoves(desks(ALL, false), row, from, delta))
+            for (const auto& WS : ALL)
+                if (keyOf(WS) == M.key)
+                    moves.emplace_back(WS, M.to);
         return renumber(moves);
     }
 
     std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why) {
         const auto                    ALL = desktops();
         std::vector<DesktopPlan::Room> rooms;
+        std::vector<Row>               rowOf;
         rooms.reserve(ALL.size());
         for (const auto& WS : ALL) {
             bool shown = false;
             for (const auto& MON : State::monitorState()->monitors())
                 shown |= MON && MON->m_activeWorkspace == WS;
-            rooms.push_back({keyOf(WS), WS->m_id, windowsOn(WS) > 0, shown});
+            rooms.push_back({keyOf(WS), WS->m_id, windowsOn(WS) > 0, shown, Rows::pinned(WS->m_id)});
+            rowOf.push_back(Rows::ofWorkspace(WS));
         }
-        const auto PLAN = DesktopPlan::compactMoves(rooms);
+        // ONCE PER ROW: each row's members from its first place. Visitors
+        // (outside their monitor's row) and provisional rows (a monitor
+        // Omarchy has not given a block yet) are left as they are. Blocks
+        // off: one row, every desktop -- the plan it always was.
+        std::vector<DesktopPlan::Move> PLAN;
+        std::vector<bool>              done(ALL.size(), false);
+        for (size_t i = 0; i < ALL.size(); ++i) {
+            if (done[i] || rowOf[i].provisional || !rowOf[i].contains(rooms[i].id))
+                continue;
+            std::vector<DesktopPlan::Room> group;
+            for (size_t j = i; j < ALL.size(); ++j)
+                if (!done[j] && sameRow(rowOf[j], rowOf[i]) && rowOf[i].contains(rooms[j].id)) {
+                    done[j] = true;
+                    group.push_back(rooms[j]);
+                }
+            for (const auto& M : DesktopPlan::compactMoves(group, rowOf[i]))
+                PLAN.push_back(M);
+        }
         if (PLAN.empty())
             return std::nullopt;
         std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;

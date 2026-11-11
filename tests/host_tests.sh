@@ -40,6 +40,10 @@
 #   row_test          Row.hpp / RowsFile.hpp: a monitor's row of desktops (the
 #                     implicit row, an Omarchy block and its overflow) and the
 #                     parse of Omarchy's monitor-workspaces(-merged) files.
+#   desktop_rows_test  DesktopPlan.hpp on Omarchy's per-monitor blocks: every
+#                     plan stays in its monitor's row, pinned guests never move,
+#                     and compaction is a fixed point of a model of Omarchy's
+#                     reconcile (omarchy_model.hpp): the two never fight.
 #   fullscreen_book_test  FullscreenBook.hpp: a fullscreen trip's places are
 #                     kept by number (never place -1), the payback decision,
 #                     and random fullscreen sequences that must give back the
@@ -149,6 +153,7 @@ run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
 run row_test tests/unit/row_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
+run desktop_rows_test tests/unit/desktop_rows_test.cpp
 run fullscreen_book_test tests/unit/fullscreen_book_test.cpp
 run fullscreen_carry_test tests/unit/fullscreen_carry_test.cpp
 run desktop_row_test tests/unit/desktop_row_test.cpp

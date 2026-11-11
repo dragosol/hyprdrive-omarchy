@@ -2,6 +2,7 @@
 #include "MotionCurves.hpp"
 #include "MotionClock.hpp"
 #include "DesktopOrder.hpp"
+#include "Rows.hpp"
 #include "FullscreenBook.hpp"
 #include "DesktopStrip.hpp"
 #include "Config.hpp"
@@ -327,7 +328,7 @@ namespace Hyprdrive::FullscreenDesktop {
             if (PLAN.makeRoom) {
                 // No room after it: the desktops from there on move along a place.
                 DesktopStrip::finishNow(); // (the strip lands first: its row is numbers)
-                if (!DesktopOrder::shift(at, +1)) {
+                if (!DesktopOrder::shift(Rows::of(MON), at, +1)) {
                     // Refused (DesktopOrder logged why): no room is made, so it
                     // stays where it is, as Hyprland has it.
                     g_settled.emplace_back(w);
@@ -575,7 +576,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     if (!DesktopOrder::renumber(moves))
                         return EPaid::Done; // refused (logged): never half-paid
                 }
-            } else if (!DesktopOrder::shift(AT + 1, -1))
+            } else if (const Row R = Rows::containing(AT); !DesktopOrder::shift(R, R.idOf(R.slot(AT) + 1), -1))
                 return EPaid::Done; // refused (logged): never half-paid
             moved(AT + 1, -1);
             return EPaid::Done;
@@ -619,7 +620,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 return;
             if (PLAN.makeRoom) {
                 DesktopStrip::finishNow();
-                if (!DesktopOrder::shift(at, +1))
+                if (!DesktopOrder::shift(Rows::of(MON), at, +1))
                     return; // refused (logged): Hyprland's own behaviour
                 moved(at, +1);
                 owes = true;

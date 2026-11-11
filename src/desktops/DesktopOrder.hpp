@@ -1,6 +1,7 @@
 #pragma once
 
 #include "globals.hpp"
+#include "Row.hpp"
 
 #include <optional>
 #include <string>
@@ -27,16 +28,23 @@ namespace Hyprdrive::DesktopOrder {
     // written -- and logged. Returns whether it was applied. Special and named
     // desktops are never touched.
     bool renumber(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves);
-    // Every ordinary desktop numbered `from` or more moves `delta` places
-    // (+1: room at `from`; -1: closing the gap below `from`). Same check.
-    bool shift(WORKSPACEID from, int delta);
+    // Every desktop of `row` (a monitor's, Rows::of) at the place of `from`
+    // or after moves `delta` places along the row (+1: room at `from`; -1:
+    // closing the gap below `from`). A block's 10th desktop +1 goes to the
+    // row's overflow, never to the next block. A `from` outside a bounded row
+    // is refused. Blocks off: every ordinary desktop numbered `from` or more.
+    // Same check.
+    bool shift(const Row& row, WORKSPACEID from, int delta);
     // Two ordinary desktops on one number: the fuller (else the older) keeps
-    // it, each other one gets the next free number above the highest. Logged.
+    // it, each other one gets the first free place in its own row (blocks off:
+    // the next free number above the highest). Logged.
     // Returns whether anything moved.
     bool heal(const char* when);
-    // NO EMPTY DESKTOPS (a display change, FullscreenDesktop.cpp): the
-    // desktops holding windows become 1..N in their order, then each shown
-    // empty one, then any other empty one (DesktopPlan::compactMoves). Logged
+    // NO EMPTY DESKTOPS (a display change, FullscreenDesktop.cpp): in each
+    // monitor's row, the desktops holding windows take its first places in
+    // their order, then each shown empty one, then any other empty one
+    // (DesktopPlan::compactMoves); visitors, pinned guests and provisional
+    // rows stay where they are. Blocks off: 1..N over every desktop. Logged
     // with `why`, before -> after. Returns the row -- (old number, new number)
     // of every desktop holding windows -- when it renumbered; nothing when
     // already compact or refused (logged).
