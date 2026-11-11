@@ -58,7 +58,11 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
     if (!FOCUSED)
         return;
 
-    const bool WANT_CLOSE = m_direction == TRACKPAD_GESTURE_DIR_DOWN;
+    // A "vertical" binding is both halves of an up/down pair: Hyprland hands
+    // begin the direction the fingers actually took (UP or DOWN), so down is
+    // the close. Reading only the bound direction made a vertical binding open
+    // on either direction and never close.
+    const bool WANT_CLOSE = m_direction == TRACKPAD_GESTURE_DIR_DOWN || (m_direction == TRACKPAD_GESTURE_DIR_VERTICAL && e.direction == TRACKPAD_GESTURE_DIR_DOWN);
 
     // An overview still animating out cannot be swiped (onSwipeUpdate reads
     // `closing` and would run backwards). Drop them first, on every monitor --
