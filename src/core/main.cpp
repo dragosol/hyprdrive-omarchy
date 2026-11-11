@@ -808,6 +808,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pMonitorGoneHook.reset();
     g_pScrollCameraActiveHook.reset();
     g_pScrollCameraMovedHook.reset();
+    // The config.preReload listener: HyprlandAPI::reloadConfig() at the end of
+    // this function would otherwise still call into it (clearClickGestures,
+    // the dock key fingerprint) with the plugin half torn down.
+    g_pClickPreReloadHook.reset();
 
     g_unloading = true;
     setDockCursor(false);

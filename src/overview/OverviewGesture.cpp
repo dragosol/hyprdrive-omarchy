@@ -771,6 +771,10 @@ void shutdownClickGestures() {
         wl_event_source_remove(g_holdClickTimer);
         g_holdClickTimer = nullptr;
     }
+    // The per-pointer hold/swipe/pinch listeners: their lambdas are this .so's
+    // code, and until now only the static destructors at dlclose let them go.
+    g_padListeners.clear();
+    g_attachedPointerCount = 0;
 }
 
 void addClickGesture(size_t fingers, const std::string& action, uint32_t mods, bool disableInhibit, const std::string& arg) {
