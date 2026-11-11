@@ -290,6 +290,7 @@ class COverview : public IOverview {
     // A mouse bind (Super+scroll) pans with the wheel's blur, a key with the
     // keyboard's.
     void         stepDesktopCard(bool next);
+    PHLWINDOW    actionTile() override;
 
   private:
     void   ensureTrailingWorkspace();

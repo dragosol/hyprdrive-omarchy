@@ -129,6 +129,11 @@ class IOverview : public IOverviewFramePolicy, public IOverviewGeometry {
     virtual bool moveSelection(const std::string& direction)        = 0;
     virtual bool windowDispatcherAction(const std::string& action)  = 0;
 
+    // The tile the overview shows as selected -- under the pointer, or the
+    // keyboard's after the arrows -- when it is a window it shows; else none.
+    // What Super+F acts on while it is open (OverviewFullscreen.hpp).
+    virtual PHLWINDOW actionTile() = 0;
+
     // X28. Commit the overview's selection to one window and close, the way a
     // tile click does. The dock's right-click window list needs exactly this:
     // focusing the window directly would be overwritten by close()'s own

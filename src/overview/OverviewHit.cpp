@@ -727,6 +727,22 @@ void COverview::selectHoveredWorkspace() {
     focusOverviewWorkspace(HOVEREDWORKSPACE, workspaceIdx);
 }
 
+// The tile the overview shows as selected, as SUPER+W reads it: the
+// keyboard's after the arrows, else the one under the pointer, over empty
+// space none.
+PHLWINDOW COverview::actionTile() {
+    if (closing)
+        return {};
+    PHLWINDOW window;
+    if (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile)
+        window = getOverviewWindowToShow(closeOnWindow.lock());
+    else {
+        lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
+        window            = windowAtOverviewCursor();
+    }
+    return window && shouldShowOverviewWindow(window) ? window : PHLWINDOW{};
+}
+
 bool COverview::windowDispatcherAction(const std::string& action) {
     const auto CURRENTKEYBIND = g_pKeybindManager ? g_pKeybindManager->m_currentKeybind : SP<SKeybind>{};
     const bool FROMMOUSEBIND  = CURRENTKEYBIND && CURRENTKEYBIND->key.starts_with("mouse:");

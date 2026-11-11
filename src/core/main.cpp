@@ -658,6 +658,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     Hyprdrive::ShowDesktop::init();
     // Super+T on a fixed-size window: a tile at its own size (OwnSizeTile.hpp).
     Hyprdrive::OwnSizeTile::init();
+    // Super+F in the overview: the hovered tile (OverviewFullscreen.hpp).
+    Hyprdrive::OverviewFullscreen::init();
     // The animation:curve preset onto Hyprland's named house beziers -- only
     // now that the key exists (Config.hpp: an earlier read aborts Hyprland).
     Hyprdrive::Motion::sync();
