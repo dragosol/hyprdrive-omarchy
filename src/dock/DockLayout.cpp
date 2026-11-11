@@ -2,6 +2,7 @@
 // and layout().
 #include "DockParts.hpp"
 #include "MotionSites.hpp"
+#include "MotionClock.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -31,7 +32,7 @@ float hiddenFraction(PHLMONITOR monitor) {
 
     const auto& R  = g_reveal[monitor->m_id];
     const int   MS = std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS));
-    const float E  = Motion::curve(Motion::ESite::DOCK_REVEAL, std::clamp(Hyprdrive::Config::realElapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
+    const float E  = Motion::curve(Motion::ESite::DOCK_REVEAL, std::clamp(Motion::Clock::animMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
 
     // From wherever it WAS to wherever it is going, which is what makes a
     // reversal continuous instead of a jump to the far end.
@@ -77,7 +78,7 @@ bool autohideAnimating(PHLMONITOR monitor) {
 
     // X54. A flight counts as animating: the window is mid-air toward the icon
     // and nothing else on an idle desktop would ask for the frames it needs.
-    return R.pending || Flight::anyOn(monitor) || Hyprdrive::Config::realElapsedMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
+    return R.pending || Flight::anyOn(monitor) || Motion::Clock::animMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
 }
 
 // The glide is Motion::ESite::DOCK_ARRANGE (ease-out cubic) and a new icon

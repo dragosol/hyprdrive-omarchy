@@ -82,7 +82,9 @@ namespace Hyprdrive::BorderFade {
         float valueAt(const SFade& f, const SCurve& c, Clock::time_point now) {
             if (c.ms <= 0.F)
                 return f.fade.to;
-            const float T = std::clamp(Hyprdrive::Motion::msBetween(now, f.fade.start) / c.ms, 0.F, 1.F);
+            // The animation clock: the speed setting stretches the `border`
+            // leaf's time, and a snapping clock lands the ring on its colour.
+            const float T = std::clamp(Hyprdrive::Motion::Clock::animMsBetween(now, f.fade.start) / c.ms, 0.F, 1.F);
             return f.fade.at(ease(c, T));
         }
     }

@@ -106,14 +106,16 @@ struct SEase {
     Time::steady_tp start = {};
 
     float value() const {
-        const float ELAPSED = Hyprdrive::Config::realElapsedMs(start);
-        // A start in the FUTURE is a delayed ease: hold at `from` until it is due.
+        // The animation clock (Motion::Clock): the speed setting stretches it
+        // and 0 lands it on `to`. A start in the FUTURE is a delayed ease (the
+        // linger): it holds at `from` until it is due, in real time.
+        const float ELAPSED = Hyprdrive::Motion::Clock::animMs(start);
         if (ELAPSED <= 0.F)
             return from;
         return ELAPSED >= ms ? to : from + (to - from) * (ELAPSED / ms);
     }
 
-    bool running() const { return Hyprdrive::Config::realElapsedMs(start) < ms; }
+    bool running() const { return Hyprdrive::Motion::Clock::animMs(start) < ms; }
 
     void retarget(float target, float durationMs, float delayMs = 0.F) {
         if (std::abs(to - target) < 0.001F)
@@ -186,7 +188,7 @@ SState* stateFor(const PHLWINDOW& window, bool create) {
 // retarget picks the curve -- the same two the compositor and the shell use.
 // Used by the PRESS. The hover has its own curve; see easedHover.
 float eased(const SEase& ease) {
-    const float PROGRESS = std::clamp(Hyprdrive::Config::realElapsedMs(ease.start) / ease.ms, 0.F, 1.F);
+    const float PROGRESS = std::clamp(Hyprdrive::Motion::Clock::animMs(ease.start) / ease.ms, 0.F, 1.F);
     const float CURVE    = houseEase(ease.to > ease.from, PROGRESS);
 
     return ease.from + (ease.to - ease.from) * CURVE;
@@ -198,7 +200,7 @@ float eased(const SEase& ease) {
 // symmetry is most of why GNOME's hover feels smoother than an accelerated exit.
 float easedHover(const SEase& ease) {
     // The animation clock: the panel's speed stretches the hover too.
-    const float T = std::clamp(Hyprdrive::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
+    const float T = std::clamp(Hyprdrive::Motion::Clock::animMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
     const float E = Motion::curve(Motion::ESite::TILE_HOVER, T);
 
     return ease.from + (ease.to - ease.from) * E;

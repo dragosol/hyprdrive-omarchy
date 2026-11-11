@@ -3,6 +3,7 @@
 #include "Motion.hpp"
 #include "DebugPaths.hpp"
 #include "OverviewInternal.hpp"
+#include "MotionClock.hpp"
 
 #include "DockStacks.hpp"
 #include "Locations.hpp"
@@ -593,12 +594,15 @@ namespace Hyprdrive::Stacks {
         g_shakes.emplace_back(SHop{.path = CANON, .startedAt = Time::steadyNow()});
     }
 
+    // The hop, the hidden dock's peek and the refusal shake are animations: the
+    // animation clock (the dock's own hop, Dock.cpp, always was). StackFan's
+    // retireHops reads the same clock, or a slowed hop would be retired early.
     float bounceAgeMs(const std::string& path) {
         const auto CANON = canonical(path);
         float      age   = -1.F;
         for (const auto& B : g_bounces)
             if (B.path == CANON)
-                age = age < 0.F ? Hyprdrive::Config::realElapsedMs(B.startedAt) : std::min(age, Hyprdrive::Config::realElapsedMs(B.startedAt));
+                age = age < 0.F ? Hyprdrive::Motion::Clock::animMs(B.startedAt) : std::min(age, Hyprdrive::Motion::Clock::animMs(B.startedAt));
         return age;
     }
 
@@ -608,7 +612,7 @@ namespace Hyprdrive::Stacks {
         for (const auto& B : g_bounces) {
             if (B.path != CANON)
                 continue;
-            out = std::max(out, Dock::hopLift(Hyprdrive::Config::realElapsedMs(B.startedAt) / Dock::HOP_MS, iconHeight));
+            out = std::max(out, Dock::hopLift(Hyprdrive::Motion::Clock::animMs(B.startedAt) / Dock::HOP_MS, iconHeight));
         }
         return out;
     }
@@ -619,7 +623,7 @@ namespace Hyprdrive::Stacks {
         for (const auto& S : g_shakes) {
             if (S.path != CANON)
                 continue;
-            const float T = std::clamp(Hyprdrive::Config::realElapsedMs(S.startedAt) / SHAKE_MS, 0.F, 1.F);
+            const float T = std::clamp(Hyprdrive::Motion::Clock::animMs(S.startedAt) / SHAKE_MS, 0.F, 1.F);
             // Decaying sine: full amplitude at the start, nothing at the end,
             // so it stops rather than being cut off mid-swing.
             out += std::sin(T * SHAKE_CYCLES * 2.F * 3.14159265F) * SHAKE_AMP * iconWidth * (1.F - T);

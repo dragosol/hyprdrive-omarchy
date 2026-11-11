@@ -1,4 +1,5 @@
 #include "DockTilt.hpp"
+#include "MotionClock.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,11 +82,20 @@ void spring(float& x, float& v, float target, float omega, float zeta, float h) 
 }
 
 void advance(STilt& s, std::optional<Vector2D> pointer) {
-    float gap = std::min(Hyprdrive::Config::realElapsedMs(s.last), MAX_GAP_MS);
+    // The animation clock's step: the speed setting slows the lean and lift.
+    float gap = Hyprdrive::Motion::Clock::animDt(std::min(Hyprdrive::Config::realElapsedMs(s.last), MAX_GAP_MS));
     s.last    = Time::steadyNow();
     s.hovered = pointer.has_value();
 
     const Vector2D TARGET = pointer.value_or(Vector2D{});
+    // A snapping clock: on the target, at rest (never into the substep loop).
+    if (Hyprdrive::Motion::isSnapDt(gap)) {
+        s.pos     = TARGET;
+        s.vel     = {};
+        s.lift    = s.hovered ? 1.F : 0.F;
+        s.liftVel = 0.F;
+        return;
+    }
     const float    OMEGA  = s.hovered ? FOLLOW_OMEGA : LEAVE_OMEGA;
     const float    ZETA   = s.hovered ? FOLLOW_ZETA : LEAVE_ZETA;
 

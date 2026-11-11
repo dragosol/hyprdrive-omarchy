@@ -919,6 +919,10 @@ class COverview : public IOverview {
     PHLANIMVAR<float>                scratchpadReveal;
     // The same for every other monitor's strip at once (0 hidden, 1 shown).
     PHLANIMVAR<float>                altStripsReveal;
+    // windowsMove's timing for the desktop insert (workspaceInsertProgress),
+    // as a copy of our own: syncPluginAnimEnabled stretches it by the speed
+    // setting without touching Hyprland's windowsMove.
+    SP<Hyprutils::Animation::SAnimationPropertyConfig> workspaceInsertMoveConfig;
     SP<Hyprutils::Animation::SAnimationPropertyConfig> workspaceInsertFadeConfig;
     SP<Hyprutils::Animation::SAnimationPropertyConfig> workspaceRemoveFadeConfig;
     SP<Hyprutils::Animation::SAnimationPropertyConfig> openAnimConfig;

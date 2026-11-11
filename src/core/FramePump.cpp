@@ -2,6 +2,7 @@
 // is for and where to add one). Moved out of the dock, unchanged.
 
 #include "FramePump.hpp"
+#include "MotionClock.hpp"
 
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>

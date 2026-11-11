@@ -1,6 +1,7 @@
 // The item model: which icons the dock shows (buildDockItems, the cached
 // dockItems), publishing them, badges, urgency and the urgent-hop timer.
 #include "DockParts.hpp"
+#include "MotionClock.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -530,10 +531,9 @@ void presentPreview(const PHLWINDOW& window, PHLMONITOR monitor, const Time::ste
 }
 
 float elapsedMs(const Time::steady_tp& since) {
-    // Hover panel, tooltip fade, bounce, launch zoom. Autohide reveal uses
-    // realElapsedMs so Hyprdrive motion off still slides the pill in from the
-    // bottom edge.
-    return Hyprdrive::Config::animElapsedMs(since);
+    // Hover panel, tooltip fade, bounce, launch zoom -- and the autohide slide
+    // (owner, 2026-11-10: "speed setting everywhere", "not exempt").
+    return Hyprdrive::Motion::Clock::animMs(since);
 }
 
 // ---- X31 -------------------------------------------------------------------

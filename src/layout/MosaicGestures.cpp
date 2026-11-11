@@ -164,7 +164,8 @@ namespace Hyprdrive::Mosaic {
         constexpr float LABEL_FADE_OUT_MS = Hyprdrive::Motion::LABEL_FADE_OUT_MS; // exits ~25% quicker, house rule
 
         float labelFadeProgress(const SLabelFade& f) {
-            const float MS = Hyprdrive::Config::realElapsedMs(f.since);
+            // The animation clock, like the dock tooltip it copies.
+            const float MS = Hyprdrive::Motion::Clock::animMs(f.since);
             return std::clamp(MS / (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS), 0.F, 1.F);
         }
         float labelFadeAlpha(const SLabelFade& f) {
@@ -397,7 +398,7 @@ namespace Hyprdrive::Mosaic {
     bool labelsAnimating() {
         const auto NOW = std::chrono::steady_clock::now();
         return std::ranges::any_of(g_labelFades, [&](const SLabelFade& f) {
-            return f.window.lock() && Hyprdrive::Motion::msBetween(NOW, f.since) < (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS) + 16.F;
+            return f.window.lock() && Hyprdrive::Motion::Clock::animMsBetween(NOW, f.since) < (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS) + 16.F;
         });
     }
 

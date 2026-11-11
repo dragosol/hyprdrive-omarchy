@@ -125,8 +125,10 @@ void main() {
             return g_shader;
         }
 
+        // The animation clock, in seconds: the speed setting stretches the
+        // ring. Capped past its life so no box is ever sized off SNAP_MS.
         float ageOf(const SRipple& r) {
-            return Hyprdrive::Motion::secondsBetween(Time::steadyNow(), r.born);
+            return std::min(Hyprdrive::Motion::Clock::animSecondsBetween(Time::steadyNow(), r.born), 2.F * LIFE_S);
         }
 
         bool finiteBox(const CBox& b) {
@@ -289,7 +291,8 @@ void main() {
     }
 
     void trigger(const PHLMONITOR& monitor, const Vector2D& originGlobal) {
-        if (!monitor)
+        // A snapping clock: the ring is over before it starts -- none at all.
+        if (!monitor || !Hyprdrive::Motion::Clock::enabled())
             return;
         std::erase_if(g_ripples, [&](const SRipple& r) { return r.monitor == monitor->m_id; });
         g_ripples.push_back(SRipple{

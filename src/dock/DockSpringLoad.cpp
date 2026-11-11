@@ -1,5 +1,6 @@
 // The spring-loaded dock: a client file drag held over an icon.
 #include "DockParts.hpp"
+#include "MotionClock.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -66,15 +67,19 @@ bool springUpdate(PHLMONITOR monitor, const Vector2D& local, bool folderDrag, in
     if (g_spring.done)
         return false;
 
+    // The dwell is a hold: real time. The flash after it is an animation: the
+    // animation clock -- and a snapping clock opens the window on the tick the
+    // dwell runs out, as the flash's end would have.
     if (!g_spring.flashAt) {
-        if (springSinceMs(g_spring.since) >= delayMs) {
-            g_spring.flashAt = Time::steadyNow();
-            springDamage();
-        }
-        return true;
+        if (springSinceMs(g_spring.since) < delayMs)
+            return true;
+        g_spring.flashAt = Time::steadyNow();
+        springDamage();
+        if (Hyprdrive::Motion::Clock::enabled())
+            return true;
     }
     springDamage();
-    if (springSinceMs(g_spring.flashAt) < SPRING_FLASH_MS)
+    if (Hyprdrive::Motion::Clock::animMs(*g_spring.flashAt) < SPRING_FLASH_MS)
         return true;
 
     g_spring.done = true;
@@ -88,7 +93,7 @@ bool springUpdate(PHLMONITOR monitor, const Vector2D& local, bool folderDrag, in
 float springFlash(const SItem& item) {
     if (!g_spring.flashAt || g_spring.done || item.subject.empty() || item.subject != g_spring.subject)
         return 0.F;
-    const float T = springSinceMs(g_spring.flashAt) / SPRING_FLASH_MS; // 0..1 over both pulses
+    const float T = Hyprdrive::Motion::Clock::animMs(*g_spring.flashAt) / SPRING_FLASH_MS; // 0..1 over both pulses
     if (T >= 1.F)
         return 0.F;
     return std::sin(T * 2.F * sc<float>(M_PI)) * std::sin(T * 2.F * sc<float>(M_PI)); // two humps

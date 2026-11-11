@@ -140,7 +140,9 @@ struct SFrameCadence {
         float target(const Time::steady_tp& now) const {
             if (!down)
                 return 1.F;
-            const float HELD = Hyprdrive::Motion::msBetween(now, downAt) / 1000.F;
+            // The squeeze deepening under a held press is motion: the
+            // animation clock (a snapping clock: all the way in at once).
+            const float HELD = Hyprdrive::Motion::Clock::animMsBetween(now, downAt) / 1000.F;
             return 1.F - 0.04F - (PRESS_MAX - 0.04F) * (1.F - std::exp(-HELD / PRESS_TAU_S));
         }
         void step(const Time::steady_tp& now) {
@@ -148,9 +150,16 @@ struct SFrameCadence {
                 last = now;
                 return;
             }
-            float dt = std::clamp(Hyprdrive::Motion::msBetween(now, *last) / 1000.F, 0.F, 0.05F);
+            float dt = Hyprdrive::Motion::Clock::animDt(std::clamp(Hyprdrive::Motion::msBetween(now, *last) / 1000.F, 0.F, 0.05F));
             last     = now;
             const float T = target(now);
+            // A snapping clock: on the target, at rest, no frames (held or not).
+            if (Hyprdrive::Motion::isSnapDt(dt)) {
+                x      = T;
+                v      = 0.F;
+                moving = false;
+                return;
+            }
             while (dt > 0.F) {
                 const float H = std::min(dt, 1.F / 240.F);
                 v += (-K * (x - T) - C * v) * H;

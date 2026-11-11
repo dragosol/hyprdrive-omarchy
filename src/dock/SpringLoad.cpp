@@ -1,5 +1,6 @@
 #include <optional>
 #include "SpringLoad.hpp"
+#include "MotionClock.hpp"
 #include "MotionCurves.hpp"
 
 #include "Config.hpp"
@@ -218,8 +219,11 @@ namespace Hyprdrive::SpringLoad {
             g_swipe->from       = g_swipe->cur;
         }
 
+        // Commit and Rewind are animations: the animation clock (a snapping
+        // one ends them on the next tick). The Peek follows the HOLD, and the
+        // hold is real time (holdMs).
         float sincePhase() {
-            return Hyprdrive::Config::realElapsedMs(g_swipe->phaseStart);
+            return Hyprdrive::Motion::Clock::animMs(g_swipe->phaseStart);
         }
 
         // Commit and Rewind play on their own; Peek follows the hold.

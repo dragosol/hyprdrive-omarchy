@@ -120,6 +120,16 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     // registered under the house names. Motion::sync owns the numbers.
     Hyprdrive::Motion::sync();
 
+    if (WINDOWSMOVEVALUES) {
+        workspaceInsertMoveConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
+        workspaceInsertMoveConfig->overridden      = true;
+        workspaceInsertMoveConfig->internalBezier  = WINDOWSMOVEVALUES->internalBezier;
+        workspaceInsertMoveConfig->internalSpeed   = WINDOWSMOVEVALUES->internalSpeed;
+        workspaceInsertMoveConfig->internalEnabled = WINDOWSMOVEVALUES->internalEnabled;
+        workspaceInsertMoveConfig->internalStyle   = WINDOWSMOVEVALUES->internalStyle;
+        workspaceInsertMoveConfig->pValues         = workspaceInsertMoveConfig;
+    }
+
     workspaceInsertFadeConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     workspaceInsertFadeConfig->overridden      = true;
     workspaceInsertFadeConfig->internalBezier  = OVERVIEW_INSERT_FADE_BEZIER;
@@ -162,7 +172,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
 
     Animation::mgr()->createAnimation(1.F, scale, openAnimConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation({}, viewOffset, openAnimConfig, AVARDAMAGE_NONE);
-    Animation::mgr()->createAnimation(1.F, workspaceInsertProgress, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(1.F, workspaceInsertProgress, workspaceInsertMoveConfig ? workspaceInsertMoveConfig : WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(1.F, workspaceInsertFadeProgress, workspaceInsertFadeConfig, AVARDAMAGE_NONE);
     Animation::mgr()->createAnimation(1.F, reflowPacer, WINDOWSMOVECONFIG, AVARDAMAGE_NONE);
 
@@ -919,7 +929,7 @@ void COverview::syncPluginAnimEnabled() {
     // internalEnabled, so plugin:hyprdrive:anim_scale 0 would otherwise still
     // ease the overview while dock flights snap. Refresh every frame so a live
     // panel toggle takes effect on an already-open overview.
-    const int ON = Hyprdrive::Config::motionEnabled() ? 1 : 0;
+    const int ON = Hyprdrive::Motion::Clock::enabled() ? 1 : 0;
     const auto set = [ON](const SP<Hyprutils::Animation::SAnimationPropertyConfig>& cfg) {
         if (cfg)
             cfg->internalEnabled = ON;
@@ -937,13 +947,29 @@ void COverview::syncPluginAnimEnabled() {
     // second), so the scale multiplies them. Refreshed here every frame, so a
     // live change reaches the next animation of an open overview. (A reversal
     // sets its own speed from the same product, in useAnimDirection.)
-    const float S = std::max(0.01F, Hyprdrive::Config::animScale());
+    const float S = std::max(0.01F, Hyprdrive::Motion::Clock::scale());
     if (openAnimConfig)
         openAnimConfig->internalSpeed = Hyprdrive::Config::getOpenSpeed() * S;
     if (closeAnimConfig)
         closeAnimConfig->internalSpeed = Hyprdrive::Config::getCloseSpeed() * S;
     if (searchAnimConfig)
         searchAnimConfig->internalSpeed = SEARCH_ANIM_SPEED * S;
+
+    // The desktop insert and its fades run on windowsMove's timing (read live,
+    // as the insert did when it ran on Hyprland's own config), stretched the
+    // same way. The insert keeps windowsMove's on/off as well -- and, like
+    // every other overview variable, goes off with the speed setting at 0.
+    const auto WM  = Config::animationTree()->getAnimationPropertyConfig("windowsMove");
+    const auto WMV = WM && WM->pValues ? WM->pValues.lock() : WM;
+    if (workspaceInsertMoveConfig && WMV) {
+        workspaceInsertMoveConfig->internalBezier  = WMV->internalBezier;
+        workspaceInsertMoveConfig->internalSpeed   = WMV->internalSpeed * S;
+        workspaceInsertMoveConfig->internalEnabled = WMV->internalEnabled && ON;
+    }
+    if (workspaceInsertFadeConfig)
+        workspaceInsertFadeConfig->internalSpeed = (WMV ? WMV->internalSpeed * 1.2F : 12.F) * S;
+    if (workspaceRemoveFadeConfig)
+        workspaceRemoveFadeConfig->internalSpeed = (WMV ? WMV->internalSpeed : 10.F) * S;
 }
 
 void COverview::useAnimDirection(bool opening) {
@@ -971,7 +997,7 @@ void COverview::useAnimDirection(bool opening) {
 
         // Floor it: a hair of travel still deserves a frame or two of motion
         // rather than a teleport.
-        reverseAnimConfig->internalSpeed = std::max(0.3F, BASE * std::max(0.01F, Hyprdrive::Config::animScale()) * LEFT);
+        reverseAnimConfig->internalSpeed = std::max(0.3F, BASE * std::max(0.01F, Hyprdrive::Motion::Clock::scale()) * LEFT);
 
         scale->setConfig(reverseAnimConfig);
         viewOffset->setConfig(reverseAnimConfig);

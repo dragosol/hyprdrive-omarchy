@@ -1193,7 +1193,7 @@ void COverview::updateRestingFade() {
     // Mid-fade the compositor has no other reason to draw -- the fade BACK in
     // runs after the gesture has ended, so there is no finger left to schedule
     // frames. Same pairing renderDetentBadge and renderSearch use.
-    if (Hyprdrive::Motion::msBetween(Time::steadyNow(), restingFadeAt) < RESTING_NUMBER_FADE_MS) {
+    if (Hyprdrive::Motion::Clock::animMs(restingFadeAt) < RESTING_NUMBER_FADE_MS) {
         damage();
         requestInputFrame();
     }
@@ -1203,7 +1203,9 @@ float COverview::restingNumberFade(size_t workspaceIdx) const {
     if (workspaceIdx != restingFadeCell && workspaceIdx != restingFadePrevCell)
         return 1.F;
 
-    const float MS = Hyprdrive::Motion::msBetween(Time::steadyNow(), restingFadeAt);
+    // The animation clock (the speed setting; 0 snaps), as is the badge's pop.
+    // How long a keyboard badge stays up (KEY_BADGE_MS) is a hold: real time.
+    const float MS = Hyprdrive::Motion::Clock::animMs(restingFadeAt);
     const float E  = SearchLetters::easeOutCubic(SearchLetters::clamp01(MS / RESTING_NUMBER_FADE_MS));
 
     // The badged cell goes 1 -> 0; the one just vacated comes 0 -> 1.
@@ -1236,7 +1238,7 @@ void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
     if (!TEX || !TEX->ok())
         return;
 
-    const float MS   = Hyprdrive::Motion::msBetween(Time::steadyNow(), badgeBornAt());
+    const float MS   = Hyprdrive::Motion::Clock::animMs(badgeBornAt());
     const auto  POSE = SearchLetters::entrancePose(MS);
 
     // Scale about the glyph's own centre; POSE.y is logical px, +down, so it
@@ -1370,7 +1372,9 @@ void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::s
     // Eased per frame, by wall clock: the cells move like things with a little
     // weight -- the lifted one trails the pointer by a hair, the others glide.
     const auto  DESKNOW = Time::steadyNow();
-    const float DT      = std::clamp(Hyprdrive::Motion::secondsBetween(DESKNOW, deskAnimAt), 0.F, 0.05F);
+    // The animation clock's step: the speed setting stretches the glide, and a
+    // snapping clock's step (SNAP_MS) takes both smoothings to K = 1 at once.
+    const float DT      = Hyprdrive::Motion::Clock::animDt(std::clamp(Hyprdrive::Motion::secondsBetween(DESKNOW, deskAnimAt), 0.F, 0.05F));
     deskAnimAt          = DESKNOW;
     const float KFOLLOW = 1.F - std::exp(-DT / 0.035F);
     const float KGLIDE  = 1.F - std::exp(-DT / 0.085F);
@@ -1614,7 +1618,8 @@ void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, floa
         }
     }
 
-    const float MS = Hyprdrive::Config::realElapsedMs(T.since);
+    // The animation clock, like the dock tooltip it copies (Dock.cpp).
+    const float MS = Hyprdrive::Motion::Clock::animMs(T.since);
     const float P  = std::clamp(MS / (T.out ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS), 0.F, 1.F);
     if (T.out && P >= 1.F) {
         T.text.clear();
@@ -1631,6 +1636,6 @@ void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, floa
 bool COverview::stripTipAnimating() const {
     if (stripTip.text.empty())
         return false;
-    const float MS = Hyprdrive::Config::realElapsedMs(stripTip.since);
+    const float MS = Hyprdrive::Motion::Clock::animMs(stripTip.since);
     return MS < (stripTip.out ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS) + 16.F;
 }

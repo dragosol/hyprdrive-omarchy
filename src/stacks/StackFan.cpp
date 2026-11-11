@@ -144,8 +144,8 @@ namespace StacksDetail {
     // kept for the hidden dock's longer peek (Dock::STACK_PEEK_MS); on the
     // dock it is over at HOP_MS and draws nothing after.
     void retireHops() {
-        std::erase_if(g_bounces, [](const SHop& h) { return Hyprdrive::Config::realElapsedMs(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
-        std::erase_if(g_shakes, [](const SHop& h) { return Hyprdrive::Config::realElapsedMs(h.startedAt) > SHAKE_MS; });
+        std::erase_if(g_bounces, [](const SHop& h) { return Hyprdrive::Motion::Clock::animMs(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
+        std::erase_if(g_shakes, [](const SHop& h) { return Hyprdrive::Motion::Clock::animMs(h.startedAt) > SHAKE_MS; });
     }
 
     // Rows the fan shows at once: every visible entry, up to its slots -- and
@@ -234,13 +234,12 @@ namespace StacksDetail {
 
     void tick(SPopup& p) {
         const auto NOW = Time::steadyNow();
-        float      DT  = p.ticked ? std::min(Hyprdrive::Motion::msBetween(NOW, p.lastTick), MAX_TICK_MS) : 0.F;
-        // anim_scale, like every other hyprdrive animation: 10 = ten times
-        // slower, 0 = snap.
-        if (const float AS = Hyprdrive::Config::animScale(); AS <= 0.F)
-            DT = DT > 0.F ? 1e6F : 0.F;
-        else
-            DT /= AS;
+        // The animation clock's step (MotionClock.hpp), like every other
+        // hyprdrive animation: 10 = ten times slower. A snapping clock hands out
+        // SNAP_MS from the very first tick, so the popup is open (or gone) on
+        // the frame it was asked for; the springs below settle on it.
+        const bool SNAP = !Hyprdrive::Motion::Clock::enabled();
+        float      DT   = SNAP ? Hyprdrive::Motion::SNAP_MS : Hyprdrive::Motion::Clock::animDt(p.ticked ? std::min(Hyprdrive::Motion::msBetween(NOW, p.lastTick), MAX_TICK_MS) : 0.F);
         p.lastTick     = NOW;
         p.ticked       = true;
         p.lastDT       = DT;
@@ -262,7 +261,12 @@ namespace StacksDetail {
             p.scrollGoal   = std::round(p.scrollGoal);
             p.fingerScroll = false;
         }
-        stepScroll(p, DT);
+        if (SNAP) {
+            p.scrollGoal = std::clamp(p.scrollGoal, 0.F, fanMaxScroll(p));
+            p.scrollPos  = p.scrollGoal;
+            p.scrollVel  = 0.F;
+        } else
+            stepScroll(p, DT);
         const bool BARON = !p.grid && fanMaxScroll(p) > 0.F && (scrollMoving(p) || p.fingerScroll || Hyprdrive::Config::realElapsedMs(p.lastScrollAt) < BAR_HOLD_MS);
         p.barAlpha       = std::clamp(p.barAlpha + (BARON ? DT / BAR_IN_MS : -DT / BAR_OUT_MS), 0.F, 1.F);
 

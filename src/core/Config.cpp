@@ -1,4 +1,5 @@
 #include "ConfigParts.hpp"
+#include "MotionClock.hpp"
 using namespace ConfigDetail;
 
 namespace ConfigDetail {
@@ -683,30 +684,21 @@ int getDragThreshold() {
     return std::max<int>(0, sc<int>(*VAL));
 }
 
-// The single hottest read in the plugin: animElapsedMs() divides by this, and
-// every eased thing on screen samples that at least once a frame.
+// Forwarders to the one animation clock, motion/MotionClock.hpp.
 float animScale() {
-    static auto& VAL = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:anim_scale");
-    return std::max(0.F, sc<float>(*VAL));
+    return Motion::Clock::scale();
 }
 
 bool motionEnabled() {
-    return animScale() > 0.F;
+    return Motion::Clock::enabled();
 }
 
 float realElapsedMs(const Time::steady_tp& since) {
-    return sc<float>(std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count());
+    return Motion::Clock::realMs(since);
 }
 
-// The ONE place the plugin's clock is read. Dividing here is what makes a single
-// slider stretch every animation at once while every duration constant keeps its
-// real value -- see the note in Config.hpp. Scale 0 is the motion toggle: every
-// ease is already finished, without touching input timers that use realElapsedMs.
 float animElapsedMs(const Time::steady_tp& since) {
-    const float SCALE = animScale();
-    if (SCALE <= 0.F)
-        return 1e9F;
-    return realElapsedMs(since) / SCALE;
+    return Motion::Clock::animMs(since);
 }
 
 float getTouchpadScrollFactor() {

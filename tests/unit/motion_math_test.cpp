@@ -1047,6 +1047,161 @@ static void testA8() {
     report("A8 shared timings == the copies they replaced", n, bad);
 }
 
+// ============================================================================
+// B3 -- one animation clock (MotionClock.hpp). The bodies it replaced, verbatim,
+// as the reference: scale 1 must be them bit for bit; 2 doubles every duration;
+// 0 is finished at once; a stamp in the future stays a real-time delay.
+// ============================================================================
+namespace old_b3 {
+    using clock = std::chrono::steady_clock;
+    // core/Config.cpp animElapsedMs, the scale a parameter.
+    [[gnu::noinline]] float configAnim(clock::time_point now, clock::time_point then, float scale) {
+        const float SCALE = std::max(0.F, scale);
+        if (SCALE <= 0.F)
+            return 1e9F;
+        return static_cast<float>(std::chrono::duration<float, std::milli>(now - then).count()) / SCALE;
+    }
+    // stacks/StackFan.cpp tick: DT /= AS (AS > 0).
+    [[gnu::noinline]] float stackFanDt(float dt, float as) {
+        return dt / as;
+    }
+    // layout/ShowDesktop.cpp: DT / SCALE, double over float.
+    [[gnu::noinline]] double showDesktopDt(double dt, float scale) {
+        return dt / scale;
+    }
+    // dock/CpuPulse.cpp, stacks/StackIcon.cpp, dock/ScratchpadExit.cpp loops.
+    [[gnu::noinline]] double cpuPhase(double t, float period) {
+        return std::fmod(t, period) / period;
+    }
+    [[gnu::noinline]] double sweepPhase(double ms) {
+        return std::fmod(ms, 1600.0) / 1600.0;
+    }
+    [[gnu::noinline]] float driftPhase(float ms, float period) {
+        return std::fmod(ms, period) / period;
+    }
+}
+
+static float g_testScale = 1.F;
+static float testScale() {
+    return g_testScale;
+}
+
+static void testB3() {
+    namespace M = Hyprdrive::Motion;
+    using clock = std::chrono::steady_clock;
+    using ns    = std::chrono::nanoseconds;
+    M::Clock::g_scaleSource = &testScale;
+
+    const long long BASES[] = {0LL, 3'600'000'000'000LL, 259'200'123'456'789LL};
+    std::vector<long long> d;
+    for (long long i = 0; i <= 2048; ++i)
+        d.push_back(i * 997);
+    for (double x = 4097; x < 2e13; x *= 1.031)
+        d.push_back(static_cast<long long>(x));
+    const size_t N = d.size();
+    for (size_t i = 0; i < N; ++i)
+        d.push_back(-d[i]);
+
+    long n = 0, bad1 = 0, bad2 = 0, bad0 = 0, badFuture = 0, badD = 0;
+    for (long long base : BASES) {
+        const clock::time_point THEN{ns{base}};
+        for (long long dd : d) {
+            const clock::time_point NOW{ns{base + dd}};
+            ++n;
+            g_testScale = 1.F;
+            bad1 += !sameBits(M::Clock::animMsBetween(NOW, THEN), old_b3::configAnim(NOW, THEN, 1.F));
+            bad1 += !sameBits(M::Clock::animMsBetween<double>(NOW, THEN), M::msBetween<double>(NOW, THEN));
+            const float REAL = M::msBetween(NOW, THEN);
+            if (dd >= 0) {
+                // 2: the same progress at twice the real time -- every
+                // duration takes twice as long; elapsed / 2 is exact.
+                g_testScale = 2.F;
+                bad2 += !sameBits(M::Clock::animMsBetween(NOW, THEN), old_b3::configAnim(NOW, THEN, 2.F));
+                bad2 += !sameBits(M::scaleMs(REAL * 2.F, 2.F), REAL);
+                // 0: past every duration at once.
+                g_testScale = 0.F;
+                bad0 += !(M::Clock::animMsBetween(NOW, THEN) >= M::SNAP_MS) + !sameBits(M::Clock::animMsBetween(NOW, THEN), old_b3::configAnim(NOW, THEN, 0.F));
+            } else {
+                // A future stamp (a delay still running): real time at every
+                // scale, so the delay keeps its length and nothing snaps past it.
+                for (float sc : {0.F, 0.5F, 2.F, 10.F}) {
+                    g_testScale = sc;
+                    badFuture += !sameBits(M::Clock::animMsBetween(NOW, THEN), REAL);
+                }
+            }
+        }
+    }
+    g_testScale = 1.F;
+    report("B3 scale 1: Clock::animMsBetween == Config::animElapsedMs, bit for bit", n, bad1);
+    report("B3 scale 2: elapsed halved (durations doubled)", n, bad2);
+    report("B3 scale 0: finished at once (SNAP_MS)", n, bad0);
+    report("B3 a future stamp is a real-time delay at every scale", n, badFuture);
+
+    // The frame steps the integrators took, at scale 1 and 2, and the snap.
+    long nd = 0;
+    for (float dt = 0.F; dt < 300.F; dt += 0.173F) {
+        ++nd;
+        badD += !sameBits(M::scaleDt(dt, 1.F), old_b3::stackFanDt(dt, 1.F)) + !sameBits(M::scaleDt(dt, 2.F), old_b3::stackFanDt(dt, 2.F));
+        const double DD = dt / 1000.0;
+        badD += !sameBits(M::scaleDt(DD, 1.F), old_b3::showDesktopDt(DD, 1.F)) + !sameBits(M::scaleDt(DD, 2.F), old_b3::showDesktopDt(DD, 2.F));
+        badD += !M::isSnapDt(M::scaleDt(dt, 0.F)) + M::isSnapDt(M::scaleDt(dt, 1.F)) + !M::isSnapDt(M::scaleDt(DD, 0.F));
+        badD += !sameBits(M::scaleDuration(dt, 1.F), dt) + !sameBits(M::scaleDuration(dt, 2.F), dt * 2.F) + !sameBits(M::scaleDuration(dt, 0.F), 0.F);
+    }
+    report("B3 frame steps: scale 1/2 == StackFan/ShowDesktop's, 0 snaps", nd, badD);
+
+    // Loops: scale 1 is the old phase; 0 holds the rest phase.
+    long nl = 0, badL = 0;
+    for (double t = 0.0; t < 5000.0; t += 0.0371) {
+        ++nl;
+        badL += !sameBits(M::loopPhaseAt<double>(t, 1.2F, 1.F, 0.5), old_b3::cpuPhase(t, 1.2F));
+        badL += !sameBits(M::loopPhaseAt<double>(t * 1000.0, 1600.0, 1.F, 0.25), old_b3::sweepPhase(t * 1000.0));
+        badL += !sameBits(M::loopPhaseAt<float>(static_cast<float>(t * 100.0), 2400.F, 1.F, 0.F), old_b3::driftPhase(static_cast<float>(t * 100.0), 2400.F));
+        badL += !sameBits(M::loopPhaseAt<double>(t, 1.2F, 0.F, 0.5), 0.5);
+    }
+    report("B3 loops: scale 1 == the old phases, 0 holds still", nl, badL);
+
+    // An integrator handed the snapping step: the closed-form spring lands
+    // exactly on its goal (DesktopStrip's row).
+    {
+        long bad = 0;
+        for (double x0 : {-3.0, 0.0, 0.25, 7.5})
+            for (double v0 : {-40.0, 0.0, 12.0}) {
+                double x = x0, v = v0;
+                M::criticalStep(x, v, 2.0, 18.0, M::scaleDt(0.016, 0.F));
+                bad += !(x == 2.0 && v == 0.0);
+            }
+        report("B3 the critical spring settles on a snapping step", 12, bad);
+    }
+
+    // SearchLetters on the clock: at 0 a typed letter is at rest the moment it
+    // is typed, a deleted one gone, and nothing asks for frames.
+    {
+        long                     bad = 0;
+        SearchLetters::SAnimator A;
+        const auto               T0 = clock::time_point{ns{259'200'123'456'789LL}};
+        g_testScale                 = 0.F;
+        A.sync("ab", T0);
+        bad += A.busy(T0);
+        const auto P = A.place({10.F, 10.F}, 1.F, 1.F, T0);
+        for (const auto& L : P)
+            bad += !(L.scale == 1.F && L.y == 0.F && L.opacity == 1.F);
+        A.sync("a", T0);
+        bad += A.busy(T0);
+        A.prune(T0);
+        bad += A.letters.size() != 1;
+        // ...and at 2 the entrance is still running at 1.9x its 1x length.
+        g_testScale = 2.F;
+        SearchLetters::SAnimator B;
+        B.sync("a", T0);
+        const auto LATER = T0 + std::chrono::microseconds(static_cast<long long>(SearchLetters::ENTRANCE_MS * 1900.F));
+        bad += !B.busy(LATER);
+        bad += B.busy(T0 + std::chrono::microseconds(static_cast<long long>(SearchLetters::ENTRANCE_MS * 2100.F)));
+        g_testScale = 1.F;
+        report("B3 SearchLetters: snaps at 0, twice as long at 2", 8, bad);
+    }
+    M::Clock::g_scaleSource = nullptr;
+}
+
 int main() {
     testA1();
     testA2();
@@ -1056,6 +1211,7 @@ int main() {
     testA6();
     testA7();
     testA8();
+    testB3();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

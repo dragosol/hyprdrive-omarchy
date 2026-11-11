@@ -549,8 +549,12 @@ namespace Hyprdrive::FullscreenDesktop {
             // (user, 2026-11-06: "sometimes spamming super+f ... snaps it to
             // fullscreen without doing the transition").
             const double   SLIDT = G && it->span > 0.5 ? std::clamp(1.0 - std::hypot(GO.x, GO.y) / it->span, 0.0, 1.0) : 1.0;
-            const double   TIMEL = std::clamp(Hyprdrive::Motion::msBetween<double>(std::chrono::steady_clock::now(), it->at) / TRAVEL_MIN_MS, 0.0, 1.0);
-            const double   T     = std::min(SLIDT, Hyprdrive::Motion::outCubicPow(TIMEL));
+            // The floor is on the animation clock (the speed setting stretches
+            // it); a snapping clock ends the trip here, slide or not: the
+            // window lands on its goal, where it rides the rest of the slide
+            // with its desktop.
+            const double   TIMEL = std::clamp(Hyprdrive::Motion::Clock::animMsBetween<double>(std::chrono::steady_clock::now(), it->at) / TRAVEL_MIN_MS, 0.0, 1.0);
+            const double   T     = Hyprdrive::Motion::Clock::enabled() ? std::min(SLIDT, Hyprdrive::Motion::outCubicPow(TIMEL)) : 1.0;
             if (it->goal && it->drawn && (it->goal->first != GOAL || it->goal->second != GSIZE)) {
                 // Re-aimed: the rest of the trip sets off from where it is drawn.
                 it->seen     = it->screen ? it->drawn->first : it->drawn->first - offsetOf(W->m_workspace);

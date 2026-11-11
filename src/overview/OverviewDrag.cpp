@@ -676,7 +676,8 @@ void COverview::updateSwapHold() {
 
     // Keep the frames coming until the hold has completed and the label has
     // finished popping in; after that a still pointer costs nothing.
-    if (!drag.swapArmed || Hyprdrive::Motion::msBetween(NOW, drag.swapArmedAt) < SearchLetters::ENTRANCE_MS) {
+    // The hold is real time (above); the label's pop is an animation.
+    if (!drag.swapArmed || Hyprdrive::Motion::Clock::animMsBetween(NOW, drag.swapArmedAt) < SearchLetters::ENTRANCE_MS) {
         damage();
         requestInputFrame();
     }
@@ -709,7 +710,7 @@ void COverview::renderSwapTargetDim(PHLMONITOR monitor) {
     const auto TARGET = drag.swapCandidate.lock();
     if (!monitor || !drag.swapArmed || !TARGET)
         return;
-    const float A = SearchLetters::entrancePose(Hyprdrive::Motion::msBetween(Time::steadyNow(), drag.swapArmedAt)).opacity;
+    const float A = SearchLetters::entrancePose(Hyprdrive::Motion::Clock::animMs(drag.swapArmedAt)).opacity;
     swapDim(drag.swapTargetBox, swapRound(TARGET, drag.swapTargetBox, monitor), A);
 }
 
@@ -727,7 +728,7 @@ void COverview::renderSwapLabel(PHLMONITOR monitor) {
     auto box = CBox{(GLOBALBOX.pos() - monitor->m_position) * monitor->m_scale, GLOBALBOX.size() * monitor->m_scale};
     box.round();
 
-    const float MS   = Hyprdrive::Motion::msBetween(Time::steadyNow(), drag.swapArmedAt);
+    const float MS   = Hyprdrive::Motion::Clock::animMs(drag.swapArmedAt);
     const auto  POSE = SearchLetters::entrancePose(MS);
     swapDim(box, swapRound(DRAGGED, box, monitor), POSE.opacity);
 

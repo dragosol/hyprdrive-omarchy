@@ -10,6 +10,11 @@
 // Serpantinum numbers, not the rice's house appleDecel/appleAccel pair -- the
 // house curves are the standing rule for tiles and chrome, and this field is
 // the exception the user asked to keep.
+//
+// Every age below is read on the animation clock (MotionClock.hpp): the speed
+// setting stretches the bounce, 0 lands every letter where it rests. A stamp in
+// the future (the placeholder's typing cadence staggers them) is a delay and
+// waits in real time.
 
 #include <algorithm>
 #include <chrono>
@@ -208,7 +213,7 @@ struct SAnimator {
 
     void prune(clock::time_point now) {
         std::erase_if(letters, [&](const SLetter& L) {
-            return L.dyingAt && Hyprdrive::Motion::msBetween(now, *L.dyingAt) >= EXIT_MS;
+            return L.dyingAt && Hyprdrive::Motion::Clock::animMsBetween(now, *L.dyingAt) >= EXIT_MS;
         });
     }
 
@@ -250,14 +255,14 @@ struct SAnimator {
     bool busy(clock::time_point now) const {
         for (const auto& L : letters) {
             if (L.dyingAt) {
-                if (Hyprdrive::Motion::msBetween(now, *L.dyingAt) < EXIT_MS)
+                if (Hyprdrive::Motion::Clock::animMsBetween(now, *L.dyingAt) < EXIT_MS)
                     return true;
                 continue;
             }
-            if (Hyprdrive::Motion::msBetween(now, L.bornAt) < ENTRANCE_MS)
+            if (Hyprdrive::Motion::Clock::animMsBetween(now, L.bornAt) < ENTRANCE_MS)
                 return true;
             for (const auto& P : L.placements)
-                if (std::abs(P.restX - P.fromX) > 0.05F && Hyprdrive::Motion::msBetween(now, P.movedAt) < DISPLACE_MS)
+                if (std::abs(P.restX - P.fromX) > 0.05F && Hyprdrive::Motion::Clock::animMsBetween(now, P.movedAt) < DISPLACE_MS)
                     return true;
         }
         return false;
@@ -284,7 +289,7 @@ struct SAnimator {
                     P = &L.placements.back();
                 } else if (std::abs(P->restX - TARGET) > 0.05F) {
                     ++lastRetargets;
-                    const float TDISP = displaceEase(Hyprdrive::Motion::msBetween(now, P->movedAt));
+                    const float TDISP = displaceEase(Hyprdrive::Motion::Clock::animMsBetween(now, P->movedAt));
                     P->fromX          = P->fromX + (P->restX - P->fromX) * TDISP;
                     P->restX          = TARGET;
                     P->movedAt        = now;
@@ -296,9 +301,9 @@ struct SAnimator {
             // A letter already dying before this view ever laid it out has
             // nowhere of its own to leave from: it leaves from where the live
             // run ends in this view.
-            const float TDISP = P ? displaceEase(Hyprdrive::Motion::msBetween(now, P->movedAt)) : 1.F;
+            const float TDISP = P ? displaceEase(Hyprdrive::Motion::Clock::animMsBetween(now, P->movedAt)) : 1.F;
             const float DRAWX = P ? P->fromX + (P->restX - P->fromX) * TDISP : x;
-            const SPose POSE  = L.dyingAt ? exitPose(Hyprdrive::Motion::msBetween(now, *L.dyingAt)) : entrancePose(Hyprdrive::Motion::msBetween(now, L.bornAt));
+            const SPose POSE  = L.dyingAt ? exitPose(Hyprdrive::Motion::Clock::animMsBetween(now, *L.dyingAt)) : entrancePose(Hyprdrive::Motion::Clock::animMsBetween(now, L.bornAt));
 
             out.push_back(SPlaced{
                 .glyph    = L.glyph,

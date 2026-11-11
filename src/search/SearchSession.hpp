@@ -124,6 +124,13 @@ inline bool qtSpringStep(float& value, float& velocity, float target, float spri
     // tuned on.
     constexpr float STEPMS = 4.F;
 
+    // A snapping animation clock (MotionClock.hpp): on the goal, at rest.
+    if (Hyprdrive::Motion::isSnapDt(dtMs)) {
+        value    = target;
+        velocity = 0.F;
+        return false;
+    }
+
     for (float remaining = std::clamp(dtMs, 0.F, 64.F); remaining > 0.F;) {
         const float H     = std::min(STEPMS, remaining);
         const float TICKS = H / 16.F;
@@ -194,7 +201,10 @@ struct SSearchFieldMotion {
             return false;
         }
 
-        const float DTMS = Hyprdrive::Motion::msBetween(now, *last);
+        // The animation clock's step: the speed setting stretches both springs
+        // and the landing; a snapping clock's step puts them on their goals
+        // (qtSpringStep, and exp(-SNAP_MS / tau) = 0 for the landing).
+        const float DTMS = Hyprdrive::Motion::Clock::animDt(Hyprdrive::Motion::msBetween(now, *last));
         last             = now;
 
         // Landing: a critically damped glide (no overshoot by construction) that

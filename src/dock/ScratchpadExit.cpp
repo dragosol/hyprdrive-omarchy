@@ -191,15 +191,21 @@ namespace Hyprdrive::ScratchpadExit {
 
         // The drift has to keep moving while the pointer is still, and the
         // render pass must not schedule its own frames -- so a timer asks.
+        // A snapping animation clock holds the drift still (drawn at its
+        // first phase) and the fade-in is done: the timer keeps polling the
+        // bar's hover, and repaints only the bar's dwell glow while it fills.
         int tickCb(void*) {
-            bool zone = false, bar = false;
+            bool       zone = false, bar = false;
+            const bool MOVING = Hyprdrive::Motion::Clock::enabled();
             for (auto& [id, st] : g_state) {
                 if (st.shown && st.zoneL.width >= 1) {
-                    g_pHyprRenderer->damageBox(st.zoneL);
+                    if (MOVING)
+                        g_pHyprRenderer->damageBox(st.zoneL);
                     zone = true;
                 }
                 if (st.barShown && st.barL.width >= 1) {
-                    g_pHyprRenderer->damageBox(st.barL);
+                    if (MOVING || st.hoverSince)
+                        g_pHyprRenderer->damageBox(st.barL);
                     bar = true;
                 }
             }
@@ -394,11 +400,14 @@ namespace Hyprdrive::ScratchpadExit {
         const float S       = sc<float>(monitor->m_scale);
         const CBox  BAR{0.0, 0.0, std::round(sc<float>(monitor->m_size.x) * S), std::round(BARL * S)};
         const auto  NOW     = Time::steadyNow();
-        const float ELAPSED = Hyprdrive::Motion::msBetween(NOW, st.barSince);
+        // The fade-in and the drift are animations (the animation clock; a
+        // snapping one holds the drift at phase 0). The dwell glow shows how
+        // far a HOLD has got toward its threshold: real time, like the hold.
+        const float ELAPSED = Hyprdrive::Motion::Clock::animMsBetween(NOW, st.barSince);
         const float IN      = std::clamp(ELAPSED / FADE_IN_MS, 0.F, 1.F);
         const float DWELL   = st.hoverSince ? std::clamp(Hyprdrive::Motion::msBetween(NOW, *st.hoverSince) / BAR_DWELL_MS, 0.F, 1.F) : 0.F;
 
-        const int PHASE = sc<int>(std::fmod(ELAPSED, DRIFT_MS) / DRIFT_MS * PHASES);
+        const int PHASE = sc<int>(Hyprdrive::Motion::Clock::loopPhase(Hyprdrive::Motion::msBetween(NOW, st.barSince), DRIFT_MS, 0.F) * PHASES);
         if (const auto STRIPES = stripeFrame(monitor, SURF_BAR, Vector2D{BAR.width, BAR.height}, PHASE); STRIPES) {
             CTexPassElement::SRenderData d;
             d.tex = STRIPES;
@@ -455,7 +464,7 @@ namespace Hyprdrive::ScratchpadExit {
             return;
 
         const auto  NOW     = Time::steadyNow();
-        const float ELAPSED = Hyprdrive::Motion::msBetween(NOW, st.since);
+        const float ELAPSED = Hyprdrive::Motion::Clock::animMsBetween(NOW, st.since);
         const float ALPHA   = std::clamp(ELAPSED / FADE_IN_MS, 0.F, 1.F);
 
         const float S    = sc<float>(monitor->m_scale);
@@ -477,7 +486,7 @@ namespace Hyprdrive::ScratchpadExit {
 
         OverviewRender::themePlate(band, ROUND, 2.F, 0.92F * ALPHA, false);
 
-        const int PHASE = sc<int>(std::fmod(ELAPSED, DRIFT_MS) / DRIFT_MS * PHASES);
+        const int PHASE = sc<int>(Hyprdrive::Motion::Clock::loopPhase(Hyprdrive::Motion::msBetween(NOW, st.since), DRIFT_MS, 0.F) * PHASES);
         if (const auto STRIPES = stripeFrame(monitor, SURF_ZONE, Vector2D{W, H}, PHASE); STRIPES) {
             CTexPassElement::SRenderData d;
             d.tex           = STRIPES;

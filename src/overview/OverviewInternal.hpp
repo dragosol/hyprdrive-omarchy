@@ -12,6 +12,7 @@
 // when compile time starts to hurt.
 
 #include "FramePacing.hpp"
+#include "MotionClock.hpp"
 #include "MotionMath.hpp"
 #include "Overview.hpp"
 
@@ -1028,20 +1029,16 @@ inline float overviewAnimScale() {
 
     if (!filled || frame != g_overviewFrame) {
         frame  = g_overviewFrame;
-        value  = Hyprdrive::Config::animScale();
+        value  = Hyprdrive::Motion::Clock::scale();
         filled = true;
     }
 
     return value;
 }
 
-// Byte-for-byte Config::animElapsedMs, reading the memoised slider.
+// Motion::Clock::animMs, reading the memoised scale.
 inline float overviewAnimElapsedMs(const Time::steady_tp& since) {
-    const float SCALE = overviewAnimScale();
-    if (SCALE <= 0.F)
-        return 1e9F;
-
-    return Hyprdrive::Config::realElapsedMs(since) / SCALE;
+    return Hyprdrive::Motion::scaleMs(Hyprdrive::Motion::Clock::realMs(since), overviewAnimScale());
 }
 
 inline float overviewOpenScale() {

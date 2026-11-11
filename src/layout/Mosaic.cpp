@@ -8,6 +8,7 @@
 #include "MosaicCanvas.hpp"
 #include "MosaicDrive.hpp"
 #include "Motion.hpp"
+#include "MotionClock.hpp"
 #include "globals.hpp"
 #include "IOverview.hpp"
 #include "Dock.hpp"
@@ -118,10 +119,15 @@ namespace Hyprdrive::Mosaic {
     // THE PAN'S MOTION (user, 2026-10-26: "when I focus on a window it pans it
     // into view smoothly with a serpantinum curve, adjustable in the animation
     // tab"): animation:canvas_curve (a Motion.hpp preset, its DECEL) over
-    // animation:canvas_pan_ms, scaled by the global speed (anim_scale; 0 snaps).
+    // animation:canvas_pan_ms on the animation clock (Motion::Clock: the
+    // progress is read through the speed setting LIVE, so a change reaches a
+    // pan under way). 0 when the clock snaps: every caller then takes its
+    // instant path, as it did when this multiplied by a scale of 0.
     double canvasPanMs() {
+        if (!Hyprdrive::Motion::Clock::enabled())
+            return 0.0;
         const double MS = sc<double>(Hyprdrive::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:animation:canvas_pan_ms"));
-        return std::max(0.0, MS * Hyprdrive::Config::animScale());
+        return std::max(0.0, MS);
     }
     float canvasEase(double t) {
         return Hyprdrive::Motion::easeNamed(Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:animation:canvas_curve"),

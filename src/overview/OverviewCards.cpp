@@ -459,7 +459,8 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
             continue;
         }
 
-        const float ELAPSED = Hyprdrive::Motion::msBetween(now, tile.start);
+        // The animation clock: the speed setting stretches it, 0 snaps it.
+        const float ELAPSED = Hyprdrive::Motion::Clock::animMsBetween(now, tile.start);
         const float T       = DURMS <= 0.F ? 1.F : std::clamp(ELAPSED / DURMS, 0.F, 1.F);
         if (T < 1.F)
             animating = true; // keep frames coming even from the cards that do not draw it
@@ -492,7 +493,9 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
     }
 
     std::erase_if(closingTiles, [&](const SClosingTile& t) {
-        const float SINCE = Hyprdrive::Motion::msBetween(now, t.start);
+        // The wait for an unmap is a timeout (real time); the shrink is an
+        // animation (the animation clock, as it is drawn above).
+        const float SINCE = t.captured ? Hyprdrive::Motion::Clock::animMsBetween(now, t.start) : Hyprdrive::Motion::msBetween(now, t.start);
         if (!t.captured) {
             const auto W = t.window.lock();
             // Refused close (still mapped past the wait), or unmapped with no

@@ -263,6 +263,9 @@ int           getDragThreshold();
 // durations: every constant in the codebase keeps its real, meaningful value
 // (GNOME's 400ms minimize stays the number 400 and can still be checked against
 // the host), and nothing has to be un-edited afterwards.
+//
+// These four forward to the one animation clock, motion/MotionClock.hpp
+// (Motion::Clock), which defines what the scale means -- 0 included.
 float         animScale();
 bool          motionEnabled();
 
@@ -270,9 +273,9 @@ bool          motionEnabled();
 // -- at 0 that clock jumps to infinity and would swallow clicks.
 float         realElapsedMs(const Time::steady_tp& since);
 
-// Milliseconds since `since`, DIVIDED by animScale -- so a clock that runs slow
-// makes every duration comparison downstream stretch, with no other changes.
-// Scale 0 returns a huge elapsed so every duration comparison is already done.
+// Milliseconds since `since` on the animation clock -- so a clock that runs
+// slow makes every duration comparison downstream stretch, with no other
+// changes. Scale 0 returns SNAP_MS so every duration comparison is already done.
 float         animElapsedMs(const Time::steady_tp& since);
 float         getDragMiniScale();
 int           getDragMiniMs();

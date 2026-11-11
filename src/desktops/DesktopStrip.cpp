@@ -208,7 +208,10 @@ namespace Hyprdrive::DesktopStrip {
         }
 
         void advance(Clock::time_point now) {
-            const double DT = std::clamp(Hyprdrive::Motion::secondsBetween<double>(now, g.last), 0.0, 0.25);
+            // The animation clock's step (owner, 2026-11-10: the row follows the
+            // speed setting too). A snapping clock's step is SNAP_MS: the
+            // closed-form spring lands exactly on its goal (exp(-w dt) = 0).
+            const double DT = Hyprdrive::Motion::Clock::animDt(std::clamp(Hyprdrive::Motion::secondsBetween<double>(now, g.last), 0.0, 0.25));
             g.last          = now;
             const double W  = g.settings.smooth && g.drive.dragging ? g.omega * DRAG_STIFFER : g.omega;
             g.spring.step(g.drive.goal(g.settings), W, DT);

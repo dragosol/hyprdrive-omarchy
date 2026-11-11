@@ -354,11 +354,12 @@ namespace Hyprdrive::ShowDesktop {
         // A stalled frame does not throw the windows: at most 50 ms a step.
         const double DT    = std::min(0.05, Hyprdrive::Motion::secondsBetween<double>(NOW, S.last));
         S.last             = NOW;
-        const float  SCALE = Config::animScale();
-        if (SCALE <= 0.F || !Config::motionEnabled())
+        // The animation clock's step; a snapping clock puts it on its target.
+        const double ADT   = Hyprdrive::Motion::Clock::animDt(DT);
+        if (Hyprdrive::Motion::isSnapDt(ADT))
             S.spring.snap(TARGET);
         else
-            S.spring.step(DT / SCALE, TARGET, S.out ? OUT_OMEGA : IN_OMEGA);
+            S.spring.step(ADT, TARGET, S.out ? OUT_OMEGA : IN_OMEGA);
         if (S.spring.settled(TARGET))
             S.spring.snap(TARGET);
 
