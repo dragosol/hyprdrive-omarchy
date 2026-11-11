@@ -166,11 +166,19 @@ namespace Hyprdrive::Intent {
             return SAMEAPP && since(g_lastPress) < SAMEAPP_S ? "the focused app, after a click or Enter" : nullptr;
         }
 
+        // judge()'s verdicts, one per window: askedWhy uses a launch up, so
+        // it is asked once, as the window maps, and remembered.
+        struct SVerdict {
+            PHLWINDOWREF win;
+            const char*  why = nullptr;
+        };
+        std::vector<SVerdict> g_verdicts;
+
         void onOpenEarly(const PHLWINDOW& w) {
             std::erase_if(g_quiet, [](const PHLWINDOWREF& r) { return !r || !r->m_isMapped; });
             if (!w || !on() || !Mosaic::isMosaicWorkspace(w->m_workspace))
                 return;
-            if (const char* WHY = askedWhy(w)) {
+            if (const char* WHY = judge(w)) {
                 trace(std::format("{} opened: asked for ({})", w->m_class, WHY));
                 return;
             }
@@ -186,6 +194,18 @@ namespace Hyprdrive::Intent {
                     g_ride = SRide{.win = F, .rel = (P - POS) / SIZE, .from = clock::now()};
             }
         }
+    }
+
+    const char* judge(const PHLWINDOW& w) {
+        if (!w)
+            return nullptr;
+        std::erase_if(g_verdicts, [](const SVerdict& v) { return !v.win; });
+        for (const auto& V : g_verdicts)
+            if (V.win.lock() == w)
+                return V.why;
+        const char* WHY = askedWhy(w);
+        g_verdicts.push_back({w, WHY});
+        return WHY;
     }
 
     void granted(const char* why) {
@@ -229,6 +249,7 @@ namespace Hyprdrive::Intent {
         g_openEarly = Event::bus()->m_events.window.openEarly.listen([](PHLWINDOW w) { onOpenEarly(w); });
         g_close     = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
             std::erase_if(g_quiet, [&](const PHLWINDOWREF& r) { return !r || r.lock() == w; });
+            std::erase_if(g_verdicts, [&](const SVerdict& v) { return !v.win || v.win.lock() == w; });
         });
         g_key = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent e, Event::SCallbackInfo&) {
             if (e.state != WL_KEYBOARD_KEY_STATE_PRESSED)
@@ -277,5 +298,6 @@ namespace Hyprdrive::Intent {
         g_ride.reset();
         g_quiet.clear();
         g_grants.clear();
+        g_verdicts.clear();
     }
 }

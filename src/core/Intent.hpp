@@ -33,6 +33,12 @@ namespace Hyprdrive::Intent {
     void shutdown();
     // The user launched something (also reached through Launch::onLaunch).
     void granted(const char* why);
+    // DID THE USER ASK FOR `w`? On every desktop (Placement: a window over a
+    // fullscreen app is shown beside it when he did, moved quietly when not).
+    // The reason, or nullptr: unasked. Judged once, as the window maps -- a
+    // launch is used up by the window that takes it -- and remembered until
+    // it closes; asking again returns the same verdict.
+    const char* judge(const PHLWINDOW& w);
     // `w` mapped unasked on a Mosaic desktop (and is still mapping).
     bool quiet(const PHLWINDOW& w);
     // Every frame of `monitor` (render.pre): the pointer rides its window.
