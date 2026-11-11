@@ -190,8 +190,9 @@ namespace OverviewDetail {
     extern std::unordered_map<MONITORID, SFrameCadence> g_frameCadence;
     extern std::unordered_map<std::string, const char*> g_frameGateReason;
     extern std::unordered_map<std::string, const char*> g_damageGateReason;
-    extern int g_searchLitNow, g_searchLitPrev;
-    extern Time::steady_tp g_searchLitAt;
+    // The search rows' hover lift (OverviewSearchView.cpp searchLit), keyed
+    // by result index.
+    extern Hyprdrive::Motion::SLitSet<Time::steady_tp> g_searchLit;
     extern bool g_pillHovered;
     extern SPillPress g_pillPress;
     extern SearchLetters::SAnimator g_placeholderLetters;

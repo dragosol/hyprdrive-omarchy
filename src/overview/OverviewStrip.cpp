@@ -1141,6 +1141,12 @@ namespace {
     // already be clear by the time the popped number is readable, otherwise the
     // two are briefly legible at once, which is the juxtaposition being avoided.
     constexpr float RESTING_NUMBER_FADE_MS = 160.F;
+
+    // The animation clock (the speed setting; 0 snaps), as is the badge's pop.
+    // How long a keyboard badge stays up (KEY_BADGE_MS) is a hold: real time.
+    float restingNumberEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade) {
+        return SearchLetters::easeOutCubic(SearchLetters::clamp01(Hyprdrive::Motion::Clock::animMs(fade.start) / RESTING_NUMBER_FADE_MS));
+    }
 }
 
 // How long a keyboard-popped number stays up after the last step.
@@ -1182,34 +1188,22 @@ void COverview::updateRestingFade() {
             requestInputFrame();
     }
 
-    if (TARGET != restingFadeCell) {
-        // The cell being vacated takes over the fade-IN slot, so the number the
-        // badge just uncovered comes back rather than snapping on behind it.
-        restingFadePrevCell = restingFadeCell;
-        restingFadeCell     = TARGET;
-        restingFadeAt       = Time::steadyNow();
-    }
+    // The cell being vacated fades back IN from where it is, so the number the
+    // badge just uncovered comes back rather than snapping on behind it.
+    restingFade.moveTo(TARGET == NONE ? decltype(restingFade)::NONE : sc<long>(TARGET), Time::steadyNow(), restingNumberEased);
 
     // Mid-fade the compositor has no other reason to draw -- the fade BACK in
     // runs after the gesture has ended, so there is no finger left to schedule
     // frames. Same pairing renderDetentBadge and renderSearch use.
-    if (Hyprdrive::Motion::Clock::animMs(restingFadeAt) < RESTING_NUMBER_FADE_MS) {
+    if (restingFade.anyRunning([](const auto& fade) { return Hyprdrive::Motion::Clock::animMs(fade.start) < RESTING_NUMBER_FADE_MS; })) {
         damage();
         requestInputFrame();
     }
 }
 
 float COverview::restingNumberFade(size_t workspaceIdx) const {
-    if (workspaceIdx != restingFadeCell && workspaceIdx != restingFadePrevCell)
-        return 1.F;
-
-    // The animation clock (the speed setting; 0 snaps), as is the badge's pop.
-    // How long a keyboard badge stays up (KEY_BADGE_MS) is a hold: real time.
-    const float MS = Hyprdrive::Motion::Clock::animMs(restingFadeAt);
-    const float E  = SearchLetters::easeOutCubic(SearchLetters::clamp01(MS / RESTING_NUMBER_FADE_MS));
-
-    // The badged cell goes 1 -> 0; the one just vacated comes 0 -> 1.
-    return workspaceIdx == restingFadeCell ? 1.F - E : E;
+    // The badged cell goes 1 -> 0; one just vacated comes back to 1.
+    return restingFade.level(sc<long>(workspaceIdx), restingNumberEased);
 }
 
 void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
@@ -1600,10 +1594,12 @@ void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, floa
 
     auto& T = stripTip;
     if (LIVE) {
-        if (key != T.key || T.out) {
-            T.key   = key;
-            T.since = Time::steadyNow();
-            T.out   = false;
+        if (key != T.key || T.out()) {
+            // Back onto the same cell mid-exit: turn from the alpha it has. A
+            // new cell has its own entrance, from 0.
+            const float NOW = key == T.key && !T.text.empty() ? T.alpha() : 0.F;
+            T.key           = key;
+            T.fade.retarget(NOW, 1.F, Time::steadyNow());
         }
         T.text   = label;
         T.cx     = cx;
@@ -1611,23 +1607,29 @@ void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, floa
     } else {
         if (T.text.empty())
             return;
-        if (!T.out) {
-            T.out   = true;
-            T.since = Time::steadyNow();
+        if (!T.out()) {
+            const float NOW = T.alpha(); // out from where it is, not from 1
+            T.fade.retarget(NOW, 0.F, Time::steadyNow());
         }
     }
 
-    // The animation clock, like the dock tooltip it copies (Dock.cpp).
-    const float MS = Hyprdrive::Motion::Clock::animMs(T.since);
-    const float P  = std::clamp(MS / (T.out ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS), 0.F, 1.F);
-    if (T.out && P >= 1.F) {
+    if (T.out() && T.progress() >= 1.F) {
         T.text.clear();
         T.key.clear();
         return;
     }
 
-    const float ALPHA = T.out ? 1.F - houseEase(false, P) : houseEase(true, P);
-    OverviewRender::labelPill(monitor, T.text, T.cx, T.bottom, ALPHA * fade, monitor->m_scale);
+    OverviewRender::labelPill(monitor, T.text, T.cx, T.bottom, T.alpha() * fade, monitor->m_scale);
+}
+
+// The animation clock, like the dock tooltip it copies (Dock.cpp).
+float COverview::SStripTip::progress() const {
+    const float MS = Hyprdrive::Motion::Clock::animMs(fade.start);
+    return std::clamp(MS / (out() ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS), 0.F, 1.F);
+}
+float COverview::SStripTip::alpha() const {
+    // Entrances decelerate, exits accelerate (the house rule).
+    return fade.at(houseEase(!out(), progress()));
 }
 
 // Whether the strip label is mid-fade, which needs frames nothing else would
@@ -1635,6 +1637,6 @@ void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, floa
 bool COverview::stripTipAnimating() const {
     if (stripTip.text.empty())
         return false;
-    const float MS = Hyprdrive::Motion::Clock::animMs(stripTip.since);
-    return MS < (stripTip.out ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS) + 16.F;
+    const float MS = Hyprdrive::Motion::Clock::animMs(stripTip.fade.start);
+    return MS < (stripTip.out() ? STRIPTIP_FADE_OUT_MS : STRIPTIP_FADE_MS) + 16.F;
 }

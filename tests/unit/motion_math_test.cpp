@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <random>
@@ -1236,6 +1237,188 @@ static void testB4() {
     report("B4 animations off through the clock: snapped, delays real", 5, bad);
 }
 
+
+// ============================================================================
+// B2 -- reversal pops. SLitSet (MotionTween.hpp) replaces the two-slot
+// "now/prev on one clock" cross-fades of the search rows (O12), the dock menu
+// rows (D8) and the strip's resting numbers (O10). An UNINTERRUPTED sequence
+// (every change after the last one finished) must give the old levels bit for
+// bit; an interrupted one must not jump at the turn, where the old one did.
+// ============================================================================
+namespace old_b2 {
+    using TP = std::chrono::steady_clock::time_point;
+    // OverviewSearchView.cpp searchLitT/searchLit and DockMenu.cpp rowLit, verbatim
+    // but for the clock (the fade's own ms in, so the test owns time).
+    struct SCross {
+        int   now = -1, prev = -1;
+        TP    at{};
+        float ms;
+        [[gnu::noinline]] float t(TP clockNow) const {
+            const float MS = std::chrono::duration<float, std::milli>(clockNow - at).count();
+            return Hyprdrive::Motion::smoothstep(std::clamp(MS / ms, 0.F, 1.F));
+        }
+        void move(int k, TP clockNow) {
+            if (k != now) {
+                prev = now;
+                now  = k;
+                at   = clockNow;
+            }
+        }
+        [[gnu::noinline]] float lit(int i, TP clockNow) const {
+            const float T = t(clockNow);
+            return (i == now ? T : 0.F) + (i == prev ? 1.F - T : 0.F);
+        }
+    };
+    // OverviewStrip.cpp restingNumberFade, verbatim but for the clock.
+    struct SResting {
+        size_t cell = std::numeric_limits<size_t>::max(), prev = std::numeric_limits<size_t>::max();
+        TP     at{};
+        void   move(size_t k, TP clockNow) {
+            if (k != cell) {
+                prev = cell;
+                cell = k;
+                at   = clockNow;
+            }
+        }
+        [[gnu::noinline]] float fade(size_t i, TP clockNow) const {
+            if (i != cell && i != prev)
+                return 1.F;
+            const float MS = std::chrono::duration<float, std::milli>(clockNow - at).count();
+            const float E  = SearchLetters::easeOutCubic(SearchLetters::clamp01(MS / 160.F));
+            return i == cell ? 1.F - E : E;
+        }
+    };
+}
+
+static void testB2() {
+    namespace M = Hyprdrive::Motion;
+    using TP    = std::chrono::steady_clock::time_point;
+    using us    = std::chrono::microseconds;
+    const TP T0{std::chrono::nanoseconds{259'200'123'456'789LL}};
+    static TP g_now; // the clock the eased functions read
+    const auto SMOOTH = [](const M::STween<TP>& f) {
+        return M::smoothstep(std::clamp(std::chrono::duration<float, std::milli>(g_now - f.start).count() / 140.F, 0.F, 1.F));
+    };
+    const auto CUBIC = [](const M::STween<TP>& f) {
+        return SearchLetters::easeOutCubic(SearchLetters::clamp01(std::chrono::duration<float, std::milli>(g_now - f.start).count() / 160.F));
+    };
+
+    std::mt19937 rng(20261111);
+    long n = 0, badExact = 0, badRest = 0;
+    // 1. Uninterrupted: random keys, each change >= the duration after the
+    //    last. Every key's level on a dense time grid, bit for bit.
+    for (int run = 0; run < 200; ++run) {
+        old_b2::SCross  O{.ms = 140.F};
+        old_b2::SResting OR;
+        M::SLitSet<TP>  N, NR{.rest = 1.F, .on = 0.F};
+        TP              t = T0;
+        for (int step = 0; step < 12; ++step) {
+            const int K = static_cast<int>(rng() % 6) - 1; // -1 = none
+            g_now       = t;
+            O.move(K, t);
+            N.moveTo(K, t, SMOOTH);
+            const size_t KR = K < 0 ? std::numeric_limits<size_t>::max() : static_cast<size_t>(K);
+            OR.move(KR, t);
+            NR.moveTo(K < 0 ? M::SLitSet<TP>::NONE : K, t, CUBIC);
+            const long GAP = 160'000 + static_cast<long>(rng() % 400'000);
+            for (long d = 0; d <= GAP; d += 1'337) {
+                g_now = t + us{d};
+                // Row indices only: -1 (no row) is never drawn, and the old
+                // code answered T for it.
+                for (int i = 0; i < 5; ++i) {
+                    ++n;
+                    badExact += !sameBits(N.level(i, SMOOTH), O.lit(i, g_now));
+                    badExact += !sameBits(NR.level(i, CUBIC), OR.fade(static_cast<size_t>(i), g_now));
+                }
+            }
+            t += us{GAP};
+        }
+        // Settled: the lit key at `on`, every other at rest, exactly.
+        g_now = t;
+        for (int i = -1; i < 5; ++i) {
+            badRest += !(N.level(i, SMOOTH) == (i == N.lit && i >= 0 ? 1.F : 0.F));
+            if (i >= 0)
+                badRest += !(NR.level(i, CUBIC) == (i == NR.lit ? 0.F : 1.F));
+        }
+        badRest += N.entries.size() > 2;
+    }
+    report("B2 SLitSet uninterrupted == the old two-slot cross-fades (search/menu, resting numbers), bit for bit", n, badExact);
+    report("B2 SLitSet settles exactly (lit at on, the rest at rest, finished keys dropped)", 200, badRest);
+
+    // 2. Interrupted: changes every 5..120 ms. At every change, every key's
+    //    level just before == just after (no jump); the old code jumps.
+    long nt = 0, badJump = 0, oldJumps = 0;
+    float worstOld = 0.F;
+    for (int run = 0; run < 300; ++run) {
+        old_b2::SCross O{.ms = 140.F};
+        M::SLitSet<TP> N;
+        TP             t = T0;
+        for (int step = 0; step < 20; ++step) {
+            const int K = static_cast<int>(rng() % 3);
+            g_now       = t;
+            float beforeN[3], beforeO[3];
+            for (int i = 0; i < 3; ++i) {
+                beforeN[i] = N.level(i, SMOOTH);
+                beforeO[i] = O.lit(i, t);
+            }
+            O.move(K, t);
+            N.moveTo(K, t, SMOOTH);
+            for (int i = 0; i < 3; ++i) {
+                ++nt;
+                badJump += std::abs(N.level(i, SMOOTH) - beforeN[i]) > 1e-6F;
+                const float J = std::abs(O.lit(i, t) - beforeO[i]);
+                oldJumps += J > 1e-3F;
+                worstOld = std::max(worstOld, J);
+            }
+            // ...and it still heads where it should: in range, monotone toward
+            // the target over the next leg.
+            float last[3];
+            for (int i = 0; i < 3; ++i)
+                last[i] = N.level(i, SMOOTH);
+            const long GAP = 5'000 + static_cast<long>(rng() % 115'000);
+            for (long d = 1'000; d <= GAP; d += 1'000) {
+                g_now = t + us{d};
+                for (int i = 0; i < 3; ++i) {
+                    const float L = N.level(i, SMOOTH);
+                    badJump += L < 0.F || L > 1.F || (i == K ? L < last[i] - 1e-6F : L > last[i] + 1e-6F);
+                    last[i] = L;
+                }
+            }
+            t += us{GAP};
+        }
+        // Left alone, it arrives exactly.
+        g_now = t + us{200'000};
+        for (int i = 0; i < 3; ++i)
+            badJump += !(N.level(i, SMOOTH) == (i == N.lit ? 1.F : 0.F));
+    }
+    report("B2 SLitSet interrupted: no jump at a turn, monotone toward the target, exact arrival", nt, badJump);
+    std::printf("B2 (contrast) the old two-slot cross-fade jumped at %ld of %ld turns, worst %.3f\n", oldJumps, nt, worstOld);
+    if (oldJumps == 0)
+        report("B2 the contrast run exercised no old jump (the test proves nothing)", 1, 1);
+
+    // 3. STween's retarget from the DRAWN value (TileChrome's SEase, the dock
+    //    tooltip, the strip label): the value is continuous at the turn, where
+    //    taking the linear progress (the old SEase) is not.
+    {
+        long  nn = 0, bad = 0, oldBad = 0;
+        const auto OUTQ = [](float x) { return M::outQuad(x); };
+        for (float turn = 0.05F; turn < 1.F; turn += 0.05F) {
+            M::STween<float> a{.from = 0.F, .to = 1.F, .start = 0.F};
+            const float      DRAWN = a.at(OUTQ(turn));
+            M::STween<float> b     = a, old = a;
+            b.retarget(DRAWN, 0.F, turn);
+            old.retarget(a.at(turn), 0.F, turn); // the old SEase: from = linear value()
+            ++nn;
+            bad += std::abs(b.at(OUTQ(0.F)) - DRAWN) > 0.F;
+            oldBad += std::abs(old.at(OUTQ(0.F)) - DRAWN) > 1e-3F;
+            bad += !(b.at(OUTQ(1.F)) == 0.F);
+        }
+        report("B2 STween retarget from the drawn value: continuous at the turn, lands on 0", nn, bad);
+        if (oldBad == 0)
+            report("B2 the linear-from contrast did not jump (the test proves nothing)", 1, 1);
+    }
+}
+
 int main() {
     testA1();
     testA2();
@@ -1247,6 +1430,7 @@ int main() {
     testA8();
     testB3();
     testB4();
+    testB2();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

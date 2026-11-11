@@ -6,6 +6,7 @@
 
 #include "StripLayout.hpp"
 #include "MotionTimings.hpp"
+#include "MotionTween.hpp"
 #include "globals.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/AnimatedVariable.hpp>
@@ -748,9 +749,15 @@ class COverview : public IOverview {
     static constexpr float           STRIPTIP_FADE_MS = Hyprdrive::Motion::LABEL_FADE_IN_MS, STRIPTIP_FADE_OUT_MS = Hyprdrive::Motion::LABEL_FADE_OUT_MS;
     struct SStripTip {
         std::string     key, text; // key = the workspace id the plate belongs to
-        Time::steady_tp since = {};
-        bool            out   = false;
-        float           cx = 0.F, bottom = 0.F;
+        // In to 1, out to 0, each leg from the alpha as drawn when it turned
+        // (inventory O8: it used to restart, in from 0 and out from 1).
+        Hyprdrive::Motion::STween<Time::steady_tp> fade{.from = 0.F, .to = 1.F, .start = {}};
+        float                                      cx = 0.F, bottom = 0.F;
+        bool                                       out() const {
+            return fade.to < 0.5F;
+        }
+        float progress() const;
+        float alpha() const;
     } stripTip;
     void                             renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now);
 
@@ -1026,12 +1033,11 @@ class COverview : public IOverview {
     void                             popKeyboardBadge(size_t workspaceIdx);
     size_t                           badgeWorkspace() const;
     Time::steady_tp                  badgeBornAt() const;
-    // Cross-fade state for the resting strip numbers. Only two cells are ever
-    // in motion: the one the badge just landed on (fading OUT) and the one it
-    // just left (fading back IN). Everything else is simply lit.
-    size_t                           restingFadeCell     = std::numeric_limits<size_t>::max();
-    size_t                           restingFadePrevCell = std::numeric_limits<size_t>::max();
-    Time::steady_tp                  restingFadeAt;
+    // Cross-fade state for the resting strip numbers: the cell the badge is on
+    // fades its number OUT (lit, toward 0), every cell it left fades back IN
+    // (toward rest, 1), each from the level it has (inventory O10: a quick
+    // back-and-forth used to restart both). Everything else is simply lit.
+    Hyprdrive::Motion::SLitSet<Time::steady_tp> restingFade{.rest = 1.F, .on = 0.F};
     // Index the last tick fired for. size_t max = none yet, so the first
     // settle after a swipe begins does not fire a spurious tick.
     size_t                           trackpadDetentTickedIdx = std::numeric_limits<size_t>::max();

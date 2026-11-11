@@ -282,6 +282,16 @@ std::string itemName(const SItem& item) {
     return item.wmClass;
 }
 
+// The tooltip's progress through its current leg, and its alpha (one clock for
+// the plate, the peek labels and the frame pump).
+static float tooltipProgress() {
+    return std::clamp(elapsedMs(g_tip.fade.start) / (g_tip.out() ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS), 0.F, 1.F);
+}
+static float tooltipAlpha(float t) {
+    // Entrances decelerate, exits accelerate: the house rule, both directions.
+    return g_tip.fade.at(houseEase(!g_tip.out(), t));
+}
+
 std::vector<PHLWINDOW> peekWindowsOn(PHLMONITOR monitor, const std::vector<PHLWINDOW>& windows) {
     std::vector<PHLWINDOW> out;
     if (!monitor)
@@ -405,10 +415,10 @@ std::string tooltipSubject(const SItem& item) {
 static void renderTooltipPeek(PHLMONITOR monitor) {
     if (g_tip.name.empty() || g_tip.peek.empty() || g_tip.monitor != monitor->m_id)
         return;
-    const float T = std::clamp(elapsedMs(g_tip.since) / (g_tip.out ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS), 0.F, 1.F);
-    if (g_tip.out && T >= 1.F)
+    const float T = tooltipProgress();
+    if (g_tip.out() && T >= 1.F)
         return;
-    renderWindowPeek(monitor, g_tip.out ? 1.F - houseEase(false, T) : houseEase(true, T));
+    renderWindowPeek(monitor, tooltipAlpha(T));
 }
 
 void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& NAME, float bottomY = 0.F, const std::string& subject = {},
@@ -424,12 +434,15 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
         // New hover target, coming back from a fade-out, or arriving from
         // another monitor's dock: own entrance. Same target, new text: swap the
         // string, keep the alpha.
-        if (KEY != g_tip.subject || g_tip.out || g_tip.monitor != monitor->m_id) {
-            g_tip.monitor = monitor->m_id;
-            g_tip.subject = KEY;
-            g_tip.name    = NAME;
-            g_tip.since   = Time::steadyNow();
-            g_tip.out     = false;
+        // Coming back to the SAME plate mid-fade-out turns it around from the
+        // alpha it has; a new target starts its entrance from 0.
+        if (KEY != g_tip.subject || g_tip.out() || g_tip.monitor != monitor->m_id) {
+            const bool  SAME = KEY == g_tip.subject && g_tip.monitor == monitor->m_id && !g_tip.name.empty();
+            const float NOW  = SAME ? tooltipAlpha(tooltipProgress()) : 0.F;
+            g_tip.monitor    = monitor->m_id;
+            g_tip.subject    = KEY;
+            g_tip.name       = NAME;
+            g_tip.fade.retarget(NOW, 1.F, Time::steadyNow());
         } else if (!NAME.empty())
             g_tip.name = NAME;
         g_tip.anchor = anchor;
@@ -443,25 +456,25 @@ void renderTooltip(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor
     } else {
         if (g_tip.name.empty())
             return;
-        if (!g_tip.out) {
-            g_tip.out   = true;
-            g_tip.since = Time::steadyNow();
+        if (!g_tip.out()) {
+            // Out from the alpha it has (1 once arrived), not from 1.
+            const float NOW = tooltipAlpha(tooltipProgress());
+            g_tip.fade.retarget(NOW, 0.F, Time::steadyNow());
         }
     }
 
     if (g_tip.name.empty())
         return;
 
-    const float T = std::clamp(elapsedMs(g_tip.since) / (g_tip.out ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS), 0.F, 1.F);
-    if (g_tip.out && T >= 1.F) {
+    const float T = tooltipProgress();
+    if (g_tip.out() && T >= 1.F) {
         g_tip.name.clear();
         g_tip.subject.clear();
         g_tip.peek.clear();
         return;
     }
 
-    // Entrances decelerate, exits accelerate: the house rule, both directions.
-    const float ALPHA = g_tip.out ? 1.F - houseEase(false, T) : houseEase(true, T);
+    const float ALPHA = tooltipAlpha(T);
 
     // The frames this fade needs are asked for by needsFrames(), which reads the
     // same g_tip clock this line does. A pointer resting on an icon emits no
@@ -549,7 +562,7 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
     if (overlayUp())
         return "hotkey-overlay";
 
-    if (g_menu && g_menu->monitor == monitor->m_id && elapsedMs(g_menu->hoverAt) < MENU_HOVER_MS + 20.F)
+    if (g_menu && g_menu->monitor == monitor->m_id && menuHoverRunning(*g_menu))
         return "menu-hover";
     if (g_menu && g_menu->monitor == monitor->m_id && menuOpening(*g_menu))
         return "menu-expand";
@@ -569,7 +582,7 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
     // Y2. A pointer resting on an icon emits no motion, so nothing else would
     // ask for the frames the tooltip fade needs. renderTooltip clears the name
     // when its exit finishes, so a settled tooltip answers false here.
-    if (!g_tip.name.empty() && g_tip.monitor == monitor->m_id && elapsedMs(g_tip.since) < (g_tip.out ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS))
+    if (!g_tip.name.empty() && g_tip.monitor == monitor->m_id && elapsedMs(g_tip.fade.start) < (g_tip.out() ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS))
         return "tooltip-fade";
 
     // THE OTHER MODULES' TERMS are asked from FramePump's table (FramePump.cpp,

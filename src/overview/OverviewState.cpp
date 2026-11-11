@@ -42,8 +42,7 @@ std::unordered_map<MONITORID, SFrameCadence> g_frameCadence;
 // while profiling is on (see Prof::enabled), read back by frameDebugLine.
 std::unordered_map<std::string, const char*> g_frameGateReason;
 std::unordered_map<std::string, const char*> g_damageGateReason;
-    int             g_searchLitNow = -1, g_searchLitPrev = -1;
-    Time::steady_tp g_searchLitAt{};
+    Hyprdrive::Motion::SLitSet<Time::steady_tp> g_searchLit;
     bool g_pillHovered = false;
     SPillPress g_pillPress;
     // The placeholder's own letters (user, 2026-11-03: "the text should pop in

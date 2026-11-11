@@ -532,13 +532,17 @@ namespace {
 // right and grow a touch; the row it left eases back. Wall-clock, like the
 // letter bounce: drawSearch notes a change of row, the frame gates below ask
 // searchHoverEasing() for frames while it runs.
+//
+// Each row eases from the level it HAS when the selection moves (inventory
+// O12: going back to a row mid-fade used to restart it -- the row popped to 0,
+// the one it left to 1). An uninterrupted move is the same cross-fade as ever:
+// the new row 0 -> 1 and the old one 1 -> 0 on one smoothstep.
     constexpr float SEARCH_HOVER_MS = 140.F;
-    float           searchLitT() {
-        return Hyprdrive::Motion::smoothstep(std::clamp(Hyprdrive::Motion::Clock::animMs(g_searchLitAt) / SEARCH_HOVER_MS, 0.F, 1.F));
+    float           searchLitEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade) {
+        return Hyprdrive::Motion::smoothstep(std::clamp(Hyprdrive::Motion::Clock::animMs(fade.start) / SEARCH_HOVER_MS, 0.F, 1.F));
     }
     float searchLit(int index) {
-        const float T = searchLitT();
-        return (index == g_searchLitNow ? T : 0.F) + (index == g_searchLitPrev ? 1.F - T : 0.F);
+        return g_searchLit.level(index, searchLitEased);
     }
 }
 void searchPillPress(bool down) {
@@ -560,7 +564,7 @@ bool pillPlaying() {
 }
 
 bool searchHoverEasing() {
-    return g_searchLitAt.time_since_epoch().count() != 0 && Hyprdrive::Motion::Clock::animMs(g_searchLitAt) < SEARCH_HOVER_MS + 20.F;
+    return g_searchLit.anyRunning([](const auto& fade) { return Hyprdrive::Motion::Clock::animMs(fade.start) < SEARCH_HOVER_MS + 20.F; });
 }
 }
 
@@ -576,11 +580,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         for (const auto& E : L.tool.entries)
             if (E.selected)
                 now = L.hits[E.hit].index;
-        if (now != g_searchLitNow) {
-            g_searchLitPrev = g_searchLitNow;
-            g_searchLitNow  = now;
-            g_searchLitAt   = Time::steadyNow();
-        }
+        g_searchLit.moveTo(now, Time::steadyNow(), searchLitEased);
     }
     const bool DRAWPILL = part != 2;
     const bool DRAWBODY = part != 1;

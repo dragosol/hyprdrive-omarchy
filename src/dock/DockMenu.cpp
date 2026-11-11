@@ -641,27 +641,23 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
             break;
         }
         if (hr != M.hoverRow || hi != M.hoverInl) {
-            M.prevRow  = M.hoverRow;
-            M.prevInl  = M.hoverInl;
-            M.hoverRow = hr;
-            M.hoverInl = hi;
-            M.hoverAt  = Time::steadyNow();
+            M.hoverRow     = hr;
+            M.hoverInl     = hi;
+            const auto NOW = Time::steadyNow();
+            M.lit.moveTo(SMenu::litKey(hr, hi), NOW, menuHoverEased);
+            M.lift.moveTo(SMenu::litKey(hr, -1), NOW, menuHoverEased);
         }
     }
-    const float HT = [&] {
-        return Hyprdrive::Motion::smoothstep(std::clamp(elapsedMs(M.hoverAt) / MENU_HOVER_MS, 0.F, 1.F));
-    }();
     // The row's highlight (the row itself hovered, not one of its buttons).
     const auto rowLit = [&](int i) {
-        return (M.hoverRow == i && M.hoverInl < 0 ? HT : 0.F) + (M.prevRow == i && M.prevInl < 0 ? 1.F - HT : 0.F);
+        return M.lit.level(SMenu::litKey(i, -1), menuHoverEased);
     };
     // The row's lift: it stays lifted while the pointer is on its buttons.
     const auto rowLift = [&](int i) {
-        const bool NOW = M.hoverRow == i, WAS = M.prevRow == i;
-        return NOW && WAS ? 1.F : NOW ? HT : WAS ? 1.F - HT : 0.F;
+        return M.lift.level(SMenu::litKey(i, -1), menuHoverEased);
     };
     const auto buttonLit = [&](int i, int b) {
-        return (M.hoverRow == i && M.hoverInl == b ? HT : 0.F) + (M.prevRow == i && M.prevInl == b ? 1.F - HT : 0.F);
+        return M.lit.level(SMenu::litKey(i, b), menuHoverEased);
     };
 
     const auto chevron = [&](float atY, bool up, bool more) {

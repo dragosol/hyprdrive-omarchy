@@ -43,6 +43,7 @@
 #include "Motion.hpp"
 #include "MotionMath.hpp"
 #include "MotionTween.hpp"
+#include "MotionCurves.hpp"
 #include "MotionTimings.hpp"
 #include "ConfigureHold.hpp"
 
@@ -887,8 +888,14 @@ struct STooltip {
     std::string     subject; // icon or window, not the text; titles can tick without this moving
     CBox            anchor;
     float           bottomY = 0.F; // Y2; 0 = hang off the pill
-    Time::steady_tp since   = Time::steadyNow();
-    bool            out     = false;
+    // The plate's alpha: up to 1 on the entrance curve, down to 0 on the exit
+    // curve, each leg from the alpha AS DRAWN when it turned (inventory D5: a
+    // hover that came back mid-fade used to pop to 0, a leave mid-entrance to 1).
+    // A new subject still has its own entrance, from 0.
+    Hyprdrive::Motion::STween<Time::steady_tp> fade{.from = 0.F, .to = 1.F, .start = Time::steadyNow()};
+    bool out() const {
+        return fade.to < 0.5F;
+    }
     // The monitor it is on. ONE tooltip exists and every monitor's render()
     // calls renderTooltip: the monitor without the pointer asked for a fade-out
     // and then drew the plate at the other monitor's pixel coordinates -- the
@@ -1093,11 +1100,18 @@ struct SMenu {
     int scrollTop = 0;
     // THE HOVER EASES (user, 2026-11-03: "a little hover effect on menu items
     // (grow, or something fancy)"). Which row -- and which of its buttons, or
-    // -1 for the row itself -- the pointer is on, the one it just left, and
-    // when it changed. renderMenu reads the clock; needsFramesReason keeps
-    // frames coming while it runs.
-    int             hoverRow = -1, hoverInl = -1, prevRow = -1, prevInl = -1;
-    Time::steady_tp hoverAt{};
+    // -1 for the row itself -- the pointer is on, and the eases: `lit` per
+    // (row, button) target -- the row's own highlight or one button's chip --
+    // and `lift` per row (it stays lifted while the pointer is on its
+    // buttons). Each turns from the level it has (inventory D8: the old
+    // now/prev pair on one clock restarted both). renderMenu reads the clock;
+    // needsFramesReason keeps frames coming while either runs.
+    int                                         hoverRow = -1, hoverInl = -1;
+    Hyprdrive::Motion::SLitSet<Time::steady_tp> lit, lift;
+    // (row, button) -> one SLitSet key; button -1 is the row itself.
+    static long litKey(int row, int inl) {
+        return row < 0 ? Hyprdrive::Motion::SLitSet<Time::steady_tp>::NONE : (static_cast<long>(row) << 16) + (inl + 1);
+    }
     // When it opened: the plate grows out of its icon from here (menuOpenP).
     Time::steady_tp openedAt{};
 
@@ -1106,6 +1120,16 @@ struct SMenu {
     std::string editText;
     bool        editFresh = false; // the name is "selected": the first key replaces it
 };
+
+// The menu's hover eases (SMenu::lit / lift): smoothstep over MENU_HOVER_MS on
+// the dock's animation clock, and whether any of them still needs frames.
+inline float menuHoverEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade) {
+    return Hyprdrive::Motion::smoothstep(std::clamp(elapsedMs(fade.start) / MENU_HOVER_MS, 0.F, 1.F));
+}
+inline bool menuHoverRunning(const SMenu& menu) {
+    const auto RUNNING = [](const Hyprdrive::Motion::STween<Time::steady_tp>& fade) { return elapsedMs(fade.start) < MENU_HOVER_MS + 20.F; };
+    return menu.lit.anyRunning(RUNNING) || menu.lift.anyRunning(RUNNING);
+}
 extern std::optional<SMenu> g_menu;
 
 // THE MENU EXPANDS LIKE THE SEARCH RESULTS (user, 2026-11-03: "a consistent
