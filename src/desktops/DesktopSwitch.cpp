@@ -86,7 +86,7 @@ namespace Hyprdrive::DesktopSwitch {
         }
 
         void* findFn(const std::string& name, const std::string& demangledNeedle) {
-            for (const auto& FN : HyprlandAPI::findFunctionsByName(SCROLLOVERVIEW_HANDLE, name)) {
+            for (const auto& FN : HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, name)) {
                 if (FN.demangled.find(demangledNeedle) != std::string::npos)
                     return FN.address;
             }
@@ -94,7 +94,7 @@ namespace Hyprdrive::DesktopSwitch {
         }
 
         CFunctionHook* hookOrThrow(void* address, void* hook, const char* name) {
-            auto* h = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, address, hook);
+            auto* h = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, address, hook);
             if (!h || !h->hook())
                 throw std::runtime_error(std::format("[hyprdrive] Could not hook {}", name));
             return h;

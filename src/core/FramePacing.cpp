@@ -101,7 +101,7 @@ namespace Hyprdrive::FramePacing {
             if (bus)
                 sd_bus_unref(bus);
             if (!ok)
-                HyprlandAPI::addNotification(SCROLLOVERVIEW_HANDLE, std::string("[hyprdrive] ") + BODY, CHyprColor{0.9F, 0.7F, 0.2F, 1.F}, 15000);
+                HyprlandAPI::addNotification(HYPRDRIVE_HANDLE, std::string("[hyprdrive] ") + BODY, CHyprColor{0.9F, 0.7F, 0.2F, 1.F}, 15000);
         }
 
         void maybeHint() {

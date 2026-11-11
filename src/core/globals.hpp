@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <string>
 
-inline HANDLE SCROLLOVERVIEW_HANDLE = nullptr;
+inline HANDLE HYPRDRIVE_HANDLE = nullptr;
 
 // The search query, the keyboard selection, the result drag and the layout the
 // search step publishes all live in SearchSession.hpp -- one grouped object with

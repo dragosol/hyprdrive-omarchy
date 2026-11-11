@@ -608,10 +608,10 @@ namespace Hyprdrive::DesktopStrip {
         g_row = std::move(row);
         g_go  = std::move(go);
         // Not fatal when missing: desktops then stack in Hyprland's order.
-        for (const auto& FN : HyprlandAPI::findFunctionsByName(SCROLLOVERVIEW_HANDLE, "renderWorkspaceWindows")) {
+        for (const auto& FN : HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, "renderWorkspaceWindows")) {
             if (FN.demangled.find("renderWorkspaceWindows(") == std::string::npos)
                 continue; // not renderWorkspaceWindowsFullscreen
-            g_stackHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, FN.address, rc<void*>(hkRenderWorkspaceWindows));
+            g_stackHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FN.address, rc<void*>(hkRenderWorkspaceWindows));
             if (g_stackHook && !g_stackHook->hook())
                 g_stackHook = nullptr;
             break;

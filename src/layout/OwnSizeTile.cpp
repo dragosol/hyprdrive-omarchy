@@ -235,18 +235,18 @@ namespace Hyprdrive::OwnSizeTile {
     }
 
     void init() {
-        const auto FNS = HyprlandAPI::findFunctionsByName(SCROLLOVERVIEW_HANDLE, FLOAT_WINDOW);
+        const auto FNS = HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, FLOAT_WINDOW);
         if (FNS.empty()) {
             trace("floatWindow not found: Hyprland's own toggle stands");
             return;
         }
-        g_hook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, FNS[0].address, rc<void*>(hkFloatWindow));
+        g_hook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FNS[0].address, rc<void*>(hkFloatWindow));
         if (g_hook && !g_hook->hook())
             g_hook = nullptr;
         // Only with the toggle hooked: no own-size tile exists without it.
-        const auto CFG = g_hook ? HyprlandAPI::findFunctionsByName(SCROLLOVERVIEW_HANDLE, ON_X11_CONFIGURE) : std::vector<SFunctionMatch>{};
+        const auto CFG = g_hook ? HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, ON_X11_CONFIGURE) : std::vector<SFunctionMatch>{};
         if (!CFG.empty()) {
-            g_configureHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, CFG[0].address, rc<void*>(hkOnX11Configure));
+            g_configureHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, CFG[0].address, rc<void*>(hkOnX11Configure));
             if (g_configureHook && !g_configureHook->hook())
                 g_configureHook = nullptr;
         }

@@ -102,10 +102,10 @@ namespace Hyprdrive::FullscreenGuard {
 
     void installFocusHook() {
         const auto FNS = HyprlandAPI::findFunctionsByName(
-            SCROLLOVERVIEW_HANDLE, "_ZN7Desktop11CFocusState15fullWindowFocusEN9Hyprutils6Memory14CSharedPointerINS_4View7CWindowEEENS_12eFocusReasonENS3_I18CWLSurfaceResourceEEb");
+            HYPRDRIVE_HANDLE, "_ZN7Desktop11CFocusState15fullWindowFocusEN9Hyprutils6Memory14CSharedPointerINS_4View7CWindowEEENS_12eFocusReasonENS3_I18CWLSurfaceResourceEEb");
         if (FNS.empty())
             return; // no game guard: Hyprland's own exit-fullscreen stands
-        g_focusHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, FNS[0].address, rc<void*>(hkFullWindowFocus));
+        g_focusHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FNS[0].address, rc<void*>(hkFullWindowFocus));
         if (g_focusHook && !g_focusHook->hook())
             g_focusHook = nullptr;
     }

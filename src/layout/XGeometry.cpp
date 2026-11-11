@@ -345,10 +345,10 @@ namespace Hyprdrive::XGeometry {
     }
 
     void installStateRequestFix() {
-        const auto FNS = HyprlandAPI::findFunctionsByName(SCROLLOVERVIEW_HANDLE, "_ZN4CXWM19handleClientMessageEP26xcb_client_message_event_t");
+        const auto FNS = HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, "_ZN4CXWM19handleClientMessageEP26xcb_client_message_event_t");
         if (FNS.empty())
             return; // Hyprland's own handling stands
-        g_clientMessageHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, FNS[0].address, rc<void*>(hkHandleClientMessage));
+        g_clientMessageHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FNS[0].address, rc<void*>(hkHandleClientMessage));
         if (g_clientMessageHook && !g_clientMessageHook->hook())
             g_clientMessageHook = nullptr;
     }

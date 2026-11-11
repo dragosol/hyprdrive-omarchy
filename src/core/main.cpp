@@ -168,7 +168,7 @@ uint32_t            g_tapCtrlLastTapMs  = 0;
 } // namespace PluginDetail
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
-    SCROLLOVERVIEW_HANDLE = handle;
+    HYPRDRIVE_HANDLE = handle;
 
     // The debug logs older versions left in /tmp, readable by everyone at
     // umask 022: ours are removed at every load (DebugPaths::removeLegacy).
@@ -186,37 +186,37 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     }
 
     g_pScrollRenderWorkspaceHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("renderWorkspace", {"CHyprRenderer::renderWorkspace(", "IHyprRenderer::renderWorkspace("}),
         rc<void*>(hkRenderWorkspace));
 
     g_pScrollScheduleFrameHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE, 
+        HYPRDRIVE_HANDLE, 
         findFnOrThrow("_ZN7Monitor8CMonitor13scheduleFrameEN10Aquamarine7IOutput19scheduleFrameReasonE", {""}),
         rc<void*>(hkScheduleFrame));
 
     g_pScrollDamageSurfaceHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("damageSurface", {"CHyprRenderer::damageSurface(", "IHyprRenderer::damageSurface("}),
         rc<void*>(hkDamageSurface));
 
     g_pScrollSendFrameEventsHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("sendFrameEventsToWorkspace", {"CHyprRenderer::sendFrameEventsToWorkspace(", "IHyprRenderer::sendFrameEventsToWorkspace("}),
         rc<void*>(hkSendFrameEventsToWorkspace));
 
     g_pScrollSurfaceFrameHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("_ZN18CWLSurfaceResource5frameERKNSt6chrono10time_pointINS0_3_V212steady_clockENS0_8durationIlSt5ratioILl1ELl1000000000EEEEEE", {""}),
         rc<void*>(hkSurfaceFrame));
 
     g_pScrollAddDamageHookB = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("addDamageEPK15pixman_region32", {"CMonitor::addDamage"}),
         rc<void*>(hkAddDamageB));
 
     g_pScrollAddDamageHookA = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("_ZN7Monitor8CMonitor9addDamageERKN9Hyprutils4Math4CBoxE", {""}),
         rc<void*>(hkAddDamageA));
 
@@ -224,24 +224,24 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // and off with the overview, and the autohide barrier lives on the plain
     // desktop, which is exactly where they are not installed.
     g_pScrollMouseMovedHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("onMouseMoved", {"CInputManager::onMouseMoved("}),
         rc<void*>(hkOnMouseMoved));
     g_pScrollMouseMovedHook->hook();
 
-    g_pSendWindowSizeHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("sendWindowSize", {"CWindow::sendWindowSize("}), rc<void*>(hkSendWindowSize));
+    g_pSendWindowSizeHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, findFnOrThrow("sendWindowSize", {"CWindow::sendWindowSize("}), rc<void*>(hkSendWindowSize));
     g_pSendWindowSizeHook->hook();
 
-    g_pTargetPlaceHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("setPositionGlobal", {"CWindowTarget::setPositionGlobal("}), rc<void*>(hkTargetPlace));
+    g_pTargetPlaceHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, findFnOrThrow("setPositionGlobal", {"CWindowTarget::setPositionGlobal("}), rc<void*>(hkTargetPlace));
     g_pTargetPlaceHook->hook();
     Hyprdrive::ConfigureHold::setSender([](Desktop::View::CWindow* window, bool force) {
         if (g_pSendWindowSizeHook)
             rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(window, force);
     });
-    g_pOnAckHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("onAck", {"CWindow::onAck("}), rc<void*>(hkOnAck));
+    g_pOnAckHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, findFnOrThrow("onAck", {"CWindow::onAck("}), rc<void*>(hkOnAck));
     g_pOnAckHook->hook();
     g_pShouldRenderWindowHook = HyprlandAPI::createFunctionHook(
-        SCROLLOVERVIEW_HANDLE,
+        HYPRDRIVE_HANDLE,
         findFnOrThrow("shouldRenderWindow", {"shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)"}),
         rc<void*>(hkShouldRenderWindow));
     g_pShouldRenderWindowHook->hook();
@@ -664,7 +664,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     Hyprdrive::Config::registerConfig();
     // The "mosaic" layout (Mosaic.hpp). Registered whether or not the panel has
     // enabled it: a desktop whose saved layout is mosaic must find it at login.
-    Hyprdrive::Mosaic::registerLayout(SCROLLOVERVIEW_HANDLE);
+    Hyprdrive::Mosaic::registerLayout(HYPRDRIVE_HANDLE);
     Hyprdrive::Intent::init();
     Hyprdrive::GameApps::init();
     Hyprdrive::FullscreenDesktop::init();
@@ -762,7 +762,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     Hyprdrive::FullscreenDesktop::shutdown();
     Hyprdrive::GameApps::shutdown();
     Hyprdrive::Mosaic::shutdown();
-    Hyprdrive::Mosaic::unregisterLayout(SCROLLOVERVIEW_HANDLE);
+    Hyprdrive::Mosaic::unregisterLayout(HYPRDRIVE_HANDLE);
     Hyprdrive::DesktopSwitch::shutdown();
     Hyprdrive::XGeometry::shutdown();
     Hyprdrive::KeyboardCat::shutdown(); // ffmpeg killed, its reader joined, before the code goes

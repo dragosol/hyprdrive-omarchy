@@ -256,10 +256,10 @@ namespace Hyprdrive::Intent {
         });
         // Not fatal when missing: then only Hyprdrive's own launches and
         // launchers grant.
-        for (const auto& FN : HyprlandAPI::findFunctionsByName(SCROLLOVERVIEW_HANDLE, "spawnRawProc")) {
+        for (const auto& FN : HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, "spawnRawProc")) {
             if (FN.demangled.find("CExecutor::spawnRawProc(") == std::string::npos)
                 continue;
-            g_spawnHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, FN.address, rc<void*>(hkSpawn));
+            g_spawnHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, FN.address, rc<void*>(hkSpawn));
             if (g_spawnHook && !g_spawnHook->hook())
                 g_spawnHook = nullptr;
             break;

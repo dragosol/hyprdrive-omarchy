@@ -30,7 +30,7 @@ const char* stableText(std::string text) {
 }
 
 void addKey(SP<::Config::Values::IValue> value) {
-    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE, value);
+    HyprlandAPI::addConfigValueV2(HYPRDRIVE_HANDLE, value);
     (g_legacyPass ? g_legacyValues : g_modernValues).emplace_back(value);
 }
 
