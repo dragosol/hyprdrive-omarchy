@@ -115,6 +115,10 @@ namespace Hyprdrive::Mosaic {
         extern void loadKept();
         extern std::optional<Vector2D> rememberedWindow(const SP<Layout::ITarget>& t);
         // Mosaic.cpp
+        // While the layout is being added: a window that was fullscreen or
+        // maximized before the swap is again, in the handler Hyprland reads
+        // now and in `self`'s own (FullscreenCarry.hpp). Before it is placed.
+        extern void carryFullscreenInto(const SP<Layout::ITarget>& target, Layout::IModeAlgorithm* self);
         extern bool traceOn();
         extern void trace(const std::string& line);
         extern bool canvasOn();
@@ -799,6 +803,8 @@ namespace Hyprdrive::Mosaic {
         }
 
         void newTarget(SP<Layout::ITarget> target) override {
+            // First: placed as what it is, a fullscreen window keeps its box.
+            carryFullscreenInto(target, this);
             m_revealPending = true;
             // A Super+drag let go is the same window put down, not one arriving:
             // the tiles keep their hold (m_tiledHold) through it.

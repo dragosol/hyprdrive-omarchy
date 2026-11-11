@@ -48,6 +48,9 @@
 #                     as C++, not as mangled symbols.
 #   overview_gesture_decision_test  OverviewGestureDecision.hpp: open or
 #                     close, for every bound x taken swipe direction.
+#   fullscreen_carry_test  FullscreenCarry.hpp: a window's fullscreen modes kept
+#                     through a layout swap (plugin reload), matched by address
+#                     and desktop only, malformed records skipped.
 #   motion_math_test  MotionMath.hpp: each shared motion function against
 #                     verbatim copies of the definitions it replaced, bit for bit.
 #
@@ -136,6 +139,7 @@ run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
 run fullscreen_book_test tests/unit/fullscreen_book_test.cpp
+run fullscreen_carry_test tests/unit/fullscreen_carry_test.cpp
 run desktop_row_test tests/unit/desktop_row_test.cpp
 run desktop_strip_test tests/unit/desktop_strip_test.cpp
 # shellcheck disable=SC2046

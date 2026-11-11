@@ -20,6 +20,7 @@
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
+#include <hyprland/src/layout/algorithm/FloatingAlgorithm.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
@@ -64,6 +65,7 @@
 #include <typeinfo>
 #include <unordered_map>
 #include <vector>
+#include "FullscreenCarry.hpp"
 #include "MosaicParts.hpp"
 
 namespace Hyprdrive::Mosaic {
@@ -475,10 +477,138 @@ namespace Hyprdrive::Mosaic {
 
     static CHyprSignalListener g_focusReasonHook; // a focus that is not a hover: g_hoverStale is over
 
+    // FULLSCREEN THROUGH A RELOAD (FullscreenCarry.hpp). Filled only for the
+    // length of one addTiledAlgo / removeAlgo call.
+    static std::vector<FullscreenCarry::SCarried> g_carry;
+
+    static std::uintptr_t carryAddr(const PHLWINDOW& w) {
+        return reinterpret_cast<std::uintptr_t>(w.get());
+    }
+
+    // The handler Hyprland keeps a tiled window's modes in on that desktop:
+    // its tiled algorithm's default one (no layout here, mosaic or dwindle,
+    // has one of its own).
+    static Fullscreen::IFullscreenHandler* tiledFsHandler(const PHLWORKSPACE& ws) {
+        if (!ws || !ws->m_space || !ws->m_space->algorithm() || !ws->m_space->algorithm()->tiledAlgo())
+            return nullptr;
+        return ws->m_space->algorithm()->tiledAlgo()->Layout::IModeAlgorithm::getFSHandler().get();
+    }
+
+    // The desktop's floating algorithm's handler: never swapped by a layout
+    // change, and read by Hyprland only for the DESKTOP's questions
+    // (hasFullscreen, getFullscreenWindow), never for a tiled window's own.
+    static Fullscreen::IFullscreenHandler* floatingFsHandler(const PHLWORKSPACE& ws) {
+        if (!ws || !ws->m_space || !ws->m_space->algorithm() || !ws->m_space->algorithm()->floatingAlgo())
+            return nullptr;
+        return ws->m_space->algorithm()->floatingAlgo()->Layout::IModeAlgorithm::getFSHandler().get();
+    }
+
+    static FullscreenCarry::SMode modesNow(const PHLWINDOW& w) {
+        const auto M = Fullscreen::controller()->getFullscreenModes(w);
+        return {.internal = int(M.internal), .client = int(M.client)};
+    }
+
+    static void seedModes(Fullscreen::IFullscreenHandler* h, const PHLWINDOW& w, FullscreenCarry::SMode m) {
+        if (!h || !w || !w->m_target || !FullscreenCarry::validMode(m.internal) || !FullscreenCarry::validMode(m.client))
+            return;
+        // The handler's own setters: its map only -- no event, no configure.
+        h->setTargetFullscreenModeInternal(w->m_target, Fullscreen::eFullscreenMode(m.internal));
+        h->setTargetFullscreenModeClient(w->m_target, Fullscreen::eFullscreenMode(m.client));
+    }
+
+    // Every tiled window that is fullscreen or maximized now.
+    static std::vector<FullscreenCarry::SCarried> recordFullscreen() {
+        std::vector<FullscreenCarry::SCarried> out;
+        if (!Desktop::windowState())
+            return out;
+        for (const auto& W : Desktop::windowState()->windows()) {
+            if (!W || !W->m_isMapped || W->m_isFloating || !W->m_target || !W->m_workspace || !tiledFsHandler(W->m_workspace))
+                continue;
+            const auto M = modesNow(W);
+            if (FullscreenCarry::worth(M))
+                out.push_back({.win = carryAddr(W), .ws = W->m_workspace->m_id, .mode = M});
+        }
+        return out;
+    }
+
+    // The live window a record is for, or none: matched by address among the
+    // windows that exist, never dereferenced from the record.
+    static PHLWINDOW carriedWindow(const FullscreenCarry::SCarried& c) {
+        if (!Desktop::windowState())
+            return nullptr;
+        for (const auto& W : Desktop::windowState()->windows())
+            if (W && carryAddr(W) == c.win && W->m_target && W->m_workspace && W->m_workspace->m_id == c.ws && !W->m_isFloating)
+                return W;
+        return nullptr;
+    }
+
+    // After the swap: whoever the new handler does not know as it was is
+    // written back into it.
+    static void reseatFullscreen(const std::vector<FullscreenCarry::SCarried>& carried, const char* why) {
+        for (const auto& C : carried) {
+            const auto W = carriedWindow(C);
+            if (!W)
+                continue;
+            // Out of where the load parked it, whatever happened meanwhile.
+            seedModes(floatingFsHandler(W->m_workspace), W, {});
+            if (!FullscreenCarry::needsSeed(C.mode, modesNow(W)))
+                continue;
+            seedModes(tiledFsHandler(W->m_workspace), W, C.mode);
+            trace(std::format("{}: {} kept fullscreen {}/{}", why, appOf(W), C.mode.internal, C.mode.client));
+        }
+    }
+
+    namespace MosaicDetail {
+        void carryFullscreenInto(const SP<Layout::ITarget>& target, Layout::IModeAlgorithm* self) {
+            if (g_carry.empty() || !target || !self)
+                return;
+            // (A group's modes are its current window's: seedModes keys them
+            // by the window's own target, as Hyprland does.)
+            const auto W = target->window();
+            if (!W || !W->m_workspace || !W->m_target)
+                return;
+            const auto* C = FullscreenCarry::find(g_carry, carryAddr(W), W->m_workspace->m_id);
+            if (!C)
+                return;
+            // The desktop's algorithm is swapped only once every window is in
+            // the new one: until then Hyprland asks the old (dwindle's) handler
+            // about this window, which must say fullscreen too, or the placing
+            // tiles it. It has left dwindle already, so nothing there drops it
+            // any more; the parked copy goes.
+            seedModes(floatingFsHandler(W->m_workspace), W, {});
+            seedModes(tiledFsHandler(W->m_workspace), W, C->mode);
+            seedModes(self->Layout::IModeAlgorithm::getFSHandler().get(), W, C->mode);
+        }
+    }
+
     void registerLayout(HANDLE handle) {
         // Before the algo exists: windows re-arrive inside addTiledAlgo.
         loadKept();
+        // A desktop going back to mosaic leaves dwindle through
+        // CDwindleAlgorithm::removeTarget, which takes a fullscreen window
+        // out of fullscreen (sent to the client). So its modes come out of
+        // dwindle's handler first, silently, and wait in the desktop's
+        // floating handler: dwindle's removeTarget asks about the window and
+        // hears "not fullscreen", while its recalculate (after another
+        // window left) asks about the desktop and hears "a fullscreen window
+        // owns it" -- the fullscreen window is not re-tiled meanwhile. Mosaic
+        // takes them as the window arrives (carryFullscreenInto); a desktop
+        // that stays on its layout gets them straight back below.
+        const bool CARRY = g_pCompositor && !g_pCompositor->m_isShuttingDown;
+        if (CARRY) {
+            g_carry = recordFullscreen();
+            for (const auto& C : g_carry)
+                if (const auto W = carriedWindow(C); W && floatingFsHandler(W->m_workspace)) {
+                    seedModes(floatingFsHandler(W->m_workspace), W, C.mode);
+                    seedModes(tiledFsHandler(W->m_workspace), W, {});
+                }
+        }
         HyprlandAPI::addTiledAlgo(handle, "mosaic", &typeid(CMosaicAlgorithm), [] { return makeUnique<CMosaicAlgorithm>(); });
+        if (CARRY) {
+            const auto CARRIED = std::move(g_carry);
+            g_carry.clear();
+            reseatFullscreen(CARRIED, "load");
+        }
         Hyprdrive::Config::registerDispatcher("focus", onFocusDispatcher);
         Hyprdrive::Config::registerDispatcher("swap", onSwapDispatcher);
         // After the window's rules are in (openLate). Directly, never a
@@ -503,6 +633,14 @@ namespace Hyprdrive::Mosaic {
         g_focusReasonHook.reset();
         // Before the algo goes: removing it hands the desktops to dwindle.
         saveKept();
+        // ...with a new algorithm object each, whose fullscreen handler knows
+        // nobody: a fullscreen window would be tiled at the next recalculate
+        // (FullscreenCarry.hpp). Dwindle is told what each was. Not at
+        // Hyprland's exit: nothing is left to keep.
+        const bool CARRY   = g_pCompositor && !g_pCompositor->m_isShuttingDown;
+        const auto CARRIED = CARRY ? recordFullscreen() : std::vector<FullscreenCarry::SCarried>{};
         HyprlandAPI::removeAlgo(handle, "mosaic");
+        if (CARRY)
+            reseatFullscreen(CARRIED, "unload");
     }
 }
