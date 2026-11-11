@@ -51,6 +51,29 @@ set -u
 cd "$(dirname "$0")/.."
 
 CXX=${CXX:-g++}
+# HOST_TEST_SANITIZE=1 (make check-asan): every test built with AddressSanitizer
+# and UndefinedBehaviorSanitizer, and any report fails it.
+# A compiler whose sanitizer runtime is not installed (Fedora's g++ without
+# libasan/libubsan) is swapped for clang++, which ships its own.
+SAN=()
+if [ "${HOST_TEST_SANITIZE:-0}" = 1 ]; then
+    SAN=(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
+    probe=$(mktemp -d)
+    echo 'int main() { return 0; }' > "$probe/p.cpp"
+    if ! "$CXX" "${SAN[@]}" -o "$probe/p" "$probe/p.cpp" 2>/dev/null; then
+        if command -v clang++ >/dev/null && clang++ "${SAN[@]}" -o "$probe/p" "$probe/p.cpp" 2>/dev/null; then
+            echo "host_tests: $CXX has no sanitizer runtime here; using clang++" >&2
+            CXX=clang++
+        else
+            rm -rf "$probe"
+            echo "host_tests: no compiler here can build with -fsanitize=address,undefined (install libasan + libubsan, or clang)" >&2
+            exit 1
+        fi
+    fi
+    rm -rf "$probe"
+    export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1}
+    export UBSAN_OPTIONS=${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=1}
+fi
 # Every src/<area>/ folder is on the include path, as in the Makefile: the tests
 # and the sources name headers bare ("StackModel.hpp").
 INC=()
@@ -61,7 +84,7 @@ fail=0
 
 run() {
     local name=$1; shift
-    if ! "$CXX" -std=c++2b -O2 -Wall "${INC[@]}" -o "$OUT/$name" "$@" 2>"$OUT/$name.build"; then
+    if ! "$CXX" -std=c++2b -O2 -Wall "${SAN[@]}" "${INC[@]}" -o "$OUT/$name" "$@" 2>"$OUT/$name.build"; then
         echo "host_tests: $name FAILED TO BUILD" >&2
         cat "$OUT/$name.build" >&2
         fail=1
