@@ -13,11 +13,18 @@
 //   - block_of_id = (id-1)//SLOTS; adopt keeps the slot if free, else the
 //     first free one; append_slot = highest used id in the block + 1, else
 //     any free id in it, else nil (stays a guest)
-//   - renumber() moves merged[old] to merged[new]
+//   - renumber() moves merged[old] to merged[new] (a record left under the
+//     new id belonged to a workspace that has gone: it goes)
+//   - merge() writes a record only when the old id's block had a monitor
+//     once (identity_of_block): an overflow id's never did
+//   - hl.on("workspace.created"): a workspace created under a record's id
+//     drops the record (created()) -- the rule Hyprdrive has Omarchy apply
+//     around its own renumbers (Rows::renumbering)
 
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace OmarchyModel {
@@ -30,8 +37,9 @@ namespace OmarchyModel {
         bool          windows = false;
     };
     struct Record {
-        Id original = 0;
-        Id originBlock = 0; // the block of its origin monitor
+        Id            original    = 0;
+        Id            originBlock = 0; // the block of its origin monitor
+        unsigned long desk        = 0; // TEST-ONLY: the workspace it was written for
     };
     struct World {
         Id                      slots = 10;
@@ -39,8 +47,24 @@ namespace OmarchyModel {
         std::vector<Ws>         ws;
         std::map<int, unsigned long> shown; // monitor -> key of the workspace it shows
         std::map<Id, Record>    merged; // current id -> record
+        std::set<Id>            known;  // blocks some monitor ever had (the state file's lines); empty = all
         unsigned long           nextKey = 1'000'000;
     };
+
+    // hl.on("workspace.created", ...): merged[id] = nil.
+    inline void created(World& w, Id id) {
+        w.merged.erase(id);
+    }
+    // Every record still describes the workspace under its id (or none is
+    // there: stale, harmless -- the next workspace created or renumbered
+    // there drops it).
+    inline bool recordsTrue(const World& w) {
+        for (const auto& [ID, R] : w.merged)
+            for (const auto& X : w.ws)
+                if (X.id == ID && X.key != R.desk)
+                    return false;
+        return true;
+    }
 
     inline Id blockOf(const World& w, Id id) {
         return (id - 1) / w.slots;
@@ -55,10 +79,15 @@ namespace OmarchyModel {
         return std::ranges::any_of(w.ws, [&](const Ws& x) { return x.id == id; });
     }
     inline void renumber(World& w, Ws& x, Id to, int& changes) {
-        if (const auto IT = w.merged.find(x.id); IT != w.merged.end()) {
-            const Record R = IT->second;
-            w.merged.erase(IT);
-            w.merged[to] = R;
+        const auto IT = w.merged.find(x.id);
+        if (IT != w.merged.end() || w.merged.contains(to)) {
+            const std::optional<Record> R = IT != w.merged.end() ? std::optional<Record>{IT->second} : std::nullopt;
+            if (IT != w.merged.end())
+                w.merged.erase(IT);
+            if (R)
+                w.merged[to] = *R;
+            else
+                w.merged.erase(to);
         }
         x.id = to;
         ++changes;
@@ -91,26 +120,29 @@ namespace OmarchyModel {
     // Returns how many ids it changed (changeworkspaceid events).
     inline int reconcile(World& w) {
         int changes = 0;
-        // 1. restore
+        // 1. restore: a record whose origin monitor is connected goes (with
+        // or without a workspace under it); its workspace goes back there,
+        // under its original id when that is in the origin's block and free,
+        // else adopted into that block when it is not in it already.
         for (auto it = w.merged.begin(); it != w.merged.end();) {
             const auto OWNER = ownerOf(w, it->second.originBlock);
-            auto       X     = std::ranges::find_if(w.ws, [&](const Ws& x) { return x.id == it->first; });
-            if (!OWNER || X == w.ws.end()) {
+            if (!OWNER) {
                 ++it;
                 continue;
             }
-            const Record R = it->second;
-            it             = w.merged.erase(it);
-            X->monitor     = *OWNER;
-            Id to          = R.original;
-            if (taken(w, to) && to != X->id) {
-                const auto A = adoptId(w, X->id, R.originBlock);
-                to           = A ? *A : X->id;
-            }
-            if (to != X->id) {
-                X->id = to;
-                ++changes;
-            }
+            const Record R  = it->second;
+            const Id     ID = it->first;
+            it              = w.merged.erase(it);
+            auto X          = std::ranges::find_if(w.ws, [&](const Ws& x) { return x.id == ID; });
+            if (X == w.ws.end())
+                continue;
+            X->monitor = *OWNER;
+            if (blockOf(w, R.original) == R.originBlock && !taken(w, R.original))
+                renumber(w, *X, R.original, changes);
+            else if (blockOf(w, X->id) != R.originBlock)
+                if (const auto A = adoptId(w, X->id, R.originBlock))
+                    renumber(w, *X, *A, changes);
+            it = w.merged.lower_bound(ID); // (renumber may have touched the map)
         }
         // 3. place
         for (auto& X : w.ws) {
@@ -135,11 +167,11 @@ namespace OmarchyModel {
             const auto TO = appendSlot(w, w.block.at(X.monitor));
             if (!TO)
                 continue; // no room: stays a guest at its foreign id
-            const Id OLD = X.id;
-            // (renumber() moves an existing record; merge writes the new one)
+            // One merged before keeps the monitor it first came from;
+            // renumber() carries the record along.
+            if (!w.merged.contains(X.id) && (w.known.empty() || w.known.contains(B)))
+                w.merged[X.id] = {X.id, B, X.key};
             renumber(w, X, *TO, changes);
-            if (!w.merged.contains(*TO) || w.merged[*TO].original == OLD)
-                w.merged[*TO] = {OLD, B};
         }
         // 5. own_views
         for (const auto& [M, B] : w.block) {
@@ -162,6 +194,7 @@ namespace OmarchyModel {
             else if (!taken(w, B * w.slots + 1)) {
                 w.ws.push_back({w.nextKey++, B * w.slots + 1, M, false});
                 w.shown[M] = w.ws.back().key;
+                created(w, B * w.slots + 1);
             }
         }
         return changes;

@@ -70,7 +70,7 @@ namespace Hyprdrive::DesktopOrder {
             std::vector<DesktopPlan::Desk> out;
             out.reserve(all.size());
             for (const auto& WS : all)
-                out.push_back({keyOf(WS), WS->m_id, counted ? windowsOn(WS) : 0, Rows::ofWorkspace(WS), Rows::pinned(WS->m_id)});
+                out.push_back({keyOf(WS), WS->m_id, counted ? windowsOn(WS) : 0, Rows::ofWorkspace(WS)});
             return out;
         }
         std::string describe(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves) {
@@ -109,15 +109,19 @@ namespace Hyprdrive::DesktopOrder {
                 done.push_back({WS, WS->m_id, WS->m_name});
         if (done.empty())
             return true;
-        for (const auto& [WS, TO] : moves) {
-            const WORKSPACEID FROM = WS->m_id;
-            if (FROM == TO)
-                continue;
-            WS->m_id = TO;
-            // A numeric name is the number; a name the user gave stays.
-            if (WS->m_name == std::to_string(FROM))
-                WS->m_name = std::to_string(TO);
-        }
+        // (Omarchy's merged records under the numbers that change are
+        // dropped by its own rule around it: Rows::renumbering.)
+        Rows::renumbering(moves, [&] {
+            for (const auto& [WS, TO] : moves) {
+                const WORKSPACEID FROM = WS->m_id;
+                if (FROM == TO)
+                    continue;
+                WS->m_id = TO;
+                // A numeric name is the number; a name the user gave stays.
+                if (WS->m_name == std::to_string(FROM))
+                    WS->m_name = std::to_string(TO);
+            }
+        });
         // (Each monitor's "previous workspace" stack holds numbers too, but
         // Hyprland keeps it private: right after a move, "workspace previous"
         // can land on the neighbour of the desktop it meant.)
@@ -167,7 +171,7 @@ namespace Hyprdrive::DesktopOrder {
             bool shown = false;
             for (const auto& MON : State::monitorState()->monitors())
                 shown |= MON && MON->m_activeWorkspace == WS;
-            rooms.push_back({keyOf(WS), WS->m_id, windowsOn(WS) > 0, shown, Rows::pinned(WS->m_id)});
+            rooms.push_back({keyOf(WS), WS->m_id, windowsOn(WS) > 0, shown});
             rowOf.push_back(Rows::ofWorkspace(WS));
         }
         // ONCE PER ROW: each row's members from its first place. Visitors

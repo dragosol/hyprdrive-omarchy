@@ -43,8 +43,8 @@ namespace Hyprdrive::DesktopOrder {
     // NO EMPTY DESKTOPS (a display change, FullscreenDesktop.cpp): in each
     // monitor's row, the desktops holding windows take its first places in
     // their order, then each shown empty one, then any other empty one
-    // (DesktopPlan::compactMoves); visitors, pinned guests and provisional
-    // rows stay where they are. Blocks off: 1..N over every desktop. Logged
+    // (DesktopPlan::compactMoves), Omarchy's guests included; visitors and
+    // provisional rows stay where they are. Blocks off: 1..N over every desktop. Logged
     // with `why`, before -> after. Returns the row -- (old number, new number)
     // of every desktop holding windows -- when it renumbered; nothing when
     // already compact or refused (logged).

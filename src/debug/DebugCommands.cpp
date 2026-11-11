@@ -104,7 +104,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     if (TOPIC == "dockmenu")
         return {.success = false, .error = Hyprdrive::Dock::debugMenuReport(Desktop::focusState()->monitor())};
     // `rows`: each monitor's row of desktops -- Omarchy's workspace blocks on
-    // or off, the block file as read, pinned guests, members and visitors.
+    // or off, the block file as read, guests and stale records, members and visitors.
     if (TOPIC == "rows")
         return {.success = false, .error = Hyprdrive::Rows::debugReport()};
     if (TOPIC == "glass") {

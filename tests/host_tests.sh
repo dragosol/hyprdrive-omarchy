@@ -41,9 +41,12 @@
 #                     implicit row, an Omarchy block and its overflow) and the
 #                     parse of Omarchy's monitor-workspaces(-merged) files.
 #   desktop_rows_test  DesktopPlan.hpp on Omarchy's per-monitor blocks: every
-#                     plan stays in its monitor's row, pinned guests never move,
-#                     and compaction is a fixed point of a model of Omarchy's
-#                     reconcile (omarchy_model.hpp): the two never fight.
+#                     plan stays in its monitor's row, Omarchy's guests are
+#                     members (no plan refused for a record), compaction is a
+#                     fixed point of a model of Omarchy's reconcile
+#                     (omarchy_model.hpp) -- the two never fight -- and over any
+#                     sequence of operations and reconciles no merged record
+#                     describes a desktop other than the one under its id.
 #   fullscreen_book_test  FullscreenBook.hpp: a fullscreen trip's places are
 #                     kept by number (never place -1), the payback decision,
 #                     and random fullscreen sequences that must give back the

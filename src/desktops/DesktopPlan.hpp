@@ -31,8 +31,7 @@ namespace Hyprdrive::DesktopPlan {
         Key key     = 0;
         Id  id      = 0;
         int windows = 0; // mapped windows on it (heal keeps the fuller one)
-        Row  row    = {};    // its monitor's row: every number it gets is in it
-        bool pinned = false; // an Omarchy guest (a merged record): never renumbered
+        Row row     = {}; // its monitor's row: every number it gets is in it
     };
     struct Move {
         Key key = 0;
@@ -46,7 +45,6 @@ namespace Hyprdrive::DesktopPlan {
         BelowOne,  // a desktop would get a number below 1
         Collision, // a moved desktop would share its number with another
         OutsideRow, // a desktop would get a number outside its monitor's row
-        Pinned,    // a pinned desktop (an Omarchy guest) would be renumbered
     };
 
     inline const char* why(Verdict v) {
@@ -57,7 +55,6 @@ namespace Hyprdrive::DesktopPlan {
             case Verdict::BelowOne: return "would number a desktop below 1";
             case Verdict::Collision: return "would put two desktops on one number";
             case Verdict::OutsideRow: return "would number a desktop outside its monitor's row";
-            case Verdict::Pinned: return "would renumber a pinned desktop (an Omarchy guest)";
         }
         return "?";
     }
@@ -69,9 +66,14 @@ namespace Hyprdrive::DesktopPlan {
     //
     // ROWS: every moved desktop must land in ITS row (Desk::row, its monitor's)
     // -- the hard guarantee that Hyprdrive only ever picks numbers in a
-    // monitor's own block (Row.hpp) -- and a pinned one is not moved at all
-    // (a move onto its own number is no move). The implicit row is every
-    // number from 1, so natively this adds nothing.
+    // monitor's own block (Row.hpp). The implicit row is every number from 1,
+    // so natively this adds nothing.
+    //
+    // An Omarchy GUEST (a desktop with a merged record) is an ordinary member:
+    // nothing here refuses it (user, 2026-11-11: pinning them blocked every
+    // trip, payback, reorder and compaction of the row they sat in). Its
+    // record is Omarchy's to drop, and Hyprdrive has Omarchy drop it whenever
+    // it renumbers one (Rows::adopt).
     inline Verdict check(const std::vector<Desk>& desks, const std::vector<Move>& moves) {
         std::unordered_map<Key, Id>          final;
         std::unordered_map<Key, const Desk*> desk;
@@ -88,8 +90,6 @@ namespace Hyprdrive::DesktopPlan {
             if (M.to < 1)
                 return Verdict::BelowOne;
             const Desk& D = *desk.at(M.key);
-            if (D.pinned && M.to != D.id)
-                return Verdict::Pinned;
             if (!D.row.contains(M.to))
                 return Verdict::OutsideRow;
             final[M.key] = M.to;
@@ -167,24 +167,19 @@ namespace Hyprdrive::DesktopPlan {
     // PER ROW (DesktopOrder::compact runs it once per row): `desks` are the
     // row's members, numbered from its first place; overflow desktops are
     // ordinary members, so they come into the block as soon as it has room
-    // -- in order, where Omarchy's append_slot would put them. A PINNED one
-    // keeps its number and the others are numbered around it.
+    // -- in order, where Omarchy's append_slot would put them. Omarchy's
+    // guests are members like any other: the row ends contiguous from its
+    // first place, always.
     struct Room {
         Key  key       = 0;
         Id   id        = 0;
         bool populated = false; // mapped windows on it
         bool shown     = false; // a monitor shows it
-        bool pinned    = false; // an Omarchy guest: stays where it is
     };
     inline std::vector<Move> compactMoves(const std::vector<Room>& desks, const Row& row) {
         std::vector<size_t> order;
-        std::set<Id>        held; // the pinned desks' places
-        for (size_t i = 0; i < desks.size(); ++i) {
-            if (desks[i].pinned)
-                held.insert(row.slot(desks[i].id));
-            else
-                order.push_back(i);
-        }
+        for (size_t i = 0; i < desks.size(); ++i)
+            order.push_back(i);
         const auto GROUP = [&](size_t i) { return desks[i].populated ? 0 : desks[i].shown ? 1 : 2; };
         std::ranges::stable_sort(order, [&](size_t a, size_t b) {
             if (GROUP(a) != GROUP(b))
@@ -194,9 +189,7 @@ namespace Hyprdrive::DesktopPlan {
         std::vector<Move> out;
         Id                next = 0;
         for (const size_t I : order) {
-            do
-                ++next;
-            while (held.contains(next));
+            ++next;
             if (const Id TO = row.idOf(next); TO != desks[I].id)
                 out.push_back({desks[I].key, TO});
         }
@@ -213,7 +206,7 @@ namespace Hyprdrive::DesktopPlan {
     //
     // ROWS: a loser on a bounded row gets the first free place in ITS row
     // (overflow included, so there always is one); on the implicit row, the
-    // next number above the highest, as before. A pinned desktop never loses.
+    // next number above the highest, as before.
     inline std::vector<Move> healMoves(const std::vector<Desk>& desks) {
         Id           top = 0;
         std::set<Id> taken;
@@ -227,7 +220,7 @@ namespace Hyprdrive::DesktopPlan {
             const auto IT = keeper.find(desks[i].id);
             if (IT == keeper.end())
                 keeper.emplace(desks[i].id, i);
-            else if (!desks[IT->second].pinned && (desks[i].pinned || desks[i].windows > desks[IT->second].windows))
+            else if (desks[i].windows > desks[IT->second].windows)
                 IT->second = i;
         }
         std::vector<Move> out;

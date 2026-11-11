@@ -10,11 +10,16 @@
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
+#include <hyprland/src/config/ConfigManager.hpp>
+#include <hyprland/src/config/lua/ConfigManager.hpp>
+#include <hyprland/src/config/lua/LuaEventHandler.hpp>
+#include <hyprland/src/config/lua/objects/LuaWorkspace.hpp>
 
 #include <algorithm>
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -27,6 +32,29 @@ extern "C" {
 #include <lua.h>
 }
 
+// OMARCHY'S OWN RULE, REACHED FROM HERE (Rows::renumbering). Omarchy drops a
+// merged record when a workspace is created under its id:
+//     hl.on("workspace.created", function(ws) if merged[ws.id] then merged[ws.id] = nil; save_merged() end end)
+// Hyprland runs that callback from CLuaEventHandler::dispatch("workspace.created"),
+// which is private. Emitting the BUS event instead would also reach every C++
+// listener: ext-workspace would hand each bound client a second handle for a
+// workspace it already has, and other plugins would see a new desktop. So the
+// Lua side alone is called, with the very desktop being renumbered (the Lua
+// object reads its id live): the one standard way to name a private member
+// without calling it from outside -- an explicit instantiation, where access
+// is not checked ([temp.spec.general]) -- hands us the member pointer.
+namespace {
+    using LuaDispatch = void (Config::Lua::CLuaEventHandler::*)(const std::string&, int, const std::function<void(lua_State*)>&);
+    LuaDispatch luaDispatch();
+    template <LuaDispatch F>
+    struct SLuaDispatch {
+        friend LuaDispatch luaDispatch() {
+            return F;
+        }
+    };
+    template struct SLuaDispatch<&Config::Lua::CLuaEventHandler::dispatch>;
+}
+
 namespace Hyprdrive::Rows {
     namespace {
         constexpr const char* BLOCKS_FILE = "monitor-workspaces";
@@ -34,7 +62,7 @@ namespace Hyprdrive::Rows {
 
         Row::Id                          g_slots = 0; // from Lua; 0 = blocks off
         std::map<std::string, Row::Id>   g_blocks;    // connector -> block (Omarchy's file)
-        std::set<WORKSPACEID>            g_merged;    // the guests' ids
+        std::set<WORKSPACEID>            g_merged;    // Omarchy's merged records' ids (a guest's, or stale)
         bool                             g_blocksRead = false, g_mergedRead = false;
         int                              g_inotify = -1, g_wdDir = -1, g_wdParent = -1;
         wl_event_source*                 g_source = nullptr;
@@ -63,13 +91,7 @@ namespace Hyprdrive::Rows {
             return s.str();
         }
 
-        // Each file on its own: a bad parse keeps what was there.
-        void reread() {
-            if (const auto T = slurp(dir() + "/" + BLOCKS_FILE))
-                if (auto m = RowsFile::blocks(*T)) {
-                    g_blocks     = std::move(*m);
-                    g_blocksRead = true;
-                }
+        void rereadMerged() {
             if (const auto T = slurp(dir() + "/" + MERGED_FILE); T) {
                 if (auto m = RowsFile::merged(*T)) {
                     g_merged.clear();
@@ -80,6 +102,15 @@ namespace Hyprdrive::Rows {
             } else {
                 g_merged.clear(); // no file: no guests (Omarchy removes it when empty)
             }
+        }
+        // Each file on its own: a bad parse keeps what was there.
+        void reread() {
+            if (const auto T = slurp(dir() + "/" + BLOCKS_FILE))
+                if (auto m = RowsFile::blocks(*T)) {
+                    g_blocks     = std::move(*m);
+                    g_blocksRead = true;
+                }
+            rereadMerged();
         }
 
         // The omarchy dir when it exists, else its parent until it does.
@@ -163,7 +194,7 @@ namespace Hyprdrive::Rows {
                     continue;
                 bool overflow = false;
                 for (const auto& WS : members(ROW))
-                    overflow |= ROW.inOverflow(WS->m_id) && !pinned(WS->m_id);
+                    overflow |= ROW.inOverflow(WS->m_id);
                 if (!overflow)
                     continue;
                 for (Row::Id s = 1; s <= ROW.capacity; ++s)
@@ -238,8 +269,62 @@ namespace Hyprdrive::Rows {
         return WORKSPACE_INVALID;
     }
 
-    bool pinned(WORKSPACEID id) {
-        return blocks() && g_merged.contains(id);
+    bool guest(WORKSPACEID id) {
+        return blocks() && g_merged.contains(id) && exists(id);
+    }
+
+    namespace {
+        // Omarchy's workspace.created callbacks, for `ws` under the id it has
+        // now. False: no Lua config (no Omarchy 4.5 either).
+        bool tellCreated(const PHLWORKSPACE& ws) {
+            if (!::Config::mgr() || ::Config::mgr()->type() != ::Config::CONFIG_LUA)
+                return false;
+            auto* const MGR = dynamic_cast<::Config::Lua::CConfigManager*>(::Config::mgr().get());
+            if (!MGR || !MGR->m_eventHandler)
+                return false;
+            (MGR->m_eventHandler.get()->*luaDispatch())("workspace.created", 1, [&](lua_State* L) { ::Config::Lua::Objects::CLuaWorkspace::push(L, ws); });
+            return true;
+        }
+    }
+
+    void renumbering(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves, const std::function<void()>& apply) {
+        if (!blocks()) {
+            apply();
+            return;
+        }
+        // Fresh: Omarchy writes the file on every change, inotify may not
+        // have been read yet this turn.
+        rereadMerged();
+        std::vector<PHLWORKSPACE> before, after;
+        std::set<WORKSPACEID>     dropped;
+        for (const auto& [WS, TO] : moves) {
+            if (!WS || WS->m_id == TO)
+                continue;
+            if (g_merged.contains(WS->m_id)) {
+                before.push_back(WS); // the record describes this desktop: it is the row's now
+                dropped.insert(WS->m_id);
+            }
+        }
+        for (const auto& [WS, TO] : moves)
+            if (WS && WS->m_id != TO && g_merged.contains(TO) && !dropped.contains(TO))
+                after.push_back(WS); // a record left under the number it gets: a desktop long gone
+        std::string told;
+        for (const auto& WS : before)
+            if (tellCreated(WS))
+                told += std::format(" {}", WS->m_id);
+        apply();
+        for (const auto& WS : after)
+            if (tellCreated(WS))
+                told += std::format(" {}", WS->m_id);
+        if (before.empty() && after.empty())
+            return;
+        rereadMerged();
+        std::string left;
+        for (const auto& [WS, TO] : moves)
+            if (WS && g_merged.contains(WS->m_id))
+                left += std::format(" {}", WS->m_id);
+        Log::logger->log(left.empty() ? Log::INFO : Log::ERR, "[hyprdrive] rows: Omarchy dropped its merged records under{} (adopted){}", told,
+                         left.empty() ? std::string{} : " -- still recorded:" + left);
     }
 
     int luaWorkspaceBlocks(lua_State* L) {
@@ -325,9 +410,14 @@ namespace Hyprdrive::Rows {
         s += "\n  file:";
         for (const auto& [CONN, B] : g_blocks)
             s += std::format(" {}={}", CONN, B);
-        s += "\n  pinned (merged):";
+        s += "\n  guests (merged):";
         for (const auto ID : g_merged)
-            s += std::format(" {}", ID);
+            if (exists(ID))
+                s += std::format(" {}", ID);
+        s += "\n  stale records:";
+        for (const auto ID : g_merged)
+            if (!exists(ID))
+                s += std::format(" {}", ID);
         for (const auto& MON : State::monitorState()->monitors()) {
             if (!MON)
                 continue;
@@ -335,7 +425,7 @@ namespace Hyprdrive::Rows {
             s += std::format("\n  {}: row base {} capacity {} overflow {}{}", MON->m_name, R.base, R.capacity, R.overflow, R.provisional ? " PROVISIONAL" : "");
             s += "\n    members:";
             for (const auto& WS : members(R))
-                s += std::format(" {}={}{}{}", WS->m_id, label(WS), WS->getWindowCount() ? "" : "(empty)", pinned(WS->m_id) ? "(pinned)" : "");
+                s += std::format(" {}={}{}{}", WS->m_id, label(WS), WS->getWindowCount() ? "" : "(empty)", guest(WS->m_id) ? "(guest)" : "");
             s += "\n    visitors:";
             for (const auto& REF : State::workspaceState()->workspaces())
                 if (const auto WS = REF.lock(); ordinary(WS) && WS->m_monitor.lock() == MON && !R.contains(WS->m_id))

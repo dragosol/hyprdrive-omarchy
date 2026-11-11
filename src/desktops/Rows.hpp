@@ -3,8 +3,10 @@
 #include "globals.hpp"
 #include "Row.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct lua_State; // lua.h's, at global scope
@@ -28,8 +30,15 @@ struct lua_State; // lua.h's, at global scope
 // says.
 //
 // The guests Omarchy merged (monitor-workspaces-merged, same watcher) are
-// PINNED: Hyprdrive never renumbers them (DesktopPlan::check), or Omarchy's
-// restore() would send the wrong desktop back to their monitor.
+// ordinary members of the row they sit in: shifted, paid back, reordered and
+// compacted like any other (user, 2026-11-11: pinned, they blocked the whole
+// row). A record names a desktop by number; renumbered, it would describe
+// another one and restore() would send the wrong desktop back. So a guest
+// Hyprdrive renumbers is ADOPTED: Omarchy drops its record by its own rule
+// (renumbering) -- it belongs to this monitor's row for good. A guest
+// Hyprdrive never touched keeps its record, and restore() takes it home when
+// its monitor really comes back. A record whose id has no desktop (stale) is
+// ignored.
 //
 // This file is the only place that knows Omarchy exists; everything else asks
 // for a Row.
@@ -55,8 +64,18 @@ namespace Hyprdrive::Rows {
     // The lowest id in the monitor's row with no desktop, or with an empty one
     // on this monitor. (Rows never fill up: overflow.)
     WORKSPACEID firstEmpty(const PHLMONITOR& monitor);
-    // An Omarchy guest: a merged record's id.
-    bool pinned(WORKSPACEID id);
+    // An Omarchy guest: a desktop under a merged record's id (stale records,
+    // with no desktop, are not).
+    bool guest(WORKSPACEID id);
+    // DesktopOrder::renumber applies its checked plan through this: every
+    // merged record under a number a desktop leaves (it describes that
+    // desktop) or gets (a stale one) is dropped by Omarchy's own rule -- its
+    // workspace.created callback, which drops merged[ws.id] -- called for the
+    // desktop under its old number before `apply` and under its new one
+    // after. Omarchy's table and file then hold only records that still
+    // describe the desktop under their id, and its next reconcile finds
+    // nothing to restore or merge for them. Blocks off: just `apply`.
+    void renumbering(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves, const std::function<void()>& apply);
 
     // hl.plugin.hyprdrive.workspace_blocks(slots): 0 = off.
     int luaWorkspaceBlocks(lua_State* L);

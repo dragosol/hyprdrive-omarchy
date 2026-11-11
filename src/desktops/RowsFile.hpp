@@ -10,7 +10,7 @@
 //                               connector gives connector -> block.
 //   monitor-workspaces-merged   `id \t originalId \t originIdentity`, one line
 //                               per guest Omarchy merged into another block.
-//                               Hyprdrive only needs the ids (pinned desktops).
+//                               Hyprdrive only needs the ids (Rows::renumbering).
 //
 // Both are written whole by Omarchy (save()), so a line that does not parse
 // means a file that is not what we think it is: the whole parse fails and the

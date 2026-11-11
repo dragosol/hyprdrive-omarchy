@@ -1,9 +1,12 @@
 // Host test for DesktopPlan.hpp ON ROWS (Row.hpp): every plan Hyprdrive makes
-// keeps each desktop inside its monitor's row, never touches another row or a
-// pinned guest, and -- against a model of Omarchy's own reconcile
-// (omarchy_model.hpp) -- is a FIXED POINT of it: Omarchy renumbers nothing
-// Hyprdrive compacted, so the two never fight. desktop_plan_test.cpp is the
-// implicit row (blocks off), unchanged.
+// keeps each desktop inside its monitor's row and never touches another row;
+// Omarchy's guests (merged records) are ordinary members, never a reason to
+// refuse; and -- against a model of Omarchy's own reconcile
+// (omarchy_model.hpp) -- every layout it leaves is a FIXED POINT of it, and
+// no merged record ever describes a desktop other than the one under its id
+// (Hyprdrive has Omarchy drop the record of every desktop it renumbers:
+// Rows::renumbering). desktop_plan_test.cpp is the implicit row (blocks off),
+// unchanged.
 #include "DesktopPlan.hpp"
 #include "omarchy_model.hpp"
 
@@ -40,8 +43,44 @@ static bool unique(const std::vector<Desk>& desks) {
             return false;
     return true;
 }
-static Desk desk(Key k, Id id, const Row& row, bool pinned = false, int windows = 1) {
-    return {.key = k, .id = id, .windows = windows, .row = row, .pinned = pinned};
+static Desk desk(Key k, Id id, const Row& row, int windows = 1) {
+    return {.key = k, .id = id, .windows = windows, .row = row};
+}
+
+// ---- Hyprdrive renumbering a model world (DesktopOrder::renumber with
+// Rows::renumbering): Omarchy's workspace.created rule for each moved
+// desktop under its old number, the moves, then under each new number that
+// still has a record. Returns how many desktops moved.
+static int hyprdriveApply(OmarchyModel::World& w, const std::vector<Move>& plan) {
+    std::set<Id> dropped;
+    for (const auto& M : plan)
+        for (const auto& X : w.ws)
+            if (X.key == M.key && X.id != M.to && w.merged.contains(X.id)) {
+                OmarchyModel::created(w, X.id);
+                dropped.insert(X.id);
+            }
+    int          n = 0;
+    std::set<Id> arrived;
+    for (const auto& M : plan)
+        for (auto& X : w.ws)
+            if (X.key == M.key && X.id != M.to) {
+                X.id = M.to;
+                arrived.insert(M.to);
+                ++n;
+            }
+    for (const Id ID : arrived)
+        if (!dropped.contains(ID))
+            OmarchyModel::created(w, ID);
+    return n;
+}
+static Row rowOfMon(const OmarchyModel::World& w, int mon) {
+    return w.block.contains(mon) ? Row::block(w.block.at(mon), w.slots) : Row{};
+}
+static std::vector<Desk> desksOf(const OmarchyModel::World& w) {
+    std::vector<Desk> out;
+    for (const auto& X : w.ws)
+        out.push_back(desk(X.key, X.id, rowOfMon(w, X.monitor), X.windows));
+    return out;
 }
 
 // ---- Hyprdrive's compaction over an Omarchy model world (DesktopOrder::compact)
@@ -50,13 +89,12 @@ static std::vector<Move> hyprdriveCompact(const OmarchyModel::World& w) {
     std::vector<Room> rooms;
     std::vector<Row>  rows;
     for (const auto& X : w.ws) {
-        const Row R = w.block.contains(X.monitor) ? Row::block(w.block.at(X.monitor), w.slots) : Row{};
+        const Row R = rowOfMon(w, X.monitor);
         bool      shown = false;
         for (const auto& [M, K] : w.shown)
             shown |= K == X.key;
-        const bool PIN = w.merged.contains(X.id);
-        desks.push_back(desk(X.key, X.id, R, PIN, X.windows));
-        rooms.push_back({X.key, X.id, X.windows, shown, PIN});
+        desks.push_back(desk(X.key, X.id, R, X.windows));
+        rooms.push_back({X.key, X.id, X.windows, shown});
         rows.push_back(R);
     }
     std::vector<Move> plan;
@@ -77,12 +115,31 @@ static std::vector<Move> hyprdriveCompact(const OmarchyModel::World& w) {
     return plan;
 }
 static int applyCompact(OmarchyModel::World& w) {
-    const auto PLAN = hyprdriveCompact(w);
-    for (const auto& M : PLAN)
-        for (auto& X : w.ws)
-            if (X.key == M.key)
-                X.id = M.to; // (Hyprdrive never renumbers a merged record's id: pinned)
-    return int(PLAN.size());
+    return hyprdriveApply(w, hyprdriveCompact(w));
+}
+// Each connected monitor's row: its populated members are its first places,
+// in a row (overflow included), whatever records there are.
+static bool contiguous(const OmarchyModel::World& w) {
+    for (const auto& [M, B] : w.block) {
+        const Row R = Row::block(B, w.slots);
+        Id        top = 0, n = 0;
+        for (const auto& X : w.ws)
+            if (X.monitor == M && R.contains(X.id) && X.windows) {
+                top = std::max(top, R.slot(X.id));
+                ++n;
+            }
+        // every place below the top holds one of them, or a desktop of
+        // another monitor numbered in this row (Omarchy's to move)
+        for (Id s = 1; s < top; ++s) {
+            bool ok = false;
+            for (const auto& X : w.ws)
+                ok |= X.id == R.idOf(s) && (X.monitor != M || X.windows);
+            if (!ok)
+                return false;
+        }
+        (void)n;
+    }
+    return true;
 }
 static std::map<unsigned long, Id> ids(const OmarchyModel::World& w) {
     std::map<unsigned long, Id> out;
@@ -104,7 +161,7 @@ static bool settledWell(const OmarchyModel::World& w) {
         bool full = true;
         for (Id s = 1; s <= R.capacity; ++s)
             full &= OmarchyModel::taken(w, R.idOf(s));
-        if (!R.contains(X.id) && !w.merged.contains(X.id) && !full)
+        if (!R.contains(X.id) && !full)
             return false;
     }
     return true;
@@ -113,7 +170,7 @@ static bool settledWell(const OmarchyModel::World& w) {
 int main() {
     const Row B0 = Row::block(0, 10), B1 = Row::block(1, 10), B2 = Row::block(2, 10);
 
-    // ---- check: a move out of the row is refused; a pinned desk is never moved
+    // ---- check: a move out of the row is refused; nothing else is
     {
         const std::vector<Desk> D{desk(1, 11, B1), desk(2, 12, B1), desk(3, 21, B2)};
         CHECK(check(D, {{1, 13}}) == Verdict::Ok);
@@ -123,9 +180,10 @@ int main() {
         CHECK(check(D, {{2, 21}}) == Verdict::OutsideRow);
         CHECK(check(D, {{1, B1.idOf(11)}}) == Verdict::Ok); // its own overflow
         CHECK(check(D, {{1, B2.idOf(11)}}) == Verdict::OutsideRow);
-        const std::vector<Desk> P{desk(1, 21, B2, true), desk(2, 22, B2)};
-        CHECK(check(P, {{1, 23}}) == Verdict::Pinned);
-        CHECK(check(P, {{1, 21}}) == Verdict::Ok); // onto its own number: no move
+        // an Omarchy guest (desk 1, a merged record) is a member like any other
+        const std::vector<Desk> P{desk(1, 21, B2), desk(2, 22, B2)};
+        CHECK(check(P, {{1, 23}}) == Verdict::Ok);
+        CHECK(check(P, {{1, 22}}) == Verdict::Collision); // a real collision still is refused
     }
     // ---- shift in a block: only that row; the 10th goes to overflow, never to 21
     {
@@ -153,20 +211,21 @@ int main() {
     }
     // ---- payMoves in a row: the empty desk goes to the row's top
     {
-        const std::vector<Desk> D{desk(1, 21, B2), desk(2, 22, B2, false, 0), desk(3, 23, B2), desk(4, 1'002'001, B2), desk(5, 11, B1)};
+        const std::vector<Desk> D{desk(1, 21, B2), desk(2, 22, B2, 0), desk(3, 23, B2), desk(4, 1'002'001, B2), desk(5, 11, B1)};
         const auto              M = payMoves(D, B2, 22, 2);
         CHECK(check(D, M) == Verdict::Ok);
         const auto A = applied(D, M);
         CHECK(A[2].id == 22 && A[3].id == 30 && A[1].id == 1'002'001 && A[4].id == 11); // the overflow desk comes back into the block
     }
-    // ---- compact in a block with a pinned guest and an overflow desktop
+    // ---- compact in a block with a guest (2) and an overflow desktop: all
+    // of them from the row's first place, the shown empty one after
     {
-        const std::vector<Room> R{{1, 22, true}, {2, 24, true, false, true}, {3, 27, true}, {4, 1'002'001, true}, {5, 29, false, true}};
+        const std::vector<Room> R{{1, 22, true}, {2, 24, true}, {3, 27, true}, {4, 1'002'001, true}, {5, 29, false, true}};
         const auto              M = compactMoves(R, B2);
         std::map<Key, Id>       to{{1, 22}, {2, 24}, {3, 27}, {4, 1'002'001}, {5, 29}};
         for (const auto& X : M)
             to[X.key] = X.to;
-        CHECK(to[1] == 21 && to[2] == 24 && to[3] == 22 && to[4] == 23 && to[5] == 25);
+        CHECK(to[1] == 21 && to[2] == 22 && to[3] == 23 && to[4] == 24 && to[5] == 25);
         // idempotent
         std::vector<Room> R2 = R;
         for (auto& X : R2)
@@ -175,7 +234,7 @@ int main() {
     }
     // ---- heal in a row: the loser gets the first free place in ITS row
     {
-        const std::vector<Desk> D{desk(1, 21, B2, false, 2), desk(2, 21, B2, false, 1), desk(3, 22, B2), desk(4, 11, B1)};
+        const std::vector<Desk> D{desk(1, 21, B2, 2), desk(2, 21, B2, 1), desk(3, 22, B2), desk(4, 11, B1)};
         const auto              M = healMoves(D);
         CHECK(M.size() == 1 && M[0].key == 2 && M[0].to == 23);
         CHECK(check(D, M) == Verdict::Ok);
@@ -183,13 +242,9 @@ int main() {
         std::vector<Desk> F;
         for (Id i = 21; i <= 30; ++i)
             F.push_back(desk(Key(i), i, B2));
-        F.push_back(desk(99, 25, B2, false, 0));
+        F.push_back(desk(99, 25, B2, 0));
         const auto MF = healMoves(F);
         CHECK(MF.size() == 1 && MF[0].to == 1'002'001);
-        // a pinned guest keeps its number even when emptier
-        const std::vector<Desk> P{desk(1, 21, B2, false, 5), desk(2, 21, B2, true, 0)};
-        const auto              MP = healMoves(P);
-        CHECK(MP.size() == 1 && MP[0].key == 1);
     }
 
     // ---- PROPERTIES on random rows: every operation stays in its row
@@ -218,7 +273,7 @@ int main() {
                 const Id ID = R.idOf(S);
                 if (!ID || !taken.insert(ID).second)
                     continue;
-                D.push_back(desk(k++, ID, R, R.bounded() && rng() % 9 == 0, int(rng() % 3)));
+                D.push_back(desk(k++, ID, R, int(rng() % 3)));
             }
         }
         const auto IN_ROW = [&](const std::vector<Desk>& before, const std::vector<Move>& moves) {
@@ -270,7 +325,7 @@ int main() {
             std::vector<Desk*> mem;
             std::vector<Id>    pool;
             for (auto& X : D)
-                if (member(X, ROW) && !X.pinned) {
+                if (member(X, ROW)) {
                     mem.push_back(&X);
                     pool.push_back(X.id);
                 }
@@ -286,7 +341,7 @@ int main() {
             auto H = D;
             if (H.size() >= 2) {
                 const size_t A = rng() % H.size(), B = rng() % H.size();
-                if (A != B && sameRow(H[A].row, H[B].row) && !H[B].pinned)
+                if (A != B && sameRow(H[A].row, H[B].row))
                     H[B].id = H[A].id;
             }
             const auto M = healMoves(H);
@@ -301,29 +356,23 @@ int main() {
                 std::vector<Room> group;
                 for (const auto& X : D)
                     if (member(X, R))
-                        group.push_back({X.key, X.id, X.windows > 0, false, X.pinned});
+                        group.push_back({X.key, X.id, X.windows > 0, false});
                 const auto M = compactMoves(group, R);
                 plan.insert(plan.end(), M.begin(), M.end());
-                // populated first..: in their old order, around the pinned ones
-                const auto     A = applied(D, M);
-                std::set<Id>   pins;
+                // populated first..: places 1..n, in their old order
+                const auto      A = applied(D, M);
+                std::vector<Id> oldOrder;
                 for (const auto& X : D)
-                    if (member(X, R) && X.pinned)
-                        pins.insert(R.slot(X.id));
-                std::vector<Id> oldOrder, newSlots;
-                for (const auto& X : D)
-                    if (member(X, R) && !X.pinned && X.windows > 0)
+                    if (member(X, R) && X.windows > 0)
                         oldOrder.push_back(R.slot(X.id));
                 std::ranges::sort(oldOrder);
-                Id s = 0;
+                Id   s       = 0;
                 bool ordered = true;
                 for (const Id OLD : oldOrder) {
-                    do
-                        ++s;
-                    while (pins.contains(s));
+                    ++s;
                     bool found = false;
                     for (size_t i = 0; i < D.size(); ++i)
-                        if (member(D[i], R) && !D[i].pinned && D[i].windows > 0 && R.slot(D[i].id) == OLD)
+                        if (member(D[i], R) && D[i].windows > 0 && R.slot(D[i].id) == OLD)
                             found = R.slot(A[i].id) == s;
                     ordered &= found;
                 }
@@ -332,7 +381,7 @@ int main() {
                 std::vector<Room> again;
                 for (size_t i = 0; i < D.size(); ++i)
                     if (member(D[i], R))
-                        again.push_back({A[i].key, A[i].id, A[i].windows > 0, false, A[i].pinned});
+                        again.push_back({A[i].key, A[i].id, A[i].windows > 0, false});
                 CHECK(compactMoves(again, R).empty());
             }
             CHECK(check(D, plan) == Verdict::Ok);
@@ -377,12 +426,17 @@ int main() {
                     w.shown[m] = X.key;
                     break;
                 }
-        // guests: records for blocks no connected monitor owns
+        // guests: records for blocks no connected monitor owns, and stale
+        // ones (no desktop under the id)
         for (const auto& X : w.ws)
             if (rng() % 7 == 0) {
                 const Id ORIGIN = 4 + Id(rng() % 3);
-                w.merged[X.id] = {ORIGIN * 10 + 1 + Id(rng() % 10), ORIGIN};
+                w.merged[X.id] = {ORIGIN * 10 + 1 + Id(rng() % 10), ORIGIN, X.key};
             }
+        for (int i = int(rng() % 3); i > 0; --i)
+            if (const Id ID = 1 + Id(rng() % 40); !OmarchyModel::taken(w, ID))
+                w.merged[ID] = {41, 4, 0};
+        CHECK(OmarchyModel::recordsTrue(w));
 
         // the fixed point: once Hyprdrive compacted, Omarchy changes nothing
         // (and its renumbers, whatever the start, are never undone)
@@ -392,6 +446,7 @@ int main() {
             OmarchyModel::collect(w);
             lastHyprdrive = applyCompact(w);
             OmarchyModel::collect(w);
+            CHECK(OmarchyModel::recordsTrue(w));
             if (rounds >= 1 && lastOmarchy == 0 && lastHyprdrive == 0)
                 break;
         }
@@ -401,38 +456,163 @@ int main() {
         CHECK(ids(w) == BEFORE);
         CHECK(applyCompact(w) == 0);
         CHECK(settledWell(w));
-        if (!settledWell(w) && std::getenv("DUMP")) {
+        CHECK(contiguous(w));
+        CHECK(OmarchyModel::recordsTrue(w));
+        if ((!settledWell(w) || !contiguous(w)) && std::getenv("DUMP")) {
             for (const auto& [M, B] : w.block)
                 std::printf(" mon%d=block%lld", M, B);
             for (const auto& X : w.ws)
-                std::printf(" [k%lu id%lld m%d w%d%s]", X.key, X.id, X.monitor, X.windows, w.merged.contains(X.id) ? " pin" : "");
+                std::printf(" [k%lu id%lld m%d w%d%s]", X.key, X.id, X.monitor, X.windows, w.merged.contains(X.id) ? " guest" : "");
             std::printf("\n");
         }
-        // no empty desktop below the last populated one in any row
-        for (const auto& [M, B] : w.block) {
-            const Row R = Row::block(B, 10);
-            Id        top = 0;
-            for (const auto& X : w.ws)
-                if (X.monitor == M && R.contains(X.id) && X.windows && !w.merged.contains(X.id)) // (a pinned guest may sit past a hole)
-                    top = std::max(top, R.slot(X.id));
-            for (Id s = 1; s < top; ++s) {
-                bool filled = false;
-                for (const auto& X : w.ws)
-                    filled |= X.id == R.idOf(s) && (X.windows || w.merged.contains(X.id));
-                bool pinnedElsewhere = false;
-                for (const auto& [ID, _] : w.merged)
-                    pinnedElsewhere |= ID == R.idOf(s);
-                const bool OK = filled || pinnedElsewhere || std::ranges::any_of(w.ws, [&](const OmarchyModel::Ws& x) { return x.id == R.idOf(s) && x.monitor != M; });
-                CHECK(OK);
-                if (!OK && std::getenv("DUMP")) {
-                    std::printf("hole at %lld (block %lld, mon %d):", R.idOf(s), B, M);
-                    for (const auto& X : w.ws)
-                        std::printf(" [k%lu id%lld m%d w%d%s]", X.key, X.id, X.monitor, X.windows, w.merged.contains(X.id) ? " pin" : "");
-                    std::printf("\n");
-                    return 1;
+    }
+
+    // ---- ANY SEQUENCE of Hyprdrive's operations (fullscreen trips with
+    // their room made and paid back, strip reorders, heals, compactions)
+    // interleaved with Omarchy's reconciles, Hyprland dropping empty
+    // desktops, and monitors (a guest's origin among them) coming and going:
+    // no plan is ever refused for a record, no record ever describes a
+    // desktop other than the one under its id, and after a compaction the
+    // rows are contiguous and a fixed point of the next reconcile.
+    for (int round = 0; round < 2000; ++round) {
+        OmarchyModel::World w;
+        w.known = {0, 1, 2, 3};
+        w.block[0] = 2; // the external monitor
+        if (rng() % 2)
+            w.block[1] = 1;
+        unsigned long k = 1;
+        // the owner's state: guests from the panel (block 0) merged into
+        // block 2, records "origin = panel", plus own desktops
+        const int GUESTS = 1 + int(rng() % 5);
+        for (int i = 0; i < GUESTS; ++i)
+            w.ws.push_back({k++, Id(1 + i), 0, true});
+        w.shown[0] = 1;
+        OmarchyModel::reconcile(w);
+        CHECK(int(w.merged.size()) == GUESTS);
+        for (int i = int(rng() % 4); i > 0; --i) {
+            const Id ID = 21 + Id(rng() % 10);
+            if (!OmarchyModel::taken(w, ID))
+                w.ws.push_back({k++, ID, 0, true});
+        }
+        CHECK(OmarchyModel::recordsTrue(w));
+        for (int step = 0; step < 25; ++step) {
+            std::vector<int> mons;
+            for (const auto& [M, B] : w.block)
+                mons.push_back(M);
+            const int MON = mons[rng() % mons.size()];
+            const Row R   = rowOfMon(w, MON);
+            std::vector<OmarchyModel::Ws*> mem;
+            for (auto& X : w.ws)
+                if (X.monitor == MON && R.contains(X.id))
+                    mem.push_back(&X);
+            std::ranges::sort(mem, [&](auto* a, auto* b) { return R.slot(a->id) < R.slot(b->id); });
+            const auto D = desksOf(w);
+            switch (rng() % 8) {
+                case 0: { // a fullscreen trip from a member: room at the next place, the trip's desktop made there
+                    if (mem.empty())
+                        break;
+                    const auto* H  = mem[rng() % mem.size()];
+                    const Id    AT = R.idOf(R.slot(H->id) + 1);
+                    const auto  M  = shiftMoves(D, R, AT, +1);
+                    const auto  V  = check(D, M);
+                    CHECK(V == Verdict::Ok || V == Verdict::Collision); // (another monitor's desktop numbered in this row)
+                    if (V != Verdict::Ok || !AT)
+                        break;
+                    hyprdriveApply(w, M);
+                    if (OmarchyModel::taken(w, AT))
+                        break;
+                    w.ws.push_back({k++, AT, MON, true});
+                    OmarchyModel::created(w, AT); // (Hyprland creates it: Omarchy's rule)
+                    w.shown[MON] = w.ws.back().key;
+                    break;
+                }
+                case 1: { // a place paid back: a member emptied, the ones after it come back
+                    if (mem.empty())
+                        break;
+                    auto* E = mem[rng() % mem.size()];
+                    E->windows = false;
+                    const auto M = payMoves(desksOf(w), R, E->id, E->key);
+                    const auto V = check(desksOf(w), M);
+                    CHECK(V == Verdict::Ok || V == Verdict::Collision);
+                    if (V == Verdict::Ok)
+                        hyprdriveApply(w, M);
+                    break;
+                }
+                case 2: { // a strip reorder: the row's own numbers, permuted
+                    std::vector<Id> pool;
+                    for (auto* X : mem)
+                        pool.push_back(X->id);
+                    std::ranges::shuffle(pool, rng);
+                    std::vector<Move> M;
+                    for (size_t i = 0; i < mem.size(); ++i)
+                        M.push_back({mem[i]->key, pool[i]});
+                    const auto V = check(D, M);
+                    CHECK(V == Verdict::Ok);
+                    hyprdriveApply(w, M);
+                    break;
+                }
+                case 3: // a display change / config reload: Omarchy, then Hyprdrive compacts
+                    OmarchyModel::reconcile(w);
+                    OmarchyModel::collect(w);
+                    applyCompact(w);
+                    CHECK(contiguous(w));
+                    break;
+                case 4: { // a window closes: Hyprland drops the empty desktop (its record goes stale)
+                    if (mem.empty())
+                        break;
+                    mem[rng() % mem.size()]->windows = false;
+                    OmarchyModel::collect(w);
+                    break;
+                }
+                case 5: { // a window opens on a new desktop (Hyprland creates it)
+                    const Id ID = R.idOf(1 + Id(rng() % 12));
+                    if (ID && !OmarchyModel::taken(w, ID)) {
+                        w.ws.push_back({k++, ID, MON, true});
+                        OmarchyModel::created(w, ID);
+                    }
+                    break;
+                }
+                case 6: // the origin monitor (the panel, block 0) comes back, or goes
+                    if (w.block.contains(7))
+                        w.block.erase(7);
+                    else
+                        w.block[7] = 0;
+                    for (auto& X : w.ws)
+                        if (!w.block.contains(X.monitor))
+                            X.monitor = 0; // its desktops wait on the external
+                    std::erase_if(w.shown, [&](const auto& P) { return !w.block.contains(P.first); });
+                    OmarchyModel::reconcile(w); // restore() / merge(): Omarchy's own moves
+                    OmarchyModel::collect(w);
+                    break;
+                default: { // heal (nothing to heal: no-op) and a plain reload
+                    const auto M = healMoves(D);
+                    CHECK(M.empty());
+                    OmarchyModel::reconcile(w);
+                    break;
                 }
             }
+            CHECK(OmarchyModel::recordsTrue(w));
+            if (!OmarchyModel::recordsTrue(w) && std::getenv("DUMP")) {
+                std::printf("step %d:", step);
+                for (const auto& [ID, Rc] : w.merged)
+                    std::printf(" rec %lld->desk %lu", ID, Rc.desk);
+                for (const auto& X : w.ws)
+                    std::printf(" [k%lu id%lld m%d w%d]", X.key, X.id, X.monitor, X.windows);
+                std::printf("\n");
+                return 1;
+            }
         }
+        // then a display change settles it: contiguous, and a fixed point
+        OmarchyModel::reconcile(w);
+        OmarchyModel::collect(w);
+        applyCompact(w);
+        OmarchyModel::collect(w);
+        CHECK(contiguous(w));
+        CHECK(OmarchyModel::recordsTrue(w));
+        const auto SETTLED = ids(w);
+        CHECK(OmarchyModel::reconcile(w) == 0);
+        CHECK(ids(w) == SETTLED);
+        CHECK(applyCompact(w) == 0);
     }
 
     // ---- OVERFLOW: a full block plus an 11th is a fixed point; a freed slot
@@ -470,7 +650,10 @@ int main() {
     // ---- THE OWNER'S CASE: internal panel off, the external monitor owns
     // block 2. (a) desktops 21..24: nothing moves. (b) the old build had
     // compacted them to 1..4 and Omarchy merged them back with records
-    // ("origin = panel"): pinned, nothing moves either.
+    // ("origin = panel"). Guests are members: a trip from the 2nd makes room
+    // through them, the payback and a reorder go through, a hole closes at
+    // the next display change, and every record left still describes the
+    // desktop under its id; the next reconcile changes nothing.
     {
         OmarchyModel::World w;
         w.block[0] = 2;
@@ -481,13 +664,45 @@ int main() {
 
         OmarchyModel::World v;
         v.block[0] = 2;
+        v.known    = {0, 2};
         for (unsigned long i = 1; i <= 4; ++i)
             v.ws.push_back({i, Id(i), 0, true});
         v.shown[0] = 1;
         CHECK(OmarchyModel::reconcile(v) == 4); // block 0 has no connected owner: merged to 21..24
-        CHECK(v.merged.size() == 4 && v.merged.contains(21) && v.merged.at(21).originBlock == 0);
-        CHECK(applyCompact(v) == 0); // pinned guests: Hyprdrive leaves them
+        CHECK(v.merged.size() == 4 && v.merged.contains(21) && v.merged.at(21).originBlock == 0 && v.merged.at(21).desk == 1);
+        CHECK(applyCompact(v) == 0); // already contiguous
         CHECK(OmarchyModel::reconcile(v) == 0);
+        // a fullscreen trip from the 2nd (22): room at 23, 23 24 -> 24 25
+        const auto TRIP = shiftMoves(desksOf(v), B2, 23, +1);
+        CHECK(TRIP.size() == 2 && check(desksOf(v), TRIP) == Verdict::Ok);
+        hyprdriveApply(v, TRIP);
+        v.ws.push_back({5, 23, 0, true}); // the trip's desktop
+        OmarchyModel::created(v, 23);
+        CHECK(OmarchyModel::recordsTrue(v));
+        CHECK(v.merged.size() == 2 && v.merged.contains(21) && v.merged.contains(22)); // 3 and 4 adopted
+        CHECK(OmarchyModel::reconcile(v) == 0);
+        // the trip ends: 23 empty, paid back (24 25 -> 23 24, 23 to the top)
+        v.ws[4].windows = false;
+        const auto PAY  = payMoves(desksOf(v), B2, 23, 5);
+        CHECK(check(desksOf(v), PAY) == Verdict::Ok);
+        hyprdriveApply(v, PAY);
+        OmarchyModel::collect(v);
+        CHECK(ids(v).at(3) == 23 && ids(v).at(4) == 24 && OmarchyModel::recordsTrue(v));
+        // a strip reorder: the guest on 21 swaps with 22
+        const std::vector<Move> SWAP{{1, 22}, {2, 21}};
+        CHECK(check(desksOf(v), SWAP) == Verdict::Ok);
+        hyprdriveApply(v, SWAP);
+        CHECK(v.merged.empty() && OmarchyModel::recordsTrue(v));
+        CHECK(OmarchyModel::reconcile(v) == 0);
+        // a STALE record: 22's windows close (Hyprland drops it, the record
+        // would stay); a display change closes the hole, nothing blocks
+        v.merged[22] = {2, 0, 1};
+        std::erase_if(v.ws, [](const OmarchyModel::Ws& x) { return x.id == 22; });
+        CHECK(OmarchyModel::reconcile(v) == 0);
+        CHECK(applyCompact(v) == 2); // 23 24 -> 22 23
+        CHECK(!v.merged.contains(22) && OmarchyModel::recordsTrue(v) && contiguous(v));
+        CHECK(OmarchyModel::reconcile(v) == 0);
+
         // the OLD behaviour (one global row) is the fight
         int fights = 0;
         for (int r = 0; r < 3; ++r) {
@@ -499,7 +714,29 @@ int main() {
             v.merged.clear(); // (and a panel blink restores them...)
             fights += OmarchyModel::reconcile(v);
         }
-        CHECK(fights == 24);
+        CHECK(fights == 18);
+    }
+
+    // ---- THE ORIGIN REALLY COMES BACK: guests Hyprdrive never moved keep
+    // their records and Omarchy's restore() takes them home; the one
+    // Hyprdrive moved is the external's for good; both rows then compact.
+    {
+        OmarchyModel::World v;
+        v.block[0] = 2;
+        v.known    = {0, 1, 2};
+        for (unsigned long i = 1; i <= 3; ++i)
+            v.ws.push_back({i, Id(10 + i), 0, true}); // from block 1's monitor, unplugged
+        v.shown[0] = 1;
+        CHECK(OmarchyModel::reconcile(v) == 3); // 21 22 23, records origin block 1
+        const std::vector<Move> SWAP{{2, 23}, {3, 22}};
+        hyprdriveApply(v, SWAP);
+        CHECK(v.merged.size() == 1 && v.merged.contains(21) && OmarchyModel::recordsTrue(v));
+        v.block[1] = 1; // block 1's monitor is plugged in again
+        CHECK(OmarchyModel::reconcile(v) == 1); // restore(): 21 -> 11 on monitor 1
+        CHECK(ids(v).at(1) == 11 && v.ws[0].monitor == 1 && v.merged.empty());
+        OmarchyModel::collect(v);
+        CHECK(applyCompact(v) == 2); // the external's 22 23 -> 21 22
+        CHECK(contiguous(v) && OmarchyModel::reconcile(v) == 0 && applyCompact(v) == 0);
     }
 
     std::printf("desktop_rows_test: %d checks, %d failed\n", g_checks, g_failed);
