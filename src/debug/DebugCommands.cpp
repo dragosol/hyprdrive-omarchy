@@ -1,4 +1,5 @@
 #include "PluginParts.hpp"
+#include "FunctionHooks.hpp"
 using namespace PluginDetail;
 
 namespace PluginDetail {
@@ -44,6 +45,15 @@ SDispatchResult onDebugDispatcher(std::string arg) {
             return {.success = false, .error = std::format("tile {} {} {} {} {}", CLASS, sc<int>(B.x), sc<int>(B.y), sc<int>(B.width), sc<int>(B.height))};
         }
         return {.success = false, .error = std::format("hyprdrive:debug tile: no tile for class {}", CLASS)};
+    }
+    // `hooks`: every Hyprland function the plugin hooked, in creation order
+    // (FunctionHooks.hpp) -- owner, name, address, demangled signature.
+    if (TOPIC == "hooks") {
+        const auto  LINES  = Hyprdrive::FunctionHooks::dump();
+        std::string report = std::format("hyprdrive hooks: {}", LINES.size());
+        for (const auto& L : LINES)
+            report += "\n" + L;
+        return {.success = false, .error = report};
     }
     // `xgeom`: XGeometry's view of the focused window right now.
     if (TOPIC == "xgeom")

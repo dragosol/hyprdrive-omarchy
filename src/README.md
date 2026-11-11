@@ -20,3 +20,11 @@ One compiled plugin (`hyprdrive.so`). Each folder is one subsystem; every
 
 A header that ends in `Model`, `Math`, `Layout`, `Plan` or `Decision` is pure
 (no compositor) and has a host test in `tests/unit/`.
+
+Every Hyprland function hook is created through `core/FunctionHooks`
+(`required()` for the ones the plugin cannot load without, `firstMatch()` for
+the ones that only disable a feature when missing), which records each one in
+creation order -- `hyprctl dispatch 'hl.plugin.hyprdrive.debug("hooks")'`
+lists them. It refuses a second hook on an address already hooked. Only the
+find-and-create step is shared: each module still decides when it hooks, calls
+`hook()`, keeps its pointer and trampoline, and unhooks on its own schedule.
