@@ -200,7 +200,6 @@ namespace PluginDetail {
     extern SDispatchResult onNavigateDispatcher(std::string arg);
     extern SDispatchResult onWindowDispatcher(std::string arg);
     extern void failNotif(const std::string& reason);
-    extern void* findFnOrThrow(const std::string& name, std::initializer_list<std::string_view> demangledNeedles);
     extern std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount, eTrackpadGestureDirection direction, const std::string& action, uint32_t modMask, float deltaScale, bool disableInhibit, const std::string& arg);
     extern SDispatchResult onRegisterOverviewGesture(size_t fingerCount, const std::string& directionStr, const std::string& action, const std::string& mods, float deltaScale, bool disableInhibit, const std::string& arg);
     extern Hyprlang::CParseResult overviewGestureKeyword(const char* LHS, const char* RHS);

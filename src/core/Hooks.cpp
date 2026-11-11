@@ -221,38 +221,4 @@ void failNotif(const std::string& reason) {
     HyprlandAPI::addNotification(HYPRDRIVE_HANDLE, "[hyprdrive] Failure in initialization: " + reason, CHyprColor{1.0, 0.2, 0.2, 1.0}, 5000);
 }
 
-// Helper function to find a function by name and ensure it contains one of the requested substrings in its demangled name (to disambiguate overloads).
-void* findFnOrThrow(const std::string& name, std::initializer_list<std::string_view> demangledNeedles) {
-    auto fns = HyprlandAPI::findFunctionsByName(HYPRDRIVE_HANDLE, name);
-    if (fns.empty()) {
-        failNotif(std::format("no fns for hook {}", name));
-        throw std::runtime_error(std::format("[hyprdrive] No fns for hook {}", name));
-    }
-
-    if (demangledNeedles.size() == 0 || (demangledNeedles.size() == 1 && demangledNeedles.begin()->empty()))
-        return fns[0].address;
-
-    std::vector<SFunctionMatch> matches;
-    matches.reserve(fns.size());
-    for (const auto& fn : fns) {
-        for (const auto& needle : demangledNeedles) {
-            if (needle.empty() || fn.demangled.find(needle) != std::string::npos) {
-                matches.push_back(fn);
-                break;
-            }
-        }
-    }
-
-    if (matches.empty()) {
-        failNotif(std::format("no matching overload for hook {}", name));
-        throw std::runtime_error(std::format("[hyprdrive] No matching overload for hook {}", name));
-    }
-
-    if (matches.size() > 1) {
-        failNotif(std::format("ambiguous overload for hook {} ({} matches)", name, matches.size()));
-        throw std::runtime_error(std::format("[hyprdrive] Ambiguous overload for hook {}", name));
-    }
-
-    return matches[0].address;
-}
 } // namespace PluginDetail

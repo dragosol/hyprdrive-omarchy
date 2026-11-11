@@ -1,4 +1,5 @@
 #include "PluginParts.hpp"
+#include "FunctionHooks.hpp"
 using namespace PluginDetail;
 
 namespace PluginDetail {
@@ -185,65 +186,39 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         throw std::runtime_error("[he] Version mismatch");
     }
 
-    g_pScrollRenderWorkspaceHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("renderWorkspace", {"CHyprRenderer::renderWorkspace(", "IHyprRenderer::renderWorkspace("}),
-        rc<void*>(hkRenderWorkspace));
+    g_pScrollRenderWorkspaceHook = Hyprdrive::FunctionHooks::required("main", "renderWorkspace", {"CHyprRenderer::renderWorkspace(", "IHyprRenderer::renderWorkspace("}, rc<void*>(hkRenderWorkspace));
 
-    g_pScrollScheduleFrameHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE, 
-        findFnOrThrow("_ZN7Monitor8CMonitor13scheduleFrameEN10Aquamarine7IOutput19scheduleFrameReasonE", {""}),
-        rc<void*>(hkScheduleFrame));
+    g_pScrollScheduleFrameHook = Hyprdrive::FunctionHooks::required("main", "_ZN7Monitor8CMonitor13scheduleFrameEN10Aquamarine7IOutput19scheduleFrameReasonE", {""}, rc<void*>(hkScheduleFrame));
 
-    g_pScrollDamageSurfaceHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("damageSurface", {"CHyprRenderer::damageSurface(", "IHyprRenderer::damageSurface("}),
-        rc<void*>(hkDamageSurface));
+    g_pScrollDamageSurfaceHook = Hyprdrive::FunctionHooks::required("main", "damageSurface", {"CHyprRenderer::damageSurface(", "IHyprRenderer::damageSurface("}, rc<void*>(hkDamageSurface));
 
-    g_pScrollSendFrameEventsHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("sendFrameEventsToWorkspace", {"CHyprRenderer::sendFrameEventsToWorkspace(", "IHyprRenderer::sendFrameEventsToWorkspace("}),
-        rc<void*>(hkSendFrameEventsToWorkspace));
+    g_pScrollSendFrameEventsHook = Hyprdrive::FunctionHooks::required("main", "sendFrameEventsToWorkspace", {"CHyprRenderer::sendFrameEventsToWorkspace(", "IHyprRenderer::sendFrameEventsToWorkspace("}, rc<void*>(hkSendFrameEventsToWorkspace));
 
-    g_pScrollSurfaceFrameHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("_ZN18CWLSurfaceResource5frameERKNSt6chrono10time_pointINS0_3_V212steady_clockENS0_8durationIlSt5ratioILl1ELl1000000000EEEEEE", {""}),
-        rc<void*>(hkSurfaceFrame));
+    g_pScrollSurfaceFrameHook = Hyprdrive::FunctionHooks::required("main", "_ZN18CWLSurfaceResource5frameERKNSt6chrono10time_pointINS0_3_V212steady_clockENS0_8durationIlSt5ratioILl1ELl1000000000EEEEEE", {""}, rc<void*>(hkSurfaceFrame));
 
-    g_pScrollAddDamageHookB = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("addDamageEPK15pixman_region32", {"CMonitor::addDamage"}),
-        rc<void*>(hkAddDamageB));
+    g_pScrollAddDamageHookB = Hyprdrive::FunctionHooks::required("main", "addDamageEPK15pixman_region32", {"CMonitor::addDamage"}, rc<void*>(hkAddDamageB));
 
-    g_pScrollAddDamageHookA = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("_ZN7Monitor8CMonitor9addDamageERKN9Hyprutils4Math4CBoxE", {""}),
-        rc<void*>(hkAddDamageA));
+    g_pScrollAddDamageHookA = Hyprdrive::FunctionHooks::required("main", "_ZN7Monitor8CMonitor9addDamageERKN9Hyprutils4Math4CBoxE", {""}, rc<void*>(hkAddDamageA));
 
     // X30. Hooked HERE and not through ensureScrollOverviewHooks(): those go on
     // and off with the overview, and the autohide barrier lives on the plain
     // desktop, which is exactly where they are not installed.
-    g_pScrollMouseMovedHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("onMouseMoved", {"CInputManager::onMouseMoved("}),
-        rc<void*>(hkOnMouseMoved));
+    g_pScrollMouseMovedHook = Hyprdrive::FunctionHooks::required("main", "onMouseMoved", {"CInputManager::onMouseMoved("}, rc<void*>(hkOnMouseMoved));
     g_pScrollMouseMovedHook->hook();
 
-    g_pSendWindowSizeHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, findFnOrThrow("sendWindowSize", {"CWindow::sendWindowSize("}), rc<void*>(hkSendWindowSize));
+    g_pSendWindowSizeHook = Hyprdrive::FunctionHooks::required("main", "sendWindowSize", {"CWindow::sendWindowSize("}, rc<void*>(hkSendWindowSize));
     g_pSendWindowSizeHook->hook();
 
-    g_pTargetPlaceHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, findFnOrThrow("setPositionGlobal", {"CWindowTarget::setPositionGlobal("}), rc<void*>(hkTargetPlace));
+    // ONE hook that DockRoom and OwnSizeTile both ride (Hooks.cpp, hkTargetPlace).
+    g_pTargetPlaceHook = Hyprdrive::FunctionHooks::required("main", "setPositionGlobal", {"CWindowTarget::setPositionGlobal("}, rc<void*>(hkTargetPlace));
     g_pTargetPlaceHook->hook();
     Hyprdrive::ConfigureHold::setSender([](Desktop::View::CWindow* window, bool force) {
         if (g_pSendWindowSizeHook)
             rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(window, force);
     });
-    g_pOnAckHook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, findFnOrThrow("onAck", {"CWindow::onAck("}), rc<void*>(hkOnAck));
+    g_pOnAckHook = Hyprdrive::FunctionHooks::required("main", "onAck", {"CWindow::onAck("}, rc<void*>(hkOnAck));
     g_pOnAckHook->hook();
-    g_pShouldRenderWindowHook = HyprlandAPI::createFunctionHook(
-        HYPRDRIVE_HANDLE,
-        findFnOrThrow("shouldRenderWindow", {"shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)"}),
-        rc<void*>(hkShouldRenderWindow));
+    g_pShouldRenderWindowHook = Hyprdrive::FunctionHooks::required("main", "shouldRenderWindow", {"shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)"}, rc<void*>(hkShouldRenderWindow));
     g_pShouldRenderWindowHook->hook();
 
     CursorShape::init();
