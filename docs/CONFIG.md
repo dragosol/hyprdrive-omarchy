@@ -168,7 +168,7 @@ Prefix: `plugin:hyprdrive:general:`
 | --- | --- | --- | --- | --- |
 | `fullscreen_desktop` | string | `"next"` |  | where an app going fullscreen goes: next (a desktop of its own right after yours; the ones after move along), free (the next free desktop) or stay (where it is). An app alone on its desktop stays in any case |
 | `file_manager` | string | `""` |  | the file manager folders open in: a desktop entry such as org.kde.dolphin.desktop, or empty for the system's default for folders |
-| `open_tiled` | bool | `false` |  | a window that would open floating (a window rule, or the app asking) opens tiled instead, on every desktop, as it always does on a Mosaic desktop; dialogs, pinned and fixed-size windows and windows tagged hyprdrive-float still float |
+| `open_tiled` | bool | `false` |  | windows float only when you float them: a window the app opens floating (a dialog, a fixed-size window, Wine and Proton's too) is tiled, on every desktop -- Mosaic desktops always do this; float rules, the hyprdrive-float tag, splash screens and tool palettes still float |
 
 ## `mosaic`
 
