@@ -1,7 +1,7 @@
 // Geometry: autohide reveal, the arrangement animation, the base layout
 // and layout().
 #include "DockParts.hpp"
-#include "MotionCurves.hpp"
+#include "MotionSites.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -14,15 +14,9 @@ namespace DockDetail {
 // Clutter's EASE_OUT_QUAD in BOTH directions -- `_animateIn` and `_animateOut`
 // pass the same mode -- so the hide does NOT accelerate away the way this
 // rice's house exit curve does. Matching the reference means dropping the
-// house asymmetry here; that is the instruction, not an oversight.
-//
-// Direction is no longer a parameter, because the curve no longer depends on it.
-float revealEase(float t) {
-    // Any animation:curve preset but the house one: its DECEL, both ways.
-    if (!Motion::housePreset())
-        return Motion::ease(Motion::ERole::DECEL, t);
-    return Hyprdrive::Motion::outQuad(std::clamp(t, 0.F, 1.F));
-}
+// house asymmetry here; that is the instruction, not an oversight. The curve is
+// Motion::ESite::DOCK_REVEAL (MotionSites.hpp); direction is not a parameter,
+// because the curve does not depend on it.
 
 // 0 = fully out, 1 = fully tucked below the bottom edge.
 float hiddenFraction(PHLMONITOR monitor) {
@@ -37,7 +31,7 @@ float hiddenFraction(PHLMONITOR monitor) {
 
     const auto& R  = g_reveal[monitor->m_id];
     const int   MS = std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS));
-    const float E  = revealEase(std::clamp(Hyprdrive::Config::realElapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
+    const float E  = Motion::curve(Motion::ESite::DOCK_REVEAL, std::clamp(Hyprdrive::Config::realElapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
 
     // From wherever it WAS to wherever it is going, which is what makes a
     // reversal continuous instead of a jump to the far end.
@@ -86,21 +80,8 @@ bool autohideAnimating(PHLMONITOR monitor) {
     return R.pending || Flight::anyOn(monitor) || Hyprdrive::Config::realElapsedMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
 }
 
-float arrangeEase(float t) { // ease-out cubic: fast away, soft landing
-    if (!Motion::housePreset())
-        return Motion::ease(Motion::ERole::DECEL, t);
-    return Hyprdrive::Motion::outCubic(std::clamp(t, 0.F, 1.F));
-}
-
-float spawnEase(float t) { // ease-out back, a touch of overshoot so it lands
-    if (!Motion::housePreset())
-        return Motion::ease(Motion::ERole::POP, t);
-    t              = std::clamp(t, 0.F, 1.F);
-    constexpr float C1 = 1.75F; // 1.25 + two 0.25 steps: peak overshoot ~6% -> ~10%
-    constexpr float C3 = C1 + 1.F;
-    const float     U  = t - 1.F;
-    return 1.F + C3 * U * U * U + C1 * U * U;
-}
+// The glide is Motion::ESite::DOCK_ARRANGE (ease-out cubic) and a new icon
+// Motion::ESite::DOCK_SPAWN (ease-out back): MotionSites.hpp.
 
 CBox scaledAboutCentre(const CBox& box, float s) {
     const double W = box.width * s, H = box.height * s;
@@ -124,7 +105,7 @@ SLayout arranged(MONITORID id, const SLayout& resting) {
         return resting;
     }
 
-    const float E   = arrangeEase(T);
+    const float E   = Motion::curve(Motion::ESite::DOCK_ARRANGE, T);
     SLayout     out = resting;
     out.pill        = Motion::lerp(A.fromPill, resting.pill, E);
     if (!A.fromShowApps.empty() && !resting.showApps.empty())
@@ -135,7 +116,7 @@ SLayout arranged(MONITORID id, const SLayout& resting) {
             item.iconBox = Motion::lerp(FROM->second, item.iconBox, E);
             continue;
         }
-        const float S = std::max(0.F, spawnEase(T));
+        const float S = std::max(0.F, Motion::curve(Motion::ESite::DOCK_SPAWN, T));
         item.iconBox  = scaledAboutCentre(item.iconBox, S);
         item.appear   = std::clamp(T * 2.F, 0.F, 1.F); // opaque by half-way
     }

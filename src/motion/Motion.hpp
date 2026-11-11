@@ -15,9 +15,9 @@
 //
 // "hyprdrive" is the default and is EXACTLY what shipped before this existed:
 // the house curves for houseEase and the overview, and each hand-rolled ease
-// (the flight's expo, the autohide's quad, ...) left as it was -- sites ask
-// housePreset() and keep their own function in that case. Any other preset
-// replaces all of them with its three curves.
+// (the flight's expo, the autohide's quad, ...) left as it was -- a site asks
+// Motion::curve(ESite, t) (MotionSites.hpp), which is its own function under
+// the house preset. Any other preset replaces all of them with its three curves.
 //
 // The dock stacks keep their own motion (dock:stack_motion) and use
 // houseFixed(), today's house curves whatever the preset.

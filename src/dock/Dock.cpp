@@ -1,7 +1,7 @@
 // The dock: its small renderers, render(), the frame pump and damage, and the
 // entry points other modules call. Split from one file; see DockParts.hpp.
 #include "DockParts.hpp"
-#include "MotionCurves.hpp"
+#include "MotionSites.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -1381,7 +1381,7 @@ void render(PHLMONITOR monitor) {
             continue;
 
         const float LT    = std::clamp(elapsedMs(ZOOM.startedAt) / LAUNCH_ZOOM_MS, 0.F, 1.F);
-        const float E     = Motion::housePreset() ? Hyprdrive::Motion::outQuad(LT) : Motion::ease(Motion::ERole::DECEL, LT);
+        const float E     = Motion::curve(Motion::ESite::DOCK_LAUNCH_ZOOM, LT);
         const float GROWN = 1.F + (LAUNCH_ZOOM_SCALE - 1.F) * E;
         const float W     = sc<float>(ZOOM.from.width) * GROWN;
         const float H     = sc<float>(ZOOM.from.height) * GROWN;

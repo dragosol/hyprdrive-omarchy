@@ -28,6 +28,7 @@
 #include "FlightController.hpp"
 #include "Motion.hpp"
 #include "MotionMath.hpp"
+#include "MotionSites.hpp"
 
 #include "AppSearch.hpp"
 #include "Config.hpp"
@@ -311,16 +312,6 @@ void warpRestoredWindowAnims(const PHLWINDOW& window) {
     window->m_realSize->warp();
     for (uint8_t i = 0; i < Desktop::View::WINDOW_ALPHA_LAST; ++i)
         window->alpha()[i]->warp();
-}
-
-// Y5. GNOME's MINIMIZE_WINDOW_ANIMATION_MODE is Clutter's EASE_OUT_EXPO, which
-// is 1 - 2^(-10t) snapped to exactly 1 at the end. Extracted from the host's
-// windowManager.js, not recalled -- see spec 13.14's reference-discipline note.
-float easeOutExpo(float t) {
-    // Any animation:curve preset but the house one travels on its DECEL.
-    if (!Motion::housePreset())
-        return Motion::ease(Motion::ERole::DECEL, t);
-    return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t);
 }
 
 float flightProgress(const SFlight& flight) {
@@ -942,7 +933,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             continue;
         }
 
-        const float E = easeOutExpo(T);
+        const float E = Motion::curve(Motion::ESite::FLIGHT, T); // Y5: GNOME's EASE_OUT_EXPO (MotionSites.hpp)
         CBox        box;
         float       alpha;
 

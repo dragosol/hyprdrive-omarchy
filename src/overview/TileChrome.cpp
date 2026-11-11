@@ -1,5 +1,5 @@
 #include "TileChrome.hpp"
-#include "MotionCurves.hpp"
+#include "MotionSites.hpp"
 #include "MotionClock.hpp"
 #include "Motion.hpp"
 
@@ -198,8 +198,8 @@ float eased(const SEase& ease) {
 // symmetry is most of why GNOME's hover feels smoother than an accelerated exit.
 float easedHover(const SEase& ease) {
     // The animation clock: the panel's speed stretches the hover too.
-    const float T   = std::clamp(Hyprdrive::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
-    const float E = Motion::housePreset() ? Hyprdrive::Motion::outQuad(T) : Motion::ease(Motion::ERole::DECEL, T);
+    const float T = std::clamp(Hyprdrive::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
+    const float E = Motion::curve(Motion::ESite::TILE_HOVER, T);
 
     return ease.from + (ease.to - ease.from) * E;
 }

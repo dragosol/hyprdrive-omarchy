@@ -21,6 +21,7 @@
 #include "DesktopStripModel.hpp"
 #include "MotionMath.hpp"
 #include "MotionPresets.hpp"
+#include "MotionSites.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -678,12 +679,115 @@ static void testA5() {
     report("A5 shared bake == houseFixed()'s pair", nh, badH);
 }
 
+// ============================================================================
+// A6 -- the per-site branch. The six old "house ? own curve : preset curve"
+// sites verbatim, with isHouse() / presetEase() standing in for Motion::housePreset() / Motion::ease() as
+// the preset under test (ease's body: clamp, then the active row of the bake --
+// A5 holds that row to the old bakes). Each is compared to resolveCurve(), the
+// body of Motion::curve(), under all nine presets.
+// ============================================================================
+namespace old_a6 {
+    using Hyprdrive::Motion::ERole;
+    size_t g_preset = 0;
+    bool   isHouse() {
+        return g_preset == 0;
+    }
+    [[gnu::noinline]] float presetEase(ERole role, float t) {
+        const float T = std::clamp(t, 0.F, 1.F);
+        return Hyprdrive::Motion::Presets::bakedPresets()[g_preset][static_cast<size_t>(role)].getYForPoint(T);
+    }
+    // motion/FlightController.cpp:320 easeOutExpo
+    [[gnu::noinline]] float easeOutExpo(float t) {
+        if (!isHouse())
+            return presetEase(ERole::DECEL, t);
+        return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t);
+    }
+    // dock/DockLayout.cpp:20 revealEase (its A3 form; A3 holds that to the original)
+    [[gnu::noinline]] float revealEase(float t) {
+        if (!isHouse())
+            return presetEase(ERole::DECEL, t);
+        return Hyprdrive::Motion::outQuad(std::clamp(t, 0.F, 1.F));
+    }
+    // dock/DockLayout.cpp:89 arrangeEase (its A3 form)
+    [[gnu::noinline]] float arrangeEase(float t) {
+        if (!isHouse())
+            return presetEase(ERole::DECEL, t);
+        return Hyprdrive::Motion::outCubic(std::clamp(t, 0.F, 1.F));
+    }
+    // dock/DockLayout.cpp:95 spawnEase
+    [[gnu::noinline]] float spawnEase(float t) {
+        if (!isHouse())
+            return presetEase(ERole::POP, t);
+        t                  = std::clamp(t, 0.F, 1.F);
+        constexpr float C1 = 1.75F;
+        constexpr float C3 = C1 + 1.F;
+        const float     U  = t - 1.F;
+        return 1.F + C3 * U * U * U + C1 * U * U;
+    }
+    // dock/Dock.cpp:1408 the launch zoom (its A3 form; LT arrives clamped)
+    [[gnu::noinline]] float launchZoom(float LT) {
+        const float E = isHouse() ? Hyprdrive::Motion::outQuad(LT) : presetEase(ERole::DECEL, LT);
+        return E;
+    }
+    // overview/TileChrome.cpp:243 easedHover (its A3 form; T arrives clamped)
+    [[gnu::noinline]] float tileHover(float T) {
+        const float E = isHouse() ? Hyprdrive::Motion::outQuad(T) : presetEase(ERole::DECEL, T);
+        return E;
+    }
+}
+
+static void testA6() {
+    using Hyprdrive::Motion::ESite;
+    std::vector<float> T;
+    for (uint32_t u = 0; u <= 0x3f800000U; u += 2039) {
+        float f;
+        std::memcpy(&f, &u, 4);
+        T.push_back(f);
+    }
+    for (int i = -2000; i <= 0; ++i)
+        T.push_back(i / 4000.F);
+    for (int i = 0; i <= 2000; ++i)
+        T.push_back(1.F + i / 4000.F);
+    for (float e : {-0.F, 0.99999994F, 1.0000001F})
+        T.push_back(e);
+
+    struct SCase {
+        const char* name;
+        ESite       site;
+        bool        clampedByCaller;
+        float (*old)(float);
+    };
+    const SCase CASES[] = {
+        {"A6 curve(FLIGHT) == FlightController.cpp easeOutExpo", ESite::FLIGHT, false, old_a6::easeOutExpo},
+        {"A6 curve(DOCK_REVEAL) == DockLayout.cpp revealEase", ESite::DOCK_REVEAL, false, old_a6::revealEase},
+        {"A6 curve(DOCK_ARRANGE) == DockLayout.cpp arrangeEase", ESite::DOCK_ARRANGE, false, old_a6::arrangeEase},
+        {"A6 curve(DOCK_SPAWN) == DockLayout.cpp spawnEase", ESite::DOCK_SPAWN, false, old_a6::spawnEase},
+        {"A6 curve(DOCK_LAUNCH_ZOOM) == Dock.cpp launch zoom", ESite::DOCK_LAUNCH_ZOOM, true, old_a6::launchZoom},
+        {"A6 curve(TILE_HOVER) == TileChrome.cpp easedHover", ESite::TILE_HOVER, true, old_a6::tileHover},
+    };
+    for (const auto& C : CASES) {
+        long n = 0, bad = 0;
+        for (size_t p = 0; p < Hyprdrive::Motion::Presets::PRESETS.size(); ++p) {
+            old_a6::g_preset = p;
+            for (float t0 : T) {
+                // The caller-clamped sites only ever see 0..1 (and the caller's clamp).
+                const float t = C.clampedByCaller ? std::clamp(t0, 0.F, 1.F) : t0;
+                ++n;
+                const float NEW = Hyprdrive::Motion::resolveCurve(C.site, t, old_a6::isHouse(), old_a6::presetEase);
+                bad += !sameBits(NEW, C.old(t));
+            }
+        }
+        report(C.name, n, bad);
+    }
+}
+
 int main() {
     testA1();
     testA2();
     testA3();
     testA4();
     testA5();
+    testA6();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

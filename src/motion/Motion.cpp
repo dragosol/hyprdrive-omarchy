@@ -1,6 +1,7 @@
 // See Motion.hpp.
 #include "Motion.hpp"
 #include "MotionPresets.hpp"
+#include "MotionSites.hpp"
 
 #include "Config.hpp"
 #include "globals.hpp"
@@ -63,6 +64,10 @@ namespace Hyprdrive::Motion {
         if (g_live.synced != g_live.preset)
             sync();
         return curveOf(*g_live.preset, role).getYForPoint(T);
+    }
+
+    float curve(ESite site, float t) {
+        return resolveCurve(site, t, housePreset(), [](ERole role, float x) { return ease(role, x); });
     }
 
     float easeNamed(const std::string& preset, ERole role, float t) {
