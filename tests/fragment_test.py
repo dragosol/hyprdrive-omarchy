@@ -122,6 +122,52 @@ with tempfile.TemporaryDirectory() as tmp:
     expect(bak.exists() and "require('hypr.hyprdrive')" in bak.read_text(),
            "uninstall keeps a backup of the original beside the hyprland.lua it was given")
 
+# OMARCHY'S WORKSPACE BLOCKS: the publisher in 00-plugin.lua tells the plugin
+# whether Omarchy 4.5's monitor-workspaces module is loaded. Without it the
+# plugin numbers every monitor on one row and the renumbering fight with
+# Omarchy comes back, so an update from ANY older release (whose installed
+# 00-plugin.lua has no publisher) must get it from make install's regeneration.
+with tempfile.TemporaryDirectory() as tmp:
+    dest = pathlib.Path(tmp) / "hyprdrive"
+    dest.mkdir()
+    old = dest / "00-plugin.lua"
+    old.write_text("-- hyprdrive fragment 00-plugin (an older release)\nfunction hyprdrive_loaded() return false end\n\n"
+                   "-- BEGIN raw-snippet (hand edits below survive regeneration)\nMINE_OLD = 1\n-- END raw-snippet\n")
+    r = subprocess.run(["bash", str(ROOT / "scripts/install-fragments.sh"), str(dest)], capture_output=True, text=True,
+                       env=dict(os.environ, HOME=tmp))
+    new = old.read_text()
+    expect(r.returncode == 0, "install-fragments.sh DIR ran (%s)" % r.stderr.strip()[-200:])
+    for needle in ('package.loaded["default.hypr.monitor-workspaces"]', "hl.plugin.hyprdrive.workspace_blocks(",
+                   'hl.on("hyprland.start", hd_blocks)', 'hl.on("config.reloaded", hd_blocks)'):
+        expect(needle in new, "an update over an old 00-plugin.lua installs the block publisher: " + needle)
+    expect("MINE_OLD = 1" in new, "... and keeps that file's raw block")
+
+    # what the installed fragment SAYS, run under stock Lua with a stub `hl`:
+    # Omarchy sourced before it (the installer appends require("hypr.hyprdrive")
+    # to the end of hyprland.lua), after it, and not at all.
+    lua = next((p for p in ("/usr/bin/lua", "/usr/bin/luajit") if os.path.exists(p)), None)
+    if lua:
+        stub = pathlib.Path(tmp) / "stub.lua"
+        stub.write_text(r'''
+local said, hooks = {}, {}
+hl = { plugin = { load = function() end, hyprdrive = { workspace_blocks = function(n) said[#said + 1] = n end } },
+       get_loaded_plugins = function() return {} end,
+       on = function(e, fn) hooks[e] = hooks[e] or {}; table.insert(hooks[e], fn) end }
+local mode, frag = arg[1], arg[2]
+if mode == "before" then package.loaded["default.hypr.monitor-workspaces"] = { slots = 10 } end
+dofile(frag)
+if mode == "after" then package.loaded["default.hypr.monitor-workspaces"] = { slots = 10 } end
+for _, e in ipairs({ "hyprland.start", "config.reloaded" }) do
+    for _, fn in ipairs(hooks[e] or {}) do fn() end
+end
+print(table.concat(said, " "))
+''')
+        for mode, want in (("before", "10 10 10"), ("after", "0 10 10"), ("none", "0 0 0")):
+            r = subprocess.run([lua, str(stub), mode, str(old)], capture_output=True, text=True, env=dict(os.environ, HOME=tmp))
+            got = r.stdout.strip()
+            expect(r.returncode == 0 and got == want,
+                   "00-plugin.lua publishes blocks (Omarchy %s): want %r, got %r %s" % (mode, want, got, r.stderr.strip()[-200:]))
+
 # misc:size_limits_tiled clamps EVERY tiled window's position into the screen's
 # work area, not only the size of windows with size rules: 20-layout.lua set it
 # for Super+T's own-size tiles on 2026-11-10 and it piled the infinite canvas's
