@@ -1,5 +1,5 @@
-// The frame pump (FramePump.hpp says what it is for). Moved out of the dock,
-// unchanged.
+// The frame pump and the foreign frame sources (FramePump.hpp says what each
+// is for and where to add one). Moved out of the dock, unchanged.
 
 #include "FramePump.hpp"
 
@@ -8,7 +8,14 @@
 #include <hyprland/src/render/Renderer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <unordered_map>
+
+#include "BorderFade.hpp"
+#include "DockStacks.hpp"
+#include "FlightController.hpp"
+#include "Mosaic.hpp"
+#include "WindowPill.hpp"
 
 namespace Hyprdrive::FramePump {
 namespace {
@@ -56,6 +63,37 @@ struct SPumpReaper {
 };
 SPumpReaper g_pumpReaper;
 
+// THE FOREIGN FRAME SOURCES, in the order Dock::needsFramesReason asks them.
+// The dock's own terms (autohide, menu, press, tilt, tooltip, ghost flight,
+// arrangement, hover panel, bounce, spring, launch zoom) stay in that function;
+// this is every term that belongs to another module. A new one is one line
+// here, in the slot whose neighbours it should be asked between -- order within
+// a slot is the order asked, and the first true one names the reason.
+constexpr std::array SOURCES{
+    // V2. The SUPER-hold pill eases in and out over windows on a desktop where
+    // nothing else is repainting, exactly like the dock's own terms. It is
+    // asked from the dock's chain rather than pumped from its own module for
+    // the reason that chain exists at all: one list, in one place, so a new
+    // animation cannot join two of the three pumps and be forgotten by the
+    // third.
+    SSource{"window-pill", [](const PHLMONITOR&) { return WindowPill::animating(); }, ESlot::AFTER_TOOLTIP},
+
+    // The titles Super shows over windows (Mosaic::renderZoomLabels) fade on
+    // the tooltip's clock, over a pointer that may have stopped.
+    SSource{"super-labels", [](const PHLMONITOR&) { return Mosaic::labelsAnimating(); }, ESlot::AFTER_TOOLTIP},
+
+    // V11 V4. The stack popup's entrance, its drag ghost, and the hop or the
+    // shake that acknowledges a move. Asked from the dock's chain rather than
+    // pumped from its own module for the reason stated there: ONE list.
+    // NOT PURE: Stacks::animating() retires finished hops and shakes.
+    SSource{"stacks", [](const PHLMONITOR& monitor) { return Stacks::needsFrames(monitor->m_id); }, ESlot::AFTER_GHOST_FLIGHT},
+
+    SSource{"flight", [](const PHLMONITOR& monitor) { return Flight::anyOn(monitor); }, ESlot::AFTER_ARRANGE},
+
+    // The pill's and the preview rings' border fade (BorderFade.hpp): a
+    // pointer resting on the pill emits no motion to repaint it.
+    SSource{"border-fade", [](const PHLMONITOR& monitor) { return BorderFade::animatingOn(monitor); }, ESlot::AFTER_ARRANGE},
+};
 }
 
 // ASK FOR ANOTHER FRAME. Every animation the dock owns runs on a desktop where
@@ -152,4 +190,11 @@ void forget(MONITORID id) {
     }
 }
 
+const char* foreignReason(const PHLMONITOR& monitor, ESlot slot) {
+    for (const auto& SOURCE : SOURCES) {
+        if (SOURCE.slot == slot && SOURCE.active(monitor))
+            return SOURCE.name;
+    }
+    return nullptr;
+}
 }

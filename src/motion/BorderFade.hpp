@@ -36,8 +36,9 @@ namespace Hyprdrive::BorderFade {
     // A fade drawn on `monitor` is still in flight. The frames it needs are
     // asked for by the pumps that already exist, never from inside the pass
     // (damage asked for during the pass is cleared with the pass, and the
-    // overview throttles plain damage): Dock::needsFramesReason on the
-    // desktop, the overview's reflow pacer while one is open.
+    // overview throttles plain damage): Dock::needsFramesReason, through
+    // FramePump.cpp's source table, on the desktop; the overview's reflow pacer
+    // while one is open.
     bool animatingOn(const PHLMONITOR& monitor);
 
     // Mid-fade? (`key` drawn and not yet at its target.)

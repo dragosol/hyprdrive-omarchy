@@ -28,3 +28,13 @@ creation order -- `hyprctl dispatch 'hl.plugin.hyprdrive.debug("hooks")'`
 lists them. It refuses a second hook on an address already hooked. Only the
 find-and-create step is shared: each module still decides when it hooks, calls
 `hook()`, keeps its pointer and trampoline, and unhooks on its own schedule.
+
+**A new animation that needs frames.** Anything that moves with no pointer
+motion and no client commit left to repaint it (a fade, a spring settling, a
+flight) has to say so, or the desktop stops drawing mid-way. A module outside
+`dock/` adds one line to the `SOURCES` table in `core/FramePump.cpp`: the reason
+name `hyprdrive:debug frames` prints, its predicate, and the slot in
+`Dock::needsFramesReason`'s chain it is asked at. The dock's own terms stay in
+that function. Nothing asks for a frame by damaging from inside the render pass:
+`FramePump::request` (the dock's `pumpFrame`) posts it for after the pass and
+coalesces it to one per output per event-loop iteration.

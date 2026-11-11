@@ -580,18 +580,14 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
     if (!g_tip.name.empty() && g_tip.monitor == monitor->m_id && elapsedMs(g_tip.since) < (g_tip.out ? TOOLTIP_FADE_OUT_MS : TOOLTIP_FADE_MS))
         return "tooltip-fade";
 
-    // V2. The SUPER-hold pill eases in and out over windows on a desktop where
-    // nothing else is repainting, exactly like everything above it. It is asked
-    // here rather than pumped from its own module for the reason this function
-    // exists at all: one list, in one place, so a new animation cannot join two
-    // of the three pumps and be forgotten by the third.
-    if (WindowPill::animating())
-        return "window-pill";
-
-    // The titles Super shows over windows (Mosaic::renderZoomLabels) fade on
-    // the tooltip's clock, over a pointer that may have stopped.
-    if (Mosaic::labelsAnimating())
-        return "super-labels";
+    // THE OTHER MODULES' TERMS are asked from FramePump's table (FramePump.cpp,
+    // `SOURCES`), at three fixed points in this chain so the order every term is
+    // asked in is the order it always was: Stacks::needsFrames and
+    // arrangeAnimating below both retire finished entries as they answer, so
+    // they are not pure predicates and moving them past each other is not a
+    // refactor. A new module's animation is one line in that table.
+    if (const char* FOREIGN = FramePump::foreignReason(monitor, FramePump::ESlot::AFTER_TOOLTIP))
+        return FOREIGN;
 
     // V3. The icon flying home after a missed drop. It runs after the button
     // came up, so no pointer motion is left to repaint it -- this is the only
@@ -600,25 +596,19 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
     if (ghostFlying())
         return "ghost-flight";
 
-    // X25/X47/Y6/Y8. A minimized window's commits damage no monitor, the hover
-    // panel's entrance and live previews need frames of their own, and a bounce
-    // or a launch zoom runs on a dock nothing else is touching.
-    // V11 V4. The stack popup's entrance, its drag ghost, and the hop or the
-    // shake that acknowledges a move. Asked here rather than pumped from its
-    // own module for the reason stated at the top of this function: ONE list.
-    if (Stacks::needsFrames(monitor->m_id))
-        return "stacks";
+    if (const char* FOREIGN = FramePump::foreignReason(monitor, FramePump::ESlot::AFTER_GHOST_FLIGHT))
+        return FOREIGN;
 
     // The arrangement glides on a desktop nothing else is repainting.
     if (arrangeAnimating(monitor->m_id))
         return "arrange";
 
-    if (Flight::anyOn(monitor))
-        return "flight";
-    // The pill's and the preview rings' border fade (BorderFade.hpp): a
-    // pointer resting on the pill emits no motion to repaint it.
-    if (BorderFade::animatingOn(monitor))
-        return "border-fade";
+    if (const char* FOREIGN = FramePump::foreignReason(monitor, FramePump::ESlot::AFTER_ARRANGE))
+        return FOREIGN;
+
+    // X25/X47/Y6/Y8. A minimized window's commits damage no monitor, the hover
+    // panel's entrance and live previews need frames of their own, and a bounce
+    // or a launch zoom runs on a dock nothing else is touching.
     if (panelNeedsFramesOn(monitor))
         return "hover-panel";
     if (!g_flight.bounces.empty())
