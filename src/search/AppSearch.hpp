@@ -25,6 +25,7 @@ namespace AppSearch {
 
         std::string path;     // the .desktop file itself, so actions can be read on demand
         std::string haystack; // lowercased name/generic/comment/keywords/id, built once
+        int64_t     mtimeNs = 0; // the file's mtime at the scan (the newest Steam shortcut wins)
     };
 
     // OVERVIEW_CPP_SPEC §13.9 X28. One `[Desktop Action <id>]` group.

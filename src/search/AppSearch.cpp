@@ -1,6 +1,7 @@
 #include "AppSearch.hpp"
 #include "Workers.hpp"
 #include "Launch.hpp"
+#include "SteamLibrary.hpp"
 
 #include "globals.hpp"
 
@@ -316,6 +317,9 @@ namespace AppSearch {
                     SEntry entry;
                     if (!parseEntry(PATH, id, entry))
                         continue;
+                    if (const auto WHEN = it->last_write_time(ec); !ec)
+                        entry.mtimeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(WHEN.time_since_epoch()).count();
+                    ec.clear();
 
                     seen.insert(id);
                     g_entries.emplace_back(std::move(entry));
@@ -1301,6 +1305,13 @@ namespace AppSearch {
             }
         }
 
+        // A Proton game: the Steam shortcut that launches its app id
+        // (SteamLibrary.hpp; the newest shortcut file speaks for it).
+        if (found == std::string::npos)
+            found = Hyprdrive::AppIdentity::SteamLibrary::newestShortcut(
+                INV.size(), Hyprdrive::AppIdentity::Steam::classDigits(WANT), [&](size_t i) { return std::string_view{INV[i].exec}; },
+                [&](size_t i) { return INV[i].mtimeNs; });
+
         // A LOOSER second pass, only when nothing above claimed the class (user,
         // 2026-10-13: LocalSend had no dock icon). Flutter and Electron apps
         // name their window after a reverse-DNS id the desktop file never
@@ -1351,12 +1362,31 @@ namespace AppSearch {
 
     std::string appNameForClass(const std::string& wmClass) {
         const auto IDX = entryIndexForClass(wmClass);
-        return IDX == std::string::npos ? "" : inventory()[IDX].name;
+        if (IDX != std::string::npos)
+            return inventory()[IDX].name;
+        // A Proton game with no Steam shortcut still has a name in its manifest
+        // (SteamLibrary.hpp: the index, rebuilt here until the identity worker
+        // exists, with the old 30 s retry for a miss).
+        const auto ID = Hyprdrive::AppIdentity::Steam::fromClass(wmClass);
+        if (!ID)
+            return "";
+        const auto SNAP = Hyprdrive::AppIdentity::SteamLibrary::ensure(Hyprdrive::AppIdentity::liveSources(), *ID);
+        return SNAP ? SNAP->nameFor(*ID) : "";
     }
 
     std::string iconForClass(const std::string& wmClass) {
         const auto IDX = entryIndexForClass(wmClass);
-        return IDX == std::string::npos ? "" : inventory()[IDX].icon;
+        if (IDX != std::string::npos)
+            return inventory()[IDX].icon;
+        // ...and its icon: Steam's theme icon, else its .ico, else the library
+        // cache's jpg, else the theme name it would have (SteamLibrary.hpp).
+        const auto DIGITS = Hyprdrive::AppIdentity::Steam::classDigits(wmClass);
+        const auto ID     = Hyprdrive::AppIdentity::Steam::fromClass(wmClass);
+        if (DIGITS.empty() || !ID)
+            return "";
+        const auto SNAP = Hyprdrive::AppIdentity::SteamLibrary::ensure(Hyprdrive::AppIdentity::liveSources(), *ID);
+        const auto ICON = SNAP ? SNAP->iconFor(*ID) : std::string{};
+        return ICON.empty() ? "steam_icon_" + DIGITS : ICON;
     }
 
     std::string idForClass(const std::string& wmClass) {

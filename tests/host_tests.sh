@@ -82,6 +82,9 @@
 #                     Lutris yml and pga rows, .ico, PE) on the fixtures in
 #                     tests/fixtures/identity/, then every prefix truncation of
 #                     each fixture file and 10,000 seeded byte flips per parser.
+#   steam_library_test  SteamLibrary: the Steam index from the fixture trees,
+#                     the icon chain (theme -> .ico as PNG -> jpg), the 30 s
+#                     retry for a miss, the newest shortcut; FileSources' caps.
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
@@ -161,6 +164,8 @@ run motion_math_test tests/unit/motion_math_test.cpp $(pkg-config --cflags --lib
 run plate_color_test tests/unit/plate_color_test.cpp
 run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run identity_parsers_test tests/unit/identity_parsers_test.cpp
+# shellcheck disable=SC2046
+run steam_library_test tests/unit/steam_library_test.cpp src/apps/identity/SteamLibrary.cpp src/apps/identity/Sources.cpp $(pkg-config --cflags --libs cairo)
 run dock_drop_test tests/unit/dock_drop_test.cpp
 run dock_menu_model_test tests/unit/dock_menu_model_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp
