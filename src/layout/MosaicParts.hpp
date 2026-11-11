@@ -1493,8 +1493,23 @@ namespace Hyprdrive::Mosaic {
             // The arrangement changed: the pan was aimed at the old one.
             m_rearrangedAt = std::chrono::steady_clock::now();
             if (m_pan.on) {
-                m_canvasOffset = m_pan.to;
-                m_pan.on       = false;
+                // A PAN UNDER WAY NEVER TURNS INSTANT (owner, 2026-11-11). It
+                // used to be committed here -- the view at its end in one frame,
+                // Hyprland's move animation sliding everyone there. It keeps
+                // going, re-aimed for the new arrangement (the reveal below, or
+                // its old end clamped to the new canvas), and carries every
+                // window from where it is drawn into its new place on the way.
+                captureCarry();
+                const Vector2D TO = m_pan.to;
+                if (REVEAL && FOCUS && holds(FOCUS))
+                    revealWindow(FOCUS, true);
+                else
+                    panTo(TO);
+                if (m_pan.on) {
+                    layoutCanvas(true);
+                    return;
+                }
+                m_panCarry.clear();
             }
             // The arrangement changed (a window came, went or moved): the focused
             // one stays in view -- aimed BEFORE the layout, so it is one move.
