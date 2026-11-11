@@ -84,7 +84,11 @@ namespace Hyprdrive::FullscreenDesktop {
         std::vector<SDebt>   g_given;
         std::vector<PHLWINDOWREF> g_settled; // fullscreen, deliberately left where it is
         std::vector<PHLWINDOWREF> g_besides; // opened over a fullscreen app and moved on: shown once mapped
-        std::vector<PHLWINDOWREF> g_moved;   // fullscreen, not on a trip, moved to another desktop (movedOntoOthers)
+        // Moved to another desktop, not on a trip, not by us (movedOntoOthers).
+        struct SMoved {
+            PHLWINDOWREF win;
+        };
+        std::vector<SMoved> g_moved;
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
         std::chrono::steady_clock::time_point g_leftAt;
         PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
@@ -792,7 +796,7 @@ namespace Hyprdrive::FullscreenDesktop {
         // another window put on a fullscreen app's desktop is not one (a game
         // keeps its fullscreen, FullscreenGuard). Moved to an empty desktop it
         // stays fullscreen there, alone -- its own desktop again. Real
-        // fullscreen only, as for the trips (not maximize).
+        // fullscreen only here, as for the trips; a maximized window: maximized() below.
         // ...AND STAYS OUT: a Wine game asks for fullscreen again the moment
         // it is taken out (rig: wine_state.exe was back in fullscreen and on a
         // trip of its own within a second). While it stays on that desktop
@@ -800,9 +804,20 @@ namespace Hyprdrive::FullscreenDesktop {
         // (Hyprland's SUPPRESS_FULLSCREEN, as `suppress_event fullscreen`);
         // the user's fullscreen (a keybind, the dock) still works, and so
         // does the client's again once the window is moved on or alone there.
+        // The same for a maximized window whose CLIENT maximizes it again
+        // right after (an X11 client insisting on _NET_WM_STATE, a Wine game
+        // that runs "maximized"): within UNMAX_REASSERT_MS of being
+        // un-maximized there, it is un-maximized once more and its own
+        // maximize requests ignored (SUPPRESS_MAXIMIZE) while it shares that
+        // desktop. A user's Super+Alt+F later on is theirs: it stands.
+        constexpr float UNMAX_REASSERT_MS = 1500.F;
+        bool            maximized(const PHLWINDOW& w) {
+            return w && Fullscreen::controller()->getFullscreenModes(w).internal == Fullscreen::FSMODE_MAXIMIZED;
+        }
         struct SHeldOut {
             PHLWINDOWREF    win;
             PHLWORKSPACEREF space;
+            uint64_t        flag = Desktop::View::SUPPRESS_FULLSCREEN;
         };
         std::vector<SHeldOut> g_heldOut;
         void releaseHeld(bool all) {
@@ -810,24 +825,67 @@ namespace Hyprdrive::FullscreenDesktop {
                 const auto W = h.win.lock();
                 if (!W)
                     return true;
-                if (!all && W->m_isMapped && W->m_workspace == h.space.lock() && !fullscreen(W) && othersOn(W->m_workspace, W) > 0)
+                const bool IN = h.flag == Desktop::View::SUPPRESS_MAXIMIZE ? maximized(W) : fullscreen(W);
+                if (!all && W->m_isMapped && W->m_workspace == h.space.lock() && !IN && othersOn(W->m_workspace, W) > 0)
                     return false;
-                W->m_suppressedEvents = sc<decltype(W->m_suppressedEvents)>(W->m_suppressedEvents & ~Desktop::View::SUPPRESS_FULLSCREEN);
+                W->m_suppressedEvents = sc<decltype(W->m_suppressedEvents)>(W->m_suppressedEvents & ~h.flag);
                 return true;
             });
         }
-        void holdOut(const PHLWINDOW& w) {
-            if (!w || (w->m_suppressedEvents & Desktop::View::SUPPRESS_FULLSCREEN))
+        void holdOut(const PHLWINDOW& w, uint64_t flag = Desktop::View::SUPPRESS_FULLSCREEN) {
+            if (!w || (w->m_suppressedEvents & flag))
                 return; // the user's own rule, or ours already
-            w->m_suppressedEvents = sc<decltype(w->m_suppressedEvents)>(w->m_suppressedEvents | Desktop::View::SUPPRESS_FULLSCREEN);
-            g_heldOut.push_back({w, w->m_workspace});
+            w->m_suppressedEvents = sc<decltype(w->m_suppressedEvents)>(w->m_suppressedEvents | flag);
+            g_heldOut.push_back({w, w->m_workspace, flag});
+        }
+        // Un-maximized by a move, and when: a re-maximize soon after is the client's.
+        struct SUnmaxed {
+            PHLWINDOWREF    win;
+            PHLWORKSPACEREF space;
+            Time::steady_tp at;
+        };
+        std::vector<SUnmaxed> g_unmaxed;
+        void unmaximize(const PHLWINDOW& w) {
+            ++g_busy;
+            Fullscreen::controller()->setFullscreenMode(w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
+            --g_busy;
+        }
+        void reasserted() {
+            std::erase_if(g_unmaxed, [](const SUnmaxed& u) {
+                const auto W = u.win.lock();
+                if (!W || !W->m_isMapped || W->m_workspace != u.space.lock() || Config::realElapsedMs(u.at) > UNMAX_REASSERT_MS)
+                    return true;
+                if (!maximized(W))
+                    return false;
+                trace(std::format("{} maximized itself again on {}: un-maximized, its requests ignored while it shares the desktop", W->m_class, W->m_workspace->m_id));
+                unmaximize(W);
+                holdOut(W, Desktop::View::SUPPRESS_MAXIMIZE);
+                return true;
+            });
         }
 
+        // ...AND A MAXIMIZED ONE IS UN-MAXIMIZED (owner, 2026-11-11: "yes"):
+        // moved onto a desktop with other windows it is tiled there by the
+        // layout like any window that arrives (Mosaic: at its remembered size,
+        // the others not resized); onto an empty desktop it stays maximized.
+        // No hold-out for an ordinary app; one whose client maximizes it again
+        // gets one (reasserted, above). XGeometry's storm guard only strips a
+        // request for the state the window already HAS, so it never fights this.
         void movedOntoOthers() {
             releaseHeld(false);
-            for (const auto& REF : std::exchange(g_moved, {})) {
-                const auto W = REF.lock();
-                if (!W || !W->m_isMapped || tripOf(W) || !fullscreen(W) || !DesktopOrder::ordinary(W->m_workspace) || othersOn(W->m_workspace, W) == 0)
+            reasserted();
+            for (const auto& M : std::exchange(g_moved, {})) {
+                const auto W = M.win.lock();
+                if (!W || !W->m_isMapped || !DesktopOrder::ordinary(W->m_workspace) || othersOn(W->m_workspace, W) == 0)
+                    continue;
+                if (maximized(W)) {
+                    trace(std::format("{} moved onto {} with other windows: un-maximized", W->m_class, W->m_workspace->m_id));
+                    unmaximize(W);
+                    std::erase_if(g_unmaxed, [&](const SUnmaxed& u) { return !u.win || u.win.lock() == W; });
+                    g_unmaxed.push_back({W, W->m_workspace, Time::steadyNow()});
+                    continue;
+                }
+                if (tripOf(W) || !fullscreen(W))
                     continue;
                 trace(std::format("{} moved onto {} with other windows: out of fullscreen", W->m_class, W->m_workspace->m_id));
                 std::erase_if(g_settled, [&](const PHLWINDOWREF& r) { return !r || r.lock() == W; });
@@ -1130,7 +1188,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // (movedOntoOthers; Hyprland takes a fullscreen window out of
             // fullscreen for the move and puts it back after).
             if (w && !tripOf(w))
-                g_moved.emplace_back(w);
+                g_moved.push_back({w});
             if (!g_trips.empty() || !g_debts.empty() || !g_moved.empty() || !g_heldOut.empty())
                 arm(1);
         });
