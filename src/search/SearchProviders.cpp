@@ -1,4 +1,5 @@
 #include "SearchProviders.hpp"
+#include "Workers.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -219,7 +220,7 @@ namespace SearchProviders {
 
         std::vector<std::function<void(sd_bus*)>> g_actions;
 
-        std::thread                               g_worker;
+        Hyprdrive::Workers::Worker                g_worker;
         std::atomic<bool>                         g_running{false};
         int                                       g_wakeFd[2] = {-1, -1};
 
@@ -707,8 +708,12 @@ namespace SearchProviders {
             // A worker that ended on its own (no bus) is finished or finishing:
             // g_running goes false as its very last act, so this join is
             // immediate. Without it the assignment below is std::terminate.
-            if (g_worker.joinable())
-                g_worker.join();
+            // One abandoned at an earlier unload of this same image (Workers.hpp)
+            // and still running keeps its pipe, and no second worker starts.
+            if (!g_worker.join()) {
+                g_running = false;
+                return;
+            }
             // ...and its wake pipe goes with it, or every retry leaks two fds.
             for (int& fd : g_wakeFd) {
                 if (fd >= 0)
@@ -726,7 +731,9 @@ namespace SearchProviders {
                 fcntl(g_wakeFd[i], F_SETFL, FL | O_NONBLOCK);
             }
             g_stop   = false;
-            g_worker = std::thread(workerMain);
+            g_worker = Hyprdrive::Workers::start("hd-search-dbus", [](std::stop_token) { workerMain(); });
+            if (!g_worker.joinable()) // refused (unloading) or no thread: no provider rows
+                g_running = false;
         }
     }
 
@@ -812,7 +819,10 @@ namespace SearchProviders {
                 g_stop = true;
             }
             wake();
-            g_worker.join();
+            // Abandoned at unload (Workers.hpp): it still polls the wake pipe,
+            // so the pipe stays open for it.
+            if (!g_worker.join())
+                return;
         }
         // Also when the worker already ended on its own (no bus): its pipe is
         // still open until ensureWorker or this closes it.

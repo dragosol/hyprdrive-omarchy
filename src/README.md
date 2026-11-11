@@ -29,6 +29,12 @@ lists them. It refuses a second hook on an address already hooked. Only the
 find-and-create step is shared: each module still decides when it hooks, calls
 `hook()`, keeps its pointer and trampoline, and unhooks on its own schedule.
 
+**A new worker thread** is started through `core/Workers` (`start()` for a
+handle the module keeps and joins, `launch()` for a job nobody waits on), never
+as a bare `std::thread` and never detached: PLUGIN_EXIT joins every one of them
+within one shared deadline, and one that misses it is left running in code
+that is kept loaded (Workers.hpp has the whole policy).
+
 **A new animation that needs frames.** Anything that moves with no pointer
 motion and no client commit left to repaint it (a fade, a spring settling, a
 flight) has to say so, or the desktop stops drawing mid-way. A module outside

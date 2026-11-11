@@ -7,6 +7,7 @@
 #include "StackModel.hpp"
 #include "TrashDirs.hpp"
 #include "FileUri.hpp"
+#include "Workers.hpp"
 
 #include <gio/gio.h>
 #include <gio/gunixmounts.h>
@@ -814,17 +815,21 @@ static void emptyTrashDirs() {
     const auto  FILES   = trashFilesDir();
     const auto  HOME    = FILES.empty() ? std::filesystem::path{} : std::filesystem::path(FILES).parent_path();
     const uid_t UID     = getuid();
-    // A thread that throws is std::terminate, and so is one that cannot be
-    // started: either would take the compositor with it. No thread, no
-    // emptying -- the trash stays full and the row can be clicked again.
+    // Owned by Workers (never detached: a detached thread could still be
+    // deleting after the plugin is unloaded, in code that is gone). An unload
+    // stops it between two files and what is left stays in the trash. A
+    // thread that cannot be started, or a body that throws, is reported there
+    // rather than std::terminate: no thread, no emptying -- the trash stays
+    // full and the row can be clicked again.
     try {
-        std::thread([TRASHES, HOME, UID] {
-            try {
-                for (const auto& T : TRASHES)
-                    TrashDirs::empty(T.string(), T == HOME, UID);
-            } catch (...) {}
-        }).detach();
-    } catch (...) {}
+        Hyprdrive::Workers::launch("hd-empty-trash", [TRASHES, HOME, UID](std::stop_token stop) {
+            for (const auto& T : TRASHES) {
+                if (stop.stop_requested())
+                    break;
+                TrashDirs::empty(T.string(), T == HOME, UID, stop);
+            }
+        });
+    } catch (...) {} // the copy of the list into the job: out of memory
 }
 
 bool emptyTrashAsksFirst() {

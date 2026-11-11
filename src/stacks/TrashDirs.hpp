@@ -20,6 +20,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <initializer_list>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
@@ -114,8 +115,9 @@ namespace Hyprdrive::TrashDirs {
     // that is not a directory is unlinked -- a symlink itself, never its target.
     // A directory is entered only as itself (O_NOFOLLOW) and only on the same
     // filesystem (something mounted inside the trash is not the trash), then
-    // emptied and removed.
-    inline void removeContents(int fd, dev_t dev, int depth) {
+    // emptied and removed. A stop requested on `stop` (the plugin unloading)
+    // is seen between two entries: what is left stays in the trash.
+    inline void removeContents(int fd, dev_t dev, int depth, const std::stop_token& stop = {}) {
         DIR* d = ::fdopendir(fd);
         if (!d) {
             ::close(fd);
@@ -123,6 +125,8 @@ namespace Hyprdrive::TrashDirs {
         }
         const int DFD = ::dirfd(d);
         while (const dirent* e = ::readdir(d)) {
+            if (stop.stop_requested())
+                break;
             const std::string_view NAME = e->d_name;
             if (NAME == "." || NAME == "..")
                 continue;
@@ -134,7 +138,7 @@ namespace Hyprdrive::TrashDirs {
                 const int   SUB = ::openat(DFD, e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
                 struct stat st {};
                 if (SUB >= 0 && ::fstat(SUB, &st) == 0 && st.st_dev == dev)
-                    removeContents(SUB, dev, depth + 1);
+                    removeContents(SUB, dev, depth + 1, stop);
                 else if (SUB >= 0)
                     ::close(SUB);
             }
@@ -148,8 +152,8 @@ namespace Hyprdrive::TrashDirs {
     // trash directory down, and it and each of the three must be this user's.
     // The home trash is the user's own and is opened as a path, as GIO does, so
     // a Trash the user moved to another disk behind a symlink still empties.
-    // Inside either, no link is ever followed.
-    inline void empty(const std::string& trash, bool home, uid_t uid) {
+    // Inside either, no link is ever followed. `stop` as in removeContents.
+    inline void empty(const std::string& trash, bool home, uid_t uid, const std::stop_token& stop = {}) {
         const int NOFOLLOW = home ? 0 : O_NOFOLLOW;
         const int T        = ::open(trash.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | NOFOLLOW);
         if (T < 0)
@@ -163,7 +167,7 @@ namespace Hyprdrive::TrashDirs {
             const int   FD = ::openat(T, SUB, O_RDONLY | O_DIRECTORY | O_CLOEXEC | NOFOLLOW);
             struct stat sub {};
             if (FD >= 0 && ::fstat(FD, &sub) == 0 && (home || sub.st_uid == uid))
-                removeContents(FD, sub.st_dev, 0);
+                removeContents(FD, sub.st_dev, 0, stop);
             else if (FD >= 0)
                 ::close(FD);
         }

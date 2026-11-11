@@ -1,5 +1,6 @@
 // See Thumbs.hpp.
 #include "Thumbs.hpp"
+#include "Workers.hpp"
 
 #include <glib.h>
 
@@ -58,7 +59,7 @@ namespace Hyprdrive::Thumbs {
         std::deque<std::string>               g_queue;    // paths waiting their turn
         uint64_t                              g_pushed = 0; // paths lookup queued: a new one ends the worker's nap
         std::unordered_map<std::string, SJob> g_jobs;
-        std::thread                           g_worker;
+        Hyprdrive::Workers::Worker            g_worker;
         bool                                  g_stop = false;
         std::atomic<uint64_t>                 g_gen{1};
         std::function<void()>                 g_ready;
@@ -320,11 +321,8 @@ namespace Hyprdrive::Thumbs {
                 }
                 // No thread now (out of resources): the next lookup tries
                 // again. Nothing may throw out of here, on the render thread.
-                if (!g_queue.empty() && !g_worker.joinable()) {
-                    try {
-                        g_worker = std::thread(workerMain);
-                    } catch (...) {}
-                }
+                if (!g_queue.empty() && !g_worker.joinable())
+                    g_worker = Hyprdrive::Workers::start("hd-thumbs", [](std::stop_token) { workerMain(); });
             }
         }
         return meanwhile;
@@ -347,7 +345,6 @@ namespace Hyprdrive::Thumbs {
             g_ready = nullptr;
         }
         g_cv.notify_all();
-        if (g_worker.joinable())
-            g_worker.join();
+        g_worker.join(); // bounded at unload (Workers.hpp)
     }
 }

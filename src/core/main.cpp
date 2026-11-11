@@ -1,5 +1,6 @@
 #include "PluginParts.hpp"
 #include "FunctionHooks.hpp"
+#include "Workers.hpp"
 using namespace PluginDetail;
 
 namespace PluginDetail {
@@ -170,6 +171,11 @@ uint32_t            g_tapCtrlLastTapMs  = 0;
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HYPRDRIVE_HANDLE = handle;
+
+    // Every worker thread is started through Workers (Workers.hpp). Accepting
+    // again matters only to an image an earlier unload had to keep loaded.
+    Hyprdrive::Workers::setLog([](const std::string& line) { Log::logger->log(Log::ERR, "{}", line); });
+    Hyprdrive::Workers::reopen();
 
     // The debug logs older versions left in /tmp, readable by everyone at
     // umask 022: ours are removed at every load (DebugPaths::removeLegacy).
@@ -728,6 +734,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    // Before any module's shutdown: no new worker starts from here on, every
+    // worker is asked to stop, and the joins below share one deadline
+    // (Workers.hpp: one that misses it is left running in code kept loaded).
+    Hyprdrive::Workers::beginShutdown();
     // First: no window may stay hidden behind a plugin that is gone.
     Hyprdrive::ShowDesktop::shutdown();
     Hyprdrive::OwnSizeTile::shutdown();
@@ -763,7 +773,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
         wl_event_source_remove(g_fileWakeSource);
         g_fileWakeSource = nullptr;
     }
-    if (g_fileWakeFd >= 0) {
+    // Not while a worker abandoned above may still write to it (Workers.hpp).
+    if (g_fileWakeFd >= 0 && Hyprdrive::Workers::abandoned() == 0) {
         close(g_fileWakeFd);
         g_fileWakeFd = -1;
     }
@@ -886,6 +897,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     Hyprdrive::DockTilt::shutdown();
     Hyprdrive::StackBlur::shutdown();
     Hyprdrive::Ripple::shutdown();
+
+    // Whatever no module joined (Empty Trash), within the same deadline. No
+    // thread of ours may outlive this function in code about to be unmapped.
+    Hyprdrive::Workers::finishShutdown();
 
     HyprlandAPI::reloadConfig(); // re-adds built-in gestures cleared above
 }

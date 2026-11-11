@@ -1,5 +1,6 @@
 // The overview's easter egg: see KeyboardCat.hpp.
 #include "KeyboardCat.hpp"
+#include "Workers.hpp"
 #include "MotionClock.hpp"
 
 #include "Config.hpp"
@@ -69,7 +70,7 @@ namespace {
     struct SDecoder {
         std::atomic<pid_t>   pid{-1};
         std::atomic<int>     fd{-1};
-        std::thread          reader;
+        Hyprdrive::Workers::Worker reader;
         std::atomic<bool>    quit{false};
         std::atomic<bool>    ended{false};
         std::atomic<bool>    failed{false};
@@ -219,8 +220,12 @@ namespace {
         g_dec->quit = true;
         if (g_dec->pid > 0)
             kill(-g_dec->pid, SIGTERM); // the group: ffmpeg and anything it started
-        if (g_dec->reader.joinable())
-            g_dec->reader.join(); // the read returns once the pipe's writer is gone
+        // The read returns once the pipe's writer is gone. A reader abandoned at
+        // unload (Workers.hpp) keeps its decoder: leaked, never freed under it.
+        if (!g_dec->reader.join()) {
+            g_dec = nullptr;
+            return;
+        }
         if (g_dec->fd >= 0)
             close(g_dec->fd);
         if (g_dec->pid > 0)
@@ -232,7 +237,7 @@ namespace {
     void startDecoder(const std::string& path) {
         stopDecoder();
         g_dec        = new SDecoder;
-        g_dec->reader = std::thread(readerMain, g_dec, path);
+        g_dec->reader = Hyprdrive::Workers::start("hd-keyboard-cat", [d = g_dec, path](std::stop_token) { readerMain(d, path); });
     }
 
     void beginClose() {

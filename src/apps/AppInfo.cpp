@@ -1,4 +1,5 @@
 #include "AppInfo.hpp"
+#include "Workers.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -79,7 +80,7 @@ printf 'Source\tLocal (not from a package)\n'
         std::deque<SReq>                       g_queue;
         std::unordered_map<std::string, SInfo> g_cache; // by .desktop path
         std::atomic<uint64_t>                  g_generation{0};
-        std::thread                            g_thread;
+        Hyprdrive::Workers::Worker             g_thread;
         bool                                   g_stop = false;
         std::atomic<pid_t>                     g_child{-1};
 
@@ -183,7 +184,7 @@ printf 'Source\tLocal (not from a package)\n'
         g_queue.push_back(SReq{desktopPath, exec});
         if (!g_thread.joinable()) {
             g_stop   = false;
-            g_thread = std::thread(workerMain);
+            g_thread = Hyprdrive::Workers::start("hd-app-info", [](std::stop_token) { workerMain(); });
         }
         g_cv.notify_all();
         return SInfo{};
@@ -202,8 +203,7 @@ printf 'Source\tLocal (not from a package)\n'
         if (const pid_t CHILD = g_child.load(); CHILD > 0)
             kill(CHILD, SIGKILL);
         g_cv.notify_all();
-        if (g_thread.joinable())
-            g_thread.join();
+        g_thread.join(); // bounded at unload (Workers.hpp); the cache below is under the lock either way
         std::lock_guard lock(g_mutex);
         g_cache.clear();
     }

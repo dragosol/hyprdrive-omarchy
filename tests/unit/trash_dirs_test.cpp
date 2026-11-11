@@ -201,6 +201,23 @@ int main() {
         expect(canaryWhole(), "home trash: a link inside it was not followed");
     }
 
+    // A stop requested (the plugin unloading mid-empty, Workers.hpp): nothing
+    // more is removed, the trash is left as it was, and empty() returns.
+    {
+        const auto T = R / "stopped";
+        fs::create_directories(T / "files" / "dir");
+        touch(T / "files" / "a");
+        touch(T / "files" / "dir" / "b");
+        fs::create_directories(T / "info");
+        touch(T / "info" / "a.trashinfo");
+        std::stop_source stop;
+        stop.request_stop();
+        empty(T.string(), true, UID, stop.get_token());
+        expect(entries(T / "files") == 2 && entries(T / "files" / "dir") == 1 && entries(T / "info") == 1, "a stopped empty() removes nothing more");
+        empty(T.string(), true, UID, std::stop_source{}.get_token());
+        expect(entries(T / "files") == 0 && entries(T / "info") == 0, "and one not stopped still empties it");
+    }
+
     std::error_code ec;
     fs::remove_all(R, ec);
 

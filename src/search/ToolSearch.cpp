@@ -2,6 +2,7 @@
 
 #include "Config.hpp"
 #include "ToolSearchParse.hpp"
+#include "Workers.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -129,7 +130,7 @@ namespace ToolSearch {
         std::list<std::string>               g_cacheOrder; // oldest first
         std::atomic<uint64_t>                g_generation{0};
         std::function<void()>                g_ready;
-        std::thread                          g_thread;
+        Hyprdrive::Workers::Worker           g_thread;
         bool                                 g_stop = false;
         // The curl in flight, so shutdown can end it: an unload joins the
         // worker, and a join that waited out a slow request would hold the
@@ -475,7 +476,7 @@ EOF
 
         if (!g_thread.joinable()) {
             g_stop   = false;
-            g_thread = std::thread(workerMain);
+            g_thread = Hyprdrive::Workers::start("hd-tool-search", [](std::stop_token) { workerMain(); });
         }
 
         // A failed attempt for THIS query stays on screen while it is retried.
@@ -518,8 +519,7 @@ EOF
         if (const pid_t CHILD = g_child.load(); CHILD > 0)
             kill(CHILD, SIGKILL); // its pipe closes, the read returns, the worker sees g_stop
         g_cv.notify_all();
-        if (g_thread.joinable())
-            g_thread.join();
+        g_thread.join(); // bounded at unload (Workers.hpp); the state below is under the lock either way
         std::lock_guard lock(g_mutex);
         g_cache.clear();
         g_cacheOrder.clear();

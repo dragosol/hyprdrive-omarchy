@@ -1,4 +1,5 @@
 #include "AppSearch.hpp"
+#include "Workers.hpp"
 #include "Launch.hpp"
 
 #include "globals.hpp"
@@ -856,7 +857,7 @@ namespace AppSearch {
     // lookup simply waits for it -- which is exactly the old behaviour, and is
     // why this is a scheduling change rather than a correctness one.
     std::mutex  g_iconIndexMutex;
-    std::thread g_iconIndexWorker;
+    Hyprdrive::Workers::Worker g_iconIndexWorker;
 
     static std::atomic<uint64_t> g_iconIndexGen{1};
     static std::atomic<bool>     g_iconRebuildRunning{false};
@@ -929,7 +930,7 @@ namespace AppSearch {
         // Up for the warm-up too, so pollForChanges never joins -- and so never
         // blocks a frame on -- a scan that is still walking the themes.
         g_iconRebuildRunning = true;
-        g_iconIndexWorker    = std::thread([] {
+        g_iconIndexWorker    = Hyprdrive::Workers::start("hd-icon-index", [](std::stop_token) {
             // Y13. NICED, and the measurement is why: moving the scan off the
             // parse-time path bought 4.1s on when `qs` launches but only 2.3s
             // on when the wallpaper lands, because the worker then spent that
@@ -944,6 +945,8 @@ namespace AppSearch {
             }
             g_iconRebuildRunning = false;
         });
+        if (!g_iconIndexWorker.joinable()) // refused (unloading) or no thread
+            g_iconRebuildRunning = false;
     }
 
     // ---- OTHER THEMES (dock stacks, 2026-09-24) ------------------------------
@@ -955,7 +958,7 @@ namespace AppSearch {
     std::mutex                                                              g_altMutex;
     std::unordered_map<std::string, std::unordered_map<std::string, SIconCandidate>> g_altIndex; // theme -> index
     std::string                                                             g_altBuilding;       // theme on the worker
-    std::thread                                                             g_altWorker;
+    Hyprdrive::Workers::Worker                                              g_altWorker;
 
     std::string omarchyIconTheme() {
         static std::string                           cached;
@@ -986,10 +989,9 @@ namespace AppSearch {
                 return resolveIconPath(iconName); // not in that theme's chain at all
             }
             if (g_altBuilding.empty()) {
-                if (g_altWorker.joinable())
-                    g_altWorker.join(); // the previous theme's worker, long finished
+                g_altWorker.join(); // the previous theme's worker, long finished
                 g_altBuilding = theme;
-                g_altWorker   = std::thread([theme] {
+                g_altWorker   = Hyprdrive::Workers::start("hd-icon-theme", [theme](std::stop_token) {
                     ::setpriority(PRIO_PROCESS, 0, 10);
                     auto index = buildIconIndex(theme);
                     {
@@ -999,16 +1001,16 @@ namespace AppSearch {
                     }
                     ++g_iconIndexGen; // textures keyed on names re-resolve
                 });
+                if (!g_altWorker.joinable()) // refused or no thread: the main theme answers
+                    g_altBuilding.clear();
             }
         }
         return resolveIconPath(iconName);
     }
 
     void shutdownIconIndex() {
-        if (g_iconIndexWorker.joinable())
-            g_iconIndexWorker.join();
-        if (g_altWorker.joinable())
-            g_altWorker.join();
+        g_iconIndexWorker.join(); // both bounded at unload (Workers.hpp)
+        g_altWorker.join();
     }
 
     uint64_t iconIndexGeneration() {
@@ -1075,11 +1077,10 @@ namespace AppSearch {
             iconStamp = ICONS;
             // The previous worker (the warm-up, or an earlier rebuild) has
             // finished if the flag is down, so this join returns at once.
-            if (g_iconIndexWorker.joinable())
-                g_iconIndexWorker.join();
+            g_iconIndexWorker.join();
 
             g_iconRebuildRunning = true;
-            g_iconIndexWorker    = std::thread([] {
+            g_iconIndexWorker    = Hyprdrive::Workers::start("hd-icon-index", [](std::stop_token) {
                 ::setpriority(PRIO_PROCESS, 0, 10);
                 const auto THEME = iconThemeName();
                 auto       fresh = buildIconIndex(THEME);
@@ -1097,6 +1098,8 @@ namespace AppSearch {
                 ++g_iconIndexGen;
                 g_iconRebuildRunning = false;
             });
+            if (!g_iconIndexWorker.joinable()) // refused or no thread: asked again on the next change
+                g_iconRebuildRunning = false;
         }
     }
 

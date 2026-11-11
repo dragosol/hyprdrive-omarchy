@@ -1,4 +1,5 @@
 #include "StackReader.hpp"
+#include "Workers.hpp"
 #include "DockDropModel.hpp"
 
 #include <algorithm>
@@ -179,7 +180,7 @@ namespace {
     std::unordered_map<std::string, SListing> g_cache;     // dir -> last listing
     std::unordered_map<std::string, bool>     g_inflight;  // dir -> a read is queued
     std::unordered_map<std::string, bool>     g_dirty;     // dir -> changed while its read was in flight
-    std::thread                               g_thread;
+    Hyprdrive::Workers::Worker                g_thread;
     bool                                      g_stop = false;
     std::atomic<uint64_t>                     g_generation{1};
     std::function<void()>                     g_ready;
@@ -262,7 +263,7 @@ namespace {
         cancellable(); // created HERE, on the compositor thread, never lazily on the worker
         if (!g_thread.joinable()) {
             g_stop   = false;
-            g_thread = std::thread(workerMain);
+            g_thread = Hyprdrive::Workers::start("hd-stack-reader", [](std::stop_token) { workerMain(); });
         }
         g_jobs.push_back(std::move(job));
         g_cv.notify_all();
@@ -395,8 +396,10 @@ namespace Hyprdrive::StackReader {
         if (g_cancel)
             g_cancellable_cancel(g_cancel);
         g_cv.notify_all();
-        if (g_thread.joinable())
-            g_thread.join();
+        // Abandoned at unload (Workers.hpp: still in a read past the deadline),
+        // it keeps what it uses -- the cancellable, the inotify fd -- leaked.
+        if (!g_thread.join())
+            return;
         g_abort.store(false); // a reload starts a fresh worker
         if (g_cancel) {
             g_object_unref(g_cancel);

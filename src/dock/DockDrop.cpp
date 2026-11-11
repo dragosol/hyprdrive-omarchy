@@ -20,6 +20,7 @@
 #undef private
 
 #include "DockDrop.hpp"
+#include "Workers.hpp"
 
 #include "Dock.hpp"
 #include "DockDropModel.hpp"
@@ -379,7 +380,7 @@ namespace {
     std::mutex              g_fetchMutex;
     std::condition_variable g_fetchCv;
     std::deque<SFetch>      g_fetchQueue;
-    std::thread             g_fetchWorker;
+    Hyprdrive::Workers::Worker g_fetchWorker;
     bool                    g_fetchStop = false;
 
     std::string percentDecode(const std::string& in) {
@@ -478,7 +479,7 @@ namespace {
             return;
         g_fetchQueue.push_back(std::move(job));
         if (!g_fetchWorker.joinable())
-            g_fetchWorker = std::thread(fetchMain);
+            g_fetchWorker = Hyprdrive::Workers::start("hd-drop-fetch", [](std::stop_token) { fetchMain(); });
         g_fetchCv.notify_one();
     }
 }
@@ -662,8 +663,10 @@ namespace Hyprdrive::DockDrop {
             g_fetchQueue.clear();
         }
         g_fetchCv.notify_all();
-        if (g_fetchWorker.joinable())
-            g_fetchWorker.join(); // at most one curl's --max-time
+        // At most one curl's --max-time (20 s), so at unload it may be
+        // abandoned at the Workers deadline; what follows is the main thread's
+        // drag state, which the worker never touches.
+        g_fetchWorker.join();
         // Our source's code is about to be unloaded: a drag of ours must not
         // outlive it (the drag state and the offers hold it only weakly).
         if (outActive())

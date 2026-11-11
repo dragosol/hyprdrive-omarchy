@@ -1,4 +1,5 @@
 #include "SearchBackend.hpp"
+#include "Workers.hpp"
 #include "Launch.hpp"
 #include "ShellQuote.hpp"
 #include "ToolSearch.hpp"
@@ -1555,7 +1556,7 @@ std::vector<SSearchItem> searchMenu(const std::string& rawQuery, size_t limit) {
 // ============================================================================
 // Asynchronous File Search (`fd`)
 // ============================================================================
-static std::thread             g_fileThread;
+static Hyprdrive::Workers::Worker g_fileThread;
 static std::atomic<bool>       g_fileRunning{false};
 static std::atomic<uint64_t>   g_fileGen{0};
 static std::atomic<uint64_t>   g_fileDoneGen{0};
@@ -2014,7 +2015,8 @@ std::vector<SSearchItem> recentFiles() {
 void init() {
     if (!g_fileRunning) {
         g_fileRunning = true;
-        g_fileThread  = std::thread(fileWorkerLoop);
+        g_fileThread  = Hyprdrive::Workers::start("hd-file-search", [](std::stop_token) { fileWorkerLoop(); });
+        g_fileRunning = g_fileThread.joinable();
     }
     reloadMenuIfNeeded();
 }
@@ -2024,8 +2026,7 @@ void shutdown() {
     if (g_fileRunning) {
         g_fileRunning = false;
         g_fileWorkerCv.notify_all();
-        if (g_fileThread.joinable())
-            g_fileThread.join();
+        g_fileThread.join(); // bounded at unload (Workers.hpp)
     }
 }
 
