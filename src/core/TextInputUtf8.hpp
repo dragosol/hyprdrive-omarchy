@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace ScrollOverview::TextInput {
+namespace Hyprdrive::TextInput {
     // The text is UTF-8, so Backspace removes a CODEPOINT: pop_back() would
     // leave a severed lead byte.
     inline void popCodepoint(std::string& s) {

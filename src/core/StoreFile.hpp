@@ -25,7 +25,7 @@
 #include <string_view>
 #include <unistd.h>
 
-namespace ScrollOverview::StoreFile {
+namespace Hyprdrive::StoreFile {
 
     // `path` holds exactly `text` afterwards, or is untouched. 0 on success,
     // else the errno of the step that failed.

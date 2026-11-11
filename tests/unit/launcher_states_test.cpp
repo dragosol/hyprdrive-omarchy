@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace ScrollOverview::LauncherEntry;
+using namespace Hyprdrive::LauncherEntry;
 
 static int checks = 0, failed = 0;
 

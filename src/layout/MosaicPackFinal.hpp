@@ -182,7 +182,7 @@
 #define BOXPACK_POOL_BIG 50
 #endif
 
-namespace ScrollOverview::MosaicPack::Box {
+namespace Hyprdrive::MosaicPack::Box {
 
     struct SRect {
         double x = 0, y = 0, w = 0, h = 0;
@@ -1655,7 +1655,7 @@ namespace ScrollOverview::MosaicPack::Box {
         return packImpl(sizes, area, gap, nullptr, quick ? 2 : 1);
     }
 
-} // namespace ScrollOverview::MosaicPack::Box
+} // namespace Hyprdrive::MosaicPack::Box
 
 // ==========================================================================
 // PART 2 -- Beam: the fit fallback ("beamcontact"), used only when Box finds nothing
@@ -1716,7 +1716,7 @@ namespace ScrollOverview::MosaicPack::Box {
 #include <optional>
 #include <vector>
 
-namespace ScrollOverview::MosaicPack::Beam {
+namespace Hyprdrive::MosaicPack::Beam {
 
     struct SRect {
         double x = 0, y = 0, w = 0, h = 0;
@@ -2457,7 +2457,7 @@ namespace ScrollOverview::MosaicPack::Beam {
 // PART 3 -- the public API: pack(), fitLayout(), packEased(), fitsEased(), limitFor()
 // ==========================================================================
 
-namespace ScrollOverview::MosaicPack {
+namespace Hyprdrive::MosaicPack {
 
 #ifndef MOSAICPACK_HAVE_SRECT // MosaicPack.hpp defines SRect itself and sets this
     struct SRect {
@@ -2681,4 +2681,4 @@ namespace ScrollOverview::MosaicPack {
         return SLimit{.w = std::round(w), .h = std::round(h), .reached = false, .placed = at ? std::move(*at) : std::vector<SRect>{}};
     }
 
-} // namespace ScrollOverview::MosaicPack
+} // namespace Hyprdrive::MosaicPack

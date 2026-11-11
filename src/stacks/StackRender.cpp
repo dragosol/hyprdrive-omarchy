@@ -4,7 +4,7 @@
 
 using namespace StacksDetail;
 
-namespace ScrollOverview::Stacks {
+namespace Hyprdrive::Stacks {
 
     // ---------------------------------------------------------------- paint --
     // THE FAN'S SCROLLBAR (user, 2026-10-08): a thin arc beside the icon

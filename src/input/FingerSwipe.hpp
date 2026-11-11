@@ -5,7 +5,7 @@
 // The glue between the touchpad's raw fingers (TouchpadRaw), the decisions
 // (FingerSwipeModel) and Hyprland: libinput's swipe/pinch/scroll events are
 // swallowed while a swipe is ours, and ours are fed to the gesture manager.
-namespace ScrollOverview::FingerSwipe {
+namespace Hyprdrive::FingerSwipe {
     void init();
     // Config reload / device hotplug: open touchpads that appeared.
     void rescan();

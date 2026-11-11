@@ -54,7 +54,7 @@
 #include <unistd.h>
 
 namespace {
-    using namespace ScrollOverview;
+    using namespace Hyprdrive;
     using DockDropModel::EAction;
     using DockDropModel::ECell;
 
@@ -483,7 +483,7 @@ namespace {
     }
 }
 
-namespace ScrollOverview::DockDrop {
+namespace Hyprdrive::DockDrop {
 
     // Hyprland's initiateDrag, for a source that is not a client's: the same
     // state, the same listeners, the same "unfocus the pointer" step. Its drag

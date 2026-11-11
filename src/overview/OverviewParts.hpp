@@ -73,7 +73,7 @@ namespace OverviewDetail {
     // frozen while the overview is up -- the commits of a moving wallpaper
     // never re-run the full-screen kawase -- and the cards are untouched: they
     // stream the live wallpaper as before.
-    using ScrollOverview::Config::EBackdrop;
+    using Hyprdrive::Config::EBackdrop;
 
     // How often each monitor's wallpaper layers commit, for AUTO: the commits
     // of the last whole second, or of the second running if it is already past.
@@ -197,7 +197,7 @@ namespace OverviewDetail {
     WORKSPACEID workspaceKey(const PHLWORKSPACE& ws);
 // WorkspacePlan facts: which empty desktops each overview holds as phantoms.
     void forgetPhantomsOf(const CScrollOverview* overview);
-    ScrollOverview::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor);
+    Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor);
     void noteFrame(MONITORID id);
     bool pillPlaying();
     bool searchHoverEasing();

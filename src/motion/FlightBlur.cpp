@@ -61,7 +61,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ScrollOverview::FlightBlur {
+namespace Hyprdrive::FlightBlur {
     namespace {
         // Room around the window for what the flight draws outside it: the card
         // shadow and the border. Logical px. The composite only samples inside

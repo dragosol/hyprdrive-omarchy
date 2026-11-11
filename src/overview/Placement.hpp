@@ -27,7 +27,7 @@
 // window's own CENTRE as the focal point: the closest node is then the anchor
 // itself, and the side test compares its centre with its centre, which falls
 // through to "new window second", i.e. force_split 2.
-namespace ScrollOverview::Placement {
+namespace Hyprdrive::Placement {
 
 // The window focused as a drag STARTS. Focus follows the pointer for the rest
 // of the gesture, so this is the only moment it still means "the window the

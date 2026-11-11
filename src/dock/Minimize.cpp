@@ -18,7 +18,7 @@
 #include <hyprland/src/state/WorkspaceState.hpp>
 #undef private
 
-namespace ScrollOverview::Minimize {
+namespace Hyprdrive::Minimize {
 
 namespace {
 

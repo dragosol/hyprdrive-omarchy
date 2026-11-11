@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace ScrollOverview::Gvfs;
+using namespace Hyprdrive::Gvfs;
 
 static int checks = 0, failed = 0;
 

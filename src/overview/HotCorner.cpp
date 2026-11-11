@@ -22,7 +22,7 @@
 #include <hyprland/src/protocols/PointerConstraints.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 
-namespace ScrollOverview::HotCorner {
+namespace Hyprdrive::HotCorner {
 
     namespace {
         constexpr const char* KEY_ENABLED = "plugin:hyprdrive:hot_corner:enabled";

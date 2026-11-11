@@ -19,7 +19,7 @@ namespace Layout {
     struct STargetBox;
 }
 
-namespace ScrollOverview::DockRoom {
+namespace Hyprdrive::DockRoom {
 
     using PlaceFn = void (*)(void* target, const Layout::STargetBox& box, uint8_t flags);
 

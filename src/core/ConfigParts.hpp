@@ -43,10 +43,10 @@ extern "C" {
 }
 
 namespace ConfigDetail {
-    extern ScrollOverview::Config::TGestureRegistrar g_gestureRegistrar;
+    extern Hyprdrive::Config::TGestureRegistrar g_gestureRegistrar;
 } // namespace ConfigDetail
 
-namespace ScrollOverview::Config::ConfigPart {
+namespace Hyprdrive::Config::ConfigPart {
     extern uint64_t g_themeGeneration;
     extern void registerLuaFunctions();
-} // namespace ScrollOverview::Config::ConfigPart
+} // namespace Hyprdrive::Config::ConfigPart

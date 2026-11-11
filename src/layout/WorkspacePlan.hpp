@@ -47,7 +47,7 @@
 #include <set>
 #include <vector>
 
-namespace ScrollOverview::WorkspacePlan {
+namespace Hyprdrive::WorkspacePlan {
 
 using ID = int64_t;
 
@@ -176,4 +176,4 @@ inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWork
     return out;
 }
 
-} // namespace ScrollOverview::WorkspacePlan
+} // namespace Hyprdrive::WorkspacePlan

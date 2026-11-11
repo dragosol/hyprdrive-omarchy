@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <set>
 
-using namespace ScrollOverview::DesktopStep;
+using namespace Hyprdrive::DesktopStep;
 
 static int g_checks = 0, g_failed = 0;
 #define CHECK(c)                                                                                                                                                                   \

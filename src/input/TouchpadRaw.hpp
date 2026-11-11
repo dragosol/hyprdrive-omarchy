@@ -18,7 +18,7 @@
 #include <functional>
 #include <hyprland/src/devices/IPointer.hpp>
 
-namespace ScrollOverview::TouchpadRaw {
+namespace Hyprdrive::TouchpadRaw {
     // Called once per evdev frame (SYN_REPORT) of any touchpad.
     using FrameFn = std::function<void(const FingerSwipeModel::SFrame&)>;
     // Called when a device the frames came from goes away mid-stream.

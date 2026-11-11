@@ -65,7 +65,7 @@
 #include <vector>
 #include "MosaicParts.hpp"
 
-namespace ScrollOverview::Mosaic {
+namespace Hyprdrive::Mosaic {
 
     using namespace MosaicDetail;
 
@@ -91,14 +91,14 @@ namespace ScrollOverview::Mosaic {
         const auto                                   NOW     = std::chrono::steady_clock::now();
         if (NOW - checked > std::chrono::seconds(1)) {
             checked = NOW;
-            on      = ScrollOverview::DebugPaths::flagOn("hyprdrive-mosaic.on");
+            on      = Hyprdrive::DebugPaths::flagOn("hyprdrive-mosaic.on");
         }
         return on;
     }
     void trace(const std::string& line) {
         if (!traceOn())
             return;
-        if (FILE* const F = ScrollOverview::DebugPaths::openLog("hyprdrive-mosaic.log")) {
+        if (FILE* const F = Hyprdrive::DebugPaths::openLog("hyprdrive-mosaic.log")) {
             std::fprintf(F, "%lld %s\n",
                          static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() % 100000000),
                          line.c_str());
@@ -110,22 +110,22 @@ namespace ScrollOverview::Mosaic {
     // that no longer fits tiles, as before. On: it spills onto a canvas the view
     // pans across -- a strip (horizontal) or a grid (all directions).
     bool canvasOn() {
-        return ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:mosaic:infinite_canvas");
+        return Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:mosaic:infinite_canvas");
     }
     bool canvasAllDirections() {
-        return ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:mosaic:canvas_directions") == "all";
+        return Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:mosaic:canvas_directions") == "all";
     }
     // THE PAN'S MOTION (user, 2026-10-26: "when I focus on a window it pans it
     // into view smoothly with a serpantinum curve, adjustable in the animation
     // tab"): animation:canvas_curve (a Motion.hpp preset, its DECEL) over
     // animation:canvas_pan_ms, scaled by the global speed (anim_scale; 0 snaps).
     double canvasPanMs() {
-        const double MS = sc<double>(ScrollOverview::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:animation:canvas_pan_ms"));
-        return std::max(0.0, MS * ScrollOverview::Config::animScale());
+        const double MS = sc<double>(Hyprdrive::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:animation:canvas_pan_ms"));
+        return std::max(0.0, MS * Hyprdrive::Config::animScale());
     }
     float canvasEase(double t) {
-        return ScrollOverview::Motion::easeNamed(ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:animation:canvas_curve"),
-                                                 ScrollOverview::Motion::ERole::DECEL, sc<float>(t));
+        return Hyprdrive::Motion::easeNamed(Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:animation:canvas_curve"),
+                                                 Hyprdrive::Motion::ERole::DECEL, sc<float>(t));
     }
     // A swipe or a Super-pan is moving the view: focus landing on a window
     // under the pointer must not pull the view back to it mid-pan.
@@ -149,7 +149,7 @@ namespace ScrollOverview::Mosaic {
     // push through, especially going down"), half again at the bottom, where
     // the dock is.
     double pushPressure(int axis, double sign) {
-        const double PX = sc<double>(ScrollOverview::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:mosaic:edge_push_resistance"));
+        const double PX = sc<double>(Hyprdrive::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:mosaic:edge_push_resistance"));
         return std::max(0.0, PX) * (axis == 1 && sign > 0 ? 1.5 : 1.0);
     }
     // ON THE DOCK (user, 2026-11-09: "being mouseovered on dock, dock context
@@ -158,10 +158,10 @@ namespace ScrollOverview::Mosaic {
     // surface but the bar (focusUnderBar has that one) is not on the window
     // painted underneath -- and while a menu or a fan is up nothing moves.
     bool pointerOnChrome(const Vector2D& p) {
-        if (ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen())
+        if (Hyprdrive::Stacks::isOpen() || Hyprdrive::Dock::menuOpen())
             return true;
         // The dock answers in monitor-local render px.
-        if (const auto MON = State::monitorState()->query().vec(p).run(); MON && ScrollOverview::Dock::uiContains(MON, (p - MON->m_position) * MON->m_scale))
+        if (const auto MON = State::monitorState()->query().vec(p).run(); MON && Hyprdrive::Dock::uiContains(MON, (p - MON->m_position) * MON->m_scale))
             return true;
         const auto PSURF = g_pSeatManager ? g_pSeatManager->m_state.pointerFocus.lock() : SP<CWLSurfaceResource>{};
         const auto HLS   = PSURF ? Desktop::View::CWLSurface::fromResource(PSURF) : SP<Desktop::View::CWLSurface>{};
@@ -192,9 +192,9 @@ namespace ScrollOverview::Mosaic {
     // came to show the dock, and nothing under it takes the focus.
     bool pointerInDockBand(const Vector2D& p) {
         const auto MON = State::monitorState()->query().vec(p).run();
-        if (!MON || !ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:dock:autohide"))
+        if (!MON || !Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:dock:autohide"))
             return false;
-        const auto L = ScrollOverview::Dock::layout(MON);
+        const auto L = Hyprdrive::Dock::layout(MON);
         if (L.pill.width < 1 || L.pill.height < 1)
             return false; // away: no dock up
         const double SC = std::max(MON->m_scale, 0.01F);
@@ -395,7 +395,7 @@ namespace ScrollOverview::Mosaic {
     }
 
     static bool openTiled() {
-        return ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:general:open_tiled");
+        return Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:general:open_tiled");
     }
 
     static void adoptFloating(const PHLWINDOW& w) {
@@ -467,8 +467,8 @@ namespace ScrollOverview::Mosaic {
         // Before the algo exists: windows re-arrive inside addTiledAlgo.
         loadKept();
         HyprlandAPI::addTiledAlgo(handle, "mosaic", &typeid(CMosaicAlgorithm), [] { return makeUnique<CMosaicAlgorithm>(); });
-        ScrollOverview::Config::registerDispatcher("focus", onFocusDispatcher);
-        ScrollOverview::Config::registerDispatcher("swap", onSwapDispatcher);
+        Hyprdrive::Config::registerDispatcher("focus", onFocusDispatcher);
+        Hyprdrive::Config::registerDispatcher("swap", onSwapDispatcher);
         // After the window's rules are in (openLate). Directly, never a
         // doLater: a deferred call still queued when the plugin unloads jumps
         // into unmapped code (the unload SEGVs, 2026-09).

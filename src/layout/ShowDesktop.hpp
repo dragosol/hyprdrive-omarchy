@@ -24,7 +24,7 @@
 // one of theirs takes the focus (the dock, a notification), and at once when
 // the desktop leaves the screen, before the overview opens (it shows the real
 // windows), and when the plugin unloads.
-namespace ScrollOverview::ShowDesktop {
+namespace Hyprdrive::ShowDesktop {
     void init();
     void shutdown();
 

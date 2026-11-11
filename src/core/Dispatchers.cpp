@@ -123,13 +123,13 @@ SDispatchResult onMinimizeDispatcher(std::string arg) {
     if (arg == "restore") {
         // Nothing minimized is nothing to do, not an error: a bind's error is
         // Lua's "runtime error" toast.
-        const auto MINIMIZED = ScrollOverview::Minimize::minimized();
+        const auto MINIMIZED = Hyprdrive::Minimize::minimized();
         if (MINIMIZED.empty())
             return {};
 
         // X54: back out through the DOCK, so it flies from its icon instead of
         // reappearing. The dock owns the animation because it owns the target.
-        ScrollOverview::Dock::restoreWithFlight(Desktop::focusState()->monitor(), MINIMIZED.back());
+        Hyprdrive::Dock::restoreWithFlight(Desktop::focusState()->monitor(), MINIMIZED.back());
         return {};
     }
 
@@ -144,18 +144,18 @@ SDispatchResult onMinimizeDispatcher(std::string arg) {
     // "no focused window" error was the Lua runtime error.
     const auto MONITOR = Desktop::focusState()->monitor();
     const auto WINDOW  = Desktop::focusState()->window();
-    if (WINDOW && WINDOW->m_workspace && !ScrollOverview::Minimize::isStash(WINDOW->m_workspace)) {
-        ScrollOverview::Dock::minimizeWithFlight(MONITOR, WINDOW);
+    if (WINDOW && WINDOW->m_workspace && !Hyprdrive::Minimize::isStash(WINDOW->m_workspace)) {
+        Hyprdrive::Dock::minimizeWithFlight(MONITOR, WINDOW);
         return {};
     }
 
     const auto HERE = MONITOR ? (MONITOR->m_activeSpecialWorkspace ? MONITOR->m_activeSpecialWorkspace : MONITOR->m_activeWorkspace) : PHLWORKSPACE{};
     if (!HERE)
         return {};
-    const auto MINIMIZED = ScrollOverview::Minimize::minimized();
+    const auto MINIMIZED = Hyprdrive::Minimize::minimized();
     for (auto it = MINIMIZED.rbegin(); it != MINIMIZED.rend(); ++it)
-        if (*it && ScrollOverview::Minimize::originalWorkspace(*it) == HERE->m_id) {
-            ScrollOverview::Dock::restoreWithFlight(MONITOR, *it);
+        if (*it && Hyprdrive::Minimize::originalWorkspace(*it) == HERE->m_id) {
+            Hyprdrive::Dock::restoreWithFlight(MONITOR, *it);
             return {};
         }
     return {};
@@ -165,7 +165,7 @@ SDispatchResult onMinimizeDispatcher(std::string arg) {
 // here; the compositor's `bind` lines carry which is which.
 SDispatchResult onHotkeyDispatcher(std::string arg) {
     if (arg == "overlay") {
-        ScrollOverview::Dock::showOverlay();
+        Hyprdrive::Dock::showOverlay();
         return {};
     }
 
@@ -179,7 +179,7 @@ SDispatchResult onHotkeyDispatcher(std::string arg) {
         arg  = arg.substr(5);
     }
 
-    ScrollOverview::Dock::hotkey(std::stoi(arg), shift, ctrl);
+    Hyprdrive::Dock::hotkey(std::stoi(arg), shift, ctrl);
     return {};
 }
 
@@ -215,7 +215,7 @@ SDispatchResult onStackDispatcher(std::string arg) {
         rest.erase(rest.begin());
 
     if (VERB == "clear") {
-        ScrollOverview::Stacks::clearAll();
+        Hyprdrive::Stacks::clearAll();
         return {};
     }
 
@@ -229,10 +229,10 @@ SDispatchResult onStackDispatcher(std::string arg) {
         std::string want = rest;
         while (want.size() > 1 && want.back() == '/')
             want.pop_back();
-        for (const auto& ITEM : ScrollOverview::Dock::layout(MONITOR).items) {
+        for (const auto& ITEM : Hyprdrive::Dock::layout(MONITOR).items) {
             if (ITEM.stack && !ITEM.placeholder && ITEM.stackPath == want) {
-                ScrollOverview::Stacks::open(MONITOR, ITEM, ITEM.iconBox);
-                ScrollOverview::Dock::damageIfChanged(MONITOR);
+                Hyprdrive::Stacks::open(MONITOR, ITEM, ITEM.iconBox);
+                Hyprdrive::Dock::damageIfChanged(MONITOR);
                 g_pHyprRenderer->damageMonitor(MONITOR);
                 return {};
             }
@@ -242,13 +242,13 @@ SDispatchResult onStackDispatcher(std::string arg) {
 
     if (VERB == "scroll") {
         try {
-            if (!ScrollOverview::Stacks::scrollBy(std::stof(rest)))
+            if (!Hyprdrive::Stacks::scrollBy(std::stof(rest)))
                 return {.success = false, .error = "no fan is open"};
         } catch (...) { return {.success = false, .error = "expected a number of rows"}; }
         return {};
     }
     if (VERB == "filter") {
-        if (!ScrollOverview::Stacks::setQuery(rest))
+        if (!Hyprdrive::Stacks::setQuery(rest))
             return {.success = false, .error = "no stack is open"};
         return {};
     }
@@ -266,14 +266,14 @@ SDispatchResult onStackDispatcher(std::string arg) {
         if (VERB == "view") {
             if (MODE != "fan" && MODE != "grid" && MODE != "auto")
                 return {.success = false, .error = "expected auto, fan or grid"};
-            ScrollOverview::Stacks::setViewMode(path, ScrollOverview::StackModel::viewFromName(MODE));
+            Hyprdrive::Stacks::setViewMode(path, Hyprdrive::StackModel::viewFromName(MODE));
             return {};
         }
 
-        const auto SORT = MODE == "mtime" ? std::optional{ScrollOverview::StackModel::ESort::Modified} : ScrollOverview::StackModel::sortFromName(MODE);
+        const auto SORT = MODE == "mtime" ? std::optional{Hyprdrive::StackModel::ESort::Modified} : Hyprdrive::StackModel::sortFromName(MODE);
         if (!SORT)
             return {.success = false, .error = "expected name, added, modified (mtime) or kind"};
-        ScrollOverview::Stacks::setSort(path, *SORT);
+        Hyprdrive::Stacks::setSort(path, *SORT);
         return {};
     }
 
@@ -281,19 +281,19 @@ SDispatchResult onStackDispatcher(std::string arg) {
         return {.success = false, .error = "expected a path"};
 
     if (VERB == "pin") {
-        if (!ScrollOverview::Stacks::pin(rest))
+        if (!Hyprdrive::Stacks::pin(rest))
             return {.success = false, .error = "not pinned: the path does not exist, or is already a stack"};
         return {};
     }
 
     if (VERB == "unpin") {
-        if (!ScrollOverview::Stacks::unpin(rest))
+        if (!Hyprdrive::Stacks::unpin(rest))
             return {.success = false, .error = "not a stack"};
         return {};
     }
 
     if (VERB == "toggle") {
-        if (!ScrollOverview::Stacks::unpin(rest) && !ScrollOverview::Stacks::pin(rest))
+        if (!Hyprdrive::Stacks::unpin(rest) && !Hyprdrive::Stacks::pin(rest))
             return {.success = false, .error = "the path does not exist"};
         return {};
     }

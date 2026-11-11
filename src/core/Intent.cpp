@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::Intent {
+namespace Hyprdrive::Intent {
     namespace {
         using clock = std::chrono::steady_clock;
 

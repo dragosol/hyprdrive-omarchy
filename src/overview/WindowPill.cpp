@@ -37,7 +37,7 @@
 
 #include <linux/input-event-codes.h>
 
-namespace ScrollOverview::WindowPill {
+namespace Hyprdrive::WindowPill {
 
 namespace {
 

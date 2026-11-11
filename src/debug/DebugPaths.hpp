@@ -28,7 +28,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace ScrollOverview::DebugPaths {
+namespace Hyprdrive::DebugPaths {
 
     // A runtime directory may hold switches and logs: a directory, ours, no
     // access for group or others. Pure: the test feeds it any stat.

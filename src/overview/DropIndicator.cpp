@@ -18,7 +18,7 @@ static constexpr float INDICATOR_BASE_SIZE_PX = 200.F;
 static constexpr float INDICATOR_ALPHA   = 0.3F;
 
 static CHyprColor indicatorColor() {
-    auto* const ACTIVEBORDER = sc<Config::CGradientValueData*>(ScrollOverview::Config::valueRef<Config::IComplexConfigValue>("general:col.active_border").ptr());
+    auto* const ACTIVEBORDER = sc<Config::CGradientValueData*>(Hyprdrive::Config::valueRef<Config::IComplexConfigValue>("general:col.active_border").ptr());
     if (!ACTIVEBORDER || ACTIVEBORDER->m_colors.empty())
         return Colors::WHITE.modifyA(INDICATOR_ALPHA);
 
@@ -103,7 +103,7 @@ static CBox clipScrollingIndicatorBox(CBox box, const CDropIndicator::SRenderPar
 }
 
 static int indicatorRounding(const CDropIndicator::SRenderParams& params) {
-    const float ROUNDING = params.anchor.window ? params.anchor.window->rounding() : ScrollOverview::Config::themeRounding();
+    const float ROUNDING = params.anchor.window ? params.anchor.window->rounding() : Hyprdrive::Config::themeRounding();
     const float SCALE    = std::max(params.renderScale, 0.01F) * std::max<float>(params.monitor ? params.monitor->m_scale : 1.F, 0.01F);
 
     return std::max(0, sc<int>(std::round(ROUNDING * SCALE)));
@@ -113,7 +113,7 @@ static float indicatorRoundingPower(const CDropIndicator::SRenderParams& params)
     if (params.anchor.window)
         return params.anchor.window->roundingPower();
 
-    return ScrollOverview::Config::themeRoundingPower();
+    return Hyprdrive::Config::themeRoundingPower();
 }
 
 }

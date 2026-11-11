@@ -7,8 +7,8 @@
 // ponytail: header-only, and it re-exports itself with a trailing using-directive so
 // the moved code needed no edits. The namespace is not decoration -- these compile to
 // exported symbols now, and `hyprlerp` / `axisValue` would otherwise collide with
-// Hyprland's own. It is deliberately NOT nested under ScrollOverview:: -- that made
-// unqualified Config:: resolve to ScrollOverview::Config. Split into real .cpp files
+// Hyprland's own. It is deliberately NOT nested under Hyprdrive:: -- that made
+// unqualified Config:: resolve to Hyprdrive::Config. Split into real .cpp files
 // when compile time starts to hurt.
 
 #include "FramePacing.hpp"
@@ -24,8 +24,8 @@
 #include "TileChrome.hpp"
 #include "WindowPill.hpp"
 
-namespace TileChrome = ScrollOverview::TileChrome;
-namespace WindowPill = ScrollOverview::WindowPill;
+namespace TileChrome = Hyprdrive::TileChrome;
+namespace WindowPill = Hyprdrive::WindowPill;
 
 #include <drm_fourcc.h>
 #include <hyprgraphics/image/Image.hpp>
@@ -129,9 +129,9 @@ namespace OvInternal {
 // The two enums OverviewGeometry mirrors so it can stay free of Hyprland. A
 // value that stops matching turns every transform into nonsense in silence, so
 // it is a compile error instead.
-namespace OvGeom = ScrollOverview::Geometry;
-static_assert(sc<int>(ScrollOverview::Config::ELayout::VERTICAL) == sc<int>(OvGeom::EAxis::VERTICAL));
-static_assert(sc<int>(ScrollOverview::Config::ELayout::HORIZONTAL) == sc<int>(OvGeom::EAxis::HORIZONTAL));
+namespace OvGeom = Hyprdrive::Geometry;
+static_assert(sc<int>(Hyprdrive::Config::ELayout::VERTICAL) == sc<int>(OvGeom::EAxis::VERTICAL));
+static_assert(sc<int>(Hyprdrive::Config::ELayout::HORIZONTAL) == sc<int>(OvGeom::EAxis::HORIZONTAL));
 static_assert(sc<int>(Layout::CORNER_TOPLEFT) == sc<int>(OvGeom::CORNER_TOPLEFT));
 static_assert(sc<int>(Layout::CORNER_TOPRIGHT) == sc<int>(OvGeom::CORNER_TOPRIGHT));
 static_assert(sc<int>(Layout::CORNER_BOTTOMLEFT) == sc<int>(OvGeom::CORNER_BOTTOMLEFT));
@@ -154,8 +154,8 @@ inline Vector2D overviewCardOriginOffsetLive(PHLMONITOR monitor, float overviewS
     const float TOP = std::max(0.F, (overviewTopChromeBottomL(monitor) - sc<float>(monitor->m_position.y)) * MS);
 
     float bottom = H;
-    if (ScrollOverview::Dock::onMonitor(monitor)) {
-        const float ICON = sc<float>(std::clamp(ScrollOverview::Config::getValue<int>("plugin:hyprdrive:dock:icon_size"), 8, 512));
+    if (Hyprdrive::Dock::onMonitor(monitor)) {
+        const float ICON = sc<float>(std::clamp(Hyprdrive::Config::getValue<int>("plugin:hyprdrive:dock:icon_size"), 8, 512));
         // Dock.cpp: ICON_PAD 14 on top and bottom, EDGE_MARGIN 4 under the pill.
         const float DOCKH = ICON + 14.F + 14.F + 4.F;
         bottom            = std::max(TOP + 1.F, H - DOCKH * MS);
@@ -164,7 +164,7 @@ inline Vector2D overviewCardOriginOffsetLive(PHLMONITOR monitor, float overviewS
     if (bottom <= TOP + 1.F)
         return {};
 
-    const float OPEN  = ScrollOverview::Config::getScale();
+    const float OPEN  = Hyprdrive::Config::getScale();
     const float RANGE = std::max(0.01F, 1.F - OPEN);
     const float T     = std::clamp((1.F - overviewScale) / RANGE, 0.F, 1.F);
     return {0.F, ((TOP + bottom) * 0.5F - MONCY) * T};
@@ -237,7 +237,7 @@ inline OvGeom::SViewport viewportOf(PHLMONITOR monitor, float overviewScale = 1.
     return vp;
 }
 
-inline OvGeom::EAxis axisOf(ScrollOverview::Config::ELayout layout) {
+inline OvGeom::EAxis axisOf(Hyprdrive::Config::ELayout layout) {
     return sc<OvGeom::EAxis>(layout);
 }
 
@@ -264,7 +264,7 @@ inline void removeOverview(CScrollOverview* overview) {
     const auto PMONITOR = overview ? overview->pMonitor.lock() : PHLMONITOR{};
     unregisterScrollOverview(overview);
     if (scrollOverviews().empty()) {
-        ScrollOverview::FramePacing::endSession();
+        Hyprdrive::FramePacing::endSession();
         disableScrollOverviewHooks();
         // Click-to-close and swipe-down never went through the dispatcher, so
         // the query lived until the next Super-tap. A fully gone overview
@@ -283,7 +283,7 @@ inline void removeOverview(CScrollOverview* overview) {
 // close; the others close without focusing their own selected window, which
 // used to pull focus and the pointer onto the wrong monitor. Off by default.
 inline bool pickKeepsFocus() {
-    return ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:focus_follows_pick");
+    return Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:focus_follows_pick");
 }
 
 inline xkb_keysym_t getOverviewKeysym(const IKeyboard::SKeyEvent& event) {
@@ -832,7 +832,7 @@ inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
             return WINDOW;
         if (!best)
             best = WINDOW;
-        else if (ScrollOverview::Minimize::isMinimized(best) && !ScrollOverview::Minimize::isMinimized(WINDOW))
+        else if (Hyprdrive::Minimize::isMinimized(best) && !Hyprdrive::Minimize::isMinimized(WINDOW))
             best = WINDOW;
     }
     return best;
@@ -848,7 +848,7 @@ inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry) {
 // shortcuts, the agent help rows. Every "are there results to walk into"
 // question asks this one, so the pane and the keys cannot disagree.
 inline bool overviewSearchPaneUp() {
-    return !g_search.query.text.empty() || (g_search.query.active && ScrollOverview::Config::getSearchBrowseOnClick()) || OmarchySearch::canNavigateMenuBack();
+    return !g_search.query.text.empty() || (g_search.query.active && Hyprdrive::Config::getSearchBrowseOnClick()) || OmarchySearch::canNavigateMenuBack();
 }
 
 void overviewQueryEdited(); // main.cpp
@@ -916,7 +916,7 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
                 return true;
             }
         }
-        AppSearch::launch(*ROW.app, ScrollOverview::Config::getTerminal());
+        AppSearch::launch(*ROW.app, Hyprdrive::Config::getTerminal());
         return true;
     } else {
         SearchProviders::activate(ROW.provider, g_search.query.text);
@@ -962,7 +962,7 @@ inline uint64_t overviewFrameOn(const PHLMONITOR& monitor) {
 
 // THE FOUR CONFIG READS THAT ARE ON THE BOX PATH, read once per drawn frame.
 //
-// ScrollOverview::Config::getValue builds a std::string from its key, hashes it
+// Hyprdrive::Config::getValue builds a std::string from its key, hashes it
 // and probes an unordered_map, every single call -- and these keys are 30-40
 // characters, so the temporary allocates. getOverviewWindowBox reaches all of
 // them (mission control on/off, the grid gap, the reflow duration, and the
@@ -981,7 +981,7 @@ inline bool overviewMissionControlOn() {
 
     if (!filled || frame != g_overviewFrame) {
         frame  = g_overviewFrame;
-        value  = ScrollOverview::Config::getMissionControl();
+        value  = Hyprdrive::Config::getMissionControl();
         filled = true;
     }
 
@@ -995,7 +995,7 @@ inline int overviewMissionControlGap() {
 
     if (!filled || frame != g_overviewFrame) {
         frame  = g_overviewFrame;
-        value  = ScrollOverview::Config::getMissionControlGap();
+        value  = Hyprdrive::Config::getMissionControlGap();
         filled = true;
     }
 
@@ -1009,7 +1009,7 @@ inline int overviewMissionControlReflowMs() {
 
     if (!filled || frame != g_overviewFrame) {
         frame  = g_overviewFrame;
-        value  = ScrollOverview::Config::getMissionControlReflowMs();
+        value  = Hyprdrive::Config::getMissionControlReflowMs();
         filled = true;
     }
 
@@ -1027,7 +1027,7 @@ inline float overviewAnimScale() {
 
     if (!filled || frame != g_overviewFrame) {
         frame  = g_overviewFrame;
-        value  = ScrollOverview::Config::animScale();
+        value  = Hyprdrive::Config::animScale();
         filled = true;
     }
 
@@ -1040,7 +1040,7 @@ inline float overviewAnimElapsedMs(const Time::steady_tp& since) {
     if (SCALE <= 0.F)
         return 1e9F;
 
-    return ScrollOverview::Config::realElapsedMs(since) / SCALE;
+    return Hyprdrive::Config::realElapsedMs(since) / SCALE;
 }
 
 inline float overviewOpenScale() {
@@ -1050,7 +1050,7 @@ inline float overviewOpenScale() {
 
     if (!filled || frame != g_overviewFrame) {
         frame  = g_overviewFrame;
-        value  = ScrollOverview::Config::getScale();
+        value  = Hyprdrive::Config::getScale();
         filled = true;
     }
 
@@ -1130,7 +1130,7 @@ inline bool overviewMembershipMatchesLive(const PHLWINDOW& WINDOW) {
     // disagreeing about whether a stashed window exists. The workspace-home
     // plumbing in overviewGridWindows and addOverviewWindow stays: it is what
     // puts the window on the RIGHT desktop once a query does bring it back.
-    if (g_search.query.text.empty() && ScrollOverview::Minimize::isMinimized(WINDOW))
+    if (g_search.query.text.empty() && Hyprdrive::Minimize::isMinimized(WINDOW))
         return false;
 
     return overviewSearchMatches(WINDOW);
@@ -1331,14 +1331,14 @@ inline constexpr float OVERVIEW_STRIP_STACK_SLACKL   = 8.F;
 // strip down, leftover up, band up again. overviewResultsBandTarget asks this
 // one instead, and it depends on nothing the band can move.
 inline float overviewStripBandCeilingL(PHLMONITOR monitor) {
-    if (!monitor || !ScrollOverview::Config::getStrip())
+    if (!monitor || !Hyprdrive::Config::getStrip())
         return 0.F;
 
-    const float H = sc<float>(ScrollOverview::Config::getStripHeight());
+    const float H = sc<float>(Hyprdrive::Config::getStripHeight());
     if (H <= 1.F)
         return 0.F;
 
-    return std::min(H, sc<float>(monitor->m_size.y) * sc<float>(ScrollOverview::Config::getStripMaxScreenPct()) / 100.F);
+    return std::min(H, sc<float>(monitor->m_size.y) * sc<float>(Hyprdrive::Config::getStripMaxScreenPct()) / 100.F);
 }
 
 inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
@@ -1370,8 +1370,8 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
     }
 
     float value = 0.F;
-    if (ScrollOverview::Config::getStrip()) {
-        const float H    = sc<float>(ScrollOverview::Config::getStripHeight());
+    if (Hyprdrive::Config::getStrip()) {
+        const float H    = sc<float>(Hyprdrive::Config::getStripHeight());
         const float MONH = sc<float>(monitor->m_size.y);
         value            = H > 1.F ? H : 0.F;
 
@@ -1546,7 +1546,7 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
     if (!monitor)
         return 1.F;
 
-    const float GAPL = sc<float>(ScrollOverview::Config::getMissionControlGap());
+    const float GAPL = sc<float>(Hyprdrive::Config::getMissionControlGap());
     return std::clamp(sc<float>(monitor->m_size.x) * 0.84F, 880.F, std::max(1.F, sc<float>(monitor->m_size.x) - (GAPL * 2.F)));
 }
 
@@ -1810,15 +1810,15 @@ inline int overviewFirstAppIndex(const std::vector<SSearchRow>& rows) {
 // The axis helpers. They used to be defined at the bottom of this file with a
 // forward declaration up here, because getOverviewWindowBox needs them; as
 // one-line forwarders they can simply be defined where they are first needed.
-inline Vector2D axisOffsetVector(float offset, ScrollOverview::Config::ELayout layout) {
+inline Vector2D axisOffsetVector(float offset, Hyprdrive::Config::ELayout layout) {
     return OvGeom::axisOffsetVector(offset, axisOf(layout));
 }
 
-inline float axisValue(const Vector2D& vector, ScrollOverview::Config::ELayout layout) {
+inline float axisValue(const Vector2D& vector, Hyprdrive::Config::ELayout layout) {
     return OvGeom::axisValue(vector, axisOf(layout));
 }
 
-inline float axisSize(const Vector2D& size, ScrollOverview::Config::ELayout layout) {
+inline float axisSize(const Vector2D& size, Hyprdrive::Config::ELayout layout) {
     return OvGeom::axisSize(size, axisOf(layout));
 }
 
@@ -1826,12 +1826,12 @@ inline float axisSize(const Vector2D& size, ScrollOverview::Config::ELayout layo
 // tile by calling this. The arithmetic itself is OverviewGeometry's and is
 // unit-tested in tests/unit/geometry_test.cpp; what stays here is the monitor
 // lookup, so no call site had to learn a new vocabulary.
-inline CBox getOverviewBox(CBox box, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+inline CBox getOverviewBox(CBox box, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                            bool round = true) {
     return OvGeom::overviewBox(box, viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout), round);
 }
 
-inline CBox getOverviewGlobalBox(CBox globalBox, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+inline CBox getOverviewGlobalBox(CBox globalBox, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                                  bool round = true) {
     return OvGeom::overviewGlobalBox(globalBox, viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout), round);
 }
@@ -1850,7 +1850,7 @@ struct SGridSlot {
     bool promoted = false;
 };
 
-inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, ScrollOverview::Config::ELayout layout);
+inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, Hyprdrive::Config::ELayout layout);
 
 // A CARD'S GRID, PUSHED TOWARD THE CENTRE CARD (user, 2026-09-30): only the
 // inner edge of a neighbouring card is on screen, so its grid is aligned to that
@@ -1859,8 +1859,8 @@ inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, ScrollOv
 // animated pan, over the card pitch -- so a card sliding in eases from pushed to
 // centred and nothing jumps at a keypress. `slot` is the card's own grid slot.
 inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset,
-                                 ScrollOverview::Config::ELayout layout) {
-    const bool   HORIZ = layout == ScrollOverview::Config::ELayout::HORIZONTAL;
+                                 Hyprdrive::Config::ELayout layout) {
+    const bool   HORIZ = layout == Hyprdrive::Config::ELayout::HORIZONTAL;
     const double MS    = std::max(monitor->m_scale, 0.01F);
     const double PITCH = getWorkspaceRenderedPitch(monitor, scale, layout);
     const double D     = offset - (HORIZ ? viewOffset.x : viewOffset.y) * scale * MS;
@@ -1889,7 +1889,7 @@ inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMO
     return slot;
 }
 
-inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                                  bool round = true, const CBox* geometryOverride = nullptr) {
     if (!window)
         return {};
@@ -1970,7 +1970,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
     return getOverviewGlobalBox(geometry, monitor, scale, viewOffset, offset, layout, round);
 }
 
-inline CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+inline CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                                      bool round = true) {
     if (!window)
         return {};
@@ -1998,7 +1998,7 @@ inline bool isOverviewPointerOnMonitor(PHLMONITOR monitor) {
     return overview && overview->pMonitor.lock() == monitor;
 }
 
-inline CBox getOverviewWorkspaceBox(PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout) {
+inline CBox getOverviewWorkspaceBox(PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout) {
     return OvGeom::overviewWorkspaceBox(viewportOf(monitor, scale), scale, viewOffset, offset, axisOf(layout));
 }
 
@@ -2095,7 +2095,7 @@ inline CBox getPinnedFloatingOverviewWindowBox(PHLMONITOR monitor, const PHLWIND
     const float RESERVEDRIGHT  = std::max(0.F, sc<float>((FULLBOX.x + FULLBOX.width) - (WORKBOX.x + WORKBOX.width))) * MONITORSCALE;
     const float RESERVEDBOTTOM = std::max(0.F, sc<float>((FULLBOX.y + FULLBOX.height) - (WORKBOX.y + WORKBOX.height))) * MONITORSCALE;
 
-    const auto WORKSPACEGAP       = sc<float>(ScrollOverview::Config::getWorkspaceGap()) * MONITORSCALE;
+    const auto WORKSPACEGAP       = sc<float>(Hyprdrive::Config::getWorkspaceGap()) * MONITORSCALE;
     const auto RESERVEDWIDTH      = RIGHT ? RESERVEDRIGHT : RESERVEDLEFT;
     const auto CALCULATEDWIDTH    = std::max(1.F, sc<float>((MONITORW - MONITORW * targetOverviewScale) / 2.F - 2.F * WORKSPACEGAP - RESERVEDWIDTH));
     const auto CALCULATEDSCALE    = CALCULATEDWIDTH / sc<float>(WINDOWSIZE.x);
@@ -2121,7 +2121,7 @@ inline CBox getPinnedFloatingOverviewWindowBox(PHLMONITOR monitor, const PHLWIND
 }
 
 inline std::chrono::milliseconds getOverviewIdleFrameInterval() {
-    const int fps = std::clamp<int>(ScrollOverview::Config::getValue<int>("misc:render_unfocused_fps"), 1, 240);
+    const int fps = std::clamp<int>(Hyprdrive::Config::getValue<int>("misc:render_unfocused_fps"), 1, 240);
     return std::chrono::milliseconds(std::max(1, 1000 / fps));
 }
 
@@ -2181,12 +2181,12 @@ inline constexpr std::chrono::milliseconds OVERVIEW_IDLE_REPAINT_FLOOR = std::ch
 // (included at the top of this file) so the dock can use them without
 // pulling this whole header. They stay in namespace OvInternal.
 
-inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, ScrollOverview::Config::ELayout layout) {
-    return OvGeom::workspaceRenderedPitch(viewportOf(monitor), scale, axisOf(layout), sc<float>(ScrollOverview::Config::getWorkspaceGap()));
+inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, Hyprdrive::Config::ELayout layout) {
+    return OvGeom::workspaceRenderedPitch(viewportOf(monitor), scale, axisOf(layout), sc<float>(Hyprdrive::Config::getWorkspaceGap()));
 }
 
-inline float getWorkspaceLogicalPitch(PHLMONITOR monitor, float scale, ScrollOverview::Config::ELayout layout) {
-    return OvGeom::workspaceLogicalPitch(viewportOf(monitor), scale, axisOf(layout), sc<float>(ScrollOverview::Config::getWorkspaceGap()));
+inline float getWorkspaceLogicalPitch(PHLMONITOR monitor, float scale, Hyprdrive::Config::ELayout layout) {
+    return OvGeom::workspaceLogicalPitch(viewportOf(monitor), scale, axisOf(layout), sc<float>(Hyprdrive::Config::getWorkspaceGap()));
 }
 
 inline bool overviewBoxesEqual(const CBox& a, const CBox& b) {
@@ -2235,7 +2235,7 @@ inline bool isWorkspaceScrolling(const PHLWORKSPACE& workspace) {
 }
 
 inline CBox getOverviewWorkspaceUsableBox(const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset,
-                                          ScrollOverview::Config::ELayout layout) {
+                                          Hyprdrive::Config::ELayout layout) {
     if (!workspace || !monitor)
         return {};
 
@@ -2289,7 +2289,7 @@ inline bool normalizeFittingScrollingOffset(const PHLWORKSPACE& workspace) {
 
     const auto   USABLE    = ALGO->usableArea();
     const double PRIMARY   = controller.getPrimary(USABLE.size());
-    const double MAXEXTENT = controller.calculateMaxExtent(USABLE, ScrollOverview::Config::getValue<bool>("scrolling:fullscreen_on_one_column"));
+    const double MAXEXTENT = controller.calculateMaxExtent(USABLE, Hyprdrive::Config::getValue<bool>("scrolling:fullscreen_on_one_column"));
     if (PRIMARY <= 0.0 || MAXEXTENT > PRIMARY + 0.5)
         return false; // something to scroll: every offset in range is a real position
 
@@ -2395,10 +2395,10 @@ inline void moveOverviewTargetNextToWindow(const SP<Layout::ITarget>& target, co
     if (moveOverviewScrollingTargetNextToWindow(target, anchor, direction))
         return;
 
-    const auto PREVFALLBACK = ScrollOverview::Config::getValue<int>("binds:window_direction_monitor_fallback");
-    ScrollOverview::Config::setValue("binds:window_direction_monitor_fallback", 0);
+    const auto PREVFALLBACK = Hyprdrive::Config::getValue<int>("binds:window_direction_monitor_fallback");
+    Hyprdrive::Config::setValue("binds:window_direction_monitor_fallback", 0);
     auto restoreFallback   = Hyprutils::Utils::CScopeGuard([PREVFALLBACK] {
-        ScrollOverview::Config::setValue("binds:window_direction_monitor_fallback", PREVFALLBACK);
+        Hyprdrive::Config::setValue("binds:window_direction_monitor_fallback", PREVFALLBACK);
     });
 
     const bool WANT_NEGATIVE = direction == "l" || direction == "u";
@@ -2446,7 +2446,7 @@ inline void moveOverviewTargetNextToWindow(const SP<Layout::ITarget>& target, co
 // the surfaces whose box intersects the backdrop, or bake a second optimized FB
 // that includes it instead of paying per-frame.
 inline void blockOverviewLayerBlurOptimization(size_t firstElement) {
-    if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:live_layer_frost"))
+    if (!Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:live_layer_frost"))
         return;
 
     auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;

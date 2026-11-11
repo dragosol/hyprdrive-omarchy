@@ -60,7 +60,7 @@
 #include <hyprutils/os/Process.hpp>
 #include "StackParts.hpp"
 
-using namespace ScrollOverview;
+using namespace Hyprdrive;
 
 namespace StacksDetail {
 
@@ -160,7 +160,7 @@ namespace StacksDetail {
 // compositor on the next mouse press when the lazy bind failed. Every symbol
 // declared in DockStacks.hpp must be defined here, at namespace scope.
 // ============================================================================
-namespace ScrollOverview::Stacks {
+namespace Hyprdrive::Stacks {
 
     const std::vector<SStack>& all() {
         auto& S = store();
@@ -396,7 +396,7 @@ namespace ScrollOverview::Stacks {
     std::string themedIcon(const std::string& name) {
         if (name.empty() || name.starts_with('@') || name.starts_with('/') || name.starts_with(BuiltinIcons::PREFIX))
             return name;
-        return themePrefix(ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme")) + name;
+        return themePrefix(Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_icon_theme")) + name;
     }
 
     size_t downloadsIn(const std::string& stackPath) {

@@ -24,7 +24,7 @@
 #define THUMBS_SETTLE_MS 2000
 #endif
 
-namespace ScrollOverview::Thumbs {
+namespace Hyprdrive::Thumbs {
     namespace {
         struct SThumbnailer {
             std::vector<std::string> exec; // argv with %i %u %o %s

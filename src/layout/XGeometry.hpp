@@ -33,7 +33,7 @@
 // Neither runs while a ConfigureHold is up or the window is animating: those
 // boxes are in-between on purpose.
 
-namespace ScrollOverview::XGeometry {
+namespace Hyprdrive::XGeometry {
     // main.cpp, after each pointer motion.
     void check();
 

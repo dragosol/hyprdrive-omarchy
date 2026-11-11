@@ -37,7 +37,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::DesktopStrip {
+namespace Hyprdrive::DesktopStrip {
     // The row of desktop ids on `mon`, `current` among them
     // (DesktopRowModel.hpp over the live desktops).
     using FRow = std::function<std::vector<int>(const PHLMONITOR& mon, int current)>;

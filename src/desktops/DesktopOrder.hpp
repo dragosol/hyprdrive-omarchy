@@ -18,7 +18,7 @@
 // old numbers. Bars hear it as the
 // desktops going and coming back (destroy/create IPC events) plus the shown
 // desktop again; the overview rebuilds.
-namespace ScrollOverview::DesktopOrder {
+namespace Hyprdrive::DesktopOrder {
     // Desktops get new numbers: (desktop, its new number). Numbers no other
     // ordinary desktop keeps. Special and named desktops are never touched.
     void renumber(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves);

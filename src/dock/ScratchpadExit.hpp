@@ -14,7 +14,7 @@
 // of the screen; carrying the drag onto it hides the scratchpad. The drag itself
 // is untouched -- it is the client's -- so it carries on over the desktop that
 // was underneath and drops wherever it is released.
-namespace ScrollOverview::ScratchpadExit {
+namespace Hyprdrive::ScratchpadExit {
 
     // Draw the zone on `monitor` if a drag is live over its shown scratchpad.
     // Desktop only: called from the dock's render hook, which the overview

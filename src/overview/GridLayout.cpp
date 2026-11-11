@@ -54,7 +54,7 @@ namespace OvInternal {
         if (!window)
             return WORKSPACE_INVALID;
 
-        if (const auto HOME = ScrollOverview::Minimize::originalWorkspace(window); HOME != WORKSPACE_INVALID)
+        if (const auto HOME = Hyprdrive::Minimize::originalWorkspace(window); HOME != WORKSPACE_INVALID)
             return HOME;
 
         return window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID;
@@ -82,7 +82,7 @@ namespace OvInternal {
             // This also subsumes X58(a), which asked only that the SEARCH reach
             // minimized windows: they are in the grid now whether a query is typed
             // or not, and the query filters them like anything else.
-            if (const auto HOME = ScrollOverview::Minimize::originalWorkspace(window); HOME != WORKSPACE_INVALID) {
+            if (const auto HOME = Hyprdrive::Minimize::originalWorkspace(window); HOME != WORKSPACE_INVALID) {
                 if (HOME != workspace->m_id)
                     continue;
             } else if (window->m_workspace != workspace)
@@ -564,11 +564,11 @@ namespace OvInternal {
     }
 
     float overviewGridProgress(float scale) {
-        return ScrollOverview::Geometry::gridProgress(scale, overviewOpenScale());
+        return Hyprdrive::Geometry::gridProgress(scale, overviewOpenScale());
     }
 
     CBox overviewGridLerpBox(const CBox& from, const CBox& to, float t) {
-        return ScrollOverview::Geometry::lerpBox(from, to, t);
+        return Hyprdrive::Geometry::lerpBox(from, to, t);
     }
 
     // WHY THE RELEASE NEEDS ITS OWN CURVE, and it is not a taste question.
@@ -595,7 +595,7 @@ namespace OvInternal {
     }
 
     bool gridBoxesDiffer(const CBox& a, const CBox& b) {
-        return ScrollOverview::Geometry::boxesDiffer(a, b);
+        return Hyprdrive::Geometry::boxesDiffer(a, b);
     }
 
     CBox gridReflowBox(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom, bool promoted, bool exiting) {

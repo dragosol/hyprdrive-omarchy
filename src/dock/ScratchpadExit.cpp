@@ -20,7 +20,7 @@
 #include <optional>
 #include <unordered_map>
 
-namespace ScrollOverview::ScratchpadExit {
+namespace Hyprdrive::ScratchpadExit {
 
     namespace {
         constexpr const char* LABEL = "\uf062   Drag here to exit scratchpad";

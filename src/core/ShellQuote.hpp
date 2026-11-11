@@ -7,7 +7,7 @@
 // only escape needed is for a single quote itself, which closes, escapes and
 // reopens. Text the user typed that ends up in a `bash -c` string goes through
 // here (marketplace review, #11012: agent prompts). Pure, host-tested.
-namespace ScrollOverview {
+namespace Hyprdrive {
     inline std::string shellQuote(const std::string& word) {
         std::string out = "'";
         for (const char C : word) {

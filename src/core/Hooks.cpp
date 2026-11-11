@@ -63,7 +63,7 @@ void setDockCursor(bool on) {
 }
 
 void hkSendWindowSize(void* thisptr, bool force) {
-    if (ScrollOverview::ConfigureHold::intercept(sc<Desktop::View::CWindow*>(thisptr), force))
+    if (Hyprdrive::ConfigureHold::intercept(sc<Desktop::View::CWindow*>(thisptr), force))
         return;
     rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(thisptr, force);
 }
@@ -72,20 +72,20 @@ bool           hkShouldRenderWindow(void* thisptr, PHLWINDOW window, PHLMONITOR 
     // A window travelling to or from its fullscreen desktop is drawn all the
     // way -- before the canvas's rule that hides windows off its view while
     // their desktop slides (a fullscreen app on a canvas usually starts there).
-    if (ScrollOverview::FullscreenDesktop::travelling(window, monitor))
+    if (Hyprdrive::FullscreenDesktop::travelling(window, monitor))
         return true;
-    if (ScrollOverview::Mosaic::hideDuringSlide(window, monitor))
+    if (Hyprdrive::Mosaic::hideDuringSlide(window, monitor))
         return false;
     return rc<bool (*)(void*, PHLWINDOW, PHLMONITOR)>(g_pShouldRenderWindowHook->m_original)(thisptr, window, monitor);
 }
 
 void           hkOnAck(void* thisptr, uint32_t serial) {
-    ScrollOverview::SizeAck::onAck(sc<Desktop::View::CWindow*>(thisptr), serial);
+    Hyprdrive::SizeAck::onAck(sc<Desktop::View::CWindow*>(thisptr), serial);
 }
 
 void hkTargetPlace(void* thisptr, const Layout::STargetBox& box, uint8_t flags) {
-    ScrollOverview::DockRoom::place(thisptr, box, flags, [](void* t, const Layout::STargetBox& b, uint8_t f) {
-        ScrollOverview::OwnSizeTile::place(t, b, f, [](void* t2, const Layout::STargetBox& b2, uint8_t f2) {
+    Hyprdrive::DockRoom::place(thisptr, box, flags, [](void* t, const Layout::STargetBox& b, uint8_t f) {
+        Hyprdrive::OwnSizeTile::place(t, b, f, [](void* t2, const Layout::STargetBox& b2, uint8_t f2) {
             rc<void (*)(void*, const Layout::STargetBox&, uint8_t)>(g_pTargetPlaceHook->m_original)(t2, b2, f2);
         });
     });
@@ -95,14 +95,14 @@ void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e) {
     // A swipe the plugin owns (a continued one, or one under a held drag):
     // libinput's leftover touchpad motion would move the pointer -- and fling
     // the held drag with the sum of every finger.
-    if (ScrollOverview::FingerSwipe::swallowMotion(e))
+    if (Hyprdrive::FingerSwipe::swallowMotion(e))
         return;
     const Vector2D BEFORE = g_pInputManager->getMouseCoordsInternal();
     rc<origOnMouseMoved>(g_pScrollMouseMovedHook->m_original)(thisptr, e);
-    ScrollOverview::Mosaic::onPointerDelta(e.delta, g_pInputManager->getMouseCoordsInternal() - BEFORE);
-    ScrollOverview::Dock::feedPointerMotion(e.delta);
-    ScrollOverview::XGeometry::check();
-    ScrollOverview::FullscreenGuard::resumePointerLock();
+    Hyprdrive::Mosaic::onPointerDelta(e.delta, g_pInputManager->getMouseCoordsInternal() - BEFORE);
+    Hyprdrive::Dock::feedPointerMotion(e.delta);
+    Hyprdrive::XGeometry::check();
+    Hyprdrive::FullscreenGuard::resumePointerLock();
 }
 
 void hkScheduleFrame(void* thisptr, Aquamarine::IOutput::scheduleFrameReason reason) {

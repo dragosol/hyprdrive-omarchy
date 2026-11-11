@@ -18,7 +18,7 @@
 #include "MosaicDrive.hpp"
 #include "FlightController.hpp"
 
-namespace ScrollOverview::MosaicDrive {
+namespace Hyprdrive::MosaicDrive {
     void drawAt(const PHLWINDOW& w, const CBox& box) {
         if (!w || !w->m_realPosition || !w->m_realSize)
             return;
@@ -65,7 +65,7 @@ namespace ScrollOverview::MosaicDrive {
         // with its size animating too (and sets m_animatingIn); centring it here
         // took its flight over (user, 2026-10-29: "you replaced my maximize from
         // dock animation").
-        if (!w->m_animatingIn || ScrollOverview::Flight::hasFlight(w))
+        if (!w->m_animatingIn || Hyprdrive::Flight::hasFlight(w))
             return false;
         const auto GP = w->m_realPosition->goal(), GS = w->m_realSize->goal(), S = w->m_realSize->value();
         w->m_realPosition->setValue(GP + (GS - S) / 2.0);

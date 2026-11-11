@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-namespace ScrollOverview::DesktopStep {
+namespace Hyprdrive::DesktopStep {
 
     // The wheel walks desktops by NUMBER, so the empty ones between are visited
     // too (Hyprland's `r+1`, not Omarchy's `e+1`), and it stops at the ends

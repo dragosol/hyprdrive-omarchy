@@ -9,7 +9,7 @@
 #include <tuple>
 #include <string>
 
-using namespace ScrollOverview::WorkspacePlan;
+using namespace Hyprdrive::WorkspacePlan;
 
 static int g_fail = 0, g_run = 0;
 

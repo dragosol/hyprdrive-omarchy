@@ -9,7 +9,7 @@
 #include <array>
 #include <string_view>
 
-namespace ScrollOverview::HotCorner {
+namespace Hyprdrive::HotCorner {
 
     enum class ECorner { TopLeft, TopRight, BottomLeft, BottomRight };
 

@@ -22,7 +22,7 @@ class CDropIndicator {
         float        renderScale           = 1.F;
         bool         workspaceFullyVisible = false;
         bool         floating              = false;
-        ScrollOverview::Config::ELayout layout = ScrollOverview::Config::ELayout::VERTICAL;
+        Hyprdrive::Config::ELayout layout = Hyprdrive::Config::ELayout::VERTICAL;
     };
 
     static void renderDropIndicator(const SRenderParams& params);

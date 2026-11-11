@@ -32,8 +32,8 @@ namespace ToolSearch {
 
     bool enabled(EKind kind) {
         switch (kind) {
-            case EKind::Define: return ScrollOverview::Config::getSearchDictionary();
-            case EKind::Translate: return ScrollOverview::Config::getSearchTranslate();
+            case EKind::Define: return Hyprdrive::Config::getSearchDictionary();
+            case EKind::Translate: return Hyprdrive::Config::getSearchTranslate();
             case EKind::None: return false;
         }
         return false;
@@ -89,7 +89,7 @@ namespace ToolSearch {
         std::string defaultTarget() {
             if (const auto& LAST = lastTargetMemo(); !LAST.empty())
                 return LAST;
-            if (const auto CFG = languageCode(ScrollOverview::Config::getSearchTranslateTarget()); !CFG.empty())
+            if (const auto CFG = languageCode(Hyprdrive::Config::getSearchTranslateTarget()); !CFG.empty())
                 return CFG;
             if (const char* LANG = std::getenv("LANG"); LANG && std::strlen(LANG) >= 2) {
                 if (const auto CODE = languageCode(std::string(LANG, 2)); !CODE.empty())
@@ -114,7 +114,7 @@ namespace ToolSearch {
                     r.query.to = defaultTarget();
                 else if (!q.term.empty())
                     rememberTarget(q.to);
-                r.endpoint = trim(ScrollOverview::Config::getSearchTranslateEndpoint());
+                r.endpoint = trim(Hyprdrive::Config::getSearchTranslateEndpoint());
                 while (!r.endpoint.empty() && r.endpoint.back() == '/')
                     r.endpoint.pop_back();
             }

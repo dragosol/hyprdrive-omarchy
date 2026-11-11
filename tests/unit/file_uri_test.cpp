@@ -21,8 +21,8 @@
 #include <vector>
 
 extern char** environ;
-using ScrollOverview::FileUri::of;
-using ScrollOverview::FileUri::showItems;
+using Hyprdrive::FileUri::of;
+using Hyprdrive::FileUri::showItems;
 
 static int checks = 0, failed = 0;
 

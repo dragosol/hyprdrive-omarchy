@@ -10,7 +10,7 @@
 #include <string>
 #include <xkbcommon/xkbcommon.h>
 
-namespace ScrollOverview::TextInput {
+namespace Hyprdrive::TextInput {
     struct SKey {
         bool        consume = false; // the key belongs to the field
         bool        starts  = false; // counts as typing, even with no text yet (compose mid-flight)

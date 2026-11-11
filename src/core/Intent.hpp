@@ -27,7 +27,7 @@
 // window you were in keeps it, Mosaic does not place the newcomer at the
 // pointer or pan to it, and the pointer, if you were not moving it, rides the
 // window it was on while the mosaic makes room. mosaic:quiet_new_windows.
-namespace ScrollOverview::Intent {
+namespace Hyprdrive::Intent {
     // PLUGIN_INIT (after Mosaic::registerLayout) / PLUGIN_EXIT.
     void init();
     void shutdown();

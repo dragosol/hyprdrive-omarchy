@@ -18,7 +18,7 @@
 // so it bends the desktop, the overview, the bar and the dock alike. While one
 // is live its monitor is fully damaged every frame (a partial redraw would bend
 // the previous frame's bend), and once more after it ends.
-namespace ScrollOverview::Ripple {
+namespace Hyprdrive::Ripple {
     void init();
     // After the PLUGIN_EXIT pass purge: the GL program and buffer go with it.
     void shutdown();

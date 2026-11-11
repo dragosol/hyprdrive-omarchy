@@ -22,7 +22,7 @@
 // starts RESTING, so one that is lit fades in -- the overview does not redraw
 // an idle tile, so its key is forgotten (keys not drawn for a while are) and
 // the hover that brings it back must still fade.
-namespace ScrollOverview::BorderFade {
+namespace Hyprdrive::BorderFade {
     uint64_t key(const void* p, uint64_t salt = 0);
     uint64_t key(std::string_view tag, uint64_t salt = 0);
 

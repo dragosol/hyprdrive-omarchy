@@ -11,7 +11,7 @@ namespace {
 }
 
 
-namespace ScrollOverview::StackModel {
+namespace Hyprdrive::StackModel {
 
     namespace {
         unsigned char lower(unsigned char c) {

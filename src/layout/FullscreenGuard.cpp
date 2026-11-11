@@ -19,7 +19,7 @@
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/protocols/types/ContentType.hpp>
 
-namespace ScrollOverview::FullscreenGuard {
+namespace Hyprdrive::FullscreenGuard {
     namespace {
         bool g_inside = false; // minimizing: its own focus handoff is not another pick
 

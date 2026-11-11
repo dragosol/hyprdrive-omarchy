@@ -16,7 +16,7 @@
 
 #include "GestureDrive.hpp"
 
-namespace ScrollOverview::GestureDrive {
+namespace Hyprdrive::GestureDrive {
 
     void begin(uint32_t timeMs, uint32_t fingers) {
         if (g_pTrackpadGestures)

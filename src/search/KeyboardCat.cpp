@@ -248,7 +248,7 @@ namespace {
     }
 }
 
-namespace ScrollOverview::KeyboardCat {
+namespace Hyprdrive::KeyboardCat {
 
     void noteTyped() {
         g_lastTyped = true;

@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace ScrollOverview::StripLayout;
+using namespace Hyprdrive::StripLayout;
 
 static int g_fail = 0, g_run = 0;
 

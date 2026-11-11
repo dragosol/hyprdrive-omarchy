@@ -14,7 +14,7 @@
 // bottom of the monitor, proportioned from the reference Dash to Dock config.
 // X25 (live previews) and X26 (drag-to-dock) both need something to draw into
 // and drop onto, which is why the surface lands before them.
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 
 struct SItem {
     std::string wmClass;

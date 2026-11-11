@@ -23,7 +23,7 @@
 
 #include "globals.hpp"
 
-namespace ScrollOverview::FramePacing {
+namespace Hyprdrive::FramePacing {
     namespace {
         constexpr const char* KEY_SCHED = "render:new_render_scheduling";
 

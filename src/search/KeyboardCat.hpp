@@ -18,7 +18,7 @@
 //
 // Symcheck rule: everything declared here is defined OUTSIDE any anonymous
 // namespace in KeyboardCat.cpp.
-namespace ScrollOverview::KeyboardCat {
+namespace Hyprdrive::KeyboardCat {
     // The search field's two edits, from handleSearchPress. A backspace that
     // follows a typed character is one cycle; the fifth inside the window
     // starts the egg (returns true).

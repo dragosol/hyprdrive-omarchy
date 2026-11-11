@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace ScrollOverview::StackBlur {
+namespace Hyprdrive::StackBlur {
     namespace {
         SP<Render::GL::CGLFramebuffer> g_fb;
         SP<Render::GL::CGLFramebuffer> g_tmp; // one instant, composited, before it is summed

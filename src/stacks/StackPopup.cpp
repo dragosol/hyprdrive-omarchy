@@ -267,7 +267,7 @@ namespace StacksDetail {
 
 }
 
-namespace ScrollOverview::Stacks {
+namespace Hyprdrive::Stacks {
 
     // ---------------------------------------------------------------- popup --
     void open(PHLMONITOR monitor, const Dock::SItem& item, const CBox& anchor) {
@@ -422,9 +422,9 @@ namespace ScrollOverview::Stacks {
 
     void traceEvent(const std::string& what) {
         // Ours only, in the private runtime directory (DebugPaths.hpp).
-        if (!ScrollOverview::DebugPaths::flagOn("hyprdrive-stacklog.on"))
+        if (!Hyprdrive::DebugPaths::flagOn("hyprdrive-stacklog.on"))
             return;
-        if (FILE* f = ScrollOverview::DebugPaths::openLog("hyprdrive-stack.log")) {
+        if (FILE* f = Hyprdrive::DebugPaths::openLog("hyprdrive-stack.log")) {
             const auto MS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() % 100000000;
             std::fprintf(f, "%08lld %s\n", sc<long long>(MS), what.c_str());
             std::fclose(f);

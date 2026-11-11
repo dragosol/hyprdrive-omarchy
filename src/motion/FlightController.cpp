@@ -68,10 +68,10 @@
 // protected intact and this TU could not reach m_realPosition / m_realSize.
 #include "OverviewChrome.hpp"
 
-namespace ScrollOverview::Flight {
+namespace Hyprdrive::Flight {
 
-using ScrollOverview::Dock::SItem;
-using ScrollOverview::Dock::SLayout;
+using Hyprdrive::Dock::SItem;
+using Hyprdrive::Dock::SLayout;
 
 namespace {
 
@@ -103,7 +103,7 @@ struct SDrawn {
 static void zdbg(const char* fmt, ...) {
     if (!Config::getValue<bool>(KEY_FLIGHT_LOG))
         return;
-    if (FILE* F = ScrollOverview::DebugPaths::openLog("ovdbg.log")) {
+    if (FILE* F = Hyprdrive::DebugPaths::openLog("ovdbg.log")) {
         va_list ap;
         va_start(ap, fmt);
         vfprintf(F, fmt, ap);
@@ -327,7 +327,7 @@ float flightProgress(const SFlight& flight) {
     if (DURATION <= 0)
         return 1.F;
 
-    return std::clamp(ScrollOverview::Config::animElapsedMs(flight.startedAt) / sc<float>(DURATION), 0.F, 1.F);
+    return std::clamp(Hyprdrive::Config::animElapsedMs(flight.startedAt) / sc<float>(DURATION), 0.F, 1.F);
 }
 
 CBox lerpBox(const CBox& a, const CBox& b, float t) {
@@ -728,16 +728,16 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::opti
         warpRestoredWindowAnims(window);
     zdbg("minimizeImpl animate=%d from=%f,%f %fx%f\n", (int)ANIMATE, from.x, from.y, from.width, from.height);
 
-    ScrollOverview::Dock::dismissHoverPanelNow(); // Z15
+    Hyprdrive::Dock::dismissHoverPanelNow(); // Z15
     if (ANIMATE && from.width >= 1 && from.height >= 1) {
         if (overviewOpenFor(monitor))
             rememberMinimizeTile(window, from); // Z13: `from` IS the tile here
-        ScrollOverview::Dock::revealNow(monitor);
+        Hyprdrive::Dock::revealNow(monitor);
         // Z10 (user, overriding Y8's "macOS bounces what arrives"): the hop is
         // the ACKNOWLEDGEMENT of the drop, so it fires now, while the window is
         // still flying in -- not at the landing.
         if (bounceOnLand)
-            ScrollOverview::Dock::armBounce(AppSearch::identityClass(window->m_class, window->m_title));
+            Hyprdrive::Dock::armBounce(AppSearch::identityClass(window->m_class, window->m_title));
         std::erase_if(g_flights, [&window](const SFlight& f) { return f.window.lock() == window; });
         SFlight next{.id = g_nextId++, .window = window, .monitor = monitor->m_id, .from = from, .kind = EFlightKind::MinimizeProxy, .startedAt = Time::steadyNow()};
         if (startBox && startBox->width >= 1 && startBox->height >= 1)
@@ -831,7 +831,7 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
         return;
     }
 
-    ScrollOverview::Dock::dismissHoverPanelNow(); // Z15
+    Hyprdrive::Dock::dismissHoverPanelNow(); // Z15
 
     CHiddenLease lease;
     {
@@ -845,7 +845,7 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
             TO = TARGET;
     }
 
-    ScrollOverview::Dock::revealNow(monitor);
+    Hyprdrive::Dock::revealNow(monitor);
     // Desktop path (window not hidden) drives the real window natively (Z17);
     // overview path (hidden) draws a proxy. The kind is frozen here for the whole
     // flight -- Z18: re-deriving it per frame flipped it mid-flight.
@@ -887,7 +887,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
         if (!monitor || it->monitor != monitor->m_id) {
             const auto OWNER = State::monitorState()->query().id(it->monitor).run();
             const int  DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
-            if (!OWNER || ScrollOverview::Config::realElapsedMs(it->startedAt) > sc<float>(std::max(0, DURATION)) + FLIGHT_ORPHAN_GRACE_MS) {
+            if (!OWNER || Hyprdrive::Config::realElapsedMs(it->startedAt) > sc<float>(std::max(0, DURATION)) + FLIGHT_ORPHAN_GRACE_MS) {
                 completeAndErase(it, nullptr, OWNER ? "orphaned" : "monitor-gone");
                 continue;
             }
@@ -934,7 +934,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
                     WINDOW->alpha()[Desktop::View::WINDOW_ALPHA_FADE]->setValueAndWarp(1.F);
                 }
                 ++it->landHeldFrames;
-                ScrollOverview::Dock::drawFlightSurface(monitor, WINDOW, it->from, 1.F, now, ownsPass);
+                Hyprdrive::Dock::drawFlightSurface(monitor, WINDOW, it->from, 1.F, now, ownsPass);
                 ++it;
                 continue;
             }
@@ -1019,15 +1019,15 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
         // active colours), both riding the flight's box and alpha.
         const auto drawProxy = [&](bool passIsOurs) {
             OvInternal::renderOverviewWorkspaceShadow(monitor, box, 1.F, false, alpha);
-            ScrollOverview::Dock::drawFlightSurface(monitor, WINDOW, box, alpha, now, passIsOurs);
-            const int BORDERSIZE = std::max(0, ScrollOverview::Config::getValue<int>("general:border_size"));
+            Hyprdrive::Dock::drawFlightSurface(monitor, WINDOW, box, alpha, now, passIsOurs);
+            const int BORDERSIZE = std::max(0, Hyprdrive::Config::getValue<int>("general:border_size"));
             if (BORDERSIZE > 0 && alpha > 0.01F) {
                 CBorderPassElement::SBorderData border;
                 border.box        = box;
                 border.grad1      = WINDOW->m_realBorderColor;
                 border.a          = alpha;
                 border.borderSize = BORDERSIZE;
-                border.round      = sc<int>(sc<float>(ScrollOverview::Config::themeRounding()) * monitor->m_scale);
+                border.round      = sc<int>(sc<float>(Hyprdrive::Config::themeRounding()) * monitor->m_scale);
                 g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
             }
         };

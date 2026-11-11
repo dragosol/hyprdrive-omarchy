@@ -5,11 +5,11 @@
 
 
 // main.cpp: Super held to pan the canvas is not a Super tap.
-namespace ScrollOverview {
+namespace Hyprdrive {
     void cancelSuperTap();
 }
 
-namespace ScrollOverview::Mosaic {
+namespace Hyprdrive::Mosaic {
 
     using namespace MosaicDetail;
 
@@ -335,7 +335,7 @@ namespace ScrollOverview::Mosaic {
         // The windows that want a title this frame. None once Super is let go:
         // the titles still up fade out below.
         std::vector<PHLWINDOW> want;
-        const auto             MODE = ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:mosaic:zoom_labels");
+        const auto             MODE = Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:mosaic:zoom_labels");
         if (g_superLabels && g_super != ESuper::IDLE && g_super != ESuper::SPENT && !openScrollOverviewForMonitor(monitor) && (MODE == "hover" || MODE == "all")) {
             // Looked up fresh, not g_labelHover (that only asks for the redraws):
             // a desktop switch under a still pointer changes the window under it.
@@ -842,7 +842,7 @@ namespace ScrollOverview::Mosaic {
             g_pSeatManager->setPointerFocus(nullptr, {});
             g_canvasPanning = true;
             // Super was held for this, not tapped: no overview on its release.
-            ScrollOverview::cancelSuperTap();
+            Hyprdrive::cancelSuperTap();
         }
 
         if (g_super == ESuper::ZOOMED && g_zoomPressing) {
@@ -867,10 +867,10 @@ namespace ScrollOverview::Mosaic {
     // heard it. Two cached reads per pointer motion (the hand that just
     // clicked the switch moves on) see the change instead.
     static void watchCanvasKeys() {
-        if (!ScrollOverview::Config::g_pluginKeysRegistered)
+        if (!Hyprdrive::Config::g_pluginKeysRegistered)
             return;
-        static auto&       ON   = ScrollOverview::Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:mosaic:infinite_canvas");
-        static auto&       DIRS = ScrollOverview::Config::valueRef<std::string>("plugin:hyprdrive:mosaic:canvas_directions");
+        static auto&       ON   = Hyprdrive::Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:mosaic:infinite_canvas");
+        static auto&       DIRS = Hyprdrive::Config::valueRef<std::string>("plugin:hyprdrive:mosaic:canvas_directions");
         static int64_t     lastOn   = -1;
         static std::string lastDirs;
         const int64_t      NOWON    = *ON;

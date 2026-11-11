@@ -27,9 +27,9 @@
 #include <utility>
 #include <vector>
 
-namespace ScrollOverview::DesktopSwitch {
+namespace Hyprdrive::DesktopSwitch {
     namespace {
-        using namespace ScrollOverview::DesktopStep;
+        using namespace Hyprdrive::DesktopStep;
 
         constexpr const char* KEY_SCROLL      = "plugin:hyprdrive:binds:scroll_desktops";
         constexpr const char* KEY_SCROLL_MODS = "plugin:hyprdrive:binds:scroll_desktops_mods";
@@ -112,15 +112,15 @@ namespace ScrollOverview::DesktopSwitch {
         uint32_t scrollMods() {
             if (!g_pKeybindManager)
                 return 0;
-            return g_pKeybindManager->stringToModMask(ScrollOverview::Config::getValue<std::string>(KEY_SCROLL_MODS));
+            return g_pKeybindManager->stringToModMask(Hyprdrive::Config::getValue<std::string>(KEY_SCROLL_MODS));
         }
 
         // THE ROW the wheel walks on `monitor` (DesktopRowModel.hpp), `current`
         // shown: binds:scroll_desktops_stop_at_empty / _populated_only.
         std::vector<int> rowOn(const PHLMONITOR& monitor, int current) {
             DesktopRow::SFacts f{.current       = current,
-                                 .stopAtEmpty   = ScrollOverview::Config::getValue<bool>(KEY_STOP_EMPTY),
-                                 .populatedOnly = ScrollOverview::Config::getValue<bool>(KEY_POPULATED)};
+                                 .stopAtEmpty   = Hyprdrive::Config::getValue<bool>(KEY_STOP_EMPTY),
+                                 .populatedOnly = Hyprdrive::Config::getValue<bool>(KEY_POPULATED)};
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
                 if (!WS || WS->m_isSpecialWorkspace || WS->m_id < DesktopRow::FIRST)
@@ -137,10 +137,10 @@ namespace ScrollOverview::DesktopSwitch {
         }
 
         StripModel::SSettings stripSettings() {
-            return {.smooth = ScrollOverview::Config::getValue<bool>(KEY_SMOOTH),
-                    .ticks  = std::clamp(sc<int>(ScrollOverview::Config::getValue<Hyprlang::INT>(KEY_TICKS)), 1, 10),
-                    .sticky = ScrollOverview::Config::getValue<bool>(KEY_STICKY),
-                    .bounce = ScrollOverview::Config::getValue<bool>(KEY_BOUNCE)};
+            return {.smooth = Hyprdrive::Config::getValue<bool>(KEY_SMOOTH),
+                    .ticks  = std::clamp(sc<int>(Hyprdrive::Config::getValue<Hyprlang::INT>(KEY_TICKS)), 1, 10),
+                    .sticky = Hyprdrive::Config::getValue<bool>(KEY_STICKY),
+                    .bounce = Hyprdrive::Config::getValue<bool>(KEY_BOUNCE)};
         }
 
         // The step itself: along the row on `monitor` -- never onto a desktop
@@ -205,7 +205,7 @@ namespace ScrollOverview::DesktopSwitch {
         void onAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& info) {
             if (info.cancelled || e.source != WL_POINTER_AXIS_SOURCE_WHEEL || e.axis != WL_POINTER_AXIS_VERTICAL_SCROLL || e.deltaDiscrete == 0)
                 return;
-            if (!ScrollOverview::Config::getValue<bool>(KEY_SCROLL))
+            if (!Hyprdrive::Config::getValue<bool>(KEY_SCROLL))
                 return;
             const uint32_t MODS = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
             const uint32_t WANT = scrollMods();
@@ -324,7 +324,7 @@ namespace ScrollOverview::DesktopSwitch {
             }
 
             const auto CAUSE = classify(g_ownDispatch > 0, g_pKeybindManager && g_pKeybindManager->m_currentKeybind, g_focusDepth > 0);
-            if (snaps(CAUSE, ScrollOverview::Config::getValue<bool>(KEY_ANIM_KEYS), ScrollOverview::Config::getValue<bool>(KEY_ANIM_FOCUS))) {
+            if (snaps(CAUSE, Hyprdrive::Config::getValue<bool>(KEY_ANIM_KEYS), Hyprdrive::Config::getValue<bool>(KEY_ANIM_FOCUS))) {
                 DesktopStrip::finishNow();
                 warpSlides(MONITOR);
                 return;
@@ -332,7 +332,7 @@ namespace ScrollOverview::DesktopSwitch {
 
             // ANIMATION:DESKTOP_JUMP_THROUGH (user, 2026-11-02): a key or the
             // dock jumping several desktops slides past the ones between.
-            const bool JUMP = (CAUSE == ECause::Keyboard || CAUSE == ECause::Focus) && ScrollOverview::Config::getValue<bool>(KEY_JUMP);
+            const bool JUMP = (CAUSE == ECause::Keyboard || CAUSE == ECause::Focus) && Hyprdrive::Config::getValue<bool>(KEY_JUMP);
             if (DesktopStrip::claims(MONITOR, FROM, TO, JUMP)) {
                 // Where the one going away was before Hyprland's slide moved it.
                 const auto     OUT = desktopOn(MONITOR, FROM);
@@ -368,7 +368,7 @@ namespace ScrollOverview::DesktopSwitch {
     }
 
     void init() {
-        ScrollOverview::Config::registerDispatcher("desktop", onDesktopDispatcher);
+        Hyprdrive::Config::registerDispatcher("desktop", onDesktopDispatcher);
         DesktopStrip::init(rowOn, [](const PHLMONITOR&, int id) { (void)::Config::Actions::changeWorkspace(std::to_string(id)); });
 
         g_focusHook = hookOrThrow(findFn("rawWindowFocus", "CFocusState::rawWindowFocus("), rc<void*>(hkRawWindowFocus), "rawWindowFocus");

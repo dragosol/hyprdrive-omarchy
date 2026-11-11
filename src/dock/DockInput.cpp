@@ -5,7 +5,7 @@
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 
-using namespace ScrollOverview;
+using namespace Hyprdrive;
 
 namespace {
 bool shiftHeld() {
@@ -18,7 +18,7 @@ bool ctrlHeld() {
 }
 }
 
-namespace ScrollOverview::DockInput {
+namespace Hyprdrive::DockInput {
 
 SClaim handleMenu(PHLMONITOR mon, const Vector2D& local, EButton role, bool pressed, bool windowDragActive, bool menuMissLetsThrough) {
     SClaim out;

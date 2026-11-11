@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-using namespace ScrollOverview::ShowDesktopMath;
+using namespace Hyprdrive::ShowDesktopMath;
 
 static int checks = 0, failed = 0;
 static void expect(bool ok, const std::string& what) {

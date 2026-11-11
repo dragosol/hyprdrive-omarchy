@@ -25,9 +25,9 @@ namespace StacksDetail {
 
     std::filesystem::path storePath() {
         if (const char* STATE = std::getenv("XDG_STATE_HOME"); STATE && *STATE)
-            return std::filesystem::path{STATE} / ScrollOverview::Compat::NAME / "stacks";
+            return std::filesystem::path{STATE} / Hyprdrive::Compat::NAME / "stacks";
         if (const char* HOME = std::getenv("HOME"); HOME && *HOME)
-            return std::filesystem::path{HOME} / ".local" / "state" / ScrollOverview::Compat::NAME / "stacks";
+            return std::filesystem::path{HOME} / ".local" / "state" / Hyprdrive::Compat::NAME / "stacks";
         return {};
     }
 

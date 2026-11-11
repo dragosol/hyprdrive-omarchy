@@ -35,7 +35,7 @@ namespace Render {
     class IWindowTransformer;
 }
 
-namespace ScrollOverview::FlightBlur {
+namespace Hyprdrive::FlightBlur {
 
     // THE BLUR SITES (user, 2026-09-30: "an entire motion blur section with
     // per-animation curve and strengths with our defaults configured"). Every

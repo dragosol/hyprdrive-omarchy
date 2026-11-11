@@ -16,7 +16,7 @@
 #include <functional>
 #include <string>
 
-namespace ScrollOverview::Thumbs {
+namespace Hyprdrive::Thumbs {
 
     // The thumbnail PNG for `path` if one exists anywhere; "" if not (and
     // then, for a kind a thumbnailer handles, one is queued). Cheap: stats only.

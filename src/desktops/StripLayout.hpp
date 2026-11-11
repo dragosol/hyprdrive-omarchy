@@ -17,7 +17,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace ScrollOverview::StripLayout {
+namespace Hyprdrive::StripLayout {
 
 struct SBox {
     double x = 0, y = 0, w = 0, h = 0;
@@ -197,4 +197,4 @@ inline SOutput layout(const SInput& in) {
     return out;
 }
 
-} // namespace ScrollOverview::StripLayout
+} // namespace Hyprdrive::StripLayout

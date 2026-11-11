@@ -52,12 +52,12 @@ CBox CScrollOverview::draggedWindowBoxFor(PHLWINDOW window, size_t workspaceIdx,
 // before the button comes up. Wall clock like the grid reflow, so a motionless
 // cursor still finishes the shrink.
 float CScrollOverview::dragMiniProgress() const {
-    const int   DURATION = ScrollOverview::Config::getDragMiniMs();
+    const int   DURATION = Hyprdrive::Config::getDragMiniMs();
     const float TARGET   = drag.miniOver ? 1.F : 0.F;
     if (DURATION <= 0)
         return TARGET;
 
-    const float ELAPSED = ScrollOverview::Config::animElapsedMs(drag.miniChangedAt);
+    const float ELAPSED = Hyprdrive::Config::animElapsedMs(drag.miniChangedAt);
     const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION));
     if (T < 1.F)
         gridSetReflowActive(pMonitor.lock()); // rides the overview's existing next-frame request
@@ -79,12 +79,12 @@ float CScrollOverview::dragMiniProgress() const {
 // alongside on the same proxy -- two coupled motions on one object reading on two
 // different curves is worse than the deviation.
 float CScrollOverview::dragRecentreProgress() const {
-    const int   DURATION = ScrollOverview::Config::getDragRecentreMs();
+    const int   DURATION = Hyprdrive::Config::getDragRecentreMs();
     const float TARGET   = drag.recentreOver ? 1.F : 0.F;
     if (DURATION <= 0)
         return TARGET;
 
-    const float ELAPSED = ScrollOverview::Config::animElapsedMs(drag.recentreChangedAt);
+    const float ELAPSED = Hyprdrive::Config::animElapsedMs(drag.recentreChangedAt);
     const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION));
     if (T < 1.F)
         gridSetReflowActive(pMonitor.lock()); // rides the overview's existing next-frame request
@@ -189,7 +189,7 @@ CBox CScrollOverview::draggedWindowGlobalBox() const {
     // a cell is what will land in it, from any source. drag_mini_scale stays as
     // the fallback for a session with the strip turned off.
     const float P          = dragMiniProgress();
-    Vector2D    miniTarget = SOURCEBOX.size() * ScrollOverview::Config::getDragMiniScale();
+    Vector2D    miniTarget = SOURCEBOX.size() * Hyprdrive::Config::getDragMiniScale();
     if (!images.empty() && overviewStripLogicalHeight(MONITOR) > 0.F) {
         const CBox CELL = stripCellBox(0, MONITOR, scale->value());
         const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -302,7 +302,7 @@ void CScrollOverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOri
 
     // Before the drag moves anything: the window the user was working in, which
     // an arriving window tiles beside (Placement.hpp).
-    ScrollOverview::Placement::noteDragAnchor(Desktop::focusState()->window());
+    Hyprdrive::Placement::noteDragAnchor(Desktop::focusState()->window());
 
     closeOnWindow = WINDOW;
     rememberSelection(WINDOW);
@@ -373,7 +373,7 @@ void CScrollOverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOri
     // desktop mode" -- a canvas desktop's tiles reflowed and re-scaled). The
     // gap closes once the drag heads for the strip, the dock or another
     // desktop (updateWindowDrag), as it did before.
-    if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:drag:hold_to_swap") || drag.miniOver)
+    if (!Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:drag:hold_to_swap") || drag.miniOver)
         grid().dragExcluded = WINDOW.get();
     TileChrome::setHovered(PHLWINDOW{});
 
@@ -421,7 +421,7 @@ void CScrollOverview::updateWindowDrag() {
     // "not a new animation" -- the proxy is already thumbnail-sized by the time
     // the button comes up, so the minimize continues a motion instead of
     // starting one.
-    const bool OVERDOCK = ScrollOverview::Dock::pillContains(pMonitor.lock(), lastMousePosLocal);
+    const bool OVERDOCK = Hyprdrive::Dock::pillContains(pMonitor.lock(), lastMousePosLocal);
 
     // A strip cell is "not the main area" even when it is the cell OF the
     // workspace currently in the viewport -- and there DROPWORKSPACE ==
@@ -595,7 +595,7 @@ namespace {
 PHLWINDOW CScrollOverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
     const auto MONITOR = pMonitor.lock();
     const auto DRAGGED = getOverviewWindowToShow(drag.activeWindow.lock());
-    if (!MONITOR || !DRAGGED || ScrollOverview::Dock::pillContains(MONITOR, point) || scratchpadCellContains(point))
+    if (!MONITOR || !DRAGGED || Hyprdrive::Dock::pillContains(MONITOR, point) || scratchpadCellContains(point))
         return nullptr;
 
     PHLWINDOW hit;
@@ -649,7 +649,7 @@ PHLWINDOW CScrollOverview::swapCandidateAt(const Vector2D& point, CBox* targetBo
 // Per FRAME, not per motion: a pointer resting on the target sends no motion,
 // and the hold has to complete under a still hand.
 void CScrollOverview::updateSwapHold() {
-    if (!drag.activeWindow || !ScrollOverview::Config::getValue<bool>(KEY_HOLD_TO_SWAP)) {
+    if (!drag.activeWindow || !Hyprdrive::Config::getValue<bool>(KEY_HOLD_TO_SWAP)) {
         drag.swapCandidate.reset();
         drag.swapTargetBox = CBox{};
         drag.swapArmed     = false;
@@ -668,7 +668,7 @@ void CScrollOverview::updateSwapHold() {
     if (!CANDIDATE)
         return;
 
-    const int HOLDMS = std::clamp<int>(ScrollOverview::Config::getValue<int>(KEY_HOLD_TO_SWAP_MS), 300, 5000);
+    const int HOLDMS = std::clamp<int>(Hyprdrive::Config::getValue<int>(KEY_HOLD_TO_SWAP_MS), 300, 5000);
     if (!drag.swapArmed && SearchLetters::msSince(NOW, drag.swapSince) >= sc<float>(HOLDMS)) {
         drag.swapArmed   = true;
         drag.swapArmedAt = NOW;
@@ -687,7 +687,7 @@ namespace {
     // The window's own corner radius, scaled to the box it is drawn into here.
     int swapRound(const PHLWINDOW& w, const CBox& box, const PHLMONITOR& monitor) {
         const double REALW = std::max(1.0, sc<double>(w->m_realSize->value().x) * monitor->m_scale);
-        const double R     = sc<double>(ScrollOverview::Config::themeRounding()) * monitor->m_scale * (box.w / REALW);
+        const double R     = sc<double>(Hyprdrive::Config::themeRounding()) * monitor->m_scale * (box.w / REALW);
         return sc<int>(std::round(std::clamp(R, 0.0, std::min(box.w, box.h) / 2.0)));
     }
 
@@ -698,9 +698,9 @@ namespace {
             return;
         CRectPassElement::SRectData r;
         r.box           = box;
-        r.color         = ScrollOverview::Config::dockBackgroundColor().modifyA(SWAP_DIM_A * a);
+        r.color         = Hyprdrive::Config::dockBackgroundColor().modifyA(SWAP_DIM_A * a);
         r.round         = round;
-        r.roundingPower = ScrollOverview::Config::themeRoundingPower();
+        r.roundingPower = Hyprdrive::Config::themeRoundingPower();
         g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(r));
     }
 }
@@ -735,8 +735,8 @@ void CScrollOverview::renderSwapLabel(PHLMONITOR monitor) {
     // icon and word scaled together about their shared centre.
     const float SCALE = sc<float>(monitor->m_scale);
     const int   SIZE  = sc<int>(std::round(std::clamp(sc<float>(box.h) * 0.10F, 14.F * SCALE, 40.F * SCALE)));
-    const auto  TEXT  = OverviewRender::text("Swap", ScrollOverview::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
-    const auto  ICON  = OverviewRender::appIcon(std::string(ScrollOverview::BuiltinIcons::SWAP));
+    const auto  TEXT  = OverviewRender::text("Swap", Hyprdrive::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
+    const auto  ICON  = OverviewRender::appIcon(std::string(Hyprdrive::BuiltinIcons::SWAP));
     if (!TEXT || !TEXT->ok())
         return;
 
@@ -804,7 +804,7 @@ bool CScrollOverview::commitSwap(const PHLWINDOW& a, const PHLWINDOW& b) {
             g_layoutManager->switchTargets(TA, TB, true);
             Desktop::globalWindowController()->moveWindowToWorkspace(b, WSA);
             RESTORE();
-            ScrollOverview::Placement::retileAsNew(b, ScrollOverview::Placement::takeDragAnchor());
+            Hyprdrive::Placement::retileAsNew(b, Hyprdrive::Placement::takeDragAnchor());
         }
     } else {
         // Floating: each keeps its size and takes the other's centre.
@@ -831,8 +831,8 @@ bool CScrollOverview::commitSwap(const PHLWINDOW& a, const PHLWINDOW& b) {
     WSA->updateWindows();
     if (WSB != WSA)
         WSB->updateWindows();
-    ScrollOverview::Dock::noteRetiled(a);
-    ScrollOverview::Dock::noteRetiled(b);
+    Hyprdrive::Dock::noteRetiled(a);
+    Hyprdrive::Dock::noteRetiled(b);
     RESTORE();
 
     clearDragPending();
@@ -1063,9 +1063,9 @@ bool CScrollOverview::moveScrollingColumnSelection(bool next) {
 
 // The live handles a drop needs, filled in by the three gather steps below in
 // the order endWindowDrag() runs them. The pure half -- what to DO with them --
-// is ScrollOverview::Drop::resolve(facts) in DropDecision.hpp.
+// is Hyprdrive::Drop::resolve(facts) in DropDecision.hpp.
 struct SOverviewDropSite {
-    ScrollOverview::Drop::SFacts facts;
+    Hyprdrive::Drop::SFacts facts;
 
     // stage 1
     PHLWINDOW              window;
@@ -1113,7 +1113,7 @@ void CScrollOverview::gatherDropSite(SOverviewDropSite& site) {
     // over. Everything else about a missed drop is unchanged, because
     // workspaceAtOverviewDropPoint already answers nullptr over the pill.
     // Asked only with a window in hand, as the guard it replaced was.
-    site.facts.overPill = site.window && ScrollOverview::Dock::pillContains(site.dropMonitor, site.dropPointLocal);
+    site.facts.overPill = site.window && Hyprdrive::Dock::pillContains(site.dropMonitor, site.dropPointLocal);
 }
 
 // Stage 2. Which workspace the cursor is over and what kind of layout it runs.
@@ -1192,7 +1192,7 @@ void CScrollOverview::commitDropMinimize(const SOverviewDropSite& site) {
     std::optional<CBox> startBox;
     if (site.window && (!site.dropOverview || site.dropOverview == this))
         startBox = draggedWindowBox(dragWorkspaceIndex(site.window));
-    ScrollOverview::Dock::minimizeWithFlight(site.dropMonitor, site.window, true, startBox);
+    Hyprdrive::Dock::minimizeWithFlight(site.dropMonitor, site.window, true, startBox);
     clearDragPending();
     damage();
     if (site.dropOverview && site.dropOverview != this)
@@ -1224,7 +1224,7 @@ void CScrollOverview::commitDropCancel(const SOverviewDropSite& site) {
         site.dropOverview->damage();
 }
 
-void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOverview::Drop::SDecision& DECISION) {
+void CScrollOverview::commitDrop(const SOverviewDropSite& site, const Hyprdrive::Drop::SDecision& DECISION) {
     const auto  WINDOW        = site.window;
     const auto& TARGET        = site.target;
     const auto& SPACE         = site.space;
@@ -1251,8 +1251,8 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
         }
     };
 
-    using enum ScrollOverview::Drop::EAction;
-    using EPlacement = ScrollOverview::Drop::EPlacement;
+    using enum Hyprdrive::Drop::EAction;
+    using EPlacement = Hyprdrive::Drop::EPlacement;
 
     switch (DECISION.action) {
         case RetileMove: {
@@ -1267,7 +1267,7 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
             // re-file it the way opening it on that desktop would (Placement.hpp).
             // Scrolling desktops take it at the far end of the tape, above.
             if (!site.facts.scrollingLayout)
-                ScrollOverview::Placement::retileAsNew(WINDOW, ScrollOverview::Placement::takeDragAnchor());
+                Hyprdrive::Placement::retileAsNew(WINDOW, Hyprdrive::Placement::takeDragAnchor());
 
             TARGET->rememberFloatingSize(drag.originalFloatSize);
 
@@ -1283,7 +1283,7 @@ void CScrollOverview::commitDrop(const SOverviewDropSite& site, const ScrollOver
 
             // The retile above gives it a new SIZE; this is what lets it draw at
             // that size while its desktop is off screen.
-            ScrollOverview::Dock::noteRetiled(WINDOW);
+            Hyprdrive::Dock::noteRetiled(WINDOW);
 
             RESTOREACTIVEWORKSPACE();
             RESTOREVIEWPORTWORKSPACE();
@@ -1356,7 +1356,7 @@ void CScrollOverview::endWindowDrag() {
     // A completed hold, let go on the same window it was held over: swap. Asked
     // BEFORE the grid closes the dragged window's gap below, or the tiles under
     // the pointer would shift out from under it at the last moment.
-    if (drag.swapArmed && ScrollOverview::Config::getValue<bool>(KEY_HOLD_TO_SWAP)) {
+    if (drag.swapArmed && Hyprdrive::Config::getValue<bool>(KEY_HOLD_TO_SWAP)) {
         const auto DRAGGED = getOverviewWindowToShow(drag.activeWindow.lock());
         const auto OTHER   = swapCandidateAt(lastMousePosLocal, nullptr);
         if (DRAGGED && OTHER && OTHER == drag.swapCandidate.lock() && commitSwap(DRAGGED, OTHER))
@@ -1391,27 +1391,27 @@ void CScrollOverview::endWindowDrag() {
     // parks the window there and the drag ends here -- ensureDefault because a
     // user with no scratchpad yet is exactly who drags a window onto it first.
     if (scratchpadCellContains(site.dropPointLocal)) {
-        if (const auto SCRATCH = ScrollOverview::Scratchpad::ensureDefault(pMonitor.lock())) {
-            ScrollOverview::Scratchpad::moveWindowTo(site.window, SCRATCH);
+        if (const auto SCRATCH = Hyprdrive::Scratchpad::ensureDefault(pMonitor.lock())) {
+            Hyprdrive::Scratchpad::moveWindowTo(site.window, SCRATCH);
             clearDragPending();
             damage();
             return;
         }
     }
 
-    if (ScrollOverview::Drop::resolve(site.facts).action == ScrollOverview::Drop::EAction::Minimize) {
+    if (Hyprdrive::Drop::resolve(site.facts).action == Hyprdrive::Drop::EAction::Minimize) {
         commitDropMinimize(site);
         return;
     }
 
     gatherDropWorkspace(site);
-    if (ScrollOverview::Drop::resolve(site.facts).action == ScrollOverview::Drop::EAction::CancelToGrid) {
+    if (Hyprdrive::Drop::resolve(site.facts).action == Hyprdrive::Drop::EAction::CancelToGrid) {
         commitDropCancel(site);
         return;
     }
 
     gatherDropAnchor(site);
-    commitDrop(site, ScrollOverview::Drop::resolve(site.facts));
+    commitDrop(site, Hyprdrive::Drop::resolve(site.facts));
 }
 
 void CScrollOverview::endWindowResize() {

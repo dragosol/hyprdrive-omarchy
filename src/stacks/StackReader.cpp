@@ -17,7 +17,7 @@
 #include <gio/gio.h>
 
 namespace {
-    using ScrollOverview::StackModel::SEntry;
+    using Hyprdrive::StackModel::SEntry;
 
     // UNLOAD MUST NOT WAIT ON A LONG JOB (review 2026-09-24): every loop below
     // checks this per entry / per file, and copies take the cancellable, so
@@ -30,8 +30,8 @@ namespace {
             g_cancel = g_cancellable_new();
         return g_cancel;
     }
-    using ScrollOverview::StackReader::SListing;
-    using ScrollOverview::StackReader::STrashResult;
+    using Hyprdrive::StackReader::SListing;
+    using Hyprdrive::StackReader::STrashResult;
 
     std::string contentKind(const std::string& path, bool dir) {
         if (dir)
@@ -85,11 +85,11 @@ namespace {
             const auto NAME = E.path().filename().string();
             if (NAME.empty() || NAME[0] == '.')
                 continue;
-            if (out.entries.size() >= ScrollOverview::StackReader::MAX_ENTRIES) {
+            if (out.entries.size() >= Hyprdrive::StackReader::MAX_ENTRIES) {
                 out.truncated = true;
                 break;
             }
-            if (ScrollOverview::StackModel::isPartialDownload(NAME))
+            if (Hyprdrive::StackModel::isPartialDownload(NAME))
                 ++out.downloads;
             const auto  PATH = E.path().string();
             struct statx sx{};
@@ -132,7 +132,7 @@ namespace {
                 r.error = "stopped";
                 break;
             }
-            if (ScrollOverview::DockDropModel::isInside(dir, P)) {
+            if (Hyprdrive::DockDropModel::isInside(dir, P)) {
                 r.error = "a folder cannot go inside itself";
                 break;
             }
@@ -146,7 +146,7 @@ namespace {
             // Already here (dropped onto its own stack): nothing to do.
             if (P.substr(0, SLASH == std::string::npos ? 0 : SLASH) == dir)
                 continue;
-            const auto NAME = ScrollOverview::DockDropModel::uniqueName(dir, BASE, [](const std::string& p) {
+            const auto NAME = Hyprdrive::DockDropModel::uniqueName(dir, BASE, [](const std::string& p) {
                 struct stat st{};
                 return ::lstat(p.c_str(), &st) == 0;
             });
@@ -269,7 +269,7 @@ namespace {
     }
 }
 
-namespace ScrollOverview::StackReader {
+namespace Hyprdrive::StackReader {
 
     SListing readNow(const std::string& dir) {
         return readDirectory(dir);

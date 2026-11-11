@@ -32,7 +32,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace ScrollOverview::StripModel {
+namespace Hyprdrive::StripModel {
 
     inline constexpr int      NOTCH        = 120;   // value120 per wheel notch
     inline constexpr int      SMOOTH_V120  = 240;   // smooth: two notches per desktop

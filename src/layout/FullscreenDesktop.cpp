@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::FullscreenDesktop {
+namespace Hyprdrive::FullscreenDesktop {
     namespace {
         // ONE MECHANIC (user, 2026-11-05: "a coherent strong mechanic that's
         // basically unbreakable and flexible"). Two things are kept, and one

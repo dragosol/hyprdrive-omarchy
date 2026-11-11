@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ScrollOverview::ShowDesktopMath {
+namespace Hyprdrive::ShowDesktopMath {
     struct SRect {
         double x = 0, y = 0, w = 0, h = 0;
     };

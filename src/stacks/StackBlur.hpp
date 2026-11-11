@@ -18,7 +18,7 @@
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <vector>
 
-namespace ScrollOverview::StackBlur {
+namespace Hyprdrive::StackBlur {
 
     struct SSample {
         SP<Render::ITexture> tex;

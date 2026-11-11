@@ -13,7 +13,7 @@ static int s_checks = 0, s_failed = 0;
         }                                                                                                                                                                      \
     } while (0)
 
-using ScrollOverview::IconOverrides::parse;
+using Hyprdrive::IconOverrides::parse;
 
 int main() {
     {

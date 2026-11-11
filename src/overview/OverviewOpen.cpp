@@ -42,7 +42,7 @@ static bool openOverview(PHLMONITOR monitor) {
     OpenProf::begin(monitor ? monitor->m_name.c_str() : "?");
     // Cheap (two config reads) and catches a `hyprctl keyword` toggle that no
     // reload announced.
-    ScrollOverview::FramePacing::apply();
+    Hyprdrive::FramePacing::apply();
     if (!openOverviewOne(monitor))
         return false;
     OpenProf::mark("first monitor open");

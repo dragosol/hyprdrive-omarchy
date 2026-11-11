@@ -17,7 +17,7 @@
 //
 // Symcheck rule: the algorithm class is defined OUTSIDE any anonymous namespace
 // in Mosaic.cpp -- Hyprland holds it by its vtable and its typeid.
-namespace ScrollOverview::Mosaic {
+namespace Hyprdrive::Mosaic {
     // PLUGIN_INIT: register "mosaic" with Hyprland's layout matcher.
     void registerLayout(HANDLE handle);
     // PLUGIN_EXIT, FIRST: every desktop on mosaic is handed back to the default

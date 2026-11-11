@@ -2,7 +2,7 @@
 // stretch. Split out of Mosaic.cpp; the state is still there (MosaicParts.hpp).
 #include "MosaicParts.hpp"
 
-namespace ScrollOverview::Mosaic {
+namespace Hyprdrive::Mosaic {
 
     using namespace MosaicDetail;
 

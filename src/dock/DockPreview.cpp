@@ -2,7 +2,7 @@
 // pointer focus over the dock and the retile tracker.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 
@@ -35,7 +35,7 @@ void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alp
     // Same switch window frost and overview chrome capture use. Dock keys of
     // -1 already mean "follow decoration:blur:*"; with the theme blur off a
     // frost pass would still run and look like a dock-only effect.
-    if (!ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
+    if (!Hyprdrive::Config::getValue<bool>("decoration:blur:enabled"))
         return;
 
     COverviewBlurPassElement::SData blur;
@@ -275,7 +275,7 @@ SPanelRows panelRows(PHLMONITOR monitor, const std::vector<PHLWINDOW>& windows) 
     for (const auto& W : windows)
         widths.push_back(cellH * previewAspect(W));
     SPanelRows out;
-    out.counts = ScrollOverview::PreviewGrid::rows(widths, GAP, PANEL_ROW_SHARE * sc<float>(monitor->m_size.x) * SCALE);
+    out.counts = Hyprdrive::PreviewGrid::rows(widths, GAP, PANEL_ROW_SHARE * sc<float>(monitor->m_size.x) * SCALE);
     // Too many rows for the screen: every cell shrinks alike.
     const float ROWS  = sc<float>(out.counts.size());
     const float MAXH  = PANEL_MAX_H_SHARE * sc<float>(monitor->m_size.y) * SCALE - 2.F * PANEL_PAD * SCALE - GAP * std::max(0.F, ROWS - 1.F);
@@ -284,7 +284,7 @@ SPanelRows panelRows(PHLMONITOR monitor, const std::vector<PHLWINDOW>& windows) 
     for (auto& w : widths)
         w *= SHRINK;
     out.cellH = cellH;
-    out.width = ScrollOverview::PreviewGrid::widest(widths, out.counts, GAP);
+    out.width = Hyprdrive::PreviewGrid::widest(widths, out.counts, GAP);
     return out;
 }
 
@@ -521,7 +521,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // Wall-clock, not animElapsedMs: at anim_scale 0 that clock is already
         // finished, so leaving an icon for the 8px gap above the pill dismissed
         // the panel in the same frame and the dock hid under the previews.
-        if (g_hover.panel->leaving && ScrollOverview::Config::realElapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
+        if (g_hover.panel->leaving && Hyprdrive::Config::realElapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
             const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
 
             g_hover.panel->from      = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
@@ -578,8 +578,8 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     // just decoration:rounding until the plate hits its cap. The window IMAGE
     // is rounded to that too: it used to get the window's rounding scaled down
     // with the thumbnail (~1 px), a square picture in a rounded ring.
-    const float OUTERL  = std::clamp(sc<float>(ScrollOverview::Config::themeRounding()) + PANEL_PAD, PANEL_RADIUS, PANEL_RADIUS_MAX);
-    const float INNERL  = std::clamp(std::min(sc<float>(ScrollOverview::Config::themeRounding()), OUTERL - PANEL_PAD), 0.F, OUTERL);
+    const float OUTERL  = std::clamp(sc<float>(Hyprdrive::Config::themeRounding()) + PANEL_PAD, PANEL_RADIUS, PANEL_RADIUS_MAX);
+    const float INNERL  = std::clamp(std::min(sc<float>(Hyprdrive::Config::themeRounding()), OUTERL - PANEL_PAD), 0.F, OUTERL);
     const int   ROUNDED = sc<int>(std::round(OUTERL * SCALE));
 
 
@@ -680,7 +680,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // X13/X29/X86: panel frost shares overview chrome blur when Super is open.
         // The corners are Hyprland's rounding_power, as the previews' are, and
         // the plate goes to the pass they go to.
-        const float POWER = ScrollOverview::Config::themeRoundingPower();
+        const float POWER = Hyprdrive::Config::themeRoundingPower();
         if (bands.size() == 1)
             frostedPlate(monitor, DRAWN, ROUNDED, ALPHA, {}, POWER, true);
         else
@@ -700,9 +700,9 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     g_hover.cells.reserve(windows.size());
 
     const auto  MOUSE      = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
-    const int   BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
-    const auto  ACCENT     = ScrollOverview::Config::highlightColor();
-    const float ROUNDPWR   = ScrollOverview::Config::themeRoundingPower();
+    const int   BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
+    const auto  ACCENT     = Hyprdrive::Config::highlightColor();
+    const float ROUNDPWR   = Hyprdrive::Config::themeRoundingPower();
 
     const float BLOCKH = NROWS * CELLH + (NROWS - 1.F) * CGAP * FIT;
     float       y      = sc<float>(DRAWN.y) + (sc<float>(DRAWN.height) - BLOCKH) / 2.F;

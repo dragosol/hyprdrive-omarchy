@@ -20,7 +20,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace ScrollOverview::DesktopRow {
+namespace Hyprdrive::DesktopRow {
 
     inline constexpr int FIRST       = 1;
     inline constexpr int DEFAULT_TOP = 10;

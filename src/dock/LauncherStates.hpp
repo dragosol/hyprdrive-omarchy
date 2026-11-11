@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::LauncherEntry {
+namespace Hyprdrive::LauncherEntry {
 
     struct SStates {
         struct SEntry {

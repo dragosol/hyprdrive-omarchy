@@ -105,34 +105,34 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
 
     // X29. Blur shader reads global decoration:blur:*; per-surface overrides ride
     // on the element and restore after (dock keys, -1 = leave global alone).
-    const auto PREVSIZE       = ScrollOverview::Config::getValue<int>("decoration:blur:size");
-    const auto PREVPASSES     = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
-    const auto PREVBRIGHTNESS = ScrollOverview::Config::getValue<float>("decoration:blur:brightness");
-    const auto PREVNOISE      = ScrollOverview::Config::getValue<float>("decoration:blur:noise");
-    const auto PREVCONTRAST   = ScrollOverview::Config::getValue<float>("decoration:blur:contrast");
-    const auto PREVVIBRANCY   = ScrollOverview::Config::getValue<float>("decoration:blur:vibrancy");
+    const auto PREVSIZE       = Hyprdrive::Config::getValue<int>("decoration:blur:size");
+    const auto PREVPASSES     = Hyprdrive::Config::getValue<int>("decoration:blur:passes");
+    const auto PREVBRIGHTNESS = Hyprdrive::Config::getValue<float>("decoration:blur:brightness");
+    const auto PREVNOISE      = Hyprdrive::Config::getValue<float>("decoration:blur:noise");
+    const auto PREVCONTRAST   = Hyprdrive::Config::getValue<float>("decoration:blur:contrast");
+    const auto PREVVIBRANCY   = Hyprdrive::Config::getValue<float>("decoration:blur:vibrancy");
 
     auto       restoreBlur = Hyprutils::Utils::CScopeGuard([PREVSIZE, PREVPASSES, PREVBRIGHTNESS, PREVNOISE, PREVCONTRAST, PREVVIBRANCY] {
-        ScrollOverview::Config::setValue("decoration:blur:size", PREVSIZE);
-        ScrollOverview::Config::setValue("decoration:blur:passes", PREVPASSES);
-        ScrollOverview::Config::setValue("decoration:blur:brightness", PREVBRIGHTNESS);
-        ScrollOverview::Config::setValue("decoration:blur:noise", PREVNOISE);
-        ScrollOverview::Config::setValue("decoration:blur:contrast", PREVCONTRAST);
-        ScrollOverview::Config::setValue("decoration:blur:vibrancy", PREVVIBRANCY);
+        Hyprdrive::Config::setValue("decoration:blur:size", PREVSIZE);
+        Hyprdrive::Config::setValue("decoration:blur:passes", PREVPASSES);
+        Hyprdrive::Config::setValue("decoration:blur:brightness", PREVBRIGHTNESS);
+        Hyprdrive::Config::setValue("decoration:blur:noise", PREVNOISE);
+        Hyprdrive::Config::setValue("decoration:blur:contrast", PREVCONTRAST);
+        Hyprdrive::Config::setValue("decoration:blur:vibrancy", PREVVIBRANCY);
     });
 
     if (data.blurSize > 0)
-        ScrollOverview::Config::setValue("decoration:blur:size", data.blurSize);
+        Hyprdrive::Config::setValue("decoration:blur:size", data.blurSize);
     if (data.blurPasses > 0)
-        ScrollOverview::Config::setValue("decoration:blur:passes", data.blurPasses);
+        Hyprdrive::Config::setValue("decoration:blur:passes", data.blurPasses);
     if (data.blurBrightness >= 0.F)
-        ScrollOverview::Config::setValue("decoration:blur:brightness", data.blurBrightness);
+        Hyprdrive::Config::setValue("decoration:blur:brightness", data.blurBrightness);
     if (data.blurNoise >= 0.F)
-        ScrollOverview::Config::setValue("decoration:blur:noise", data.blurNoise);
+        Hyprdrive::Config::setValue("decoration:blur:noise", data.blurNoise);
     if (data.blurContrast >= 0.F)
-        ScrollOverview::Config::setValue("decoration:blur:contrast", data.blurContrast);
+        Hyprdrive::Config::setValue("decoration:blur:contrast", data.blurContrast);
     if (data.blurVibrancy >= 0.F)
-        ScrollOverview::Config::setValue("decoration:blur:vibrancy", data.blurVibrancy);
+        Hyprdrive::Config::setValue("decoration:blur:vibrancy", data.blurVibrancy);
 
     // X96. Always full-monitor dual-kawase at decoration:blur:* with a=1, then
     // UV-sample into the rounded panel. Thin damage + native renderRect blur
@@ -341,15 +341,15 @@ std::vector<UP<IPassElement>> COverviewShadowPassElement::draw() {
 
     std::optional<int> previousRenderPower;
     if (data.renderPower > 0) {
-        previousRenderPower = ScrollOverview::Config::getValue<int>("decoration:shadow:render_power");
-        ScrollOverview::Config::setValue("decoration:shadow:render_power", data.renderPower);
+        previousRenderPower = Hyprdrive::Config::getValue<int>("decoration:shadow:render_power");
+        Hyprdrive::Config::setValue("decoration:shadow:render_power", data.renderPower);
     }
 
     auto restoreRenderPower = Hyprutils::Utils::CScopeGuard([previousRenderPower] {
         if (!previousRenderPower)
             return;
 
-        ScrollOverview::Config::setValue("decoration:shadow:render_power", *previousRenderPower);
+        Hyprdrive::Config::setValue("decoration:shadow:render_power", *previousRenderPower);
     });
 
     Render::GL::g_pHyprOpenGL->renderRoundedShadow(data.fullBox, data.rounding, data.roundingPower, data.range, data.color, std::clamp(data.alpha, 0.F, 1.F));

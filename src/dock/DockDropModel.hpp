@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::DockDropModel {
+namespace Hyprdrive::DockDropModel {
 
     namespace Detail {
         inline int hexValue(char c) {

@@ -188,7 +188,7 @@ void CScrollOverview::updateTileHover() {
     // The linger is for reaching the close button through empty space. The
     // dock is a different surface: keep the hold and the title sits on the
     // pill, so drop it the moment the pointer is on the dock.
-    if (ScrollOverview::Dock::uiContains(pMonitor.lock(), lastMousePosLocal)) {
+    if (Hyprdrive::Dock::uiContains(pMonitor.lock(), lastMousePosLocal)) {
         TileChrome::setHovered(PHLWINDOW{}, false);
         return;
     }
@@ -557,7 +557,7 @@ PHLWORKSPACE CScrollOverview::workspaceAtOverviewDropPoint(const Vector2D& point
     // answers FIRST, because the pill floats over the main area and the card
     // underneath would otherwise claim the drop. Saying it once here is what
     // keeps the drop indicator, the mini shrink and endWindowDrag agreeing.
-    if (ScrollOverview::Dock::pillContains(MONITOR, point))
+    if (Hyprdrive::Dock::pillContains(MONITOR, point))
         return nullptr;
 
     const auto ACTIVEIDX       = activeWorkspaceIndex();
@@ -599,7 +599,7 @@ PHLWORKSPACE CScrollOverview::workspaceAtOverviewDropPoint(const Vector2D& point
 
         const auto WORKSPACEBOX = getOverviewWorkspaceUsableBox(wimg->pWorkspace, MONITOR, scale->value(), viewOffset->value(),
                                                                 workspaceOverviewOffset(workspaceIdx, ACTIVEIDX, WORKSPACEPITCH), layout);
-        const bool ONLAYOUTAXIS = layout == ScrollOverview::Config::ELayout::HORIZONTAL ?
+        const bool ONLAYOUTAXIS = layout == Hyprdrive::Config::ELayout::HORIZONTAL ?
             point.x >= WORKSPACEBOX.x && point.x <= WORKSPACEBOX.x + WORKSPACEBOX.width :
             point.y >= WORKSPACEBOX.y && point.y <= WORKSPACEBOX.y + WORKSPACEBOX.height;
 
@@ -676,7 +676,7 @@ void CScrollOverview::performPrimaryClickAction() {
         // ensureDefault, not scratchpadCellWorkspace: with no scratchpad yet
         // (or none left, once its last window moved out) there is nothing to
         // show, and the click has to be what brings it into being.
-        ScrollOverview::Scratchpad::show(ScrollOverview::Scratchpad::ensureDefault(pMonitor.lock()));
+        Hyprdrive::Scratchpad::show(Hyprdrive::Scratchpad::ensureDefault(pMonitor.lock()));
         close();
         return;
     }

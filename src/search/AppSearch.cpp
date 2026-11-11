@@ -1195,7 +1195,7 @@ namespace AppSearch {
 
         auto binary = args.front();
         args.erase(args.begin());
-        ScrollOverview::Launch::wrap(binary, args); // its own scope, not Hyprland's (Launch.hpp)
+        Hyprdrive::Launch::wrap(binary, args); // its own scope, not Hyprland's (Launch.hpp)
 
         CProcess process(binary, args);
         return process.runAsync();
@@ -1210,7 +1210,7 @@ namespace AppSearch {
             return false;
 
         // The rule rides the environment, which uwsm-app keeps (Launch.hpp).
-        std::string cmd = "[" + execRule + "] " + ScrollOverview::Launch::prefix();
+        std::string cmd = "[" + execRule + "] " + Hyprdrive::Launch::prefix();
         for (const auto& WORD : ARGS)
             cmd += " " + shellQuote(WORD);
 
@@ -1486,7 +1486,7 @@ namespace AppSearch {
 
         auto binary = args.front();
         args.erase(args.begin());
-        ScrollOverview::Launch::wrap(binary, args); // its own scope, not Hyprland's (Launch.hpp)
+        Hyprdrive::Launch::wrap(binary, args); // its own scope, not Hyprland's (Launch.hpp)
 
         CProcess process(binary, args);
         return process.runAsync();

@@ -55,7 +55,7 @@ bool overviewAcceptsSearch() {
 // A sequence half-typed when the overview closes, or when ESC/BACKSPACE cuts it
 // short, must not swallow the first key of the next one.
 void resetCompose() {
-    ScrollOverview::TextInput::resetCompose();
+    Hyprdrive::TextInput::resetCompose();
 }
 } // namespace PluginDetail
 
@@ -63,7 +63,7 @@ void resetCompose() {
 // BACKSPACE removes a CODEPOINT. pop_back() would leave a severed lead byte and
 // hand the providers a string that is not valid UTF-8.
 static void popCodepoint(std::string& s) {
-    ScrollOverview::TextInput::popCodepoint(s);
+    Hyprdrive::TextInput::popCodepoint(s);
 }
 
 struct SSearchKey {
@@ -77,7 +77,7 @@ struct SSearchKey {
 static SSearchKey searchKeyFor(uint32_t keycode) {
     if (!g_heldGuardKeys.empty())
         return {};
-    const auto K = ScrollOverview::TextInput::keyFor(activeXkbState(), keycode);
+    const auto K = Hyprdrive::TextInput::keyFor(activeXkbState(), keycode);
     return {.consume = K.consume, .starts = K.starts, .text = K.text};
 }
 
@@ -88,8 +88,8 @@ static int letterTickCb(void*) {
     // The easter egg is a video: it wants every frame while it plays, and the
     // tick stays up while it does -- with or without an overview, so its
     // watchdog can stop the sound if the overview went away under it.
-    ScrollOverview::KeyboardCat::watchdog();
-    const bool CAT     = ScrollOverview::KeyboardCat::busy();
+    Hyprdrive::KeyboardCat::watchdog();
+    const bool CAT     = Hyprdrive::KeyboardCat::busy();
     const bool LETTERS = SearchLetters::g_searchLetters.busy(NOW) || CAT;
 
     bool again = false;
@@ -254,7 +254,7 @@ bool handleSearchPress(uint32_t keycode) {
         if (g_search.query.text.empty())
             g_search.query.active = false;
         afterQueryEdit();
-        if (ScrollOverview::KeyboardCat::noteBackspace())
+        if (Hyprdrive::KeyboardCat::noteBackspace())
             armLetterTick(); // its frames start with the trigger
         return true;
     }
@@ -283,7 +283,7 @@ bool handleSearchPress(uint32_t keycode) {
     if (g_search.query.windowsOnly)
         g_search.query.text.clear();
     g_search.query.text += KEY.text;
-    ScrollOverview::KeyboardCat::noteTyped();
+    Hyprdrive::KeyboardCat::noteTyped();
     afterQueryEdit();
     return true;
 }
@@ -335,7 +335,7 @@ int onFileResultsReady(int fd, uint32_t mask, void* data) {
         overview->damage();
         overview->requestInputFrame();
     }
-    ScrollOverview::Stacks::onReaderReady();
+    Hyprdrive::Stacks::onReaderReady();
     return 0;
 }
 

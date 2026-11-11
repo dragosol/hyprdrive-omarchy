@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace ScrollOverview::MosaicPack {
+namespace Hyprdrive::MosaicPack {
 
     struct SRect {
         double x = 0, y = 0, w = 0, h = 0;

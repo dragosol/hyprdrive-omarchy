@@ -10,7 +10,7 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/protocols/PointerGestures.hpp>
 
-namespace ScrollOverview::FingerSwipe {
+namespace Hyprdrive::FingerSwipe {
 
     namespace {
         constexpr const char* KEY_KEEP = "plugin:hyprdrive:gestures:keep_swipe";

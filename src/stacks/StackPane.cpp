@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ScrollOverview::Stacks::Pane {
+namespace Hyprdrive::Stacks::Pane {
 
     SPaneLayout layout(PHLMONITOR monitor, const CBox& anchor, const CBox& pill, size_t items, float progress, bool leaving) {
         SPaneLayout out;

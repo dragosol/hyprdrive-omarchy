@@ -28,11 +28,11 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         if (closing || (g_pointerGrabOverview && g_pointerGrabOverview != this) || (!g_pointerGrabOverview && INPUTOVERVIEW.get() != this))
             return;
 
-        const bool     LEFT_HANDED           = ScrollOverview::Config::getLeftHanded();
+        const bool     LEFT_HANDED           = Hyprdrive::Config::getLeftHanded();
         const uint32_t MAIN_BUTTON           = LEFT_HANDED ? BTN_RIGHT : BTN_LEFT;
-        const bool     INVERT_DRAG_MODE      = ScrollOverview::Config::getDragMode() == 1;
+        const bool     INVERT_DRAG_MODE      = Hyprdrive::Config::getDragMode() == 1;
         const uint32_t SECONDARY_DRAG_BUTTON = BTN_MIDDLE;
-        const float    DRAGTHRESHOLD         = ScrollOverview::Config::getDragThreshold() * (pMonitor ? pMonitor->m_scale : 1.F);
+        const float    DRAGTHRESHOLD         = Hyprdrive::Config::getDragThreshold() * (pMonitor ? pMonitor->m_scale : 1.F);
         const float    DRAGTHRESHOLDSQ       = std::pow(DRAGTHRESHOLD, 2);
 
         lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
@@ -76,14 +76,14 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // all of them the cursor plane). A plain damageMonitor is not enough
         // either: hkScheduleFrame throttles AQ_SCHEDULE_DAMAGE for as long as an
         // overview is open, so the frame has to be asked for the overview's way.
-        if (ScrollOverview::Dock::damageIfChanged(pMonitor.lock())) {
+        if (Hyprdrive::Dock::damageIfChanged(pMonitor.lock())) {
             damage();
             requestInputFrame();
         }
 
         // X32. The dock's drag lives in the dock; the overview only forwards the
         // motion, exactly as it forwards the button edges.
-        if (ScrollOverview::Dock::dragPending() && ScrollOverview::Dock::dragMove(pMonitor.lock(), lastMousePosLocal)) {
+        if (Hyprdrive::Dock::dragPending() && Hyprdrive::Dock::dragMove(pMonitor.lock(), lastMousePosLocal)) {
             damage();
             requestInputFrame();
         }
@@ -91,14 +91,14 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // G12. The hold has to pass BEFORE the distance is even looked at.
         if (g_search.pointer.drag && !g_search.pointer.drag->desktopId.empty()) {
             if (!g_search.pointer.drag->live) {
-                const float HELDMS = ScrollOverview::Config::realElapsedMs(g_search.pointer.drag->startedAt);
+                const float HELDMS = Hyprdrive::Config::realElapsedMs(g_search.pointer.drag->startedAt);
                 if (HELDMS >= G12_HOLD_MS && g_search.pointer.drag->start.distanceSq(lastMousePosLocal) > DRAGTHRESHOLDSQ)
                     g_search.pointer.drag->live = true;
             }
 
             if (g_search.pointer.drag->live) {
                 const auto MON = pMonitor.lock();
-                ScrollOverview::Dock::setForeignInsert(ScrollOverview::Dock::showAppsContains(MON, lastMousePosLocal) ? -1 : ScrollOverview::Dock::dropIndexAt(MON, lastMousePosLocal));
+                Hyprdrive::Dock::setForeignInsert(Hyprdrive::Dock::showAppsContains(MON, lastMousePosLocal) ? -1 : Hyprdrive::Dock::dropIndexAt(MON, lastMousePosLocal));
                 damage();
                 requestInputFrame();
             }
@@ -271,10 +271,10 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
         // buttons are still pressed, which locks focus.
         g_pInputManager->releaseAllMouseButtons();
 
-        const bool     LEFT_HANDED        = ScrollOverview::Config::getLeftHanded();
+        const bool     LEFT_HANDED        = Hyprdrive::Config::getLeftHanded();
         const uint32_t MAIN_BUTTON        = LEFT_HANDED ? BTN_RIGHT : BTN_LEFT;
         const uint32_t RESIZE_BUTTON      = LEFT_HANDED ? BTN_LEFT : BTN_RIGHT;
-        const bool     INVERT_DRAG_MODE   = ScrollOverview::Config::getDragMode() == 1;
+        const bool     INVERT_DRAG_MODE   = Hyprdrive::Config::getDragMode() == 1;
         const uint32_t SECONDARY_DRAG_BUTTON = BTN_MIDDLE;
         const auto     clearSubmapMouseClickPending = [&]() {
             submapMouseClickPending = false;
@@ -315,7 +315,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
             // distSq 104.4 vs threshSq 100.0 -> drag, no focus, no close.
             // ponytail: flat 3x band (~30 px). If drags start feeling sticky, the upgrade
             // is a press-duration test, not a bigger number.
-            const float CLICK_MAX_DRAG_DISTANCE = ScrollOverview::Config::getDragThreshold() * 3.F * (pMonitor ? pMonitor->m_scale : 1.F);
+            const float CLICK_MAX_DRAG_DISTANCE = Hyprdrive::Config::getDragThreshold() * 3.F * (pMonitor ? pMonitor->m_scale : 1.F);
 
             if (drag.activeWindow) {
                 if (drag.startMouseLocal.distanceSq(lastMousePosLocal) < CLICK_MAX_DRAG_DISTANCE * CLICK_MAX_DRAG_DISTANCE) {
@@ -359,12 +359,12 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
             const auto DOCKMONITOR = pMonitor.lock();
             const auto DOCKPOINT   = getOverviewMousePosLocal(DOCKMONITOR);
             const bool PRESSED     = event.state == WL_POINTER_BUTTON_STATE_PRESSED;
-            const auto ROLE        = event.button == RESIZE_BUTTON ? ScrollOverview::DockInput::EButton::Menu
-                                   : event.button == BTN_MIDDLE    ? ScrollOverview::DockInput::EButton::Launch
-                                   : event.button == MAIN_BUTTON   ? ScrollOverview::DockInput::EButton::Main
-                                                                   : ScrollOverview::DockInput::EButton::Other;
+            const auto ROLE        = event.button == RESIZE_BUTTON ? Hyprdrive::DockInput::EButton::Menu
+                                   : event.button == BTN_MIDDLE    ? Hyprdrive::DockInput::EButton::Launch
+                                   : event.button == MAIN_BUTTON   ? Hyprdrive::DockInput::EButton::Main
+                                                                   : Hyprdrive::DockInput::EButton::Other;
 
-            if (ScrollOverview::DockInput::handleMenu(DOCKMONITOR, DOCKPOINT, ROLE, PRESSED, static_cast<bool>(drag.activeWindow), false).claimed) {
+            if (Hyprdrive::DockInput::handleMenu(DOCKMONITOR, DOCKPOINT, ROLE, PRESSED, static_cast<bool>(drag.activeWindow), false).claimed) {
                 lastMousePosLocal = DOCKPOINT;
                 return;
             }
@@ -398,7 +398,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
             if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && g_search.pointer.drag) {
                 const auto DRAG = *g_search.pointer.drag;
                 g_search.pointer.drag.reset();
-                ScrollOverview::Dock::setForeignInsert(-1);
+                Hyprdrive::Dock::setForeignInsert(-1);
                 damage();
                 requestInputFrame();
 
@@ -406,10 +406,10 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                     const auto MON = pMonitor.lock();
                     // The button sits INSIDE the pill, so it has to be asked
                     // first or the drop index would claim it.
-                    if (ScrollOverview::Dock::showAppsContains(MON, lastMousePosLocal))
-                        ScrollOverview::Dock::unpin(DRAG.desktopId);
-                    else if (const int INDEX = ScrollOverview::Dock::dropIndexAt(MON, lastMousePosLocal); INDEX >= 0)
-                        ScrollOverview::Dock::pinAt(DRAG.desktopId, INDEX);
+                    if (Hyprdrive::Dock::showAppsContains(MON, lastMousePosLocal))
+                        Hyprdrive::Dock::unpin(DRAG.desktopId);
+                    else if (const int INDEX = Hyprdrive::Dock::dropIndexAt(MON, lastMousePosLocal); INDEX >= 0)
+                        Hyprdrive::Dock::pinAt(DRAG.desktopId, INDEX);
                     return;
                 }
 
@@ -437,7 +437,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
             // sits inside the pill and is offered first -- and behind the
             // window-drag guard. Same dock the plain desktop drives; the ladder
             // and the reasons for its order live in DockInput.
-            if (const auto CLAIM = ScrollOverview::DockInput::handlePill(pMonitor.lock(), lastMousePosLocal, ScrollOverview::DockInput::EButton::Main,
+            if (const auto CLAIM = Hyprdrive::DockInput::handlePill(pMonitor.lock(), lastMousePosLocal, Hyprdrive::DockInput::EButton::Main,
                                                          event.state == WL_POINTER_BUTTON_STATE_PRESSED, static_cast<bool>(drag.activeWindow));
                 CLAIM.claimed) {
                 if (CLAIM.needsFrame) {
@@ -685,16 +685,16 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
         // 2026-09-30): the desktop's dock scroll hook skips overview monitors,
         // so the pane never saw a tick while the overview was up.
         if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-            ScrollOverview::Stacks::noteAxis(e.delta, e.source == WL_POINTER_AXIS_SOURCE_WHEEL);
+            Hyprdrive::Stacks::noteAxis(e.delta, e.source == WL_POINTER_AXIS_SOURCE_WHEEL);
         if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL && e.delta != 0.0 &&
-            ScrollOverview::Stacks::scroll(pMonitor.lock(), getOverviewMousePosLocal(pMonitor.lock()), e.delta < 0.0))
+            Hyprdrive::Stacks::scroll(pMonitor.lock(), getOverviewMousePosLocal(pMonitor.lock()), e.delta < 0.0))
             return;
         if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL && e.delta != 0.0 &&
-            ScrollOverview::Dock::menuScroll(pMonitor.lock(), getOverviewMousePosLocal(pMonitor.lock()), e.delta < 0.0))
+            Hyprdrive::Dock::menuScroll(pMonitor.lock(), getOverviewMousePosLocal(pMonitor.lock()), e.delta < 0.0))
             return;
 
-        const auto ACTION = e.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? ScrollOverview::Config::getHorizontalScrollAction(layout) :
-                                                                          ScrollOverview::Config::getVerticalScrollAction(layout);
+        const auto ACTION = e.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? Hyprdrive::Config::getHorizontalScrollAction(layout) :
+                                                                          Hyprdrive::Config::getVerticalScrollAction(layout);
 
         // mouse wheel: discrete stepping, throttled by scroll_event_delay so one notch is one step
         if (e.source == WL_POINTER_AXIS_SOURCE_WHEEL) {
@@ -706,7 +706,7 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
             if (!scrollStepAllowed(e.timeMs))
                 return;
 
-            if (ACTION == ScrollOverview::Config::EScrollAction::WORKSPACE) {
+            if (ACTION == Hyprdrive::Config::EScrollAction::WORKSPACE) {
                 wheelPanAt = Time::steadyNow();
                 moveViewportWorkspace(e.delta > 0);
             } else
@@ -719,7 +719,7 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
             return;
 
         // scroll workspace or layout with 1:1 animation (snaping on release)
-        if (ACTION == ScrollOverview::Config::EScrollAction::WORKSPACE)
+        if (ACTION == Hyprdrive::Config::EScrollAction::WORKSPACE)
             trackpadSwipeWorkspace(e.delta);
         else
             trackpadSwipeLayout(images[viewportCurrentWorkspace]->pWorkspace, e.delta);

@@ -32,7 +32,7 @@ namespace {
     }
 }
 
-namespace ScrollOverview::TextInput {
+namespace Hyprdrive::TextInput {
 
     void resetCompose() {
         if (auto* C = composeState(); C)

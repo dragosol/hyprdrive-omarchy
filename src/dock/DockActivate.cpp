@@ -4,7 +4,7 @@
 // call launchApp/activateItem with default arguments.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 

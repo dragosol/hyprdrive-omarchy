@@ -2,7 +2,7 @@
 // empty-desktop app list.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 
@@ -13,10 +13,10 @@ namespace DockDetail {
 // back out and this is user data rather than a tunable.
 std::filesystem::path favoritesPath() {
     if (const char* STATE = std::getenv("XDG_STATE_HOME"); STATE && *STATE)
-        return std::filesystem::path{STATE} / ScrollOverview::Compat::NAME / "favorites";
+        return std::filesystem::path{STATE} / Hyprdrive::Compat::NAME / "favorites";
 
     if (const char* HOME = std::getenv("HOME"); HOME && *HOME)
-        return std::filesystem::path{HOME} / ".local" / "state" / ScrollOverview::Compat::NAME / "favorites";
+        return std::filesystem::path{HOME} / ".local" / "state" / Hyprdrive::Compat::NAME / "favorites";
 
     return {};
 }

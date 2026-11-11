@@ -24,7 +24,7 @@
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #undef private
 
-namespace ScrollOverview::TileChrome {
+namespace Hyprdrive::TileChrome {
 
 namespace {
 
@@ -196,7 +196,7 @@ float eased(const SEase& ease) {
 // symmetry is most of why GNOME's hover feels smoother than an accelerated exit.
 float easedHover(const SEase& ease) {
     // The animation clock: the panel's speed stretches the hover too.
-    const float T   = std::clamp(ScrollOverview::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
+    const float T   = std::clamp(Hyprdrive::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
     const float INV = 1.F - T;
     const float E   = Motion::housePreset() ? 1.F - INV * INV : Motion::ease(Motion::ERole::DECEL, T);
 
@@ -525,11 +525,11 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
     // X56. The RING is Hyprland's -- size from general:border_size, colour from
     // general:col.active_border -- the same source the tooltip and the drop
     // indicator read, so the button re-themes with everything else.
-    const int BORDER = std::max(0, ScrollOverview::Config::getValue<int>("general:border_size"));
+    const int BORDER = std::max(0, Hyprdrive::Config::getValue<int>("general:border_size"));
     if (BORDER > 0) {
         CRectPassElement::SRectData ring;
         ring.box           = BUTTON.copy().expand(sc<double>(BORDER) * SCALE);
-        ring.color         = ScrollOverview::Config::highlightColor().modifyA(ALPHA);
+        ring.color         = Hyprdrive::Config::highlightColor().modifyA(ALPHA);
         ring.round         = ROUND + sc<int>(std::round(sc<float>(BORDER) * SCALE));
         ring.roundingPower = 2.F;
         g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(ring));

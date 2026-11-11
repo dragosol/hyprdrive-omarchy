@@ -23,7 +23,7 @@
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/render/Texture.hpp>
 
-namespace ScrollOverview::SizeAck {
+namespace Hyprdrive::SizeAck {
     void onAck(Desktop::View::CWindow* window, uint32_t serial) {
         auto&      acks = window->m_pendingSizeAcks;
         const auto IT   = std::ranges::find_if(acks | std::views::reverse, [serial](const auto& e) { return e.first <= serial; });

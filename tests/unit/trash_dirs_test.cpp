@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 namespace fs = std::filesystem;
-using namespace ScrollOverview::TrashDirs;
+using namespace Hyprdrive::TrashDirs;
 
 static int checks = 0, failed = 0;
 

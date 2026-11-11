@@ -58,7 +58,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprutils/os/Process.hpp>
 
-using namespace ScrollOverview;
+using namespace Hyprdrive;
 
 namespace StacksDetail {
 

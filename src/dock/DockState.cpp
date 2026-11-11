@@ -2,7 +2,7 @@
 // Dock.cpp defined them: one TU, so their construction order is unchanged.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 

@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace ScrollOverview::Gvfs {
+namespace Hyprdrive::Gvfs {
 
     // One entry of org.gtk.vfs.MountTracker.ListMounts2, the parts the dock uses.
     struct SMount {

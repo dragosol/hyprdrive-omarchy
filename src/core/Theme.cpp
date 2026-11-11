@@ -1,7 +1,7 @@
 #include "ConfigParts.hpp"
 using namespace ConfigDetail;
 
-namespace ScrollOverview::Config {
+namespace Hyprdrive::Config {
 
 using namespace ConfigPart;
 

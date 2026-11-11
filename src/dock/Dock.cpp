@@ -2,7 +2,7 @@
 // entry points other modules call. Split from one file; see DockParts.hpp.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 bool foldersAnywhere() {
@@ -868,10 +868,10 @@ void setWindowDragActive(bool active) {
 // each added a sixth. See the note in Dock.hpp.
 // The theme's accent: Hyprland's active border, the colour labelPill's ring uses.
 CHyprColor accentColor() {
-    if (auto* const ACTIVE = sc<::Config::CGradientValueData*>(ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>("general:col.active_border").ptr());
+    if (auto* const ACTIVE = sc<::Config::CGradientValueData*>(Hyprdrive::Config::valueRef<::Config::IComplexConfigValue>("general:col.active_border").ptr());
         ACTIVE && !ACTIVE->m_colors.empty())
         return ACTIVE->m_colors[0];
-    return ScrollOverview::Config::themeForeground();
+    return Hyprdrive::Config::themeForeground();
 }
 
 void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha, const CBox& clip, float roundingPower, bool currentPass) {
@@ -1222,7 +1222,7 @@ void render(PHLMONITOR monitor) {
     // Y7. Drawn FIRST so the pill's own frost and background land on top of it
     // and the halo only shows where it reaches past the pill's edges.
     if (const float GLOW = dragGlow(monitor, LAYOUT, MOUSELOCAL); GLOW > 0.001F) {
-        const auto ACCENT = ScrollOverview::Config::highlightColor();
+        const auto ACCENT = Hyprdrive::Config::highlightColor();
 
         // A stack of expanded rounded rects with a falling alpha. There is no
         // soft-shadow primitive to hand, and a real blur for a halo would be a
@@ -1254,9 +1254,9 @@ void render(PHLMONITOR monitor) {
     // then the accent, faded between on Hyprland's `border` animation
     // (BorderFade.hpp) -- in the overview and on the desktop alike.
     {
-        const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+        const int  BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
         const auto COLOR      = BorderFade::color(monitor, BorderFade::key("dock-pill", sc<uint64_t>(monitor->m_id)), dockInUse(monitor, LAYOUT, MOUSELOCAL),
-                                                  ScrollOverview::Config::restingBorderColor(), ScrollOverview::Config::highlightColor().modifyA(1.F));
+                                                  Hyprdrive::Config::restingBorderColor(), Hyprdrive::Config::highlightColor().modifyA(1.F));
 
         CBorderPassElement::SBorderData border;
         border.box           = LAYOUT.pill.copy().round();
@@ -1279,7 +1279,7 @@ void render(PHLMONITOR monitor) {
         // X56 (user, 2026-08-06): themed, so the dock re-colours with
         // everything else when the Hyprland theme changes. The alpha is the
         // tuned value and stays -- only the hue comes from the config.
-        const auto ACCENT = ScrollOverview::Config::highlightColor();
+        const auto ACCENT = Hyprdrive::Config::highlightColor();
 
         CRectPassElement::SRectData fill;
         fill.box           = hoverBox(HASHOVER ? HOVEREDITEM->iconBox : LAYOUT.showApps, monitor->m_scale);
@@ -1306,7 +1306,7 @@ void render(PHLMONITOR monitor) {
     const auto       TALLY    = buildTally();
     const bool       SHOWDOT  = Config::getValue<bool>(KEY_SHOW_RUNNING);
     const int        DOTSIZE  = Config::getValue<int>(KEY_DOT_SIZE);
-    const CHyprColor DOTCOLOR = ScrollOverview::Config::dockIndicatorColor();
+    const CHyprColor DOTCOLOR = Hyprdrive::Config::dockIndicatorColor();
     const bool       DANCE    = Config::getValue<bool>(KEY_DANCE_URGENT);
     const bool       BADGES   = badgesEnabled();
     const double     RESTPX   = restingIconPx(monitor); // the texture size every icon below asks for
@@ -1413,7 +1413,7 @@ void render(PHLMONITOR monitor) {
     if (const auto ARR = g_arrange.find(monitor->m_id); ARR != g_arrange.end() && !ARR->second.exits.empty()) {
         const double DY = LAYOUT.pill.y - arranged(monitor->m_id, baseLayout(monitor)).pill.y;
         for (const auto& EXIT : ARR->second.exits) {
-            const float T = std::clamp(ScrollOverview::Config::animElapsedMs(EXIT.since) / EXIT_MS, 0.F, 1.F);
+            const float T = std::clamp(Hyprdrive::Config::animElapsedMs(EXIT.since) / EXIT_MS, 0.F, 1.F);
             if (T >= 1.F)
                 continue;
             const auto TEX = OverviewRender::appIcon(EXIT.item.icon, EXIT.item.scratchpad, false, RESTPX);

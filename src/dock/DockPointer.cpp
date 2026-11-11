@@ -2,7 +2,7 @@
 // scroll, the menu's keys and clicks, and the info-poll timer.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 
 

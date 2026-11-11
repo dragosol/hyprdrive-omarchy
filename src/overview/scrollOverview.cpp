@@ -15,7 +15,7 @@ using namespace OverviewDetail;
 // not exist until an overview has been opened once (and a reload can drop
 // them), so until then every houseEase site fell back to a plain cubic.
 float houseEase(bool decel, float t) {
-    return ScrollOverview::Motion::ease(decel ? ScrollOverview::Motion::ERole::DECEL : ScrollOverview::Motion::ERole::ACCEL, t);
+    return Hyprdrive::Motion::ease(decel ? Hyprdrive::Motion::ERole::DECEL : Hyprdrive::Motion::ERole::ACCEL, t);
 }
 
 
@@ -369,29 +369,29 @@ void CScrollOverview::applyInputConfigOverrides() {
     if (!sharedStateOwner || inputConfigOverridden)
         return;
 
-    previousNoWarps                    = ScrollOverview::Config::getValue<int>("cursor:no_warps");
-    previousWarpOnChangeWorkspace      = ScrollOverview::Config::getValue<int>("cursor:warp_on_change_workspace");
-    previousWarpOnToggleSpecial        = ScrollOverview::Config::getValue<int>("cursor:warp_on_toggle_special");
-    previousWarpBackAfterNonMouseInput = ScrollOverview::Config::getValue<int>("cursor:warp_back_after_non_mouse_input");
-    previousFollowMouse                = ScrollOverview::Config::getValue<int>("input:follow_mouse");
+    previousNoWarps                    = Hyprdrive::Config::getValue<int>("cursor:no_warps");
+    previousWarpOnChangeWorkspace      = Hyprdrive::Config::getValue<int>("cursor:warp_on_change_workspace");
+    previousWarpOnToggleSpecial        = Hyprdrive::Config::getValue<int>("cursor:warp_on_toggle_special");
+    previousWarpBackAfterNonMouseInput = Hyprdrive::Config::getValue<int>("cursor:warp_back_after_non_mouse_input");
+    previousFollowMouse                = Hyprdrive::Config::getValue<int>("input:follow_mouse");
     inputConfigOverridden = true;
 
-    ScrollOverview::Config::setValue("cursor:no_warps", 1);
-    ScrollOverview::Config::setValue("cursor:warp_on_change_workspace", 0);
-    ScrollOverview::Config::setValue("cursor:warp_on_toggle_special", 0);
-    ScrollOverview::Config::setValue("cursor:warp_back_after_non_mouse_input", 0);
-    ScrollOverview::Config::setValue("input:follow_mouse", 0);
+    Hyprdrive::Config::setValue("cursor:no_warps", 1);
+    Hyprdrive::Config::setValue("cursor:warp_on_change_workspace", 0);
+    Hyprdrive::Config::setValue("cursor:warp_on_toggle_special", 0);
+    Hyprdrive::Config::setValue("cursor:warp_back_after_non_mouse_input", 0);
+    Hyprdrive::Config::setValue("input:follow_mouse", 0);
 }
 
 void CScrollOverview::restoreInputConfigOverrides() {
     if (!inputConfigOverridden)
         return;
 
-    ScrollOverview::Config::setValue("cursor:no_warps", previousNoWarps);
-    ScrollOverview::Config::setValue("cursor:warp_on_change_workspace", previousWarpOnChangeWorkspace);
-    ScrollOverview::Config::setValue("cursor:warp_on_toggle_special", previousWarpOnToggleSpecial);
-    ScrollOverview::Config::setValue("cursor:warp_back_after_non_mouse_input", previousWarpBackAfterNonMouseInput);
-    ScrollOverview::Config::setValue("input:follow_mouse", previousFollowMouse);
+    Hyprdrive::Config::setValue("cursor:no_warps", previousNoWarps);
+    Hyprdrive::Config::setValue("cursor:warp_on_change_workspace", previousWarpOnChangeWorkspace);
+    Hyprdrive::Config::setValue("cursor:warp_on_toggle_special", previousWarpOnToggleSpecial);
+    Hyprdrive::Config::setValue("cursor:warp_back_after_non_mouse_input", previousWarpBackAfterNonMouseInput);
+    Hyprdrive::Config::setValue("input:follow_mouse", previousFollowMouse);
 
     inputConfigOverridden = false;
 }
@@ -484,9 +484,9 @@ void CScrollOverview::render() {
     noteFrame(MONITOR->m_id);
     // Smooth-frames hint: only the open/close animation must hit every refresh.
     if (scale->isBeingAnimated())
-        ScrollOverview::FramePacing::noteAnimatedFrame(MONITOR);
+        Hyprdrive::FramePacing::noteAnimatedFrame(MONITOR);
     else
-        ScrollOverview::FramePacing::noteIdleFrame(MONITOR);
+        Hyprdrive::FramePacing::noteIdleFrame(MONITOR);
 
     ++g_overviewFrame;
     ++g_overviewFramesByMonitor[MONITOR->m_id];
@@ -511,7 +511,7 @@ void CScrollOverview::render() {
         frost.lastOverviewViewOffset = VIEWOFFSET;
     }
 
-    const auto WALLPAPERMODE = ScrollOverview::Config::getWallpaperMode();
+    const auto WALLPAPERMODE = Hyprdrive::Config::getWallpaperMode();
 
     // Y17 (GPU, 2026-09-14): at PROGRESS >= 1 the blurred backdrop below covers
     // this full-screen wallpaper pass, so skipping it here looks free. It is
@@ -531,7 +531,7 @@ void CScrollOverview::render() {
     // through the 80% scrim is black instead of wallpaper: invisible.
     // That frame budget is what decides whether a typed letter's animation
     // holds 60 fps or drops a refresh.
-    const float OPENSCALE    = ScrollOverview::Config::getScale();
+    const float OPENSCALE    = Hyprdrive::Config::getScale();
     const float OPENPROGRESS = std::clamp(std::abs(SCALE - 1.F) / std::max(0.01F, std::abs(1.F - OPENSCALE)), 0.F, 1.F);
     const bool  BACKDROPCOVERS = OPENPROGRESS >= 0.999F && WALLPAPERMODE != 1 && frost.backdropFB && frost.backdropFB->isAllocated() && frost.backdropFB->getTexture();
     if ((WALLPAPERMODE == 0 || WALLPAPERMODE == 2) && !BACKDROPCOVERS)
@@ -558,7 +558,7 @@ void CScrollOverview::render() {
     // them on. Cards keep the undimmed, unblurred fill captured above.
     // Flush BEFORE the cards so the scrim cannot land on top of the card fill.
     {
-        const float OPEN     = ScrollOverview::Config::getScale();
+        const float OPEN     = Hyprdrive::Config::getScale();
         const float RANGE    = std::max(0.01F, std::abs(1.F - OPEN));
         const float PROGRESS = std::clamp(std::abs(SCALE - 1.F) / RANGE, 0.F, 1.F);
         float       DIM      = BACKDROP_DIM * PROGRESS;
@@ -637,9 +637,9 @@ void CScrollOverview::render() {
     // did NOT render through renderOverviewWindow -- the Quick Look preview
     // below, a dock hover preview -- on the xray path (Renderer.cpp:1540), so
     // with it on the pre-blur keeps running regardless.
-    const int  BLURSIZE               = ScrollOverview::Config::getValue<int>("decoration:blur:size");
+    const int  BLURSIZE               = Hyprdrive::Config::getValue<int>("decoration:blur:size");
     const bool TILEBLURSCALED         = BLURSIZE > 0 && std::max(1, sc<int>(std::round(BLURSIZE * SCALE))) != BLURSIZE;
-    const bool NOPREBLURREADER        = TILEBLURSCALED && !ScrollOverview::Config::getValue<bool>("decoration:blur:xray");
+    const bool NOPREBLURREADER        = TILEBLURSCALED && !Hyprdrive::Config::getValue<bool>("decoration:blur:xray");
     const bool NEEDS_PRECOMPUTED_BLUR = !NOPREBLURREADER && hasVisiblePrecomputedBlurWindow(MONITOR, ACTIVEIDX, PITCH, SCALE);
     if (NEEDS_PRECOMPUTED_BLUR && frost.overviewDirty)
         g_pHyprRenderer->m_renderPass.add(makeUnique<CPreBlurElement>());
@@ -688,11 +688,11 @@ void CScrollOverview::render() {
     // xray=false: they blur live and never look at this FB.)
     const auto renderStripLayer = [&]() {
         const bool CHROMEBLURSAMPLED = overviewGridProgress(SCALE) >= 0.01F;
-        if (CHROMEBLURSAMPLED && ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
+        if (CHROMEBLURSAMPLED && Hyprdrive::Config::getValue<bool>("decoration:blur:enabled"))
             OverviewRender::captureFrameChromeBlur(MONITOR);
         else if (CHROMEBLURSAMPLED && detentBadgeVisible()) {
-            ScrollOverview::Config::setValue("decoration:blur:enabled", true);
-            auto restoreBlur = Hyprutils::Utils::CScopeGuard([] { ScrollOverview::Config::setValue("decoration:blur:enabled", false); });
+            Hyprdrive::Config::setValue("decoration:blur:enabled", true);
+            auto restoreBlur = Hyprutils::Utils::CScopeGuard([] { Hyprdrive::Config::setValue("decoration:blur:enabled", false); });
             OverviewRender::captureFrameChromeBlur(MONITOR);
         } else
             OverviewRender::clearFrameChromeBlur();
@@ -757,7 +757,7 @@ void CScrollOverview::render() {
     // Above the grid, the strip and the search; below the bar and the dock,
     // as on the desktop.
     if (const auto SPECIAL = overviewShownSpecialOn(MONITOR)) {
-        const float DIM = ScrollOverview::Config::getValue<float>("decoration:dim_special") * SPECIAL->m_alpha->value();
+        const float DIM = Hyprdrive::Config::getValue<float>("decoration:dim_special") * SPECIAL->m_alpha->value();
         if (DIM > 0.001F) {
             CRectPassElement::SRectData dim;
             dim.box   = CBox{{}, MONITOR->m_transformedSize};
@@ -800,9 +800,9 @@ void CScrollOverview::render() {
     // overview owns the monitor, so the pill is still drawn exactly once.
     // Y7. The pill glows as a dragged window nears it; the dock computes the
     // distance itself, this only says whether a drag is happening at all.
-    ScrollOverview::Dock::setWindowDragActive(drag.activeWindow.operator bool());
+    Hyprdrive::Dock::setWindowDragActive(drag.activeWindow.operator bool());
     OpenProf::gpuMark("pinned+top");
-    ScrollOverview::Dock::render(MONITOR);
+    Hyprdrive::Dock::render(MONITOR);
     OpenProf::gpuMark("dock");
     // Hover titles hang off the bottom of a tile, so they collide with the
     // dock on the active card. Flush them after the pill so the label is the
@@ -843,7 +843,7 @@ void CScrollOverview::render() {
     if (Prof::enabled() && Prof::pending) {
         ++Prof::frames;
         const auto SINCEKEY = std::chrono::duration<double, std::milli>(Prof::clock::now() - Prof::keyAt).count();
-        if (FILE* const F = ScrollOverview::DebugPaths::openLog("hyprdrive-prof.log")) {
+        if (FILE* const F = Hyprdrive::DebugPaths::openLog("hyprdrive-prof.log")) {
             // The query's LENGTH, never its text: a log of timings has no
             // business holding what was searched for (marketplace review, #11392).
             std::fprintf(F, "qlen=%-3zu f=%llu sinceKey=%7.2fms  FRAME=%6.2fms  bg=%6.2fms  live=%6.2fms  strip=%6.2fms  renderSearch=%6.2fms  match=%5.2fms/%llu  rows=%5.2fms  app=%5.2fms  scan=%5.2fms/%llu  TEXT[cold=%llu %6.2fms]  ICON[cold=%llu resolve=%6.2f decode=%6.2f upload=%6.2f]  LETTERS[n=%zu busy=%d]  RETARGET[%d]  SCALE[%.5f]  FIELDW[%.3f]\n",

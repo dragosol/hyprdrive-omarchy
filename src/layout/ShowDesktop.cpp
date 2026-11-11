@@ -38,7 +38,7 @@
 #undef protected
 #undef private
 
-namespace ScrollOverview::ShowDesktop {
+namespace Hyprdrive::ShowDesktop {
     namespace {
         using namespace ShowDesktopMath;
 

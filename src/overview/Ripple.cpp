@@ -17,7 +17,7 @@
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 
-namespace ScrollOverview::Ripple {
+namespace Hyprdrive::Ripple {
 
     namespace {
         // The film's jump ring (edge.ts, WAVE): speed, wavenumber, envelope and

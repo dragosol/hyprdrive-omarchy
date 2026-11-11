@@ -16,7 +16,7 @@
 
 #include <unordered_map>
 
-namespace ScrollOverview::DockRoom {
+namespace Hyprdrive::DockRoom {
     namespace {
         std::unordered_map<MONITORID, CBox> g_lastPill;
         uint64_t                            g_relayoutSeq = 0;

@@ -23,7 +23,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace ScrollOverview::IconOverrides {
+namespace Hyprdrive::IconOverrides {
     // Lines -> {desktop id -> icon}. Blank lines, `#` comments, a line with no
     // tab, an empty id or an empty icon are skipped; trailing whitespace and CR
     // are trimmed; the LAST line for an id wins.

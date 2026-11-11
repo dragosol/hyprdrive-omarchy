@@ -22,7 +22,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ScrollOverview::Launch {
+namespace Hyprdrive::Launch {
 
     // Told of every launch that goes through wrap() (Intent::init sets it): a
     // window the user launched may take the focus (Intent.hpp). A plain

@@ -165,7 +165,7 @@ std::string CScrollOverview::frameDebugLine() const {
         out += " pan";
     if (SearchLetters::g_searchLetters.busy(Time::steadyNow()))
         out += " searchLetters";
-    if (const auto DOCK = ScrollOverview::Dock::frameReason(MONITOR); DOCK)
+    if (const auto DOCK = Hyprdrive::Dock::frameReason(MONITOR); DOCK)
         out += std::string(" dock:") + DOCK;
 
     return out;
@@ -516,7 +516,7 @@ bool CScrollOverview::needsIdleRepaint() const {
     if (searchHoverEasing() || pillPlaying())
         return true;
 
-    if (ScrollOverview::BorderFade::animatingOn(pMonitor.lock()))
+    if (Hyprdrive::BorderFade::animatingOn(pMonitor.lock()))
         return true;
 
     // THE TWO HAND-TIMED ANIMATIONS OF THE SEARCH FIELD (user, 2026-09-19: the
@@ -925,7 +925,7 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
     // Minimized windows never hit this because their stash workspace fails
     // shouldShowOverviewWindow below and takes the `return true` -- which is why
     // X25's minimized previews measured live and Y11's did not.
-    if (ScrollOverview::Dock::isPreviewing(window)) {
+    if (Hyprdrive::Dock::isPreviewing(window)) {
         noteFrameGate(window, "dock-preview");
         return true;
     }
@@ -933,7 +933,7 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
     // ...and the same argument for a window that was just retiled onto a
     // desktop nobody is looking at: it needs a few real frames to redraw at its
     // new size, or the strip shows its old buffer inside the new frame.
-    if (ScrollOverview::Dock::isRetiling(window)) {
+    if (Hyprdrive::Dock::isRetiling(window)) {
         noteFrameGate(window, "retiling");
         return true;
     }

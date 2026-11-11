@@ -3,7 +3,7 @@
 
 #include <cstdio>
 
-using namespace ScrollOverview::SubmapBorrow;
+using namespace Hyprdrive::SubmapBorrow;
 
 static int checks = 0, failed = 0;
 static void expect(bool ok, const char* what) {

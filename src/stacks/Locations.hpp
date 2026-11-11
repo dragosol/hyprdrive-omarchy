@@ -12,7 +12,7 @@
 // kind: everything in Dock.cpp that identifies an app keys on a WINDOW CLASS,
 // and a location has none -- so a location that pretended to be an SItem would
 // answer every one of those lookups with the empty string.
-namespace ScrollOverview::Locations {
+namespace Hyprdrive::Locations {
 
     struct SLocation {
         std::string uri;             // `trash:///`, or the mount root as a file:// URI

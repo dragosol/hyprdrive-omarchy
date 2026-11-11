@@ -17,7 +17,7 @@
 
 #include <string>
 
-namespace ScrollOverview::FileUri {
+namespace Hyprdrive::FileUri {
 
     // An absolute path as a percent-encoded file:// URI -- or the old spelling
     // where GLib refuses (a relative path), which is no worse than before.

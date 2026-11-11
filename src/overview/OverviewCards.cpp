@@ -61,7 +61,7 @@ void CScrollOverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float 
     // genuinely clipped and antialiased against whatever is behind them --
     // shadow included -- which no painted-on mask could match exactly.
     if (alpha > 0.001F && frost.cardWallpaperFB && frost.cardWallpaperFB->isAllocated() && frost.cardWallpaperFB->getTexture()) {
-        const auto    CARDROUND = getOverviewCardRounding(monitor, ScrollOverview::Config::getScale());
+        const auto    CARDROUND = getOverviewCardRounding(monitor, Hyprdrive::Config::getScale());
         const auto    BOXPX     = box.copy().round();
         const CRegion DMG{BOXPX};
 
@@ -84,9 +84,9 @@ void CScrollOverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float 
     // window borders, floored at 1 so a theme with border_size 0 still frames
     // the card.
     if (alpha > 0.001F) {
-        const auto CARDROUND   = getOverviewCardRounding(monitor, ScrollOverview::Config::getScale());
-        const int  BORDERSIZE  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
-        const auto ACCENT      = ScrollOverview::Config::highlightColor();
+        const auto CARDROUND   = getOverviewCardRounding(monitor, Hyprdrive::Config::getScale());
+        const int  BORDERSIZE  = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
+        const auto ACCENT      = Hyprdrive::Config::highlightColor();
 
         // While the workspace drag is running, the card the detent is settling
         // on wears a heavier ring. FOCUS is 1 on a card centre and 0 at the
@@ -312,18 +312,18 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
             // The open decelerates, so its speed is up front; the close
             // accelerates, so its speed is at the end -- its progress is
             // mirrored, or the fade would be over before the tiles got going.
-            const auto  SITE = ZOOMING ? ScrollOverview::FlightBlur::ESite::OVERVIEW :
-                    KEYPAN            ? (WHEELLAST ? ScrollOverview::FlightBlur::ESite::WHEEL_PAN : ScrollOverview::FlightBlur::ESite::DESKTOP_SWITCH) :
-                                        ScrollOverview::FlightBlur::ESite::SEARCH_TILES;
+            const auto  SITE = ZOOMING ? Hyprdrive::FlightBlur::ESite::OVERVIEW :
+                    KEYPAN            ? (WHEELLAST ? Hyprdrive::FlightBlur::ESite::WHEEL_PAN : Hyprdrive::FlightBlur::ESite::DESKTOP_SWITCH) :
+                                        Hyprdrive::FlightBlur::ESite::SEARCH_TILES;
             const float PROG = ZOOMING ? (closing ? 1.F - scale->getPercent() : scale->getPercent()) : 0.F;
-            const CBox  HALF = ScrollOverview::FlightBlur::shape(SITE, P, windowBox, PROG);
+            const CBox  HALF = Hyprdrive::FlightBlur::shape(SITE, P, windowBox, PROG);
             // Only a real move: a frame-to-frame jump of a third of the screen
             // is a card swap, not motion.
             // (Not the first frame's: that one is computed, not a swap.)
             const bool JUMP = !firstFramePrev &&
                 (std::abs(P.x - windowBox.x) > monitor->m_transformedSize.x / 3.0 || std::abs(P.y - windowBox.y) > monitor->m_transformedSize.y / 3.0);
             if (!JUMP)
-                tileBlurred = ScrollOverview::FlightBlur::drawBlurred(
+                tileBlurred = Hyprdrive::FlightBlur::drawBlurred(
                     monitor, window, HALF, windowBox,
                     [&] {
                         renderWindowLive(monitor, window, windowBox, renderScale, now, PROMOTED ? &ACTIVECARDBOX : &CARDBOX, false, NEIGHBOURALPHA(PROMOTED), false);
@@ -331,7 +331,7 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
                         // with it (user, 2026-09-30).
                         TileChrome::render(monitor, window, windowBox, monitor->m_scale, CHROMEFADE);
                     },
-                    ScrollOverview::FlightBlur::layoutSamples());
+                    Hyprdrive::FlightBlur::layoutSamples());
             if (tileBlurred)
                 OverviewRender::flushPass(monitor);
         }
@@ -639,9 +639,9 @@ void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, 
     // frame through the blurred path (user's recording, 2026-10-10).
     const bool GROWS = PREV.w >= 1 && (std::abs(PREV.w - windowBox.w) > 2.0 || std::abs(PREV.h - windowBox.h) > 2.0);
     if (GROWS &&
-        ScrollOverview::FlightBlur::drawBlurred(monitor, WINDOW, ScrollOverview::FlightBlur::shape(ScrollOverview::FlightBlur::ESite::DRAG, PREV, windowBox, 0.F), windowBox,
+        Hyprdrive::FlightBlur::drawBlurred(monitor, WINDOW, Hyprdrive::FlightBlur::shape(Hyprdrive::FlightBlur::ESite::DRAG, PREV, windowBox, 0.F), windowBox,
                                                 [&] { renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true, 1.F, false); },
-                                                ScrollOverview::FlightBlur::layoutSamples()))
+                                                Hyprdrive::FlightBlur::layoutSamples()))
         return;
 
     renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true);
@@ -703,7 +703,7 @@ void CScrollOverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float over
     if (!monitor)
         return;
 
-    const auto TARGETOVERVIEWSCALE = ScrollOverview::Config::getScale();
+    const auto TARGETOVERVIEWSCALE = Hyprdrive::Config::getScale();
     const auto ANIMATIONPROGRESS   = (1.F - TARGETOVERVIEWSCALE) > 0.001F ? (1.F - overviewScale) / (1.F - TARGETOVERVIEWSCALE) : 1.F;
 
     for (const auto& windowRef : pinnedFloatingWindows) {
@@ -935,7 +935,7 @@ void CScrollOverview::redrawAll(bool forcelowres) {
         // missed, and the window was never added to anything and so never drawn.
         // One lookup, not the twenty scattered `m_workspace ==` comparisons a
         // first reading suggested.
-        WORKSPACEID homeId = ScrollOverview::Minimize::originalWorkspace(overviewWindow);
+        WORKSPACEID homeId = Hyprdrive::Minimize::originalWorkspace(overviewWindow);
         if (homeId == WORKSPACE_INVALID)
             homeId = overviewWindow->m_workspace->m_id;
 

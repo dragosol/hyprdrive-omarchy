@@ -1,7 +1,7 @@
 // The spring-loaded dock: a client file drag held over an icon.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 

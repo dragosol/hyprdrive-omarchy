@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 namespace fs = std::filesystem;
-using ScrollOverview::StoreFile::replace;
+using Hyprdrive::StoreFile::replace;
 
 static int checks = 0, failed = 0;
 

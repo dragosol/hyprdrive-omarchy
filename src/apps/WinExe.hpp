@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace ScrollOverview::WinExe {
+namespace Hyprdrive::WinExe {
         struct SPe {
         std::vector<uint8_t>                       rsrc;
         uint32_t                                   rva = 0;

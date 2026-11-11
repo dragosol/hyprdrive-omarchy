@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-using namespace ScrollOverview::StackModel;
+using namespace Hyprdrive::StackModel;
 
 static int g_fail = 0, g_checks = 0;
 static void check(bool ok, const std::string& what) {
@@ -128,7 +128,7 @@ int main() {
 
     // TextInput's Backspace removes one CODEPOINT, never half of one.
     {
-        using ScrollOverview::TextInput::popCodepoint;
+        using Hyprdrive::TextInput::popCodepoint;
         std::string t = "caf\xc3\xa9";
         popCodepoint(t);
         check(t == "caf", "pop é");

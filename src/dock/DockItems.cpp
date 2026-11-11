@@ -2,7 +2,7 @@
 // dockItems), publishing them, badges, urgency and the urgent-hop timer.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 
@@ -368,7 +368,7 @@ static void publishDockApps(const std::vector<SItem>& items) {
         const auto        WHICH = Config::getValue<std::string>(KEY_TRASH_ICON);
         const auto        STYLE = Config::getValue<std::string>("plugin:hyprdrive:dock:trash_style");
         const auto        PAPERS = Config::getValue<std::string>("plugin:hyprdrive:dock:trash_papers");
-        const auto        A     = ScrollOverview::Config::highlightColor();
+        const auto        A     = Hyprdrive::Config::highlightColor();
         const auto        HEX   = std::format("#{:02x}{:02x}{:02x}", sc<int>(std::clamp(A.r, 0.0, 1.0) * 255.0), sc<int>(std::clamp(A.g, 0.0, 1.0) * 255.0),
                                               sc<int>(std::clamp(A.b, 0.0, 1.0) * 255.0));
         static std::string lastKey;
@@ -487,7 +487,7 @@ float previewAspect(const PHLWINDOW& window) {
 }
 
 CHyprColor background() {
-    return ScrollOverview::Config::dockBackgroundColor();
+    return Hyprdrive::Config::dockBackgroundColor();
 }
 
 // X25. A minimized window lives on a special workspace nobody shows, so every
@@ -533,7 +533,7 @@ float elapsedMs(const Time::steady_tp& since) {
     // Hover panel, tooltip fade, bounce, launch zoom. Autohide reveal uses
     // realElapsedMs so Hyprdrive motion off still slides the pill in from the
     // bottom edge.
-    return ScrollOverview::Config::animElapsedMs(since);
+    return Hyprdrive::Config::animElapsedMs(since);
 }
 
 // ---- X31 -------------------------------------------------------------------

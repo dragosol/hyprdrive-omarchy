@@ -56,7 +56,7 @@ static void append(const fs::path& p) {
 }
 
 static std::string lookup(const fs::path& p) {
-    return ScrollOverview::Thumbs::lookup(p.string(), KIND);
+    return Hyprdrive::Thumbs::lookup(p.string(), KIND);
 }
 
 int main() {
@@ -151,7 +151,7 @@ int main() {
         check(!e && T == OLDER, "...stamped with the copy's date");
     }
 
-    ScrollOverview::Thumbs::shutdown();
+    Hyprdrive::Thumbs::shutdown();
     std::error_code ec;
     fs::remove_all(ROOT, ec);
     std::printf("thumbs_test: %d checks, %d failed\n", g_checks, g_fail);

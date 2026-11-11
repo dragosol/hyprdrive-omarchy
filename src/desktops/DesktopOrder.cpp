@@ -12,7 +12,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace ScrollOverview::DesktopOrder {
+namespace Hyprdrive::DesktopOrder {
     bool ordinary(const PHLWORKSPACE& ws) {
         return ws && !ws->m_isSpecialWorkspace && ws->m_id >= 1;
     }

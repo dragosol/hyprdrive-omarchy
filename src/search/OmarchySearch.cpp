@@ -444,7 +444,7 @@ std::string agentRunner() {
 std::string agentLaunch(const std::string& tmpl, bool withPrompt) {
     if (!withPrompt || !tmpl.starts_with(OMARCHY_TUI))
         return tmpl;
-    return std::string{OMARCHY_TUI} + ScrollOverview::shellQuote(agentRunner()) + " --prompt-file " + std::string{PROMPT_FILE_MARK} + " -- " +
+    return std::string{OMARCHY_TUI} + Hyprdrive::shellQuote(agentRunner()) + " --prompt-file " + std::string{PROMPT_FILE_MARK} + " -- " +
         tmpl.substr(OMARCHY_TUI.size());
 }
 
@@ -2056,7 +2056,7 @@ bool activate(const SSearchItem& item) {
         // The opened app is a child of this: its own scope (Launch.hpp).
         std::string              binary = "/usr/bin/xdg-open";
         std::vector<std::string> args   = {item.filePath};
-        ScrollOverview::Launch::wrap(binary, args);
+        Hyprdrive::Launch::wrap(binary, args);
         CProcess proc(binary, args);
         return proc.runAsync();
     }
@@ -2075,7 +2075,7 @@ bool activate(const SSearchItem& item) {
         // An action can start an app (an agent opens a terminal): its own scope.
         std::string              binary = "/bin/bash";
         std::vector<std::string> args   = {"-c", command};
-        ScrollOverview::Launch::wrap(binary, args);
+        Hyprdrive::Launch::wrap(binary, args);
         CProcess proc(binary, args);
         return proc.runAsync();
     }

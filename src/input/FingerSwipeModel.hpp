@@ -27,7 +27,7 @@
 #include <set>
 #include <vector>
 
-namespace ScrollOverview::FingerSwipeModel {
+namespace Hyprdrive::FingerSwipeModel {
 
     struct SVec {
         double x = 0, y = 0;

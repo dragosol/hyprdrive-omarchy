@@ -7,7 +7,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace ScrollOverview::IconOverrides {
+namespace Hyprdrive::IconOverrides {
     namespace {
         // Twice a second, like the favourites store: on the layout path, and the
         // file changes when someone clicks in the settings panel.
@@ -28,9 +28,9 @@ namespace ScrollOverview::IconOverrides {
 
         std::filesystem::path path() {
             if (const char* STATE = std::getenv("XDG_STATE_HOME"); STATE && *STATE)
-                return std::filesystem::path{STATE} / ScrollOverview::Compat::NAME / "icons";
+                return std::filesystem::path{STATE} / Hyprdrive::Compat::NAME / "icons";
             if (const char* HOME = std::getenv("HOME"); HOME && *HOME)
-                return std::filesystem::path{HOME} / ".local" / "state" / ScrollOverview::Compat::NAME / "icons";
+                return std::filesystem::path{HOME} / ".local" / "state" / Hyprdrive::Compat::NAME / "icons";
             return {};
         }
 

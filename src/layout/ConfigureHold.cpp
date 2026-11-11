@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace ScrollOverview::ConfigureHold {
+namespace Hyprdrive::ConfigureHold {
     namespace {
         struct SHeld {
             PHLWINDOWREF window;

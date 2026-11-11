@@ -64,7 +64,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ScrollOverview::Mosaic {
+namespace Hyprdrive::Mosaic {
 
     class CMosaicAlgorithm;
     namespace MosaicDetail {
@@ -210,7 +210,7 @@ namespace ScrollOverview::Mosaic {
                 // Never while the dock has a fan, a pane or a menu up (user,
                 // 2026-11-03): a hover that got past it must not slide the
                 // canvas -- and the pointer with it -- out from under the dock.
-                const bool DOCKUP = ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen();
+                const bool DOCKUP = Hyprdrive::Stacks::isOpen() || Hyprdrive::Dock::menuOpen();
                 // A window sliding under the pointer while it still pushes is
                 // no hover -- but once the pointer is off the edge, the push
                 // is over (user, 2026-11-09: quickly back on the previous
@@ -408,7 +408,7 @@ namespace ScrollOverview::Mosaic {
             // where the layout had it, so the view jumping under it landed it
             // off screen and slid it in (user, 2026-10-29: "you replaced my
             // maximize from dock animation"). It pans, as before.
-            if (animate && std::chrono::steady_clock::now() - m_rearrangedAt < std::chrono::milliseconds(600) && !ScrollOverview::Flight::hasFlight(w)) {
+            if (animate && std::chrono::steady_clock::now() - m_rearrangedAt < std::chrono::milliseconds(600) && !Hyprdrive::Flight::hasFlight(w)) {
                 trace(std::format("reveal after a re-arrangement: {}x{} -> {}x{} as window moves", m_canvasOffset.x, m_canvasOffset.y, WANT->x, WANT->y));
                 m_pan.on       = false;
                 m_canvasOffset = *WANT;
@@ -468,10 +468,10 @@ namespace ScrollOverview::Mosaic {
         // window wholly past that edge, and only after a firm push
         // (PUSH_PRESSURE): a light touch is the dock's.
         bool pushThrough(const Vector2D& lost) {
-            if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:mosaic:edge_push"))
+            if (!Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:mosaic:edge_push"))
                 return false;
             // A dock menu or fan is up: the push is not the canvas's.
-            if (ScrollOverview::Stacks::isOpen() || ScrollOverview::Dock::menuOpen())
+            if (Hyprdrive::Stacks::isOpen() || Hyprdrive::Dock::menuOpen())
                 return false;
             if (!m_asCanvas || m_zoomed || !shownNow())
                 return false;
@@ -798,7 +798,7 @@ namespace ScrollOverview::Mosaic {
         // this desktop's screen; the tiles keep dwindle's own rule
         // (placeInTiles), and the first window still centres.
         void placeAtCursor(const SP<Layout::ITarget>& target) {
-            if (!ScrollOverview::Config::getValue<bool>("plugin:hyprdrive:mosaic:spawn_at_cursor") || !m_tree.empty() || m_entries.size() < 2)
+            if (!Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:mosaic:spawn_at_cursor") || !m_tree.empty() || m_entries.size() < 2)
                 return;
             const auto AREA = area();
             if (!AREA || indexOf(target) < 0)

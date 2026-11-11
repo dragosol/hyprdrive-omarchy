@@ -27,7 +27,7 @@
 #include <optional>
 #include <vector>
 
-namespace ScrollOverview::MosaicPack {
+namespace Hyprdrive::MosaicPack {
 
     struct SCanvasPack {
         std::vector<SRect> rects;  // per window, in the input order; canvas coordinates (0,0 = top left)

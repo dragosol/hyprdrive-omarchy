@@ -29,7 +29,7 @@
 
 namespace fs = std::filesystem;
 
-namespace ScrollOverview::GameApps {
+namespace Hyprdrive::GameApps {
     namespace {
         std::string lower(std::string s) {
             std::ranges::transform(s, s.begin(), [](unsigned char c) { return std::tolower(c); });

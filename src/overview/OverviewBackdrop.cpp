@@ -44,7 +44,7 @@ namespace OverviewDetail {
 
     // What this monitor's frost does right now: AUTO picks LIVE or SNAPSHOT.
     EBackdrop resolvedBackdrop(MONITORID id) {
-        const auto M = ScrollOverview::Config::getBackdrop();
+        const auto M = Hyprdrive::Config::getBackdrop();
         if (M != EBackdrop::AUTO)
             return M;
         return wallpaperRate(id) >= AUTO_LIVE_MAX_HZ ? EBackdrop::SNAPSHOT : EBackdrop::LIVE;
@@ -86,7 +86,7 @@ namespace {
         // the backdrop mode shows a live wallpaper -- the next open then blurs
         // a fresh frame of it (the snapshot), and a still one costs nothing.
         IT->second.cardWallpaperDirty = true;
-        if (background || backdropSeesBottom(ScrollOverview::Config::getBackdrop()))
+        if (background || backdropSeesBottom(Hyprdrive::Config::getBackdrop()))
             IT->second.backdropDirty = true;
     }
 
@@ -120,7 +120,7 @@ namespace {
     }
 }
 
-namespace ScrollOverview {
+namespace Hyprdrive {
 
     std::string wallpaperStashReport() {
         std::string out = std::format("  | wallpaper stash: commits while closed {}", g_wallpaperCommits);
@@ -267,9 +267,9 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
     frostSigMixP(h, monitor->m_background.get());
     if (monitor->m_backgroundOpacity)
         frostSigMixD(h, monitor->m_backgroundOpacity->value());
-    frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:background_color")));
-    frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:disable_hyprland_logo")));
-    frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("misc:disable_splash_rendering")));
+    frostSigMix(h, sc<uint64_t>(Hyprdrive::Config::getValue<int>("misc:background_color")));
+    frostSigMix(h, sc<uint64_t>(Hyprdrive::Config::getValue<int>("misc:disable_hyprland_logo")));
+    frostSigMix(h, sc<uint64_t>(Hyprdrive::Config::getValue<int>("misc:disable_splash_rendering")));
 
     const auto MIXLAYER = [&h, includeTextures](const PHLLS& ls) {
         if (!Desktop::View::validMapped(ls))
@@ -299,10 +299,10 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
     }
 
     if (includeBlurKnobs) {
-        frostSigMixD(h, ScrollOverview::Config::getValue<float>("decoration:blur:brightness"));
-        frostSigMixD(h, ScrollOverview::Config::getValue<float>("decoration:blur:vibrancy"));
-        frostSigMixD(h, ScrollOverview::Config::getValue<float>("decoration:blur:vibrancy_darkness"));
-        frostSigMix(h, sc<uint64_t>(ScrollOverview::Config::getValue<int>("render:use_shader_blur_blend")));
+        frostSigMixD(h, Hyprdrive::Config::getValue<float>("decoration:blur:brightness"));
+        frostSigMixD(h, Hyprdrive::Config::getValue<float>("decoration:blur:vibrancy"));
+        frostSigMixD(h, Hyprdrive::Config::getValue<float>("decoration:blur:vibrancy_darkness"));
+        frostSigMix(h, sc<uint64_t>(Hyprdrive::Config::getValue<int>("render:use_shader_blur_blend")));
     }
 
     return h;
@@ -383,7 +383,7 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
         return;
 
     // The backdrop mode is part of the key: switching it in the panel rebuilds.
-    const auto MODE      = ScrollOverview::Config::getBackdrop();
+    const auto MODE      = Hyprdrive::Config::getBackdrop();
     const auto RESOLVED  = resolvedBackdrop(monitor->m_id);
     const bool BOTTOM    = backdropSeesBottom(MODE);
     const int  MODEKEY   = wallpaperMode * 8 + sc<int>(MODE);
@@ -464,22 +464,22 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
         return;
     }
 
-    const auto PREV_ENABLED  = ScrollOverview::Config::getValue<bool>("decoration:blur:enabled");
-    const auto PREV_SIZE     = ScrollOverview::Config::getValue<int>("decoration:blur:size");
-    const auto PREV_PASSES   = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
-    const auto PREV_NOISE    = ScrollOverview::Config::getValue<float>("decoration:blur:noise");
-    const auto PREV_CONTRAST = ScrollOverview::Config::getValue<float>("decoration:blur:contrast");
-    ScrollOverview::Config::setValue("decoration:blur:enabled", true);
-    ScrollOverview::Config::setValue("decoration:blur:size", LOCKSCREEN_BLUR_SIZE);
-    ScrollOverview::Config::setValue("decoration:blur:passes", LOCKSCREEN_BLUR_PASSES);
-    ScrollOverview::Config::setValue("decoration:blur:noise", 0.F);
-    ScrollOverview::Config::setValue("decoration:blur:contrast", LOCKSCREEN_BLUR_CONTRAST);
+    const auto PREV_ENABLED  = Hyprdrive::Config::getValue<bool>("decoration:blur:enabled");
+    const auto PREV_SIZE     = Hyprdrive::Config::getValue<int>("decoration:blur:size");
+    const auto PREV_PASSES   = Hyprdrive::Config::getValue<int>("decoration:blur:passes");
+    const auto PREV_NOISE    = Hyprdrive::Config::getValue<float>("decoration:blur:noise");
+    const auto PREV_CONTRAST = Hyprdrive::Config::getValue<float>("decoration:blur:contrast");
+    Hyprdrive::Config::setValue("decoration:blur:enabled", true);
+    Hyprdrive::Config::setValue("decoration:blur:size", LOCKSCREEN_BLUR_SIZE);
+    Hyprdrive::Config::setValue("decoration:blur:passes", LOCKSCREEN_BLUR_PASSES);
+    Hyprdrive::Config::setValue("decoration:blur:noise", 0.F);
+    Hyprdrive::Config::setValue("decoration:blur:contrast", LOCKSCREEN_BLUR_CONTRAST);
     auto restoreBlur = Hyprutils::Utils::CScopeGuard([PREV_ENABLED, PREV_SIZE, PREV_PASSES, PREV_NOISE, PREV_CONTRAST, monitor] {
-        ScrollOverview::Config::setValue("decoration:blur:enabled", PREV_ENABLED);
-        ScrollOverview::Config::setValue("decoration:blur:size", PREV_SIZE);
-        ScrollOverview::Config::setValue("decoration:blur:passes", PREV_PASSES);
-        ScrollOverview::Config::setValue("decoration:blur:noise", PREV_NOISE);
-        ScrollOverview::Config::setValue("decoration:blur:contrast", PREV_CONTRAST);
+        Hyprdrive::Config::setValue("decoration:blur:enabled", PREV_ENABLED);
+        Hyprdrive::Config::setValue("decoration:blur:size", PREV_SIZE);
+        Hyprdrive::Config::setValue("decoration:blur:passes", PREV_PASSES);
+        Hyprdrive::Config::setValue("decoration:blur:noise", PREV_NOISE);
+        Hyprdrive::Config::setValue("decoration:blur:contrast", PREV_CONTRAST);
         // Y17: this guard is now only constructed on the rebuild path, so
         // m_blurFBDirty is set only when the forced-config blur actually ran --
         // it used to be set on every frame of every monitor, which asked

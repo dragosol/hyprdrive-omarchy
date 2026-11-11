@@ -22,7 +22,7 @@
 // (CInputManager::onMouseButton emits the bus event first and returns on
 // info.cancelled), so a claim is a veto over the bind and a pass-through leaves
 // the drag exactly as it was before this existed.
-namespace ScrollOverview::WindowPill {
+namespace Hyprdrive::WindowPill {
 
 enum class EButton : uint8_t {
     None = 0, // on the capsule, but not on a button -- NOT a claim

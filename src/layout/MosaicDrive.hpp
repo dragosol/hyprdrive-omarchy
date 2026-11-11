@@ -8,7 +8,7 @@
 // compositor's current (animated) position and size move, the way a restore
 // flight draws a window (FlightController.cpp). Its own TU because it needs
 // the animated variables' protected flag.
-namespace ScrollOverview::MosaicDrive {
+namespace Hyprdrive::MosaicDrive {
     // Draw `w` at `box` (global logical) from the next frame on.
     void drawAt(const PHLWINDOW& w, const CBox& box);
     // Where the layout has it (the animated variables' goals).

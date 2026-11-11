@@ -8,7 +8,7 @@
 // that littered both). The ladder lives here now; each hook resolves its own
 // monitor, pill-local point and button ROLE, then forwards. Every place the two
 // modes genuinely differ is a parameter, not a second copy.
-namespace ScrollOverview::DockInput {
+namespace Hyprdrive::DockInput {
 
 // The role the caller's own button mapping assigned. Desktop hardcodes
 // (right=Menu, middle=Launch, left=Main); the overview honours the left-handed

@@ -73,11 +73,11 @@ static bool currentBindIsWheel() {
 
 CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
     // A shown desktop's windows back first: the overview shows the real ones.
-    ScrollOverview::ShowDesktop::restoreNow();
+    Hyprdrive::ShowDesktop::restoreNow();
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
     pMonitor                     = PMONITOR;
     adoptWallpaperStash();
-    layout                       = ScrollOverview::Config::getLayout();
+    layout                       = Hyprdrive::Config::getLayout();
     sharedStateOwner             = scrollOverviews().empty();
     usesSubmapKeybinds           = hasOverviewSubmap();
     // The overview's own mouse binds must let a press through when the
@@ -99,9 +99,9 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     applyWorkspaceAnimationOverrides();
     if (sharedStateOwner)
         forceWorkspaceAlphaVisible();
-    ScrollOverview::Dock::releasePointerFocus();
+    Hyprdrive::Dock::releasePointerFocus();
     // A zoomed-out canvas ends here: its presses would be ours too.
-    ScrollOverview::Mosaic::onOverviewOpen();
+    Hyprdrive::Mosaic::onOverviewOpen();
     applyInputConfigOverrides();
     OpenProf::mark("ctor overrides applied");
     g_pInputManager->unconstrainMouse();
@@ -118,7 +118,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // well before it stops moving), accelerate out (leave slowly enough to read
     // as motion, then get out of the way): the animation:curve preset's pair,
     // registered under the house names. Motion::sync owns the numbers.
-    ScrollOverview::Motion::sync();
+    Hyprdrive::Motion::sync();
 
     workspaceInsertFadeConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     workspaceInsertFadeConfig->overridden      = true;
@@ -139,7 +139,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     openAnimConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     openAnimConfig->overridden      = true;
     openAnimConfig->internalBezier  = OVERVIEW_OPEN_BEZIER;
-    openAnimConfig->internalSpeed   = ScrollOverview::Config::getOpenSpeed();
+    openAnimConfig->internalSpeed   = Hyprdrive::Config::getOpenSpeed();
     openAnimConfig->internalEnabled = WINDOWSMOVEVALUES ? WINDOWSMOVEVALUES->internalEnabled : 1;
     openAnimConfig->internalStyle   = "";
     openAnimConfig->pValues         = openAnimConfig;
@@ -147,7 +147,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     closeAnimConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     closeAnimConfig->overridden      = true;
     closeAnimConfig->internalBezier  = OVERVIEW_CLOSE_BEZIER;
-    closeAnimConfig->internalSpeed   = ScrollOverview::Config::getCloseSpeed();
+    closeAnimConfig->internalSpeed   = Hyprdrive::Config::getCloseSpeed();
     closeAnimConfig->internalEnabled = WINDOWSMOVEVALUES ? WINDOWSMOVEVALUES->internalEnabled : 1;
     closeAnimConfig->internalStyle   = "";
     closeAnimConfig->pValues         = closeAnimConfig;
@@ -155,7 +155,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     reverseAnimConfig                  = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
     reverseAnimConfig->overridden      = true;
     reverseAnimConfig->internalBezier  = OVERVIEW_OPEN_BEZIER; // ease-OUT: maximum slope at t=0
-    reverseAnimConfig->internalSpeed   = ScrollOverview::Config::getCloseSpeed();
+    reverseAnimConfig->internalSpeed   = Hyprdrive::Config::getCloseSpeed();
     reverseAnimConfig->internalEnabled = WINDOWSMOVEVALUES ? WINDOWSMOVEVALUES->internalEnabled : 1;
     reverseAnimConfig->internalStyle   = "";
     reverseAnimConfig->pValues         = reverseAnimConfig;
@@ -212,7 +212,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     g_search.resetLayout(PMONITOR ? PMONITOR->m_id : MONITOR_INVALID);
 
     if (!swipe)
-        *scale = ScrollOverview::Config::getScale();
+        *scale = Hyprdrive::Config::getScale();
 
     const auto initialFullscreenWindow =
         PMONITOR && PMONITOR->m_activeWorkspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(PMONITOR->m_activeWorkspace)) : PHLWINDOW{};
@@ -266,7 +266,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     // the others open after the keyboard is gone and would read the same one.
     if (scrollOverviews().size() <= 1)
         OvInternal::g_focusAtOpen = Desktop::focusState()->window();
-    ScrollOverview::Stacks::traceEvent(std::format("locks: open on {} (overviews={}) focusAtOpen={}", pMonitor ? pMonitor->m_name : "?", scrollOverviews().size(),
+    Hyprdrive::Stacks::traceEvent(std::format("locks: open on {} (overviews={}) focusAtOpen={}", pMonitor ? pMonitor->m_name : "?", scrollOverviews().size(),
                                                    OvInternal::g_focusAtOpen.lock() ? OvInternal::g_focusAtOpen->m_class : "-"));
     rememberSelection(Desktop::focusState()->window());
     viewportCurrentWorkspace = activeWorkspaceIndex();
@@ -323,14 +323,14 @@ void CScrollOverview::close() {
     // X28. The pill only exists while the overview does, so its menu must go
     // with it -- otherwise a stale plate is still holding every pointer press
     // the next time the overview opens.
-    ScrollOverview::Dock::closeMenu();
+    Hyprdrive::Dock::closeMenu();
 
     // X32/G12. Same reasoning for both drags: the overview can close under a
     // held button (Escape, a keybind, a window taking focus), and the release
     // that would have ended the gesture then never reaches this hook. Neither
     // may survive into the next open as a phantom drop.
-    ScrollOverview::Dock::dragCancel();
-    ScrollOverview::Dock::setForeignInsert(-1);
+    Hyprdrive::Dock::dragCancel();
+    Hyprdrive::Dock::setForeignInsert(-1);
     OmarchySearch::closeSushi();
 
     // Click-to-close and swipe-commit never go through the dispatcher, so a
@@ -408,8 +408,8 @@ void CScrollOverview::close() {
     // note that a stashed window is restored rather than selected because the
     // stash owns no card to land a selection on. This is the fourth caller, not
     // a fourth answer.
-    if (closeOnWindow && ScrollOverview::Minimize::isMinimized(closeOnWindow.lock()))
-        ScrollOverview::Minimize::restore(closeOnWindow.lock());
+    if (closeOnWindow && Hyprdrive::Minimize::isMinimized(closeOnWindow.lock()))
+        Hyprdrive::Minimize::restore(closeOnWindow.lock());
 
     // X43: focus and stacking are two different things. fullWindowFocus() only
     // makes a window active -- it never restacks -- so a selected floating
@@ -603,7 +603,7 @@ void CScrollOverview::onPreRender() {
     // The border fade (BorderFade.hpp) rings -- tiles, plates, strip cells,
     // the dock pill -- on the same pacer, for the same reason: wall-clock
     // eases, and plain damage is throttled while an overview is open.
-    if (ScrollOverview::BorderFade::animatingOn(pMonitor.lock()))
+    if (Hyprdrive::BorderFade::animatingOn(pMonitor.lock()))
         gridSetReflowActive(pMonitor.lock());
 
     if (gridTakeReflowActive(pMonitor.lock())) {
@@ -773,8 +773,8 @@ void CScrollOverview::onWorkspaceChange() {
     // back under as a ghost while the empty one fades in at its own place.
     // (Before, both were a plain pan: user's recording, 2026-11-06.)
     const bool PREVKNOWN   = previousStartedOn && previousStartedOn != NEWWORKSPACE && previousWorkspaceOffsets.contains(workspaceKey(previousStartedOn));
-    const bool REUSEDENTER = !INSERTEDWORKSPACE && PREVKNOWN && ScrollOverview::FullscreenDesktop::justEntered(NEWWORKSPACE);
-    const bool REUSEDEXIT  = !REMOVEDPREVIOUSWORKSPACE && !REUSEDENTER && PREVKNOWN && ScrollOverview::FullscreenDesktop::justLeft(previousStartedOn) &&
+    const bool REUSEDENTER = !INSERTEDWORKSPACE && PREVKNOWN && Hyprdrive::FullscreenDesktop::justEntered(NEWWORKSPACE);
+    const bool REUSEDEXIT  = !REMOVEDPREVIOUSWORKSPACE && !REUSEDENTER && PREVKNOWN && Hyprdrive::FullscreenDesktop::justLeft(previousStartedOn) &&
         std::ranges::any_of(images, [&](const auto& image) { return image && image->pWorkspace == previousStartedOn; });
     const bool BORNLIKE    = INSERTEDWORKSPACE || REUSEDENTER;
 
@@ -919,7 +919,7 @@ void CScrollOverview::syncPluginAnimEnabled() {
     // internalEnabled, so plugin:hyprdrive:anim_scale 0 would otherwise still
     // ease the overview while dock flights snap. Refresh every frame so a live
     // panel toggle takes effect on an already-open overview.
-    const int ON = ScrollOverview::Config::motionEnabled() ? 1 : 0;
+    const int ON = Hyprdrive::Config::motionEnabled() ? 1 : 0;
     const auto set = [ON](const SP<Hyprutils::Animation::SAnimationPropertyConfig>& cfg) {
         if (cfg)
             cfg->internalEnabled = ON;
@@ -937,11 +937,11 @@ void CScrollOverview::syncPluginAnimEnabled() {
     // second), so the scale multiplies them. Refreshed here every frame, so a
     // live change reaches the next animation of an open overview. (A reversal
     // sets its own speed from the same product, in useAnimDirection.)
-    const float S = std::max(0.01F, ScrollOverview::Config::animScale());
+    const float S = std::max(0.01F, Hyprdrive::Config::animScale());
     if (openAnimConfig)
-        openAnimConfig->internalSpeed = ScrollOverview::Config::getOpenSpeed() * S;
+        openAnimConfig->internalSpeed = Hyprdrive::Config::getOpenSpeed() * S;
     if (closeAnimConfig)
-        closeAnimConfig->internalSpeed = ScrollOverview::Config::getCloseSpeed() * S;
+        closeAnimConfig->internalSpeed = Hyprdrive::Config::getCloseSpeed() * S;
     if (searchAnimConfig)
         searchAnimConfig->internalSpeed = SEARCH_ANIM_SPEED * S;
 }
@@ -963,15 +963,15 @@ void CScrollOverview::useAnimDirection(bool opening) {
     // actually left to travel, or a reversal caught at 90% open would spend a
     // full close on the last 10% and feel slower than no animation at all.
     if (scale && scale->isBeingAnimated() && reverseAnimConfig) {
-        const float OPEN   = ScrollOverview::Config::getScale();
+        const float OPEN   = Hyprdrive::Config::getScale();
         const float TARGET = opening ? OPEN : 1.F;
         const float RANGE  = std::max(0.01F, std::abs(1.F - OPEN));
         const float LEFT   = std::clamp(std::abs(TARGET - scale->value()) / RANGE, 0.F, 1.F);
-        const float BASE   = opening ? ScrollOverview::Config::getOpenSpeed() : ScrollOverview::Config::getCloseSpeed();
+        const float BASE   = opening ? Hyprdrive::Config::getOpenSpeed() : Hyprdrive::Config::getCloseSpeed();
 
         // Floor it: a hair of travel still deserves a frame or two of motion
         // rather than a teleport.
-        reverseAnimConfig->internalSpeed = std::max(0.3F, BASE * std::max(0.01F, ScrollOverview::Config::animScale()) * LEFT);
+        reverseAnimConfig->internalSpeed = std::max(0.3F, BASE * std::max(0.01F, Hyprdrive::Config::animScale()) * LEFT);
 
         scale->setConfig(reverseAnimConfig);
         viewOffset->setConfig(reverseAnimConfig);
@@ -998,7 +998,7 @@ void CScrollOverview::reopen() {
     closeOnWindow.reset();
     setClosing(false); // flips `closing` back to false + re-arms the overrides
     // Open again, as from the constructor: a zoom started during the close ends.
-    ScrollOverview::Mosaic::onOverviewOpen();
+    Hyprdrive::Mosaic::onOverviewOpen();
 
     if (sharedStateOwner)
         forceWorkspaceAlphaVisible();
@@ -1025,14 +1025,14 @@ void CScrollOverview::reopen() {
     // where the close had got to: no jump, and no restart from the endpoint.
     useAnimDirection(true);
     *viewOffset = Vector2D{};
-    *scale      = ScrollOverview::Config::getScale();
+    *scale      = Hyprdrive::Config::getScale();
 
     stealOverviewKeyboard();
     damage();
 }
 
-static_assert(ScrollOverview::SubmapBorrow::MOD_SHIFT == HL_MODIFIER_SHIFT && ScrollOverview::SubmapBorrow::MOD_CTRL == HL_MODIFIER_CTRL &&
-              ScrollOverview::SubmapBorrow::MOD_ALT == HL_MODIFIER_ALT && ScrollOverview::SubmapBorrow::MOD_META == HL_MODIFIER_META);
+static_assert(Hyprdrive::SubmapBorrow::MOD_SHIFT == HL_MODIFIER_SHIFT && Hyprdrive::SubmapBorrow::MOD_CTRL == HL_MODIFIER_CTRL &&
+              Hyprdrive::SubmapBorrow::MOD_ALT == HL_MODIFIER_ALT && Hyprdrive::SubmapBorrow::MOD_META == HL_MODIFIER_META);
 
 static void borrowGlobalPassthroughBinds(const std::string& fromSubmap) {
     if (!g_pKeybindManager)
@@ -1040,7 +1040,7 @@ static void borrowGlobalPassthroughBinds(const std::string& fromSubmap) {
 
     for (const auto& keybind : g_pKeybindManager->m_keybinds) {
         if (!keybind || keybind->submapUniversal || keybind->submap.name != fromSubmap ||
-            !ScrollOverview::SubmapBorrow::borrows(keybind->key, keybind->modmask, keybind->mouse, keybind->catchAll))
+            !Hyprdrive::SubmapBorrow::borrows(keybind->key, keybind->modmask, keybind->mouse, keybind->catchAll))
             continue;
 
         keybind->submapUniversal = true;
@@ -1072,7 +1072,7 @@ void CScrollOverview::activateSubmapIfConfigured() {
 
     const auto SUBMAP = boundOverviewSubmap();
     if (SUBMAP != std::string_view{OVERVIEW_SUBMAP})
-        ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::KEY, std::string{"submap "} + SUBMAP);
+        Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::KEY, std::string{"submap "} + SUBMAP);
 
     const auto RESULT = Config::Actions::setSubmap(SUBMAP);
     if (!RESULT) {
@@ -1164,7 +1164,7 @@ void OvInternal::releasePointerLocks() {
         if (const auto C = c.lock(); C && C->isActive())
             ++active;
     if (active)
-        ScrollOverview::Stacks::traceEvent(std::format("locks: release {} (overviews={} closing0={})", active, scrollOverviews().size(),
+        Hyprdrive::Stacks::traceEvent(std::format("locks: release {} (overviews={} closing0={})", active, scrollOverviews().size(),
                                                        scrollOverviews().empty() || !scrollOverviews().front() ? -1 : (int)scrollOverviews().front()->isClosing()));
     g_pInputManager->unconstrainMouse();
 }
@@ -1204,7 +1204,7 @@ void CScrollOverview::superChanged() {
 
 // A desktop with windows on it, numbered (not special, not named).
 bool CScrollOverview::deskMovable(size_t idx) const {
-    if (idx >= images.size() || !images[idx] || !ScrollOverview::DesktopOrder::ordinary(images[idx]->pWorkspace))
+    if (idx >= images.size() || !images[idx] || !Hyprdrive::DesktopOrder::ordinary(images[idx]->pWorkspace))
         return false;
     return std::ranges::any_of(images[idx]->windows, [](const PHLWINDOWREF& r) {
         const auto W = r.lock();
@@ -1223,7 +1223,7 @@ bool CScrollOverview::moveDesktop(size_t from, size_t to) {
     std::vector<PHLWORKSPACE> order;
     std::vector<WORKSPACEID>  ids;
     for (const auto& I : images) {
-        if (!I || !ScrollOverview::DesktopOrder::ordinary(I->pWorkspace))
+        if (!I || !Hyprdrive::DesktopOrder::ordinary(I->pWorkspace))
             return false;
         order.push_back(I->pWorkspace);
         ids.push_back(I->pWorkspace->m_id);
@@ -1235,7 +1235,7 @@ bool CScrollOverview::moveDesktop(size_t from, size_t to) {
     std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
     for (size_t k = 0; k < order.size(); ++k)
         moves.emplace_back(order[k], ids[k]);
-    ScrollOverview::DesktopOrder::renumber(moves);
+    Hyprdrive::DesktopOrder::renumber(moves);
     // (renumber asked for a rebuild; this one runs now, with the transition.)
     onWorkspaceChange();
     return true;
@@ -1313,7 +1313,7 @@ bool CScrollOverview::deskDragMove() {
         return false;
     }
     const auto  MON = pMonitor.lock();
-    const float THR = ScrollOverview::Config::getDragThreshold() * (MON ? MON->m_scale : 1.F);
+    const float THR = Hyprdrive::Config::getDragThreshold() * (MON ? MON->m_scale : 1.F);
     if (!deskDrag.live && deskDrag.start.distanceSq(lastMousePosLocal) > THR * THR)
         deskDrag.live = true;
     if (deskDrag.live && MON && deskDrag.from < images.size()) {
@@ -1354,7 +1354,7 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
     // overview over a game) gives it the lock back.
     if (const auto HLSURF = surface ? Desktop::View::CWLSurface::fromResource(surface) : nullptr; HLSURF && HLSURF->constraint()) {
         HLSURF->constraint()->activate();
-        ScrollOverview::Stacks::traceEvent(std::format("locks: handed back to {} active={}", window->m_class, HLSURF->constraint()->isActive() ? 1 : 0));
+        Hyprdrive::Stacks::traceEvent(std::format("locks: handed back to {} active={}", window->m_class, HLSURF->constraint()->isActive() ? 1 : 0));
         return;
     }
 
@@ -1376,18 +1376,18 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
         const CBox BOX{FINAL->m_realPosition->goal(), FINAL->m_realSize->goal()};
         if (BOX.width < 1 || BOX.height < 1 || (!CENTRE && BOX.containsPoint(g_pInputManager->getMouseCoordsInternal())))
             return;
-        ScrollOverview::Stacks::traceEvent(std::format("locks: warp into {}", FINAL->m_class));
+        Hyprdrive::Stacks::traceEvent(std::format("locks: warp into {}", FINAL->m_class));
         Pointer::pointerController()->warpTo(BOX.middle(), true);
     });
 }
 
 void OvInternal::traceHandback(const char* who, const PHLWINDOW& asked, const PHLWINDOW& target, const PHLWINDOW& before) {
     const auto NAME = [](const PHLWINDOW& w) { return w ? w->m_class : std::string{"-"}; };
-    ScrollOverview::Stacks::traceEvent(std::format("locks: handback {} asked={} target={} before={} after={}", who, NAME(asked), NAME(target), NAME(before),
+    Hyprdrive::Stacks::traceEvent(std::format("locks: handback {} asked={} target={} before={} after={}", who, NAME(asked), NAME(target), NAME(before),
                                                    NAME(Desktop::focusState()->window())));
 }
 
-ScrollOverview::DesktopTape::STape ScrollOverview::DesktopTape::probe(const PHLWORKSPACE& workspace) {
+Hyprdrive::DesktopTape::STape Hyprdrive::DesktopTape::probe(const PHLWORKSPACE& workspace) {
     STape tape;
     const auto ALGO = overviewScrollingAlgorithmForWorkspace(workspace);
     if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller || !ALGO->m_scrollingData->controller->isPrimaryHorizontal())
@@ -1398,7 +1398,7 @@ ScrollOverview::DesktopTape::STape ScrollOverview::DesktopTape::probe(const PHLW
     return tape;
 }
 
-void ScrollOverview::DesktopTape::setOffset(const PHLWORKSPACE& workspace, double offset) {
+void Hyprdrive::DesktopTape::setOffset(const PHLWORKSPACE& workspace, double offset) {
     const auto ALGO = overviewScrollingAlgorithmForWorkspace(workspace);
     if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller)
         return;

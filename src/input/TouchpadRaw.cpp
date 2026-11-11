@@ -18,7 +18,7 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <aquamarine/input/Input.hpp>
 
-namespace ScrollOverview::TouchpadRaw {
+namespace Hyprdrive::TouchpadRaw {
 
     namespace {
         constexpr int MAX_SLOTS = 16;

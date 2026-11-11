@@ -23,7 +23,7 @@
 // ends it -- and whatever was owed is paid back. The desktops slide on the
 // strip's spring (DesktopStrip::glideTo): changing your mind halfway turns the
 // slide round where it is.
-namespace ScrollOverview::FullscreenDesktop {
+namespace Hyprdrive::FullscreenDesktop {
     void init();
     void shutdown();
     // render.pre, after the desktop strip's: a window on its way to or from a

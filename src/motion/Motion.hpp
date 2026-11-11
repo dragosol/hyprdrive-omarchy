@@ -25,7 +25,7 @@
 #include <cstdint>
 #include <string>
 
-namespace ScrollOverview::Motion {
+namespace Hyprdrive::Motion {
 
     enum class ERole : uint8_t {
         DECEL,

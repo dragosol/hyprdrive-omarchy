@@ -13,7 +13,7 @@
 // fullscreen on that monitor, a game holds the pointer, a swipe is running, the
 // session is locked, or an overview is closing. Only an OUTER corner
 // counts: where another monitor continues past it, the pointer just crosses.
-namespace ScrollOverview::HotCorner {
+namespace Hyprdrive::HotCorner {
     // After Config::registerConfig() (the keys must exist before anything reads
     // them), and shutdown() at PLUGIN_EXIT: the timer must not outlive the .so.
     void init();

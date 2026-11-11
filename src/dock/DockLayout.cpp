@@ -2,7 +2,7 @@
 // and layout().
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 
@@ -37,7 +37,7 @@ float hiddenFraction(PHLMONITOR monitor) {
 
     const auto& R  = g_reveal[monitor->m_id];
     const int   MS = std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS));
-    const float E  = revealEase(std::clamp(ScrollOverview::Config::realElapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
+    const float E  = revealEase(std::clamp(Hyprdrive::Config::realElapsedMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
 
     // From wherever it WAS to wherever it is going, which is what makes a
     // reversal continuous instead of a jump to the far end.
@@ -83,7 +83,7 @@ bool autohideAnimating(PHLMONITOR monitor) {
 
     // X54. A flight counts as animating: the window is mid-air toward the icon
     // and nothing else on an idle desktop would ask for the frames it needs.
-    return R.pending || Flight::anyOn(monitor) || ScrollOverview::Config::realElapsedMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
+    return R.pending || Flight::anyOn(monitor) || Hyprdrive::Config::realElapsedMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
 }
 
 float arrangeEase(float t) { // ease-out cubic: fast away, soft landing
@@ -119,7 +119,7 @@ SLayout arranged(MONITORID id, const SLayout& resting) {
     auto&       A = IT->second;
     // On the animation clock, so plugin:hyprdrive:anim_scale (the panel's
     // speed) stretches it too; 0 finishes it at once.
-    const float T = ScrollOverview::Config::animElapsedMs(A.since) / ARRANGE_MS;
+    const float T = Hyprdrive::Config::animElapsedMs(A.since) / ARRANGE_MS;
     if (T >= 1.F) {
         A.active = false;
         A.fromBoxes.clear();
@@ -190,8 +190,8 @@ bool arrangeAnimating(MONITORID id) {
     if (IT == g_arrange.end())
         return false;
     auto& A = IT->second;
-    std::erase_if(A.exits, [](const SArrangeExit& X) { return ScrollOverview::Config::animElapsedMs(X.since) >= EXIT_MS; });
-    return (A.active && ScrollOverview::Config::animElapsedMs(A.since) < ARRANGE_MS) || !A.exits.empty();
+    std::erase_if(A.exits, [](const SArrangeExit& X) { return Hyprdrive::Config::animElapsedMs(X.since) >= EXIT_MS; });
+    return (A.active && Hyprdrive::Config::animElapsedMs(A.since) < ARRANGE_MS) || !A.exits.empty();
 }
 
 SLayout buildBaseLayout(PHLMONITOR monitor) {
@@ -236,7 +236,7 @@ SLayout buildBaseLayout(PHLMONITOR monitor) {
 
     out.pill = CBox{XL * SCALE, YL * SCALE, M.width * SCALE, M.height * SCALE};
     out.pill.round();
-    out.rounding = std::max(0, sc<int>(std::round(sc<float>(ScrollOverview::Config::dockCornerRadius()) * SCALE)));
+    out.rounding = std::max(0, sc<int>(std::round(sc<float>(Hyprdrive::Config::dockCornerRadius()) * SCALE)));
 
     float cursor = XL + CONTAINER_PAD_X + ITEM_MARGIN_X;
     out.items = std::move(items);
@@ -294,7 +294,7 @@ const SLayout& baseLayout(PHLMONITOR monitor) {
     key.height   = monitor->m_size.y;
     key.scale    = monitor->m_scale;
     key.iconSize = Config::getValue<int>(KEY_ICON_SIZE);
-    key.radius   = ScrollOverview::Config::dockCornerRadius();
+    key.radius   = Hyprdrive::Config::dockCornerRadius();
     key.fraction = Config::getValue<float>(KEY_FRACTION);
     key.flags    = (Config::getValue<bool>(KEY_ENABLED) ? 1U : 0U) |          //
         (Config::getValue<bool>(KEY_SHOW_APPS) ? 2U : 0U) |                   //
@@ -476,7 +476,7 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
         R.pendingSince = Time::steadyNow();
     }
 
-    if (!immediate && ScrollOverview::Config::realElapsedMs(R.pendingSince) < sc<float>(std::max(0, Config::getValue<int>(want ? KEY_SHOW_DELAY : KEY_HIDE_DELAY))))
+    if (!immediate && Hyprdrive::Config::realElapsedMs(R.pendingSince) < sc<float>(std::max(0, Config::getValue<int>(want ? KEY_SHOW_DELAY : KEY_HIDE_DELAY))))
         return;
 
     R.from      = hiddenFraction(monitor);

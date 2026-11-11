@@ -79,7 +79,7 @@ namespace OpenProf {
         void abRestore() {
             if (g_abSaved < 0)
                 return;
-            ScrollOverview::Config::setValue("render:new_render_scheduling", g_abSaved);
+            Hyprdrive::Config::setValue("render:new_render_scheduling", g_abSaved);
             g_abSaved = -1;
         }
         std::vector<GLuint>   g_freeQueries;
@@ -164,7 +164,7 @@ namespace OpenProf {
         void flush() {
             if (g_lines.empty())
                 return;
-            if (FILE* f = ScrollOverview::DebugPaths::openLog("hyprdrive-openprof.log")) {
+            if (FILE* f = Hyprdrive::DebugPaths::openLog("hyprdrive-openprof.log")) {
                 for (const auto& l : g_lines)
                     std::fprintf(f, "%s\n", l.c_str());
                 std::fclose(f);
@@ -286,7 +286,7 @@ namespace OpenProf {
 
     void begin(const char* what) {
         // Read per open, not per load: touch/rm the flag with no reload.
-        if (!ScrollOverview::DebugPaths::flagOn("hyprdrive-openprof.on"))
+        if (!Hyprdrive::DebugPaths::flagOn("hyprdrive-openprof.on"))
             return;
         flush(); // a previous window cut short by this open
         g_on       = true;
@@ -342,11 +342,11 @@ namespace OpenProf {
             });
         }
         std::string ab;
-        if (ScrollOverview::DebugPaths::flagOn("hyprdrive-openprof.ab")) {
+        if (Hyprdrive::DebugPaths::flagOn("hyprdrive-openprof.ab")) {
             abRestore();
-            g_abSaved       = ScrollOverview::Config::getValue<int>("render:new_render_scheduling");
+            g_abSaved       = Hyprdrive::Config::getValue<int>("render:new_render_scheduling");
             const int SCHED = (g_abOpen++ % 2 == 0) ? 1 : 0;
-            ScrollOverview::Config::setValue("render:new_render_scheduling", SCHED);
+            Hyprdrive::Config::setValue("render:new_render_scheduling", SCHED);
             ab = SCHED ? " sched=new" : " sched=old";
         }
         g_lines.push_back(std::format("=== open ({}) gpuclk {}{}", what, gpuMHz(), ab));

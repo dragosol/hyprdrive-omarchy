@@ -31,12 +31,12 @@
 #include <cstdint>
 #include <optional>
 
-namespace ScrollOverview::Geometry {
+namespace Hyprdrive::Geometry {
 
     using Hyprutils::Math::CBox;
     using Hyprutils::Math::Vector2D;
 
-    // Mirrors ScrollOverview::Config::ELayout value for value. OverviewInternal.hpp
+    // Mirrors Hyprdrive::Config::ELayout value for value. OverviewInternal.hpp
     // static_asserts the correspondence at the boundary and casts; this header must
     // not include Config.hpp, which drags in the whole compositor.
     enum class EAxis : uint8_t {
@@ -135,4 +135,4 @@ namespace ScrollOverview::Geometry {
     float    hyprlerp(float from, float to, float perc);
     Vector2D hyprlerp(const Vector2D& from, const Vector2D& to, float perc);
 
-} // namespace ScrollOverview::Geometry
+} // namespace Hyprdrive::Geometry

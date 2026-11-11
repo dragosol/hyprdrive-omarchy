@@ -28,11 +28,11 @@
 #include <optional>
 #include <string>
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 struct SLayout;
 }
 
-namespace ScrollOverview::Flight {
+namespace Hyprdrive::Flight {
 
 // FROZEN AT CREATION (Z18: re-deriving it per frame flipped a flight between
 // proxy and driven when the overview closed mid-flight).
@@ -103,7 +103,7 @@ bool isRestoreFlight(const PHLWINDOW& window);
 // Advance every flight one frame AND DRAW IT, inside the dock's render pass.
 // `now` and `ownsPass` are the dock's render context, handed over for the
 // duration of the loop so the drawing is bit-identical to when it lived there.
-void renderFlights(PHLMONITOR monitor, const ScrollOverview::Dock::SLayout& layout, const Time::steady_tp& now, bool ownsPass);
+void renderFlights(PHLMONITOR monitor, const Hyprdrive::Dock::SLayout& layout, const Time::steady_tp& now, bool ownsPass);
 
 // LAND EVERY FLIGHT WHERE IT STANDS, with the same guarantees a landing gives:
 // unhidden, alpha 1, geometry at the target, focus handed off. One mechanism,

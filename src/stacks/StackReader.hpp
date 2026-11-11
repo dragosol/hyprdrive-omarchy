@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::StackReader {
+namespace Hyprdrive::StackReader {
     constexpr size_t MAX_ENTRIES = 5000;
 
     struct SListing {

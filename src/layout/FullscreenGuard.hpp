@@ -23,7 +23,7 @@
 // other window takes the focus. Every route -- the overview's pick, the dock, a
 // keybind, an activation request, a notification -- comes through
 // CFocusState::fullWindowFocus, which installFocusHook() hooks.
-namespace ScrollOverview::FullscreenGuard {
+namespace Hyprdrive::FullscreenGuard {
     // A game, as far as a window tells: the content type it set, a Steam game,
     // gamescope, or a Windows program under XWayland.
     bool      isGame(const PHLWINDOW& w);

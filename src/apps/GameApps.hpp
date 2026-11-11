@@ -27,7 +27,7 @@
 //
 // AppSearch asks through two hooks (AppSearch.hpp): extra inventory entries,
 // and a window class -> app id map.
-namespace ScrollOverview::GameApps {
+namespace Hyprdrive::GameApps {
     void init();
     void shutdown();
 }

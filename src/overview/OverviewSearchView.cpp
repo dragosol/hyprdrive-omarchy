@@ -65,7 +65,7 @@ size_t CScrollOverview::matchingWindowCount() const {
 struct SSearchLayoutInputs {
     PHLMONITOR                     monitor;
     float                          renderScale = 1.F;
-    ScrollOverview::Config::ELayout layout{};
+    Hyprdrive::Config::ELayout layout{};
     float                          fade = 0.F;  // the overview's open progress
     float                          dock = 0.F;  // X50: searchDock->value()
     float                          nudge = 0.F; // pillNudge->value(): rendered px the pill is lifted for a strip label
@@ -603,10 +603,10 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
     // this is still a circle, so nothing changes there.
     const float INSET      = std::max(0.0, std::min(BADGE.x - PILL.x, BADGE.y - PILL.y));
     const int   BADGEROUND = std::clamp(sc<int>(std::round(PILLROUND - INSET)), 0, sc<int>(std::round(std::min(BADGE.w, BADGE.h) / 2.0)));
-    const auto ACCENT    = ScrollOverview::Config::highlightColor();
+    const auto ACCENT    = Hyprdrive::Config::highlightColor();
 
     if (DRAWPILL)
-        OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit, ScrollOverview::BorderFade::key("search-pill", renderMonitorId()));
+        OverviewRender::themePlate(PILL, PILLROUND, POWER, FADE, false, pillLit, Hyprdrive::BorderFade::key("search-pill", renderMonitorId()));
 
     CRectPassElement::SRectData badgeBg;
     badgeBg.box           = BADGE;
@@ -625,7 +625,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
     };
 
-    const auto GLYPHTEX = OverviewRender::text("\uF002", ScrollOverview::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
+    const auto GLYPHTEX = OverviewRender::text("\uF002", Hyprdrive::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
                                                       "JetBrainsMono Nerd Font", 0);
     if (DRAWPILL && GLYPHTEX && GLYPHTEX->ok()) {
         CBox glyphBox = {
@@ -639,12 +639,12 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
 
     if (DRAWBODY) {
     if (L.containerBox.width > 1.F) {
-        OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true, resultsLit, ScrollOverview::BorderFade::key("search-results", renderMonitorId()));
+        OverviewRender::themePlate(L.containerBox, roundFor(L.containerBox), POWER, FADE, true, resultsLit, Hyprdrive::BorderFade::key("search-results", renderMonitorId()));
 
         for (const auto& divBox : L.dividers) {
             CRectPassElement::SRectData div;
             div.box   = divBox;
-            div.color = ScrollOverview::Config::themeForeground().modifyA(0.12F * FADE);
+            div.color = Hyprdrive::Config::themeForeground().modifyA(0.12F * FADE);
             g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(div));
         }
     }
@@ -654,9 +654,9 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
     // and the translator read as the same surface as the results they replace.
     if (L.tool.active) {
         const CBox& HEAD   = L.tool.header;
-        const auto  FGCOL  = ScrollOverview::Config::themeForeground();
-        const auto  MUTED  = ScrollOverview::Config::themeMutedText();
-        const auto  HEADCO = ScrollOverview::Config::themeHeading();
+        const auto  FGCOL  = Hyprdrive::Config::themeForeground();
+        const auto  MUTED  = Hyprdrive::Config::themeMutedText();
+        const auto  HEADCO = Hyprdrive::Config::themeHeading();
 
         // Glyph, headword, source -- and on the right, what Enter does.
         const char* GLYPH  = L.tool.kind == 1 ? "\uf02d" : "\uf1ab"; // book / language
@@ -754,7 +754,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         }
 
         const int  HEADPX  = std::max(1, sc<int>(std::round(12.F * SCALE)));
-        const auto HEADTEX = OverviewRender::text(CARD.title, ScrollOverview::Config::themeHeading(), HEADPX, false, "", std::max(1, sc<int>(CARD.box.width - headIndent - PADL)), 600);
+        const auto HEADTEX = OverviewRender::text(CARD.title, Hyprdrive::Config::themeHeading(), HEADPX, false, "", std::max(1, sc<int>(CARD.box.width - headIndent - PADL)), 600);
         if (HEADTEX && HEADTEX->ok()) {
             CBox headText{CARD.box.x + headIndent, CARD.box.y + PADL, sc<float>(HEADTEX->m_size.x), sc<float>(HEADTEX->m_size.y)};
             ADDTEX(HEADTEX, headText.round());
@@ -763,7 +763,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         if (CARD.more > 0) {
             const int   MOREPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
             std::string moreStr = "+" + std::to_string(CARD.more);
-            const auto  MORETEX = OverviewRender::text(moreStr, ScrollOverview::Config::themeMutedText(), MOREPX, false, "", 100, 500);
+            const auto  MORETEX = OverviewRender::text(moreStr, Hyprdrive::Config::themeMutedText(), MOREPX, false, "", 100, 500);
             if (MORETEX && MORETEX->ok()) {
                 CBox moreBox{(CARD.box.x + CARD.box.width) - PADL - sc<float>(MORETEX->m_size.x), CARD.box.y + PADL, sc<float>(MORETEX->m_size.x), sc<float>(MORETEX->m_size.y)};
                 ADDTEX(MORETEX, moreBox.round());
@@ -790,7 +790,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             if (LIT > 0.01F) {
                 CRectPassElement::SRectData sel;
                 sel.box           = ROW;
-                const auto SELFILL = ScrollOverview::Config::themeSelectedFill();
+                const auto SELFILL = Hyprdrive::Config::themeSelectedFill();
                 sel.color          = SELFILL.modifyA(SELFILL.a * FADE * CARD.alpha * LIT);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
@@ -805,7 +805,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
                 const int         GLYPHPX = std::max(1, sc<int>(std::round(16.F * SCALE)));
                 const std::string FAMILY  = ITEM.iconFont.empty() ? "JetBrainsMono Nerd Font" : ITEM.iconFont;
                 const auto        GLYPHTEX =
-                    OverviewRender::text(ITEM.icon, ITEM.selected ? ScrollOverview::Config::themeSelectedText() : ScrollOverview::Config::themeForeground(), GLYPHPX, false,
+                    OverviewRender::text(ITEM.icon, ITEM.selected ? Hyprdrive::Config::themeSelectedText() : Hyprdrive::Config::themeForeground(), GLYPHPX, false,
                                          FAMILY, sc<int>(ICOND + std::round(8.F * SCALE)), 400);
                 if (GLYPHTEX && GLYPHTEX->ok()) {
                     CBox glyphBox{ROW.x + ROWPAD, ROW.y + std::round((ROW.height - sc<float>(GLYPHTEX->m_size.y)) / 2.F), sc<float>(GLYPHTEX->m_size.x),
@@ -820,7 +820,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             }
 
             const int  ROWPX  = std::max(1, sc<int>(std::round(13.F * SCALE)));
-            const auto FG     = ITEM.selected ? ScrollOverview::Config::themeSelectedText() : ScrollOverview::Config::themeForeground();
+            const auto FG     = ITEM.selected ? Hyprdrive::Config::themeSelectedText() : Hyprdrive::Config::themeForeground();
             const auto ROWTEX = OverviewRender::text(ITEM.name, FG, ROWPX, false, "", std::max(1, sc<int>(ROW.width - textIndent) - sc<int>(ROWPAD)), 500);
             if (ROWTEX && ROWTEX->ok()) {
                 CBox rowText{ROW.x + textIndent, ROW.y + std::round((ROW.height - sc<float>(ROWTEX->m_size.y)) / 2.F), sc<float>(ROWTEX->m_size.x), sc<float>(ROWTEX->m_size.y)};
@@ -832,7 +832,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
                     const float DESCX = rowText.x + rowText.width + std::round(8.F * SCALE);
                     const int   DESCW = sc<int>((ROW.x + ROW.width - ROWPAD) - DESCX);
                     if (DESCW > sc<int>(std::round(24.F * SCALE))) {
-                        const auto DESCFG = ITEM.selected ? FG : ScrollOverview::Config::themeMutedText();
+                        const auto DESCFG = ITEM.selected ? FG : Hyprdrive::Config::themeMutedText();
                         const int  DESCPX = std::max(1, sc<int>(std::round(11.F * SCALE)));
                         if (const auto DESCTEX = OverviewRender::text(ITEM.description, DESCFG, DESCPX, false, "", DESCW); DESCTEX && DESCTEX->ok()) {
                             CBox descText{DESCX, ROW.y + std::round((ROW.height - sc<float>(DESCTEX->m_size.y)) / 2.F), sc<float>(DESCTEX->m_size.x), sc<float>(DESCTEX->m_size.y)};
@@ -846,7 +846,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
 
         if (CARD.items.empty()) {
             const int  EMPTYPX  = std::max(1, sc<int>(std::round(12.F * SCALE)));
-            const auto EMPTYTEX = OverviewRender::text(CARD.emptyHint.empty() ? "No items" : CARD.emptyHint, ScrollOverview::Config::themeMutedText(), EMPTYPX, false, "", sc<int>(CARD.box.width - PADL * 2.F), 400);
+            const auto EMPTYTEX = OverviewRender::text(CARD.emptyHint.empty() ? "No items" : CARD.emptyHint, Hyprdrive::Config::themeMutedText(), EMPTYPX, false, "", sc<int>(CARD.box.width - PADL * 2.F), 400);
             if (EMPTYTEX && EMPTYTEX->ok()) {
                 CBox emptyBox{CARD.box.x + PADL, CARD.box.y + PADL + std::round(30.F * SCALE), sc<float>(EMPTYTEX->m_size.x), sc<float>(EMPTYTEX->m_size.y)};
                 ADDTEX(EMPTYTEX, emptyBox.round());
@@ -879,7 +879,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             ADDINSP(ICONTEX, iconBox.round());
         } else if (!L.inspector.icon.empty()) {
             const int  GLYPHPX = std::max(1, sc<int>(std::round(28.F * SCALE)));
-            const auto GLYPHTEX = OverviewRender::text(L.inspector.icon, ScrollOverview::Config::themeHeading(), GLYPHPX, false, "", sc<int>(ICOND), 400);
+            const auto GLYPHTEX = OverviewRender::text(L.inspector.icon, Hyprdrive::Config::themeHeading(), GLYPHPX, false, "", sc<int>(ICOND), 400);
             if (GLYPHTEX && GLYPHTEX->ok()) {
                 CBox glyphBox{IBOX.x + PADL, IBOX.y + PADL, sc<float>(GLYPHTEX->m_size.x), sc<float>(GLYPHTEX->m_size.y)};
                 ADDINSP(GLYPHTEX, glyphBox.round());
@@ -904,14 +904,14 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         };
 
         if (!L.inspector.category.empty()) {
-            auto catCol = ScrollOverview::Config::themeHeading();
+            auto catCol = Hyprdrive::Config::themeHeading();
             paintWrap(L.inspector.category, catCol, std::max(1, sc<int>(std::round(10.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(18.F * SCALE), std::round(3.F * SCALE));
         }
         if (!L.inspector.status.empty()) {
-            const auto STCOL = L.inspector.running ? ScrollOverview::Config::themeHeading() : ScrollOverview::Config::themeMutedText();
+            const auto STCOL = L.inspector.running ? Hyprdrive::Config::themeHeading() : Hyprdrive::Config::themeMutedText();
             paintWrap(L.inspector.status, STCOL, std::max(1, sc<int>(std::round(11.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(18.F * SCALE), std::round(3.F * SCALE));
         }
-        paintWrap(L.inspector.title, ScrollOverview::Config::themeForeground(), std::max(1, sc<int>(std::round(15.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(40.F * SCALE),
+        paintWrap(L.inspector.title, Hyprdrive::Config::themeForeground(), std::max(1, sc<int>(std::round(15.F * SCALE))), 600, TEXTX, TEXTW, sc<int>(40.F * SCALE),
                   std::round(4.F * SCALE));
 
         textY = std::max(textY, sc<float>(IBOX.y + PADL + ICOND)) + std::round(10.F * SCALE);
@@ -922,11 +922,11 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         // the foot are measured first, and the subtitle may fill everything
         // between the header and them -- a tall card shows the whole answer, a
         // short one ellipsizes on the last line that fits.
-        const auto DETCOL  = ScrollOverview::Config::themeMutedText();
+        const auto DETCOL  = Hyprdrive::Config::themeMutedText();
         const int  DETPX   = std::max(1, sc<int>(std::round(11.F * SCALE)));
         const int  DET3PX  = std::max(1, sc<int>(std::round(10.F * SCALE)));
         const int  HINTPX  = std::max(1, sc<int>(std::round(11.F * SCALE)));
-        const auto HINTCOL = ScrollOverview::Config::themeMutedText();
+        const auto HINTCOL = Hyprdrive::Config::themeMutedText();
         const int  WRAPW   = std::max(16, ((FULLW + 15) / 16) * 16);
         const auto measure = [&](const std::string& str, const CHyprColor& col, int px, int weight, int maxH, float gapAfter) -> float {
             if (str.empty())
@@ -941,7 +941,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             measure(L.inspector.shortcutHint, HINTCOL, HINTPX, 500, HINTH, std::round(4.F * SCALE)) + std::round(16.F * SCALE);
         const int SUBH = std::max(sc<int>(48.F * SCALE), sc<int>(CLIPB - textY - BELOW));
 
-        paintWrap(L.inspector.subtitle, ScrollOverview::Config::themeMutedText(), std::max(1, sc<int>(std::round(12.F * SCALE))), 400, IBOX.x + PADL, FULLW, SUBH,
+        paintWrap(L.inspector.subtitle, Hyprdrive::Config::themeMutedText(), std::max(1, sc<int>(std::round(12.F * SCALE))), 400, IBOX.x + PADL, FULLW, SUBH,
                   std::round(8.F * SCALE));
         paintWrap(L.inspector.detail1, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, DET1H, std::round(6.F * SCALE));
         paintWrap(L.inspector.detail2, DETCOL, DETPX, 400, IBOX.x + PADL, FULLW, DET2H, std::round(6.F * SCALE));
@@ -969,7 +969,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         return;
 
     texFade = FADE;
-    const CHyprColor FG = L.placeholder ? ScrollOverview::Config::themeMutedText() : (L.emptyResult ? ScrollOverview::Config::themeUrgent() : ScrollOverview::Config::themeForeground());
+    const CHyprColor FG = L.placeholder ? Hyprdrive::Config::themeMutedText() : (L.emptyResult ? Hyprdrive::Config::themeUrgent() : Hyprdrive::Config::themeForeground());
 
     const int  FONTPX = std::max(1, sc<int>(std::round(OVERVIEW_PILL_TEXTPX * SCALE)));
     const auto NOW    = Time::steadyNow();
@@ -1337,7 +1337,7 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     }
     // The easter egg's frame takes the same band (KeyboardCat::bandL), so the
     // strip makes room for it the way it does for results.
-    const float TARGET = std::max(PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, TOOLPANE, toolRowsHL) : 0.F, ScrollOverview::KeyboardCat::bandL());
+    const float TARGET = std::max(PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, TOOLPANE, toolRowsHL) : 0.F, Hyprdrive::KeyboardCat::bandL());
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 
@@ -1451,9 +1451,9 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         bool blurred = false;
         if (GROWING) {
             const float PCT  = std::max(resultsBand->isBeingAnimated() ? resultsBand->getPercent() : 0.F, resultsWidth->isBeingAnimated() ? resultsWidth->getPercent() : 0.F);
-            const CBox  PREV = ScrollOverview::FlightBlur::shape(ScrollOverview::FlightBlur::ESite::SEARCH_PANE, PREVBOX, SL.containerBox, PCT);
-            blurred = ScrollOverview::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
-                                                              ScrollOverview::FlightBlur::layoutSamples());
+            const CBox  PREV = Hyprdrive::FlightBlur::shape(Hyprdrive::FlightBlur::ESite::SEARCH_PANE, PREVBOX, SL.containerBox, PCT);
+            blurred = Hyprdrive::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
+                                                              Hyprdrive::FlightBlur::layoutSamples());
         }
         if (std::abs(g_pillPress.x - 1.F) > 0.0005F) {
             // The pill, squeezed about its own centre: its BOXES are scaled, not
@@ -1479,12 +1479,12 @@ void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         } else
             drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
         // The easter egg (KeyboardCat.hpp) opens out of the pill, over it.
-        ScrollOverview::KeyboardCat::render(monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
+        Hyprdrive::KeyboardCat::render(monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
     }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor
     // will not schedule the rest of the pop on its own.
-    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()) || ScrollOverview::KeyboardCat::busy()) {
+    if (SearchLetters::g_searchLetters.busy(Time::steadyNow()) || Hyprdrive::KeyboardCat::busy()) {
         damage();
         requestInputFrame();
     }
@@ -1536,7 +1536,7 @@ bool overviewHandleShiftTap() {
     if (idx < 0 || idx >= sc<int>(RESULTS.size()) || !RESULTS[sc<size_t>(idx)].app)
         return false;
 
-    AppSearch::launch(*RESULTS[sc<size_t>(idx)].app, ScrollOverview::Config::getTerminal());
+    AppSearch::launch(*RESULTS[sc<size_t>(idx)].app, Hyprdrive::Config::getTerminal());
     for (const auto& overview : scrollOverviews()) {
         if (overview)
             overview->close();

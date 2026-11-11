@@ -15,7 +15,7 @@
 #include <type_traits>
 #include <unordered_map>
 
-namespace ScrollOverview::Config {
+namespace Hyprdrive::Config {
 
 using TDispatcher       = SDispatchResult (*)(std::string);
 using TGestureKeyword   = Hyprlang::CParseResult (*)(const char* LHS, const char* RHS);

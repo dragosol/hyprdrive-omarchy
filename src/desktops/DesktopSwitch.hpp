@@ -22,7 +22,7 @@
 //     same warp Hyprland's own `instant` path does. Only Hyprland's workspaces
 //     animation is affected (Omarchy ships it disabled, and then this has
 //     nothing to cut short); never with the overview open, never a swipe.
-namespace ScrollOverview::DesktopSwitch {
+namespace Hyprdrive::DesktopSwitch {
     // PLUGIN_INIT, after registerConfig(): the dispatcher, the listeners and
     // the focus hook. Throws (like main.cpp's hooks) if the focus function
     // cannot be found.

@@ -28,7 +28,7 @@
 #include <string>
 #include <string_view>
 
-namespace ScrollOverview::SubmapBorrow {
+namespace Hyprdrive::SubmapBorrow {
 
 // Hyprland's HL_MODIFIER_* bits (IKeyboard.hpp, xkb's modifier order);
 // scrollOverview.cpp static_asserts they still agree.

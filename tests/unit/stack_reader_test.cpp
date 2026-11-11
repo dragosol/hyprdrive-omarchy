@@ -24,7 +24,7 @@ int main() {
     std::ofstream(DIR / "a.png") << "x";
     std::ofstream(DIR / "b.txt") << "x";
 
-    auto L = ScrollOverview::StackReader::readNow(DIR.string());
+    auto L = Hyprdrive::StackReader::readNow(DIR.string());
     check(L.ready && !L.truncated && !L.missing, "small dir ready");
     check(L.entries.size() == 3, "hidden skipped: " + std::to_string(L.entries.size()));
     bool sawDir = false, sawPng = false;
@@ -40,10 +40,10 @@ int main() {
     fs::create_directories(BIG);
     for (int i = 0; i < 6000; ++i)
         std::ofstream(BIG / ("f" + std::to_string(i))) << "";
-    auto B = ScrollOverview::StackReader::readNow(BIG.string());
-    check(B.entries.size() == ScrollOverview::StackReader::MAX_ENTRIES && B.truncated, "cap at 5000");
+    auto B = Hyprdrive::StackReader::readNow(BIG.string());
+    check(B.entries.size() == Hyprdrive::StackReader::MAX_ENTRIES && B.truncated, "cap at 5000");
 
-    auto M = ScrollOverview::StackReader::readNow((DIR / "nope").string());
+    auto M = Hyprdrive::StackReader::readNow((DIR / "nope").string());
     check(M.ready && M.missing && M.entries.empty(), "missing dir");
 
     // Dock stacks B: move into a folder, never overwriting, never into itself.
@@ -52,14 +52,14 @@ int main() {
     std::ofstream(DEST / "one.txt") << "old";
     std::ofstream(DIR / "one.txt") << "new";
     std::ofstream(DIR / "two.txt") << "two";
-    auto R = ScrollOverview::StackReader::moveOrCopyNow(DEST.string(), {(DIR / "one.txt").string(), (DIR / "two.txt").string()});
+    auto R = Hyprdrive::StackReader::moveOrCopyNow(DEST.string(), {(DIR / "one.txt").string(), (DIR / "two.txt").string()});
     check(R.error.empty() && R.moved == 2, "moved 2: " + R.error);
     check(fs::exists(DEST / "one (2).txt") && fs::exists(DEST / "two.txt") && !fs::exists(DIR / "one.txt"), "conflict renamed, sources gone");
     std::ifstream kept(DEST / "one.txt");
     std::string   keptText;
     kept >> keptText;
     check(keptText == "old", "the existing file was not overwritten");
-    auto SELF = ScrollOverview::StackReader::moveOrCopyNow((DEST).string(), {DIR.string()});
+    auto SELF = Hyprdrive::StackReader::moveOrCopyNow((DEST).string(), {DIR.string()});
     check(!SELF.error.empty() && SELF.moved == 0, "a folder into its own child refused");
 
     fs::remove_all(DIR);

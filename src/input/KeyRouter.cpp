@@ -67,7 +67,7 @@ void                registerRawKeyHooks() {
 
         // The zoomed-out canvas: the user's screenshot key (Print) shoots it,
         // though Super is held for the zoom (Mosaic::onZoomKey).
-        if (ScrollOverview::Mosaic::onZoomKey(event.keycode, PRESSED, event.timeMs)) {
+        if (Hyprdrive::Mosaic::onZoomKey(event.keycode, PRESSED, event.timeMs)) {
             info.cancelled = true;
             return;
         }
@@ -109,8 +109,8 @@ void                registerRawKeyHooks() {
                 // The easter egg owns the overview's keys while it is up: the
                 // first ones are swallowed (the hands are still mid-spam), any
                 // after that stops it, and none of them types into the search.
-                if (overviewAcceptsSearch() && ScrollOverview::KeyboardCat::active() && !isGlobalPassthroughKeycode(event.keycode) &&
-                    ScrollOverview::KeyboardCat::handleKey(event.keycode)) {
+                if (overviewAcceptsSearch() && Hyprdrive::KeyboardCat::active() && !isGlobalPassthroughKeycode(event.keycode) &&
+                    Hyprdrive::KeyboardCat::handleKey(event.keycode)) {
                     stopSearchRepeat();
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
@@ -146,12 +146,12 @@ void                registerRawKeyHooks() {
                 const bool PLAINKEY = g_heldGuardKeys.empty() && !isGlobalPassthroughKeycode(event.keycode);
 
                 // The dock menu's Rename field, while it is up, owns the keyboard.
-                if (PLAINKEY && ScrollOverview::Dock::menuWantsKeyboard() && ScrollOverview::Dock::menuHandleKey(event.keycode)) {
+                if (PLAINKEY && Hyprdrive::Dock::menuWantsKeyboard() && Hyprdrive::Dock::menuHandleKey(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;
                 }
-                if (PLAINKEY && ScrollOverview::Stacks::keyboardActive() && ScrollOverview::Stacks::handleKey(event.keycode)) {
+                if (PLAINKEY && Hyprdrive::Stacks::keyboardActive() && Hyprdrive::Stacks::handleKey(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     info.cancelled = true;
                     return;
@@ -269,7 +269,7 @@ void                registerRawKeyHooks() {
 
         // The infinite canvas's Super gesture (Mosaic.hpp): armed on the press,
         // over on the release -- zoomed out, the release zooms back in.
-        ScrollOverview::Mosaic::onSuperKey(PRESSED);
+        Hyprdrive::Mosaic::onSuperKey(PRESSED);
 
         if (PRESSED) {
             g_tapSuperCandidate = true;
@@ -281,10 +281,10 @@ void                registerRawKeyHooks() {
             return;
         g_tapSuperCandidate = false;
 
-        if (!ScrollOverview::Config::getTapSuper())
+        if (!Hyprdrive::Config::getTapSuper())
             return;
 
-        const auto TIMEOUT = ScrollOverview::Config::getTapSuperTimeoutMs();
+        const auto TIMEOUT = Hyprdrive::Config::getTapSuperTimeoutMs();
         if (TIMEOUT > 0 && event.timeMs - g_tapSuperPressedAt > static_cast<uint32_t>(TIMEOUT))
             return;
 

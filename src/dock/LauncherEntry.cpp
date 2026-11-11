@@ -17,7 +17,7 @@
 // all before anything is damaged.
 #include "Dock.hpp"
 
-namespace ScrollOverview::LauncherEntry {
+namespace Hyprdrive::LauncherEntry {
 
 namespace {
 

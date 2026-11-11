@@ -24,7 +24,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ScrollOverview::MountSort {
+namespace Hyprdrive::MountSort {
 
     struct SToken {
         bool        number = false;

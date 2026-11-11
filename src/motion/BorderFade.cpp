@@ -12,7 +12,7 @@
 #include <functional>
 #include <unordered_map>
 
-namespace ScrollOverview::BorderFade {
+namespace Hyprdrive::BorderFade {
     namespace {
         using Clock = std::chrono::steady_clock;
 

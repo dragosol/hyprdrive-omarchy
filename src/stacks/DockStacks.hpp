@@ -42,7 +42,7 @@
 // reads, trash jobs, inotify -- off the compositor thread), TextInput (shared
 // typing), StackPane.cpp (the searchable pane's geometry), StackIcon.cpp (the
 // pile cell). DOCK STACKS B added drops from other apps (DockDrop.hpp).
-namespace ScrollOverview::Stacks {
+namespace Hyprdrive::Stacks {
 
     // EVERY box handed to the render pass goes through this (2026-09-24: a
     // stack cell animating IN from zero size gave the pile outline a negative

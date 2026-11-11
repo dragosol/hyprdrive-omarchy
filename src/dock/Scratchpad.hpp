@@ -12,7 +12,7 @@
 // plugin's own `special:minimized` stash, which is not a scratchpad and has
 // semantics of its own (Minimize.hpp). Minimize::isStash is what keeps the two
 // apart, and it is asked here so no caller has to know the difference.
-namespace ScrollOverview::Scratchpad {
+namespace Hyprdrive::Scratchpad {
 
 // Every special workspace that is not the minimize stash.
 std::vector<PHLWORKSPACE> workspaces();

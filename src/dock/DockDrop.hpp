@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::DockDrop {
+namespace Hyprdrive::DockDrop {
 
     // Pointer motion on the plain desktop (null monitor: off every monitor).
     void onPointerMove(PHLMONITOR monitor, const Vector2D& local);

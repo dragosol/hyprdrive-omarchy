@@ -4,9 +4,9 @@
 # runs is a comment with a build cost.
 #
 # Three of them today:
-#   drop_table_test   ScrollOverview::Drop::resolve(), all 65536 fact
+#   drop_table_test   Hyprdrive::Drop::resolve(), all 65536 fact
 #                     combinations against the pre-split branch ladder.
-#   geometry_test     ScrollOverview::Geometry -- the overview's transform,
+#   geometry_test     Hyprdrive::Geometry -- the overview's transform,
 #                     clamps and box predicates.
 #   search_letters_test  SearchLetters -- Serpantinum Input.qml bounce eases,
 #                     UTF-8 split, prefix/suffix diff, animator state.

@@ -1,4 +1,4 @@
-// Host-side unit test for ScrollOverview::Geometry -- the overview's pure
+// Host-side unit test for Hyprdrive::Geometry -- the overview's pure
 // transforms. Needs no compositor, no Hyprland, no display: it links
 // OverviewGeometry.cpp against -lhyprutils and does arithmetic.
 //
@@ -25,7 +25,7 @@
 #include <optional>
 #include <string>
 
-using namespace ScrollOverview::Geometry;
+using namespace Hyprdrive::Geometry;
 
 static int g_fail = 0, g_run = 0;
 

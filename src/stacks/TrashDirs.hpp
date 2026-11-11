@@ -27,7 +27,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ScrollOverview::TrashDirs {
+namespace Hyprdrive::TrashDirs {
 
     // /proc/mounts writes a space, tab, newline or backslash inside a field as
     // \ooo. Decoded in ONE left-to-right pass, and only where three octal

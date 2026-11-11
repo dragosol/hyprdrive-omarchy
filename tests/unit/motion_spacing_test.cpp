@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <random>
 
-using namespace ScrollOverview::MotionSpacing;
+using namespace Hyprdrive::MotionSpacing;
 
 static int checks = 0, failed = 0;
 static void expect(bool ok, const char* what) {

@@ -12,7 +12,7 @@
 #include <cstring>
 #include <string_view>
 
-namespace ScrollOverview::Motion {
+namespace Hyprdrive::Motion {
     namespace {
         using Hyprutils::Math::Vector2D;
 

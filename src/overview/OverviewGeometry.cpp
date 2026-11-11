@@ -11,7 +11,7 @@
 // Nothing else changed -- deliberately, so a disagreement between the old
 // pixels and the new ones is a transcription slip and not a redesign.
 
-namespace ScrollOverview::Geometry {
+namespace Hyprdrive::Geometry {
 
     Vector2D axisOffsetVector(float offset, EAxis axis) {
         return axis == EAxis::HORIZONTAL ? Vector2D{offset, 0.F} : Vector2D{0.F, offset};
@@ -273,4 +273,4 @@ namespace ScrollOverview::Geometry {
         return Vector2D{hyprlerp(static_cast<float>(from.x), static_cast<float>(to.x), perc), hyprlerp(static_cast<float>(from.y), static_cast<float>(to.y), perc)};
     }
 
-} // namespace ScrollOverview::Geometry
+} // namespace Hyprdrive::Geometry

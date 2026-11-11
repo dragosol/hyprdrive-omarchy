@@ -22,7 +22,7 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 #include "Config.hpp"
 
-namespace ScrollOverview::DockTilt {
+namespace Hyprdrive::DockTilt {
 
 namespace {
 
@@ -177,7 +177,7 @@ SP<CShader> shader() {
 // rather than tilted and in the wrong colours. Same test renderToFBInternal makes.
 bool needsColorManagement(const SP<Render::ITexture>& tex) {
     const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
-    if (!MONITOR || !Render::GL::g_pHyprOpenGL->m_cmSupported || !ScrollOverview::Config::getValue<bool>("render:cm_enabled") || MONITOR->doesNoShaderCM())
+    if (!MONITOR || !Render::GL::g_pHyprOpenGL->m_cmSupported || !Hyprdrive::Config::getValue<bool>("render:cm_enabled") || MONITOR->doesNoShaderCM())
         return false;
 
     const auto SOURCE = tex->m_imageDescription ? tex->m_imageDescription : NColorManagement::getDefaultImageDescription();
@@ -285,8 +285,8 @@ SSwitches& switches() {
 
     s.loaded = true;
     s.readAt = NOW;
-    s.hover  = ScrollOverview::Config::getValue<bool>(KEY_HOVER);
-    s.press  = ScrollOverview::Config::getValue<bool>(KEY_PRESS);
+    s.hover  = Hyprdrive::Config::getValue<bool>(KEY_HOVER);
+    s.press  = Hyprdrive::Config::getValue<bool>(KEY_PRESS);
     return s;
 }
 
@@ -543,4 +543,4 @@ CRegion CDockTiltPassElement::opaqueRegion() {
     return {};
 }
 
-} // namespace ScrollOverview::DockTilt
+} // namespace Hyprdrive::DockTilt

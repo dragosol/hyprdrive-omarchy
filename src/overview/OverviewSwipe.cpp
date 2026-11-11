@@ -41,7 +41,7 @@ void CScrollOverview::moveViewportWorkspace(bool up) {
 }
 
 bool CScrollOverview::scrollStepAllowed(uint32_t timeMs) {
-    const uint32_t DELAY = sc<uint32_t>(ScrollOverview::Config::getScrollEventDelay());
+    const uint32_t DELAY = sc<uint32_t>(Hyprdrive::Config::getScrollEventDelay());
 
     // throttle discrete scroll steps so a single notch / a burst of high-res events only steps once
     if (lastScrollStepTimeMs != 0 && timeMs >= lastScrollStepTimeMs && timeMs - lastScrollStepTimeMs < DELAY)
@@ -71,7 +71,7 @@ void CScrollOverview::trackpadSwipeLayout(const PHLWORKSPACE target, const doubl
     }
 
     trackpadTapeFollowing = true;
-    ALGO->moveTape(sc<float>(-1 * delta * ScrollOverview::Config::getTouchpadScrollFactor() / SCALE));
+    ALGO->moveTape(sc<float>(-1 * delta * Hyprdrive::Config::getTouchpadScrollFactor() / SCALE));
     damage();
 }
 
@@ -109,7 +109,7 @@ void CScrollOverview::trackpadSwipeWorkspace(const double delta) {
     const float SCALE = std::max<float>(scale->value(), 0.01F);
 
     trackpadWorkspaceFollowing  = true;
-    trackpadScrollAccum         += delta * ScrollOverview::Config::getTouchpadScrollFactor();
+    trackpadScrollAccum         += delta * Hyprdrive::Config::getTouchpadScrollFactor();
 
     viewOffset->setValueAndWarp(axisOffsetVector(sc<float>(trackpadWorkspaceScrollOffset(MONITOR, SCALE)), layout));
     damage();
@@ -358,7 +358,7 @@ void CScrollOverview::maybeTickDetent(size_t workspaceIdx) {
 
     trackpadDetentTickedIdx = workspaceIdx;
 
-    const auto CMD = ScrollOverview::Config::getGestureDetentSound();
+    const auto CMD = Hyprdrive::Config::getGestureDetentSound();
     // Missing or non-executable is silent, not an error: the default names a
     // path that only some machines have, and a detent is not worth a failed
     // spawn per boundary on the ones that do not.
@@ -390,7 +390,7 @@ void CScrollOverview::onWorkspaceSwipeUpdate(double delta) {
     const float PITCH = getWorkspaceLogicalPitch(MONITOR, SCALE, layout);
     // gesture_distance px on the pad = one desktop. Linear in finger travel,
     // not velocity, so a slow swipe still reaches the next workspace.
-    const float DIST  = std::max(80.F, sc<float>(ScrollOverview::Config::getGestureDistance()));
+    const float DIST  = std::max(80.F, sc<float>(Hyprdrive::Config::getGestureDistance()));
 
     trackpadWorkspaceFollowing = true;
 
@@ -441,7 +441,7 @@ void CScrollOverview::onWorkspaceSwipeUpdate(double delta) {
     double u = 0.0;
     if (SPAN > 1e-6) {
         u                   = std::clamp((trackpadDetentRaw - LO) / SPAN, 0.0, 1.0);
-        trackpadScrollAccum = LO + SPAN * detentWarp(u, sc<double>(ScrollOverview::Config::getGestureDetent()));
+        trackpadScrollAccum = LO + SPAN * detentWarp(u, sc<double>(Hyprdrive::Config::getGestureDetent()));
     } else
         trackpadScrollAccum = trackpadDetentRaw;
 
@@ -476,7 +476,7 @@ void CScrollOverview::onWorkspaceSwipeEnd() {
 }
 
 void CScrollOverview::onSwipeUpdate(double delta) {
-    const int DISTANCE = ScrollOverview::Config::getGestureDistance();
+    const int DISTANCE = Hyprdrive::Config::getGestureDistance();
 
     m_isSwiping = true;
 
@@ -493,12 +493,12 @@ void CScrollOverview::onSwipeUpdate(double delta) {
     // snaps back to the desktop), while the overview itself only ever appears
     // fully open or fully gone. onSwipeEnd's 0.35/0.65 thresholds then see a
     // clean 0 or 1 and resolve the same way they always did.
-    if (!ScrollOverview::Config::motionEnabled()) {
-        scale->setValueAndWarp(PERC >= 0.5F ? ScrollOverview::Config::getScale() : 1.F);
+    if (!Hyprdrive::Config::motionEnabled()) {
+        scale->setValueAndWarp(PERC >= 0.5F ? Hyprdrive::Config::getScale() : 1.F);
         return;
     }
 
-    scale->setValueAndWarp(hyprlerp(1.F, ScrollOverview::Config::getScale(), PERC));
+    scale->setValueAndWarp(hyprlerp(1.F, Hyprdrive::Config::getScale(), PERC));
 }
 
 void CScrollOverview::onSwipeEnd() {
@@ -508,7 +508,7 @@ void CScrollOverview::onSwipeEnd() {
 
     // Scale 1 is the desktop, the configured overview scale is fully open.
     // A reverse mid-gesture is just this number coming back the other way.
-    const float OPEN     = ScrollOverview::Config::getScale();
+    const float OPEN     = Hyprdrive::Config::getScale();
     const float RANGE    = std::max(0.01F, std::abs(1.F - OPEN));
     const float OPENNESS = std::clamp(std::abs(scale->value() - 1.F) / RANGE, 0.F, 1.F);
 

@@ -29,7 +29,7 @@ namespace Monitor {
     class CMonitor;
 }
 
-namespace ScrollOverview::FramePacing {
+namespace Hyprdrive::FramePacing {
     // Apply plugin:hyprdrive:smooth_frames (load, config reload, panel toggle).
     void apply();
     // Unload: the user's own scheduler value goes back.

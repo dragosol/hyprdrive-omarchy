@@ -37,18 +37,18 @@ CBox CScrollOverview::stripSlotLogicalBox(size_t workspaceIdx, bool scratchSlot,
     if (!ROW.valid)
         return {};
 
-    const auto BOX = scratchSlot ? ROW.scratch : (workspaceIdx < ROW.cells.size() ? ROW.cells[workspaceIdx] : ScrollOverview::StripLayout::SBox{});
+    const auto BOX = scratchSlot ? ROW.scratch : (workspaceIdx < ROW.cells.size() ? ROW.cells[workspaceIdx] : Hyprdrive::StripLayout::SBox{});
     return BOX.empty() ? CBox{} : CBox{BOX.x, BOX.y, BOX.w, BOX.h};
 }
 
 // The whole row: this monitor's cells, the scratchpad cell, and every other
 // monitor's strip -- StripLayout.hpp, the pure function with the host test. This
 // only gathers what it needs to know.
-const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scratchRevealOverride, float altRevealOverride) const {
+const Hyprdrive::StripLayout::SOutput& CScrollOverview::stripRow(float scratchRevealOverride, float altRevealOverride) const {
     // A row with no cells in it, for the outputs that have nothing to lay out.
     // Returned by reference like every other answer here: the SOutput carries
     // three vectors, and stripSlotLogicalBox asks for one cell at a time.
-    static const ScrollOverview::StripLayout::SOutput EMPTY{};
+    static const Hyprdrive::StripLayout::SOutput EMPTY{};
 
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || images.empty())
@@ -65,7 +65,7 @@ const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scra
     const float    ALTREVEAL = altRevealOverride >= 0.F ? std::clamp(altRevealOverride, 0.F, 1.F) : altStripsRevealValue();
     const float    TOPL      = overviewSearchLogicalHeight(MONITOR) + overviewResultsLogicalHeight(MONITOR);
     const float    BANDL     = overviewStripLogicalHeight(MONITOR);
-    const float    GAPL      = sc<float>(ScrollOverview::Config::getStripGap());
+    const float    GAPL      = sc<float>(Hyprdrive::Config::getStripGap());
     const double   ASPECT    = MONITOR->m_size.y > 1 ? sc<double>(MONITOR->m_size.x) / sc<double>(MONITOR->m_size.y) : 1.6;
     // The other monitors' strips, as one number: how many there are, how many
     // cells each has, and where each output sits -- the only things about them
@@ -89,7 +89,7 @@ const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scra
         stripRowMemo.aspect == ASPECT && stripRowMemo.images == images.size() && stripRowMemo.altSignature == altSignature)
         return stripRowMemo.out;
 
-    ScrollOverview::StripLayout::SInput in;
+    Hyprdrive::StripLayout::SInput in;
     in.monX     = MONITOR->m_position.x;
     in.monY     = MONITOR->m_position.y;
     in.monW     = MONITOR->m_size.x;
@@ -97,7 +97,7 @@ const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scra
     in.top      = TOPL;
     in.band     = BANDL;
     in.padFrac  = OVERVIEW_STRIP_BAND_PAD_FRAC;
-    in.gap      = ScrollOverview::Config::getStripGap();
+    in.gap      = Hyprdrive::Config::getStripGap();
     in.panelPad = OVERVIEW_STRIP_PANELPADL;
     in.detach   = OVERVIEW_SCRATCHPAD_DETACH_GAPS;
 
@@ -129,7 +129,7 @@ const ScrollOverview::StripLayout::SOutput& CScrollOverview::stripRow(float scra
     stripRowMemo.aspect       = in.aspect;
     stripRowMemo.images       = images.size();
     stripRowMemo.altSignature = altSignature;
-    stripRowMemo.out          = ScrollOverview::StripLayout::layout(in);
+    stripRowMemo.out          = Hyprdrive::StripLayout::layout(in);
     stripRowMemo.filled       = true;
 
     // What the plate actually reaches, for the grid below it. StripLayout puts
@@ -177,14 +177,14 @@ bool CScrollOverview::scratchpadCellContains(const Vector2D& point) const {
 
 PHLWORKSPACE CScrollOverview::scratchpadCellWorkspace() const {
     // The one already up wins, so the cell keeps naming what the user can see.
-    if (const auto SHOWN = ScrollOverview::Scratchpad::shownOn(pMonitor.lock()))
+    if (const auto SHOWN = Hyprdrive::Scratchpad::shownOn(pMonitor.lock()))
         return SHOWN;
 
-    const auto POPULATED = ScrollOverview::Scratchpad::populated();
+    const auto POPULATED = Hyprdrive::Scratchpad::populated();
     if (!POPULATED.empty())
         return POPULATED.front();
 
-    const auto ALL = ScrollOverview::Scratchpad::workspaces();
+    const auto ALL = Hyprdrive::Scratchpad::workspaces();
     return ALL.empty() ? nullptr : ALL.front();
 }
 
@@ -207,7 +207,7 @@ CBox CScrollOverview::scratchpadZoneLogicalBox() const {
     if (LAST.width <= 1)
         return {};
 
-    const float GAP = sc<float>(ScrollOverview::Config::getStripGap());
+    const float GAP = sc<float>(Hyprdrive::Config::getStripGap());
     const float PAD = OVERVIEW_STRIP_PANELPADL + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
     const float X   = sc<float>(LAST.x) + sc<float>(LAST.width) + PAD;
     const float W   = sc<float>(MONITOR->m_position.x) + sc<float>(MONITOR->m_size.x) - X;
@@ -316,7 +316,7 @@ CBox CScrollOverview::altZoneLogicalBox() const {
     if (FIRST.width <= 1)
         return {};
 
-    const float GAP = sc<float>(ScrollOverview::Config::getStripGap());
+    const float GAP = sc<float>(Hyprdrive::Config::getStripGap());
     const float PAD = OVERVIEW_STRIP_PANELPADL + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
     const float X   = sc<float>(MONITOR->m_position.x);
     const float W   = sc<float>(FIRST.x) - PAD - X;
@@ -441,7 +441,7 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
         const int  PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PLATE.x))));
         const int  PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
         OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE),
-                                   ScrollOverview::BorderFade::key("strip-alt", (sc<uint64_t>(monitor->m_id) << 16) ^ (OTHERMON ? sc<uint64_t>(OTHERMON->m_id) : 0xFFFF)));
+                                   Hyprdrive::BorderFade::key("strip-alt", (sc<uint64_t>(monitor->m_id) << 16) ^ (OTHERMON ? sc<uint64_t>(OTHERMON->m_id) : 0xFFFF)));
 
         const float MINIRENDERSCALE = renderScale * sc<float>(FIRSTCELL.height) / std::max(1.F, sc<float>(OTHERMON->m_size.y) * monitor->m_scale);
 
@@ -460,7 +460,7 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
             renderOverviewWorkspaceShadow(monitor, CELL, renderScale, false, FADE);
 
             // The desktop's number, as every strip cell carries it.
-            if (const auto NUMTEX = OverviewRender::text(std::to_string(WIMG->pWorkspace->m_id), ScrollOverview::Config::themeForeground().modifyA(0.20F),
+            if (const auto NUMTEX = OverviewRender::text(std::to_string(WIMG->pWorkspace->m_id), Hyprdrive::Config::themeForeground().modifyA(0.20F),
                                                          std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
                 NUMTEX && NUMTEX->ok()) {
                 CTexPassElement::SRenderData num;
@@ -495,14 +495,14 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
             // Tint and outline fade in and out on Hyprland's `border` animation,
             // as a window's border does when it takes focus (BorderFade.hpp).
             const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 40) ^ (sc<uint64_t>(OTHERMON->m_id) << 32) ^ sc<uint64_t>(sc<uint32_t>(WIMG->pWorkspace->m_id));
-            const float    HOTMIX  = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-alt-hot", CELLKEY), HOT);
+            const float    HOTMIX  = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-alt-hot", CELLKEY), HOT);
             if (HOTMIX > 0.F)
-                renderStripCellRect(CELL, ScrollOverview::Config::highlightColor().modifyA(0.22F * FADE * HOTMIX), ATLEFT, ATRIGHT, STYLE);
+                renderStripCellRect(CELL, Hyprdrive::Config::highlightColor().modifyA(0.22F * FADE * HOTMIX), ATLEFT, ATRIGHT, STYLE);
 
             // That monitor's active desktop, marked the way its own strip marks it.
             const bool ACTIVE = OTHERMON->m_activeWorkspace && WIMG->pWorkspace->m_id == OTHERMON->m_activeWorkspace->m_id;
             renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE,
-                                  ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-alt-ring", CELLKEY), HOT || ACTIVE));
+                                  Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-alt-ring", CELLKEY), HOT || ACTIVE));
         }
 
         // Which monitor this is, over its plate, the scratchpad label's plate
@@ -523,7 +523,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
 
     const float FADE      = STYLE.fade * REVEAL;
     const auto  WORKSPACE = scratchpadCellWorkspace();
-    const auto  PARKED    = ScrollOverview::Scratchpad::windowsOn(WORKSPACE);
+    const auto  PARKED    = Hyprdrive::Scratchpad::windowsOn(WORKSPACE);
 
     // Its OWN plate. The cell is detached, so it cannot borrow the strip's --
     // which is the whole visual point: two plates read as two things, and a
@@ -533,7 +533,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     if (PLATE.width > 1) {
         const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(CELL.x) - sc<float>(PLATE.x))));
         const int PLATEROUND = STYLE.round <= 0 ? 0 : STYLE.round + PADPX;
-        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE), ScrollOverview::BorderFade::key("strip-scratchpad", sc<uint64_t>(monitor->m_id)));
+        OverviewRender::themePlate(PLATE, PLATEROUND, STYLE.power, FADE, true, pointerOnChrome(PLATE), Hyprdrive::BorderFade::key("strip-scratchpad", sc<uint64_t>(monitor->m_id)));
     }
 
     // From here down the cell is built in the SAME order renderStripCell builds
@@ -547,7 +547,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     // The same accent wash the strip's own cells use, so a drop target here and
     // a drop target there read as one control. A lone cell is large on both
     // ends: there is no neighbour for a tight facing corner.
-    renderStripCellRect(CELL, ScrollOverview::Config::highlightColor().modifyA((HOT ? 0.30F : 0.12F) * FADE), true, true, STYLE);
+    renderStripCellRect(CELL, Hyprdrive::Config::highlightColor().modifyA((HOT ? 0.30F : 0.12F) * FADE), true, true, STYLE);
 
     // A WORD, not a number: it is not one of the numbered desktops and must not
     // be mistaken for one. Same size and weight as a cell's workspace number
@@ -556,7 +556,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     // its windows and an empty one still says what it is. Carried at a higher
     // alpha than a number because a word is read, not just recognised.
     const float FONTPX = std::max(1.F, sc<float>(CELL.height) * 0.156F);
-    if (const auto TEX = OverviewRender::text(ScrollOverview::Scratchpad::label(WORKSPACE), ScrollOverview::Config::themeForeground().modifyA(0.45F),
+    if (const auto TEX = OverviewRender::text(Hyprdrive::Scratchpad::label(WORKSPACE), Hyprdrive::Config::themeForeground().modifyA(0.45F),
                                               sc<int>(std::round(FONTPX)), false, "", sc<int>(CELL.width), 600);
         TEX && TEX->ok()) {
         CTexPassElement::SRenderData label;
@@ -584,7 +584,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
             continue;
 
         renderWindowLive(monitor, SHOWN, MINI.copy().round(), MINIRENDERSCALE, now, &CELL, false, FADE);
-        ScrollOverview::Dock::pumpRetiled(SHOWN, monitor, now);
+        Hyprdrive::Dock::pumpRetiled(SHOWN, monitor, now);
     }
 
     // After the minis, so the target reads as a target even over a cell full of
@@ -603,7 +603,7 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
     // lifted by.
     if (!PARKED.empty()) {
         const float TOP = PLATE.width > 1 ? sc<float>(PLATE.y) : sc<float>(CELL.y) - OVERVIEW_STRIP_PANELPADL * monitor->m_scale;
-        OverviewRender::labelPill(monitor, ScrollOverview::Scratchpad::label(WORKSPACE), sc<float>(CELL.x) + sc<float>(CELL.width) / 2.F,
+        OverviewRender::labelPill(monitor, Hyprdrive::Scratchpad::label(WORKSPACE), sc<float>(CELL.x) + sc<float>(CELL.width) / 2.F,
                                   TOP - OverviewRender::LABEL_PILL_GAP * monitor->m_scale, FADE, monitor->m_scale);
     }
 }
@@ -764,7 +764,7 @@ CBox CScrollOverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITO
     // A Mosaic desktop on its infinite canvas: the whole canvas, with the
     // screen it pans across, zoomed out into the cell at one scale and centred
     // -- every window on it shows, as the tape's minis do for a scrolling one.
-    if (const auto CANVAS = ScrollOverview::Mosaic::canvasBox(WORKSPACE)) {
+    if (const auto CANVAS = Hyprdrive::Mosaic::canvasBox(WORKSPACE)) {
         const CBox   MON{monitor->m_position, monitor->m_size};
         const double X0 = std::min(CANVAS->x, MON.x), Y0 = std::min(CANVAS->y, MON.y);
         const double W  = std::max(CANVAS->x + CANVAS->w, MON.x + MON.w) - X0, H = std::max(CANVAS->y + CANVAS->h, MON.y + MON.h) - Y0;
@@ -817,7 +817,7 @@ PHLWINDOW CScrollOverview::windowAtStripPoint(const Vector2D& point, CBox* miniB
     if (scratchpadRevealValue() > 0.5F) {
         const auto CELL = scratchpadCellBox(MONITOR, scale->value(), -1.F);
         if (CELL.width > 1 && CELL.containsPoint(point)) {
-            const auto PARKED = ScrollOverview::Scratchpad::windowsOn(scratchpadCellWorkspace());
+            const auto PARKED = Hyprdrive::Scratchpad::windowsOn(scratchpadCellWorkspace());
 
             for (auto it = PARKED.rbegin(); it != PARKED.rend(); ++it) {
                 const auto WINDOW = getOverviewWindowToShow(*it);
@@ -941,7 +941,7 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
                 // Lit only while the pointer is on it or Tab has the keyboard
                 // in it; otherwise the resting tile border (user, 2026-09-27).
                 const bool LIT = (g_search.nav.zone == EOverviewNavZone::Desktop && activeScrollOverview().get() == this) || pointerOnChrome(PANEL);
-                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true, LIT, ScrollOverview::BorderFade::key("strip-desktops", sc<uint64_t>(monitor->m_id)));
+                OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true, LIT, Hyprdrive::BorderFade::key("strip-desktops", sc<uint64_t>(monitor->m_id)));
             }
         }
     }
@@ -1005,8 +1005,8 @@ void CScrollOverview::renderStripCellRect(const CBox& cell, const CHyprColor& co
 void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool largeLeft, bool largeRight, const SStripStyle& STYLE, float mix) const {
     if (mix <= 0.F)
         return;
-    const auto OUTLINE = ScrollOverview::Config::highlightColor();
-    const int  BORDER  = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+    const auto OUTLINE = Hyprdrive::Config::highlightColor();
+    const int  BORDER  = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
     // Inset by the full stroke width: renderBorder centres nothing, it grows
     // outward from the box, so the box has to be the INNER rectangle for the
     // stroke to land inside the tile. Radii shrink with it or the curve would
@@ -1047,7 +1047,7 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // type at the overview's own scale, i.e. 250/1600 = 15.6% of a cell's
     // height, DemiBold, foreground at alpha 0.2. Reproduced as a fraction of
     // the strip cell so it tracks the strip instead of a fixed pixel size.
-    const auto NUMTEX = OverviewRender::text(std::to_string(wimg->pWorkspace->m_id), ScrollOverview::Config::themeForeground().modifyA(0.20F),
+    const auto NUMTEX = OverviewRender::text(std::to_string(wimg->pWorkspace->m_id), Hyprdrive::Config::themeForeground().modifyA(0.20F),
                                                     std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
     // Only the cell the badge is sitting on fades, and only while it is there.
     const float NUMFADE = restingNumberFade(workspaceIdx);
@@ -1085,7 +1085,7 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
         // an old buffer. Drawing it here shows that old buffer letterboxed inside
         // the new frame; this is what actually asks the client to redraw, for the
         // length of its grace and no longer.
-        ScrollOverview::Dock::pumpRetiled(WINDOW, monitor, now);
+        Hyprdrive::Dock::pumpRetiled(WINDOW, monitor, now);
     }
 
     // Tint and outline fade in and out on Hyprland's `border` animation, as a
@@ -1093,11 +1093,11 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // Keyed by the desktop itself, not its number: a desktop moved along the
     // strip keeps its tint and ring through the renumbering.
     const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 32) ^ sc<uint64_t>(workspaceKey(wimg->pWorkspace));
-    if (const float HOVERMIX = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-hover", CELLKEY), hovered); HOVERMIX > 0.F) {
+    if (const float HOVERMIX = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-hover", CELLKEY), hovered); HOVERMIX > 0.F) {
         // X4: the hover tint is themed, from the same general:col.active_border
         // that DropIndicator already reads. White is only the fallback for a
         // theme that defines no gradient.
-        const auto ACCENT = ScrollOverview::Config::highlightColor();
+        const auto ACCENT = Hyprdrive::Config::highlightColor();
 
         renderStripCellRect(CELL, ACCENT.modifyA(0.22F * FADE * HOVERMIX), ATLEFT, ATRIGHT, STYLE);
     }
@@ -1121,7 +1121,7 @@ void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, c
     // it. One outline for both: drawn after the tint and after the minis, so
     // the drop target reads as a target even over a cell full of previews.
     renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE,
-                          ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-ring", CELLKEY), hovered || ISACTIVE));
+                          Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-ring", CELLKEY), hovered || ISACTIVE));
 }
 
 namespace {
@@ -1166,7 +1166,7 @@ Time::steady_tp CScrollOverview::badgeBornAt() const {
 bool CScrollOverview::detentBadgeVisible() const {
     const bool   KEYS = keyBadgeLive && SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) < KEY_BADGE_MS;
     const size_t IDX  = badgeWorkspace();
-    return (trackpadDetentActive || KEYS) && ScrollOverview::Config::getGestureDetentLabel() && IDX < images.size() && images[IDX] && images[IDX]->pWorkspace;
+    return (trackpadDetentActive || KEYS) && Hyprdrive::Config::getGestureDetentLabel() && IDX < images.size() && images[IDX] && images[IDX]->pWorkspace;
 }
 
 void CScrollOverview::updateRestingFade() {
@@ -1231,7 +1231,7 @@ void CScrollOverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
 
     const auto NAME = wimg->pWorkspace->m_name.empty() ? std::to_string(wimg->pWorkspace->m_id) : wimg->pWorkspace->m_name;
     const int  SIZE = std::max(1, sc<int>(std::round(sc<float>(CELL.height) * DETENT_BADGE_FRACTION)));
-    const auto TEX  = OverviewRender::text(NAME, ScrollOverview::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
+    const auto TEX  = OverviewRender::text(NAME, Hyprdrive::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
     if (!TEX || !TEX->ok())
         return;
 
@@ -1429,8 +1429,8 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
         }
         // A LITTLE BIGGER: lifted under Super, a touch more in the hand; both
         // on Hyprland's border curve, so they swell and settle like the ring.
-        const float LIFT = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-lift", CK), workspaceIdx == superIdx || MINE);
-        const float HELD = ScrollOverview::BorderFade::mix(monitor, ScrollOverview::BorderFade::key("strip-held", CK), MINE);
+        const float LIFT = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-lift", CK), workspaceIdx == superIdx || MINE);
+        const float HELD = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-held", CK), MINE);
         if (const float G = 1.F + 0.04F * LIFT + 0.03F * HELD; G > 1.0005F) {
             const double W = cell.width * G, H = cell.height * G;
             cell           = {cell.x + (cell.width - W) / 2.0, cell.y + (cell.height - H) / 2.0, W, H};

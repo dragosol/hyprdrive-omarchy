@@ -1,7 +1,7 @@
 // The context menu: its rows (ERow, buildRows, info rows) and drawing.
 #include "DockParts.hpp"
 
-namespace ScrollOverview::Dock {
+namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 
@@ -462,8 +462,8 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     // The THEME's text colour, not white: on a light Omarchy theme the plate is
     // light and white labels vanished (user, 2026-09-29). Dim = the same ink,
     // thinner; the danger red darkens on a light plate to stay readable.
-    const bool       LIGHT = ScrollOverview::Config::isLightTheme();
-    const auto       INK   = ScrollOverview::Config::themeForeground();
+    const bool       LIGHT = Hyprdrive::Config::isLightTheme();
+    const auto       INK   = Hyprdrive::Config::themeForeground();
     const CHyprColor LABEL_COLOR{INK.r, INK.g, INK.b, 0.95F};
     const CHyprColor DANGER_COLOR = LIGHT ? CHyprColor{0.78F, 0.16F, 0.14F, 1.F} : CHyprColor{1.F, 0.50F, 0.47F, 0.97F};
     const CHyprColor DIM_COLOR{INK.r, INK.g, INK.b, LIGHT ? 0.60F : 0.45F};
@@ -727,7 +727,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
             // X56: the context menu's row highlight follows the theme too --
             // except on the destructive row, which lights in its own colour so
             // the pointer landing on it is noticed.
-            const auto ROWACCENT = row.danger ? DANGER_COLOR : ScrollOverview::Config::highlightColor();
+            const auto ROWACCENT = row.danger ? DANGER_COLOR : Hyprdrive::Config::highlightColor();
 
             // The first and last rows sit in the plate's rounded corners, and a
             // square highlight poked out of them (user, 2026-09-29, Force Quit).
@@ -790,7 +790,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
                 CRectPassElement::SRectData fill;
                 const double INSET = 3.F * SCALE + (1.F - BL) * 5.F * SCALE;
                 fill.box           = CBox{B.box.x + INSET, B.box.y + INSET, B.box.width - 2 * INSET, B.box.height - 2 * INSET};
-                fill.color         = ScrollOverview::Config::highlightColor().modifyA(0.30F * BL);
+                fill.color         = Hyprdrive::Config::highlightColor().modifyA(0.30F * BL);
                 fill.round         = sc<int>(std::round(6.F * SCALE));
                 fill.roundingPower = 2.F;
                 ADDRECT(fill);
@@ -826,10 +826,10 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     // Hyprland's border weight, floored at 1. Drawn after the rows so a
     // full-width highlight never paints over it.
     {
-        const int                       BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+        const int                       BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
         CBorderPassElement::SBorderData border;
         border.box = VIS;
-        border.grad1.reset(ScrollOverview::Config::highlightColor().modifyA(1.F));
+        border.grad1.reset(Hyprdrive::Config::highlightColor().modifyA(1.F));
         border.a             = 1.F;
         border.borderSize    = BORDERSIZE;
         border.round         = sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE, VISH / 2.0)));

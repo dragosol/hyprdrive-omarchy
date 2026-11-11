@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::StackModel {
+namespace Hyprdrive::StackModel {
 
     enum class ESort : uint8_t { Name, Added, Modified, Kind };
     enum class EDisplay : uint8_t { Stack, Folder };

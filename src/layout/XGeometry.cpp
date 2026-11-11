@@ -31,7 +31,7 @@
 #include <hyprland/src/xwayland/XWM.hpp>
 #undef private
 
-namespace ScrollOverview::XGeometry {
+namespace Hyprdrive::XGeometry {
     namespace {
         using Clock = std::chrono::steady_clock;
 

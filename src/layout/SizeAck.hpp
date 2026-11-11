@@ -36,7 +36,7 @@ namespace Desktop::View {
     class CWindow;
 }
 
-namespace ScrollOverview::SizeAck {
+namespace Hyprdrive::SizeAck {
     // CWindow::onAck, fixed. Replaces the original entirely.
     void onAck(Desktop::View::CWindow* window, uint32_t serial);
 

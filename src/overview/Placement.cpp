@@ -13,7 +13,7 @@
 #include <hyprland/src/layout/target/Target.hpp>
 #undef private
 
-namespace ScrollOverview::Placement {
+namespace Hyprdrive::Placement {
 
 namespace {
 

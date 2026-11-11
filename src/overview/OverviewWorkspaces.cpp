@@ -40,7 +40,7 @@ float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activ
     const auto MONITORSCALE        = MONITOR ? std::max(MONITOR->m_scale, 0.01F) : 1.F;
     const auto MONITORSIZE         = MONITOR ? axisSize(MONITOR->m_size, layout) : 0.F;
     const auto RENDERSCALE         = MONITOR && MONITORSIZE > 0 ?
-        std::max(0.01F, (workspacePitch / MONITORSCALE - sc<float>(ScrollOverview::Config::getWorkspaceGap())) / sc<float>(MONITORSIZE)) :
+        std::max(0.01F, (workspacePitch / MONITORSCALE - sc<float>(Hyprdrive::Config::getWorkspaceGap())) / sc<float>(MONITORSIZE)) :
         std::max(scale->value(), 0.01F);
     const auto LOGICALPITCH        = MONITOR ? getWorkspaceLogicalPitch(MONITOR, RENDERSCALE, layout) : workspacePitch / std::max(RENDERSCALE * MONITORSCALE, 0.01F);
     const auto RENDEREDLOGICALUNIT = RENDERSCALE * MONITORSCALE;
@@ -70,7 +70,7 @@ float CScrollOverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_
         if (workspaceIdx_ + 1 >= images.size() || !images[workspaceIdx_] || !images[workspaceIdx_ + 1])
             return 0.F;
 
-        if (layout == ScrollOverview::Config::ELayout::HORIZONTAL)
+        if (layout == Hyprdrive::Config::ELayout::HORIZONTAL)
             return images[workspaceIdx_]->overflowRight + images[workspaceIdx_ + 1]->overflowLeft;
 
         return images[workspaceIdx_]->overflowBottom + images[workspaceIdx_ + 1]->overflowTop;
@@ -128,8 +128,8 @@ static bool isHeldPhantom(const PHLWORKSPACE& workspace) {
 
 namespace OverviewDetail {
 
-ScrollOverview::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
-    namespace WP = ScrollOverview::WorkspacePlan;
+Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
+    namespace WP = Hyprdrive::WorkspacePlan;
     if (!monitor)
         return {};
 
@@ -371,7 +371,7 @@ void CScrollOverview::updateWorkspaceOverflow() {
         // edge are the canvas out of view, not a desktop hanging over its
         // neighbours -- room made for them was an empty gap between desktops
         // (user, 2026-10-29).
-        if (ScrollOverview::Mosaic::canvasBox(img->pWorkspace))
+        if (Hyprdrive::Mosaic::canvasBox(img->pWorkspace))
             continue;
 
         for (const auto& windowRef : img->windows) {

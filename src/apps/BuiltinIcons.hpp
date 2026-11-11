@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace ScrollOverview::BuiltinIcons {
+namespace Hyprdrive::BuiltinIcons {
     inline constexpr std::string_view PREFIX      = "hyprdrive-";
     // The Trash is one template in nine variants (2026-09-24):
     // "hyprdrive-trash-<empty|full>-<light|dark|clear>-<white|color>".

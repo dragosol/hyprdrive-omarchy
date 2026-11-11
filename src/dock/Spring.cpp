@@ -29,7 +29,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 
-namespace ScrollOverview::Spring {
+namespace Hyprdrive::Spring {
 
     namespace {
         constexpr const char* KEY_DOCK  = "plugin:hyprdrive:drag:spring_dock";

@@ -11,7 +11,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace ScrollOverview::PreviewGrid {
+namespace Hyprdrive::PreviewGrid {
 
     // The width of `count` cells from `from`, `gap` between neighbours.
     inline float rowWidth(const std::vector<float>& widths, size_t from, size_t count, float gap) {

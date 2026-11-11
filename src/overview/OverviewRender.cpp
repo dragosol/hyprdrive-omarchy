@@ -118,11 +118,11 @@ void captureFrameChromeBlur(PHLMONITOR monitor) {
     // the SAME blur the windows get, so the capture now runs at the configured
     // pass count and the scope guard below is left in place only because the
     // shader still reads the value globally.
-    const int PREV_PASSES   = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
+    const int PREV_PASSES   = Hyprdrive::Config::getValue<int>("decoration:blur:passes");
     const int CHROME_PASSES = PREV_PASSES;
-    ScrollOverview::Config::setValue("decoration:blur:passes", CHROME_PASSES);
+    Hyprdrive::Config::setValue("decoration:blur:passes", CHROME_PASSES);
     auto restorePasses = Hyprutils::Utils::CScopeGuard([PREV_PASSES] {
-        ScrollOverview::Config::setValue("decoration:blur:passes", PREV_PASSES);
+        Hyprdrive::Config::setValue("decoration:blur:passes", PREV_PASSES);
     });
 
     // Dual-kawase the CURRENT overview main FB (cards + tiles if already drawn).
@@ -315,7 +315,7 @@ SP<Render::ITexture> imageFile(const std::string& path, int px, bool budgeted, b
 static std::unordered_map<std::string, SP<Render::ITexture>> g_builtinIcons;
 
 static SP<Render::ITexture> builtinIcon(const std::string& name, int px) {
-    const auto A   = ScrollOverview::Config::highlightColor();
+    const auto A   = Hyprdrive::Config::highlightColor();
     const auto HEX = std::format("#{:02x}{:02x}{:02x}", sc<int>(std::clamp(A.r, 0.0, 1.0) * 255.0), sc<int>(std::clamp(A.g, 0.0, 1.0) * 255.0),
                                  sc<int>(std::clamp(A.b, 0.0, 1.0) * 255.0));
     const auto KEY = name + "\x01" + std::to_string(px) + "\x01" + HEX;
@@ -325,7 +325,7 @@ static SP<Render::ITexture> builtinIcon(const std::string& name, int px) {
         g_builtinIcons.clear();
 
     SP<Render::ITexture> texture;
-    const auto           SVG = ScrollOverview::BuiltinIcons::svg(name, HEX);
+    const auto           SVG = Hyprdrive::BuiltinIcons::svg(name, HEX);
     if (!SVG.empty()) {
         Hyprgraphics::CImage image(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(SVG.data()), SVG.size()}, Hyprgraphics::IMAGE_FORMAT_SVG,
                                    {sc<double>(px), sc<double>(px)});
@@ -444,7 +444,7 @@ namespace {
                 push(AppSearch::iconForClass(AppSearch::identityClass(W->m_class, W->m_title)));
         // The dock's icons at the size each monitor draws them (an autohidden
         // dock's first slide-in decoded them on its opening frames otherwise).
-        for (const auto& [NAME, PX] : ScrollOverview::Dock::iconWarmList())
+        for (const auto& [NAME, PX] : Hyprdrive::Dock::iconWarmList())
             push(NAME, PX);
     }
 
@@ -465,8 +465,8 @@ namespace {
     constexpr int          WARM_TEXTS_PER_TICK = 6;
 
     std::string warmTextsKey() {
-        std::string key = std::format("{}|{}|{:x}|{:x}|{}", AppSearch::inventoryGeneration(), ScrollOverview::Config::themeFontFamily(),
-                                      ScrollOverview::Config::themeForeground().getAsHex(), ScrollOverview::Config::themeMutedText().getAsHex(), ScrollOverview::Config::getScale());
+        std::string key = std::format("{}|{}|{:x}|{:x}|{}", AppSearch::inventoryGeneration(), Hyprdrive::Config::themeFontFamily(),
+                                      Hyprdrive::Config::themeForeground().getAsHex(), Hyprdrive::Config::themeMutedText().getAsHex(), Hyprdrive::Config::getScale());
         for (const auto& M : State::monitorState()->monitors())
             if (M)
                 key += std::format("|{}", M->m_scale);
@@ -478,12 +478,12 @@ namespace {
         std::unordered_set<float> scales;
         for (const auto& M : State::monitorState()->monitors())
             if (M)
-                scales.insert(sc<float>(M->m_scale) * ScrollOverview::Config::getScale());
-        const auto FG    = ScrollOverview::Config::themeForeground();
-        const auto MUTED = ScrollOverview::Config::themeMutedText();
+                scales.insert(sc<float>(M->m_scale) * Hyprdrive::Config::getScale());
+        const auto FG    = Hyprdrive::Config::themeForeground();
+        const auto MUTED = Hyprdrive::Config::themeMutedText();
         const auto px    = [](float base, float scale) { return std::max(1, sc<int>(std::round(base * scale))); };
         // Popped from the back: push in REVERSE priority.
-        const auto HEADING = ScrollOverview::Config::themeHeading();
+        const auto HEADING = Hyprdrive::Config::themeHeading();
         const auto& ITEMS  = warmSearchItems();
         for (const float S : scales) {
             for (const auto& E : AppSearch::inventory())
@@ -610,7 +610,7 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
     if (iconName.empty())
         return nullptr;
     const int BUCKET = IconSize::bucket(px);
-    if (iconName.starts_with(ScrollOverview::BuiltinIcons::PREFIX))
+    if (iconName.starts_with(Hyprdrive::BuiltinIcons::PREFIX))
         return builtinIcon(iconName, BUCKET > 0 ? BUCKET : 192);
 
     const std::string BASE = appIconBaseKey(iconName, tintWhite, padded);
@@ -861,7 +861,7 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
     // lives on the fontconfig monospace alias (`omarchy font set`); callers
     // that do not pin a family inherit that. Bound by REFERENCE: themeFontFamily
     // hands back its cache, and this runs on every probe.
-    const std::string& FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+    const std::string& FAMILY = fontFamily.empty() ? Hyprdrive::Config::themeFontFamily() : fontFamily;
 
     // A label that FITS is the same pixels at any maxWidth (renderText sizes
     // the texture to the text, ellipsising only past the limit), so maxWidth
@@ -930,7 +930,7 @@ SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color
     if (str.empty() || maxW < 8 || maxH < 8 || fontSize < 1)
         return nullptr;
 
-    const std::string& FAMILY = fontFamily.empty() ? ScrollOverview::Config::themeFontFamily() : fontFamily;
+    const std::string& FAMILY = fontFamily.empty() ? Hyprdrive::Config::themeFontFamily() : fontFamily;
     const std::string  KEY    = std::format("{}\x1f{}\x1f{:x}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}", str, FAMILY, color.getAsHex(), fontSize, maxW, maxH, weight, (italic ? 1 : 0) | (centred ? 2 : 0));
     if (const auto IT = g_wrapCache.find(KEY); IT != g_wrapCache.end())
         return IT->second;
@@ -1011,7 +1011,7 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     // Same switch window frost and dock frost use. Search/strip chrome used to
     // queue a live dual-kawase even when decoration:blur:enabled was off, so a
     // squared Omarchy theme still got a frosted pill.
-    if (!ScrollOverview::Config::getValue<bool>("decoration:blur:enabled"))
+    if (!Hyprdrive::Config::getValue<bool>("decoration:blur:enabled"))
         return;
 
     // X14: NOT a CRectPassElement. Upstream leaves a blurred rect's corners square
@@ -1036,10 +1036,10 @@ void themePlate(const CBox& box, int rounding, float roundingPower, float alpha,
     if (box.empty() || alpha <= 0.F)
         return;
 
-    const int PASSES = ScrollOverview::Config::getValue<int>("decoration:blur:passes");
+    const int PASSES = Hyprdrive::Config::getValue<int>("decoration:blur:passes");
     queueBlur(box, rounding, roundingPower, alpha, usePrecomputedBlur, PASSES);
 
-    const auto TINT = ScrollOverview::Config::dockBackgroundColor();
+    const auto TINT = Hyprdrive::Config::dockBackgroundColor();
     CRectPassElement::SRectData bg;
     bg.box           = box;
     bg.color         = CHyprColor{TINT.r, TINT.g, TINT.b, TINT.a * alpha};
@@ -1047,12 +1047,12 @@ void themePlate(const CBox& box, int rounding, float roundingPower, float alpha,
     bg.roundingPower = roundingPower;
     g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
 
-    const int  BORDERSIZE = std::max(1, ScrollOverview::Config::getValue<int>("general:border_size"));
+    const int  BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
     CBorderPassElement::SBorderData border;
     border.box           = box.copy().round();
-    const auto LIT     = ScrollOverview::Config::highlightColor().modifyA(1.F);
-    const auto RESTING = ScrollOverview::Config::restingBorderColor();
-    border.grad1.reset(fadeKey ? ScrollOverview::BorderFade::color(g_pHyprRenderer->m_renderData.pMonitor.lock(), fadeKey, lit, RESTING, LIT) : lit ? LIT : RESTING);
+    const auto LIT     = Hyprdrive::Config::highlightColor().modifyA(1.F);
+    const auto RESTING = Hyprdrive::Config::restingBorderColor();
+    border.grad1.reset(fadeKey ? Hyprdrive::BorderFade::color(g_pHyprRenderer->m_renderData.pMonitor.lock(), fadeKey, lit, RESTING, LIT) : lit ? LIT : RESTING);
     border.a             = alpha;
     border.borderSize    = BORDERSIZE;
     border.round         = rounding;
@@ -1117,9 +1117,9 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
     // rather than a constant -- it stays a pill when the font or padding moves.
     const int ROUND = sc<int>(std::round(plate.height / 2.0));
 
-    const int BORDER = std::max(0, ScrollOverview::Config::getValue<int>("general:border_size"));
+    const int BORDER = std::max(0, Hyprdrive::Config::getValue<int>("general:border_size"));
     if (BORDER > 0) {
-        if (auto* const ACTIVE = sc<::Config::CGradientValueData*>(ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>("general:col.active_border").ptr());
+        if (auto* const ACTIVE = sc<::Config::CGradientValueData*>(Hyprdrive::Config::valueRef<::Config::IComplexConfigValue>("general:col.active_border").ptr());
             ACTIVE && !ACTIVE->m_colors.empty()) {
             CRectPassElement::SRectData ring;
             ring.box           = plate.copy().expand(sc<double>(BORDER) * SCALE);

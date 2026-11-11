@@ -14,7 +14,7 @@ struct SDispatcher {
     std::string_view                    typeArgError;
     std::string_view                    invalidArgError;
     TArgValidator                       argValidator = nullptr;
-    ScrollOverview::Config::TDispatcher dispatcher   = nullptr;
+    Hyprdrive::Config::TDispatcher dispatcher   = nullptr;
     lua_CFunction                       luaFunction  = nullptr;
     // Same factory, distinct function: a lua_CFunction cannot capture, so
     // 'this call came in under the old namespace' has to be baked into the
@@ -39,7 +39,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected select, tab or toggle/open/close [monitor|all] (aliases: on, enable, off, disable)",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "overview"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.overview");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.overview");
                 return dispatcherFactoryLua(L, "overview");
             },
         },
@@ -50,7 +50,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected one of: left, right, up, down",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "navigate"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.navigate");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.navigate");
                 return dispatcherFactoryLua(L, "navigate");
             },
         },
@@ -62,7 +62,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected one of: window, restore",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "minimize"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.minimize");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.minimize");
                 return dispatcherFactoryLua(L, "minimize");
             },
         },
@@ -77,7 +77,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected overlay, or 1-10 optionally prefixed with 'shift ' or 'ctrl '",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "hotkey"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.hotkey");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.hotkey");
                 return dispatcherFactoryLua(L, "hotkey");
             },
         },
@@ -94,7 +94,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected: pin <path> | unpin <path> | toggle <path> | open <path> | view auto|fan|grid <path> | sort name|added|modified|kind <path> | scroll <rows> | filter [text] | clear",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "stack"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.stack");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.stack");
                 return dispatcherFactoryLua(L, "stack");
             },
         },
@@ -110,7 +110,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | desktop | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
                 return dispatcherFactoryLua(L, "debug");
             },
         },
@@ -161,7 +161,7 @@ SDispatcher* findDispatcher(const std::string_view name) {
             .invalidArgError = "expected one of: select, close, click",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "window"); },
             .luaLegacy       = [](lua_State* L) {
-                ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.window");
+                Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.window");
                 return dispatcherFactoryLua(L, "window");
             },
         },
@@ -183,7 +183,7 @@ int runDispatcherNow(lua_State* L, const SDispatcher& dispatcher, const char* ar
 }
 
 void pushDispatcherBindAction(lua_State* L, const char* name, const char* arg) {
-    const std::string CODE = "return function() return hl.plugin." + std::string{ScrollOverview::Compat::NAME} + "._dispatch(\"" + std::string{name} + "\", \"" + std::string{arg} + "\") end";
+    const std::string CODE = "return function() return hl.plugin." + std::string{Hyprdrive::Compat::NAME} + "._dispatch(\"" + std::string{name} + "\", \"" + std::string{arg} + "\") end";
 
     if (luaL_loadstring(L, CODE.c_str()) != LUA_OK)
         lua_error(L);
@@ -212,7 +212,7 @@ int runDispatcherActionLua(lua_State* L) {
 }
 
 int runDispatcherActionLegacyLua(lua_State* L) {
-    ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview._dispatch");
+    Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview._dispatch");
     return runDispatcherActionLua(L);
 }
 
@@ -267,7 +267,7 @@ int configureLua(lua_State* L) {
     lua_newtable(L);
     lua_newtable(L);
     lua_pushvalue(L, CONFIG);
-    lua_setfield(L, -2, ScrollOverview::Compat::NAME);
+    lua_setfield(L, -2, Hyprdrive::Compat::NAME);
     lua_setfield(L, -2, "plugin");
 
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
@@ -282,7 +282,7 @@ int configureLua(lua_State* L) {
 }
 
 int configureLegacyLua(lua_State* L) {
-    ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.configure");
+    Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.configure");
     return configureLua(L);
 }
 
@@ -349,13 +349,13 @@ int gestureLua(lua_State* L) {
 }
 
 int gestureLegacyLua(lua_State* L) {
-    ScrollOverview::Compat::noteLegacyUse(ScrollOverview::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.gesture");
+    Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.gesture");
     return gestureLua(L);
 }
 
 }
 
-namespace ScrollOverview::Config {
+namespace Hyprdrive::Config {
 
 using namespace ConfigPart;
 

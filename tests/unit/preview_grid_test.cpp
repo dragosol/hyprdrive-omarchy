@@ -3,7 +3,7 @@
 
 #include <cstdio>
 
-using namespace ScrollOverview::PreviewGrid;
+using namespace Hyprdrive::PreviewGrid;
 
 static int g_checks = 0, g_failed = 0;
 static void expect(bool ok, const char* what) {

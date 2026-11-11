@@ -29,7 +29,7 @@
 
 using namespace Hyprutils::OS;
 
-namespace ScrollOverview::Locations {
+namespace Hyprdrive::Locations {
 
 namespace {
 

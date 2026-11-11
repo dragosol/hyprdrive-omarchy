@@ -1,5 +1,5 @@
 // Exhaustive table tests for the two ladders in DropDecision.hpp:
-// ScrollOverview::Drop::resolve() (a released WINDOW drag) and V3's
+// Hyprdrive::Drop::resolve() (a released WINDOW drag) and V3's
 // resolveIcon() (a released DOCK ICON drag). Two gestures, two tables, one
 // file -- they end on the same screen and must not grow apart.
 //
@@ -20,7 +20,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace ScrollOverview::Drop;
+using namespace Hyprdrive::Drop;
 
 // The ladder spelled out the long way, so a slip in either copy shows up as a
 // disagreeing row. Since 1.9.2 the overview only MOVES windows between

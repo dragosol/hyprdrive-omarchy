@@ -20,7 +20,7 @@
 #include <format>
 #include <optional>
 
-namespace ScrollOverview::DesktopStrip {
+namespace Hyprdrive::DesktopStrip {
     namespace {
         using namespace StripModel;
         using Clock = std::chrono::steady_clock;

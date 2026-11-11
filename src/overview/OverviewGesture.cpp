@@ -129,7 +129,7 @@ void COverviewGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e)
     // Signed follow: reversing the fingers undoes the motion. Clamp to the
     // gesture length so extra travel does not wind up a reverse.
     m_lastDelta += distance(e);
-    const float MAX = sc<float>(ScrollOverview::Config::getGestureDistance());
+    const float MAX = sc<float>(Hyprdrive::Config::getGestureDistance());
     m_lastDelta     = std::clamp(m_lastDelta, 0.F, MAX);
 
     for (const auto& REF : m_overviews) {
@@ -152,7 +152,7 @@ void COverviewGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
 }
 
 void COverviewWorkspaceGesture::setTapeOffset(const PHLWORKSPACE& ws) {
-    ScrollOverview::DesktopTape::setOffset(ws, m_tapeOffset);
+    Hyprdrive::DesktopTape::setOffset(ws, m_tapeOffset);
 }
 
 // A gesture bound to "swipe" (any direction) is handed its updates as SWIPE,
@@ -189,7 +189,7 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
             // A Mosaic desktop on its infinite canvas is NOT a tape here: the
             // swipe switches desktops at once (user, 2026-10-29). Super+move
             // and Super+scroll still pan the canvas.
-            if (const auto TAPE = ScrollOverview::DesktopTape::probe(WS); TAPE.usable) {
+            if (const auto TAPE = Hyprdrive::DesktopTape::probe(WS); TAPE.usable) {
                 m_mode          = EMode::Tape;
                 m_tapeWorkspace = WS;
                 m_tapeOffset    = std::clamp(TAPE.offset, 0.0, TAPE.maxOffset);
@@ -198,9 +198,9 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
                 // it: each new window under the cursor took focus, and the layout
                 // refit its camera to that window -- a jump past the end.
                 if (!m_forcedFollow) {
-                    m_prevFollow   = ScrollOverview::Config::getValue<int>("input:follow_mouse");
+                    m_prevFollow   = Hyprdrive::Config::getValue<int>("input:follow_mouse");
                     m_forcedFollow = true;
-                    ScrollOverview::Config::setValue("input:follow_mouse", 0);
+                    Hyprdrive::Config::setValue("input:follow_mouse", 0);
                 }
                 m_tape.begin(e);
                 return;
@@ -209,15 +209,15 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
     }
 
     if (m_allWorkspaces && !m_forcedUseR) {
-        m_prevUseR   = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_use_r");
+        m_prevUseR   = Hyprdrive::Config::getValue<int>("gestures:workspace_swipe_use_r");
         m_forcedUseR = true;
-        ScrollOverview::Config::setValue("gestures:workspace_swipe_use_r", 1);
+        Hyprdrive::Config::setValue("gestures:workspace_swipe_use_r", 1);
     }
 
     // The desktop strip moving the row (a wheel scroll still landing): the
     // desktop most on screen becomes the shown one, where it is, for the swipe
     // to begin from (DesktopStrip.hpp).
-    const bool STRIP = MONITOR && ScrollOverview::DesktopStrip::catchForSwipe(MONITOR);
+    const bool STRIP = MONITOR && Hyprdrive::DesktopStrip::catchForSwipe(MONITOR);
 
     m_native.begin(e);
 
@@ -228,18 +228,18 @@ void COverviewWorkspaceGesture::begin(const ITrackpadGesture::STrackpadGestureBe
     // the fingers carry on from it, and Hyprland puts the neighbour beside it.
     if (g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress() && MONITOR && MONITOR->m_activeWorkspace) {
         if (STRIP)
-            ScrollOverview::DesktopStrip::letGo(MONITOR);
+            Hyprdrive::DesktopStrip::letGo(MONITOR);
         const auto& OFF = MONITOR->m_activeWorkspace->m_renderOffset;
         if (OFF && (OFF->isBeingAnimated() || STRIP)) {
             const Vector2D V     = OFF->value();
             const bool     VERT  = std::abs(V.y) > std::abs(V.x);
-            const double   GAP   = sc<double>(ScrollOverview::Config::getValue<int>("general:gaps_workspaces"));
+            const double   GAP   = sc<double>(Hyprdrive::Config::getValue<int>("general:gaps_workspaces"));
             const double   SPAN  = (VERT ? MONITOR->m_size.y : MONITOR->m_size.x) + GAP;
-            const double   SWIPE = std::max(1.0, sc<double>(ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_distance")));
+            const double   SWIPE = std::max(1.0, sc<double>(Hyprdrive::Config::getValue<int>("gestures:workspace_swipe_distance")));
             // Drawn stretched past a canvas desktop's overhang (Mosaic's swipe
             // stretch): the swipe's own place is that divided back out, or the
             // desktop jumped outward by the stretch as it was caught.
-            const double   D     = (VERT ? V.y : V.x) / std::max(1.0, ScrollOverview::Mosaic::swipeStretch(MONITOR->m_activeWorkspace, MONITOR, V));
+            const double   D     = (VERT ? V.y : V.x) / std::max(1.0, Hyprdrive::Mosaic::swipeStretch(MONITOR->m_activeWorkspace, MONITOR, V));
             if (std::abs(D) >= 0.5 && SPAN > 1)
                 g_pUnifiedWorkspaceSwipe->update(-D / SPAN * SWIPE);
         }
@@ -283,7 +283,7 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
         // Same sign the native swipe would have accumulated for this motion:
         // D += invert ? -distance : distance, and the tape moved forward (far
         // end) exactly when distance was negative.
-        const bool INVERT = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_invert") != 0;
+        const bool INVERT = Hyprdrive::Config::getValue<int>("gestures:workspace_swipe_invert") != 0;
         const double MAG  = std::abs(over);
         m_switchDelta     = (FAREND == INVERT) ? MAG : -MAG;
         m_switchSide      = m_switchDelta > 0.0 ? 1 : -1;
@@ -294,7 +294,7 @@ void COverviewWorkspaceGesture::update(const ITrackpadGesture::STrackpadGestureU
     }
 
     if (m_mode == EMode::TapeSwitch) {
-        const bool   INVERT = ScrollOverview::Config::getValue<int>("gestures:workspace_swipe_invert") != 0;
+        const bool   INVERT = Hyprdrive::Config::getValue<int>("gestures:workspace_swipe_invert") != 0;
         const double DELTA  = distance(e);
         const double D      = m_switchDelta + (INVERT ? -DELTA : DELTA);
         if (D * m_switchSide > 0.0) {
@@ -330,7 +330,7 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     // follow_mouse back before anything settles focus.
     const auto RESTOREFOLLOW = [this] {
         if (m_forcedFollow) {
-            ScrollOverview::Config::setValue("input:follow_mouse", m_prevFollow);
+            Hyprdrive::Config::setValue("input:follow_mouse", m_prevFollow);
             m_forcedFollow = false;
         }
     };
@@ -342,7 +342,7 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     const auto SNAPINSIDE = [this, &e] {
         m_tape.end(e); // snap to a column (with momentum) and focus it
         if (const auto WS = m_tapeWorkspace.lock()) {
-            ScrollOverview::DesktopTape::setOffset(WS, ScrollOverview::DesktopTape::probe(WS).offset); // setOffset clamps
+            Hyprdrive::DesktopTape::setOffset(WS, Hyprdrive::DesktopTape::probe(WS).offset); // setOffset clamps
         }
     };
 
@@ -357,7 +357,7 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
     if (m_mode == EMode::TapeSwitch) {
         RESTOREFOLLOW();
         g_pUnifiedWorkspaceSwipe->end();
-        ScrollOverview::DesktopStrip::quickenSwipeRelease(Desktop::focusState()->monitor());
+        Hyprdrive::DesktopStrip::quickenSwipeRelease(Desktop::focusState()->monitor());
         // Cancelled (not far or fast enough): still on the tape's desktop, so the
         // windows settle as a tape swipe would -- snapped, a column focused.
         const auto WS = m_tapeWorkspace.lock();
@@ -370,12 +370,12 @@ void COverviewWorkspaceGesture::end(const ITrackpadGesture::STrackpadGestureEnd&
 
     m_native.end(e);
     // Its release: as quick as its distance and the fingers' speed (DesktopStrip.hpp).
-    ScrollOverview::DesktopStrip::quickenSwipeRelease(Desktop::focusState()->monitor());
+    Hyprdrive::DesktopStrip::quickenSwipeRelease(Desktop::focusState()->monitor());
 
     // AFTER the native end: the release is where it picks the workspace to land
     // on, and it reads use_r to do it.
     if (m_forcedUseR) {
-        ScrollOverview::Config::setValue("gestures:workspace_swipe_use_r", m_prevUseR);
+        Hyprdrive::Config::setValue("gestures:workspace_swipe_use_r", m_prevUseR);
         m_forcedUseR = false;
     }
 }
@@ -460,7 +460,7 @@ void clickLog(const char* fmt, ...) {
     if (!ENABLED)
         return;
 
-    if (FILE* F = ScrollOverview::DebugPaths::openLog("hyprdrive-click.log")) {
+    if (FILE* F = Hyprdrive::DebugPaths::openLog("hyprdrive-click.log")) {
         va_list ap;
         va_start(ap, fmt);
         vfprintf(F, fmt, ap);
@@ -872,7 +872,7 @@ bool handleClickGestureButton(const IPointer::SButtonEvent& event) {
 void CCanvasZoomGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
     ITrackpadGesture::begin(e);
     m_delta = 0.F;
-    m_mode  = ScrollOverview::Mosaic::fingerZoomBegin();
+    m_mode  = Hyprdrive::Mosaic::fingerZoomBegin();
     if (m_mode == 0)
         m_overview.begin(e);
 }
@@ -883,10 +883,10 @@ void CCanvasZoomGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& 
         return;
     }
     // Signed: the fingers going back undo it, clamped to the gesture's length.
-    const float MAX = std::max(1.F, sc<float>(ScrollOverview::Config::getGestureDistance()));
+    const float MAX = std::max(1.F, sc<float>(Hyprdrive::Config::getGestureDistance()));
     m_delta         = std::clamp(m_delta + distance(e), 0.F, MAX);
     const double T  = m_delta / MAX;
-    ScrollOverview::Mosaic::fingerZoomFollow(m_mode > 0 ? T : 1.0 - T);
+    Hyprdrive::Mosaic::fingerZoomFollow(m_mode > 0 ? T : 1.0 - T);
 }
 
 void CCanvasZoomGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
@@ -895,10 +895,10 @@ void CCanvasZoomGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
         return;
     }
     const bool   CANCELLED = e.swipe && e.swipe->cancelled;
-    const double Z         = ScrollOverview::Mosaic::fingerZoomLevel();
+    const double Z         = Hyprdrive::Mosaic::fingerZoomLevel();
     // Out past a third of the way (back in: in past a third of the way back).
     const bool OUT = m_mode > 0 ? !CANCELLED && Z >= 1.0 / 3.0 : CANCELLED || Z > 2.0 / 3.0;
-    ScrollOverview::Mosaic::fingerZoomEnd(OUT);
+    Hyprdrive::Mosaic::fingerZoomEnd(OUT);
     m_mode = 0;
 }
 
@@ -957,7 +957,7 @@ namespace {
 void CScratchpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
     const auto MONITOR = Desktop::focusState()->monitor();
     if (!m_show && MONITOR) {
-        if (const auto SHOWN = ScrollOverview::Scratchpad::shownOn(MONITOR); SHOWN && SHOWN->m_monitor) {
+        if (const auto SHOWN = Hyprdrive::Scratchpad::shownOn(MONITOR); SHOWN && SHOWN->m_monitor) {
             if (const auto IT = g_closedLook.find(SHOWN->m_name); IT != g_closedLook.end()) {
                 const auto  MON = SHOWN->m_monitor.lock();
                 const auto& C   = IT->second;
@@ -976,7 +976,7 @@ void CScratchpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e)
     // A reveal started: the native gesture just read its From values -- the
     // closed look -- out of these same begun()s.
     if (m_show && m_native && MONITOR)
-        if (const auto WS = ScrollOverview::Scratchpad::shownOn(MONITOR); WS && WS->m_monitor) {
+        if (const auto WS = Hyprdrive::Scratchpad::shownOn(MONITOR); WS && WS->m_monitor) {
             const auto MON         = WS->m_monitor.lock();
             g_closedLook[WS->m_name] = SClosedLook{
                 .fade   = MON->m_specialFade->begun(),
@@ -993,8 +993,8 @@ ITrackpadGesture* CScratchpadGesture::pick() {
     if (!MONITOR)
         return nullptr;
 
-    const auto SHOWN  = ScrollOverview::Scratchpad::shownOn(MONITOR);
-    const auto TARGET = m_show ? (SHOWN ? PHLWORKSPACE{} : ScrollOverview::Scratchpad::ensureDefault(MONITOR)) : SHOWN;
+    const auto SHOWN  = Hyprdrive::Scratchpad::shownOn(MONITOR);
+    const auto TARGET = m_show ? (SHOWN ? PHLWORKSPACE{} : Hyprdrive::Scratchpad::ensureDefault(MONITOR)) : SHOWN;
     if (!TARGET)
         return nullptr;
 

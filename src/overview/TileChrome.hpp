@@ -8,7 +8,7 @@
 //
 // State lives here rather than on CScrollOverview because there is exactly one
 // cursor: hover is a property of the session, not of a monitor's overview.
-namespace ScrollOverview::TileChrome {
+namespace Hyprdrive::TileChrome {
 
 // The cursor moved. Pass nullptr when it is over no tile.
 // `lingerOnLeave` is the post-hover hold that keeps the close button

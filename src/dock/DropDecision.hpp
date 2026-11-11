@@ -15,7 +15,7 @@
 // the fields a stage has not filled in yet are false, which is why the two
 // early actions are decided by the facts that ARE known first.
 
-namespace ScrollOverview::Drop {
+namespace Hyprdrive::Drop {
 
     struct SFacts {
         // stage 1 -- the window and where the button came up

@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace ScrollOverview::FingerSwipeModel;
+using namespace Hyprdrive::FingerSwipeModel;
 
 static int g_fail = 0, g_checks = 0;
 static void check(bool ok, const std::string& what) {

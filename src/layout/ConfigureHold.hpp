@@ -27,7 +27,7 @@ namespace Desktop::View {
     class CWindow;
 }
 
-namespace ScrollOverview::ConfigureHold {
+namespace Hyprdrive::ConfigureHold {
 
     // main.cpp: how to reach the real CWindow::sendWindowSize past the hook.
     void setSender(std::function<void(Desktop::View::CWindow*, bool)> sender);

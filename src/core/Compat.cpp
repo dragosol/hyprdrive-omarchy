@@ -31,7 +31,7 @@ std::vector<SPair>& pairs() {
 bool g_warned = false;
 
 void appendLog(const std::string& line) {
-    if (FILE* const F = ScrollOverview::DebugPaths::openLog(COMPAT_LOG)) {
+    if (FILE* const F = Hyprdrive::DebugPaths::openLog(COMPAT_LOG)) {
         std::fputs(line.c_str(), F);
         std::fputc('\n', F);
         std::fclose(F);
@@ -57,8 +57,8 @@ T* replyStorage(const std::string& name) {
 // other's pointer is how a config copy becomes memory corruption.
 template <typename T>
 void assignVia(const SPair& pair) {
-    auto* FROM = ScrollOverview::Config::getValuePtr<T>(pair.legacy);
-    auto* TO   = ScrollOverview::Config::getValuePtr<T>(pair.modern);
+    auto* FROM = Hyprdrive::Config::getValuePtr<T>(pair.legacy);
+    auto* TO   = Hyprdrive::Config::getValuePtr<T>(pair.modern);
     if (FROM && TO)
         *TO = *FROM;
 }
@@ -84,8 +84,8 @@ void copyValue(const SPair& pair) {
         // IComplexConfigValue specialisation knows both storage paths, the
         // native one and hyprlang's CUSTOMTYPE, so the copy borrows it instead
         // of guessing which one a gradient landed on.
-        auto& FROM = ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>(pair.legacy);
-        auto& TO   = ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>(pair.modern);
+        auto& FROM = Hyprdrive::Config::valueRef<::Config::IComplexConfigValue>(pair.legacy);
+        auto& TO   = Hyprdrive::Config::valueRef<::Config::IComplexConfigValue>(pair.modern);
         if (!FROM.good() || !TO.good())
             return;
         auto* F = sc<::Config::CGradientValueData*>(FROM.ptr());
@@ -107,10 +107,10 @@ std::filesystem::path stateDir(const char* name) {
 
 }
 
-namespace ScrollOverview::Compat {
+namespace Hyprdrive::Compat {
 
 void openLog() {
-    if (FILE* const F = ScrollOverview::DebugPaths::openLog(COMPAT_LOG, false)) {
+    if (FILE* const F = Hyprdrive::DebugPaths::openLog(COMPAT_LOG, false)) {
         std::fprintf(F, "# %s compat log -- every use of a pre-rename name, and the one warning\n", NAME);
         std::fclose(F);
     }

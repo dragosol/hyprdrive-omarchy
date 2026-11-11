@@ -8,7 +8,7 @@
 #include <numeric>
 #include <utility>
 
-using namespace ScrollOverview::MosaicPack;
+using namespace Hyprdrive::MosaicPack;
 
 static int  checks = 0, failed = 0;
 static void expect(bool ok, const char* what) {

@@ -215,7 +215,7 @@ bool CScrollOverview::tabAcrossMonitors() {
     const auto ENTERTILES = [&](const std::pair<CScrollOverview*, SP<IOverview>>& ov) {
         auto*      OV    = ov.first;
         const auto FIRST = OV->isNavTile(OV->closeOnWindow.lock()) ? OV->closeOnWindow.lock() : OV->firstNavTile();
-        ScrollOverview::Stacks::traceEvent(std::format("tab: try monitor {} closeOn={} navTile={} first={}", OV->pMonitor->m_name, (uintptr_t)OV->closeOnWindow.lock().get(),
+        Hyprdrive::Stacks::traceEvent(std::format("tab: try monitor {} closeOn={} navTile={} first={}", OV->pMonitor->m_name, (uintptr_t)OV->closeOnWindow.lock().get(),
                                                        OV->isNavTile(OV->closeOnWindow.lock()) ? 1 : 0, (uintptr_t)OV->firstNavTile().get()));
         if (!FIRST)
             return false;
@@ -248,7 +248,7 @@ bool CScrollOverview::tabAcrossMonitors() {
     };
 
     const bool IN_GRID = g_search.nav.zone == EOverviewNavZone::Tile || g_search.nav.zone == EOverviewNavZone::Desktop;
-    ScrollOverview::Stacks::traceEvent(std::format("tab: from monitor {} zone={} self={}", pMonitor->m_name, (int)g_search.nav.zone, self));
+    Hyprdrive::Stacks::traceEvent(std::format("tab: from monitor {} zone={} self={}", pMonitor->m_name, (int)g_search.nav.zone, self));
 
     // NO RESULTS UP (user, 2026-09-27): "monitor 1 strip -> grid -> monitor 2
     // strip -> grid monitor 2" and round again -- search has nothing to offer,

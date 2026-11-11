@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-namespace ScrollOverview::OwnSizeTile {
+namespace Hyprdrive::OwnSizeTile {
     namespace {
         using ::Config::Actions::ActionResult;
         using ::Config::Actions::eTogglableAction;

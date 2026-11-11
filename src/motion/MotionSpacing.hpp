@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace ScrollOverview::MotionSpacing {
+namespace Hyprdrive::MotionSpacing {
 
     inline constexpr double MAX_GAP     = 2.0; // device px between consecutive copies
     inline constexpr int    MAX_SAMPLES = 64;  // the shader's MOTION_BLUR_MAX_SAMPLES

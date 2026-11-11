@@ -33,14 +33,14 @@ struct SOverviewShadowConfig {
 // exactly one copy is made, into the struct the shadow pass element takes by
 // value; the two compositor ints are resolved to a handle once per call site.
 inline SOverviewShadowConfig getOverviewShadowConfig() {
-    const auto  enabled     = ScrollOverview::Config::getShadowEnabled();
-    const auto  range       = ScrollOverview::Config::getShadowRange();
-    const auto  renderPower = ScrollOverview::Config::getShadowRenderPower();
-    const auto* color       = ScrollOverview::Config::getShadowColor();
+    const auto  enabled     = Hyprdrive::Config::getShadowEnabled();
+    const auto  range       = Hyprdrive::Config::getShadowRange();
+    const auto  renderPower = Hyprdrive::Config::getShadowRenderPower();
+    const auto* color       = Hyprdrive::Config::getShadowColor();
 
-    static auto& globalRangeVal       = ScrollOverview::Config::valueRef<Hyprlang::INT>("decoration:shadow:range");
-    static auto& globalRenderPowerVal = ScrollOverview::Config::valueRef<Hyprlang::INT>("decoration:shadow:render_power");
-    static auto& globalColorVal       = ScrollOverview::Config::valueRef<::Config::IComplexConfigValue>("decoration:shadow:color");
+    static auto& globalRangeVal       = Hyprdrive::Config::valueRef<Hyprlang::INT>("decoration:shadow:range");
+    static auto& globalRenderPowerVal = Hyprdrive::Config::valueRef<Hyprlang::INT>("decoration:shadow:render_power");
+    static auto& globalColorVal       = Hyprdrive::Config::valueRef<::Config::IComplexConfigValue>("decoration:shadow:color");
 
     const auto globalRange       = sc<int>(*globalRangeVal);
     const auto globalRenderPower = sc<int>(*globalRenderPowerVal);
@@ -48,7 +48,7 @@ inline SOverviewShadowConfig getOverviewShadowConfig() {
     Config::CGradientValueData shadowColor;
     if (color && !color->m_colors.empty())
         shadowColor = *color;
-    else if (const auto* globalColor = ScrollOverview::Config::gradientPtr(globalColorVal); globalColor && !globalColor->m_colors.empty())
+    else if (const auto* globalColor = Hyprdrive::Config::gradientPtr(globalColorVal); globalColor && !globalColor->m_colors.empty())
         shadowColor = *globalColor;
 
     return {
@@ -67,8 +67,8 @@ struct SOverviewCardRounding {
 };
 
 inline SOverviewCardRounding getOverviewCardRounding(PHLMONITOR monitor, float overviewScale) {
-    const auto THEMEROUNDING = ScrollOverview::Config::themeRounding();
-    const auto THEMEPOWER    = ScrollOverview::Config::themeRoundingPower();
+    const auto THEMEROUNDING = Hyprdrive::Config::themeRounding();
+    const auto THEMEPOWER    = Hyprdrive::Config::themeRoundingPower();
 
     const float MONITORSCALE = monitor ? monitor->m_scale : 1.F;
 

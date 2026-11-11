@@ -31,7 +31,7 @@ namespace Layout {
     struct STargetBox;
 }
 
-namespace ScrollOverview::OwnSizeTile {
+namespace Hyprdrive::OwnSizeTile {
     using PlaceFn = void (*)(void* target, const Layout::STargetBox& box, uint8_t flags);
 
     void init();

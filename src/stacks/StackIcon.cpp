@@ -24,7 +24,7 @@
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
-namespace ScrollOverview::Stacks {
+namespace Hyprdrive::Stacks {
 
     namespace {
         // The freedesktop thumbnail cache: ~/.cache/thumbnails/{large,normal}/md5(uri).png.

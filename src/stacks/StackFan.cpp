@@ -108,7 +108,7 @@ namespace StacksDetail {
         // Serpantinum's numbers x0.8 (user, 2026-09-24: "the curve is nice,
         // maybe 20% faster").
         static const SFanMotion SERP{224.F, 208.F, 32.F, 240.F, 120.F, 176.F, true};
-        return ScrollOverview::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_motion") == "extension" ? EXT : SERP;
+        return Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_motion") == "extension" ? EXT : SERP;
     }
     float outQuad(float t) { return 1.F - (1.F - t) * (1.F - t); }
     float outCubic(float t) { return 1.F - std::pow(1.F - t, 3.F); }
@@ -246,7 +246,7 @@ namespace StacksDetail {
         float      DT  = p.ticked ? std::min(std::chrono::duration<float, std::milli>(NOW - p.lastTick).count(), MAX_TICK_MS) : 0.F;
         // anim_scale, like every other hyprdrive animation: 10 = ten times
         // slower, 0 = snap.
-        if (const float AS = ScrollOverview::Config::animScale(); AS <= 0.F)
+        if (const float AS = Hyprdrive::Config::animScale(); AS <= 0.F)
             DT = DT > 0.F ? 1e6F : 0.F;
         else
             DT /= AS;

@@ -22,7 +22,7 @@
 // rather than a worker thread like SearchProviders': the handler's only job is
 // to damage monitors so an idle desktop notices a new badge, and that is a
 // main-thread act. Costs no thread, no mutex and no wake pipe.
-namespace ScrollOverview::LauncherEntry {
+namespace Hyprdrive::LauncherEntry {
 
 // The protocol also carries `progress` / `progress-visible`. Dock stacks read
 // them (2026-09-24): Chromium-family browsers publish their download progress

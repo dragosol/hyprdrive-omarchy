@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-using namespace ScrollOverview;
+using namespace Hyprdrive;
 
 static int g_checks = 0, g_failed = 0;
 #define CHECK(c)                                                                                                                                                                   \

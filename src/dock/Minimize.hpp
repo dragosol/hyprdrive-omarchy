@@ -7,7 +7,7 @@
 // OVERVIEW_CPP_SPEC §13.9 X24. The compositor half of hyprgnomedock's
 // minimize: the dock surface does not exist yet, and this is what its icon
 // clicks will drive once it does.
-namespace ScrollOverview::Minimize {
+namespace Hyprdrive::Minimize {
 
 bool                   isMinimized(PHLWINDOW window);
 // Whether this workspace IS the stash. Scratchpad.hpp needs the question asked

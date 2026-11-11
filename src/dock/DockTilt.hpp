@@ -32,7 +32,7 @@
 //   dock:press_tilt  a press leans further in toward the press point, on the
 //                    press squish's own curve (rebound included)
 // With both off the press is the flat squish it was before either existed.
-namespace ScrollOverview::DockTilt {
+namespace Hyprdrive::DockTilt {
 
 // Everything that places one icon in 3D for one frame. Angles in radians about
 // the icon's centre, CSS conventions: rotY > 0 sends the RIGHT edge away,
@@ -120,4 +120,4 @@ class CDockTiltPassElement : public IPassElement {
     SData data;
 };
 
-} // namespace ScrollOverview::DockTilt
+} // namespace Hyprdrive::DockTilt

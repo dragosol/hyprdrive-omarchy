@@ -19,7 +19,7 @@
 #include <hyprland/src/state/WorkspaceState.hpp>
 #undef private
 
-namespace ScrollOverview::Scratchpad {
+namespace Hyprdrive::Scratchpad {
 
 bool isScratchpad(const PHLWORKSPACE& workspace) {
     return workspace && workspace->m_isSpecialWorkspace && !Minimize::isStash(workspace);

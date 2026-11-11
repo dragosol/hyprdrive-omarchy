@@ -15,7 +15,7 @@
 
 #include "OverviewGesture.hpp"
 
-namespace ScrollOverview {
+namespace Hyprdrive {
     void endActiveTrackpadGesture() {
         if (!g_pTrackpadGestures)
             return;
