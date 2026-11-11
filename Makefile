@@ -121,5 +121,12 @@ clean:
 # from src/ instead, the way -MP already treats a header that is gone.
 $(notdir $(SRCS)):
 $(addprefix src/,$(notdir $(wildcard src/*/*.cpp src/*/*.hpp))):
+# Phase 2 renamed three pairs of files (scrollOverview -> Overview, OmarchySearch ->
+# SearchBackend, Spring -> SpringLoad). A .d written before that names the old
+# spellings, at whichever of the three layouts it was built with, so each old
+# name gets the same empty rule.
+RENAMED_FROM := scrollOverview.cpp scrollOverview.hpp OmarchySearch.cpp OmarchySearch.hpp Spring.cpp Spring.hpp
+$(RENAMED_FROM) $(addprefix src/,$(RENAMED_FROM)) src/overview/scrollOverview.cpp src/overview/scrollOverview.hpp \
+    src/search/OmarchySearch.cpp src/search/OmarchySearch.hpp src/dock/Spring.cpp src/dock/Spring.hpp:
 
 -include $(DEPS)
