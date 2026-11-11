@@ -317,7 +317,7 @@ static void registerConfigValuesFor() {
                                     "draw the dock on one monitor only: its name (DP-1) or desc:<description prefix>; empty = every monitor. "
                                     "A monitor that is not connected falls back to every monitor",
                                     Hyprlang::STRING{""}));
-    // Spring loading and the finger-aware swipe (user, 2026-10-07). Spring.cpp,
+    // Spring loading and the finger-aware swipe (user, 2026-10-07). SpringLoad.cpp,
     // FingerSwipe.cpp.
     addKey(makeShared<CBoolValue>(KEY("drag:spring_dock"),
                                   "a file drag held over a running app's dock icon or preview for spring_delay_ms flashes it twice and switches to it", true));

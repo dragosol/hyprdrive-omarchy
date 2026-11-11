@@ -110,7 +110,7 @@ using namespace Hyprutils::String;
 #include "WindowPill.hpp"
 #include "Placement.hpp"
 #include "FingerSwipe.hpp"
-#include "Spring.hpp"
+#include "SpringLoad.hpp"
 #include "HotCorner.hpp"
 #include "Ripple.hpp"
 #include "BorderFade.hpp"

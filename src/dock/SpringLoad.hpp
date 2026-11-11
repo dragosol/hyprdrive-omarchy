@@ -11,7 +11,7 @@
 //   * a file drag held over a running app in the dock springs it open
 //     (Dock::springUpdate).
 // A pointer resting at an edge sends no motion, so a timer keeps asking.
-namespace Hyprdrive::Spring {
+namespace Hyprdrive::SpringLoad {
     void init();
     void shutdown();
 }

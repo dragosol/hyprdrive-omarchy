@@ -1,5 +1,5 @@
 #include <optional>
-#include "Spring.hpp"
+#include "SpringLoad.hpp"
 
 #include "Config.hpp"
 #include "Dock.hpp"
@@ -29,7 +29,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 
-namespace Hyprdrive::Spring {
+namespace Hyprdrive::SpringLoad {
 
     namespace {
         constexpr const char* KEY_DOCK  = "plugin:hyprdrive:drag:spring_dock";
