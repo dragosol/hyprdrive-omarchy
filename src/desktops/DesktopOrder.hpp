@@ -52,8 +52,9 @@ namespace Hyprdrive::DesktopOrder {
     // provisional rows stay where they are. Blocks off: 1..N over every desktop. Logged
     // with `why`, before -> after. Returns the row -- (old number, new number)
     // of every desktop holding windows -- when it renumbered; nothing when
-    // already compact or refused (logged).
-    std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why);
+    // already compact or refused (logged). `only`: that one row and no other
+    // (the strip's Clean Up button: the monitor it is on); nullptr: every row.
+    std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why, const Row* only = nullptr);
     // Told after every applied renumber (FullscreenDesktop keeps the places it
     // owes by number). nullptr: nobody.
     void onRenumbered(void (*hook)());

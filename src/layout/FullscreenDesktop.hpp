@@ -31,6 +31,12 @@ namespace Hyprdrive::FullscreenDesktop {
     // a config reload (where Omarchy reconciles its blocks), an overflow
     // desktop with room in its block (Rows.cpp).
     void compactSoon(const char* why);
+    // The same, now, for `monitor`'s row alone (the overview strip's Clean Up
+    // button, OverviewStripCleanup.cpp) -- with the overview up, which the
+    // timed one waits out. Refused while a desktop slides, a swipe is under
+    // way or the monitor's block is still a guess. True: something moved
+    // (the fullscreen book follows, as after a display change).
+    bool compactRow(const PHLMONITOR& monitor, const char* why);
     // render.pre, after the desktop strip's: a window on its way to or from a
     // fullscreen desktop sets off from where it was seen.
     void preRender(PHLMONITOR monitor);

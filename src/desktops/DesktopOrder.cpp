@@ -172,7 +172,7 @@ namespace Hyprdrive::DesktopOrder {
         return renumber(moves);
     }
 
-    std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why) {
+    std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why, const Row* only) {
         const auto                    ALL = desktops();
         std::vector<DesktopPlan::Room> rooms;
         std::vector<Row>               rowOf;
@@ -191,7 +191,7 @@ namespace Hyprdrive::DesktopOrder {
         std::vector<DesktopPlan::Move> PLAN;
         std::vector<bool>              done(ALL.size(), false);
         for (size_t i = 0; i < ALL.size(); ++i) {
-            if (done[i] || rowOf[i].provisional || !rowOf[i].contains(rooms[i].id))
+            if (done[i] || rowOf[i].provisional || !rowOf[i].contains(rooms[i].id) || (only && !sameRow(rowOf[i], *only)))
                 continue;
             std::vector<DesktopPlan::Room> group;
             for (size_t j = i; j < ALL.size(); ++j)

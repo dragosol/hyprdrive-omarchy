@@ -710,7 +710,8 @@ namespace Hyprdrive::FullscreenDesktop {
         // Never while a strip slides, a swipe is under way, or an overview is
         // up (its cards fill the holes with desktops of its own while it is,
         // and a drag on its strip moves numbers): looked at again shortly.
-        // Only here: at no other time.
+        // Only here -- and on the overview strip's Clean Up button, for its
+        // monitor's row alone (compactRow), with the overview up on purpose.
         //
         // The book follows (FullscreenBook::compactedPlace): a debt whose place
         // the compaction closed is settled by it and dropped; one whose place
@@ -724,16 +725,11 @@ namespace Hyprdrive::FullscreenDesktop {
                 return true;
             return !scrollOverviews().empty(); // open or still closing
         }
-        // Returns ms until it wants another look, or 0: nothing due.
-        int compactIfDue() {
-            if (!g_compactDue)
-                return 0;
-            const auto LEFT = COMPACT_SETTLE - std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_compactAt);
-            if (LEFT.count() > 0)
-                return std::max<int>(1, LEFT.count());
-            if (compactBlocked())
-                return 60;
-            const std::string WHY = std::exchange(g_compactDue, nullptr);
+        // The compaction itself and the book after it; `only`: one row (the
+        // strip's Clean Up button), whose places alone are looked at -- a
+        // trip, debt or given window in another row keeps what it had.
+        bool compactNow(const std::string& WHY, const Row* only) {
+            const auto inScope = [only](WORKSPACEID at) { return !only || only->contains(at); };
             (void)DesktopOrder::heal("before removing empty desktops");
             std::erase_if(g_given, [](const SDebt& g) { return !DesktopOrder::ordinary(g.space.lock()); });
             // Every place by its number before.
@@ -747,10 +743,10 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             for (const auto& G : g_given)
                 givenWas.push_back(placeOf(G));
-            const auto RENUMBERED = DesktopOrder::compact(WHY);
+            const auto RENUMBERED = DesktopOrder::compact(WHY, only);
             if (!RENUMBERED) {
                 trace(std::format("{}: no empty desktop between (or refused, see the desktops log)", WHY));
-                return 0;
+                return false;
             }
             std::vector<std::pair<FullscreenBook::Id, FullscreenBook::Id>> ROW;
             for (const auto& [FROM, TO] : *RENUMBERED)
@@ -758,6 +754,10 @@ namespace Hyprdrive::FullscreenDesktop {
             trace(std::format("{}: empty desktops removed", WHY));
             std::vector<SDebt> kept;
             for (size_t i = 0; i < g_debts.size() && i < debtWas.size(); ++i) {
+                if (!inScope(debtWas[i])) {
+                    kept.push_back(g_debts[i]);
+                    continue;
+                }
                 const WORKSPACEID NOW = FullscreenBook::compactedPlace(debtWas[i], ROW);
                 if (NOW == FullscreenBook::NO_PLACE) {
                     trace(std::format("debt at place {}: closed by the compaction, settled", debtWas[i]));
@@ -768,7 +768,9 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             g_debts = std::move(kept);
             for (size_t i = 0; i < g_trips.size() && i < tripWas.size(); ++i) {
-                auto&             T   = g_trips[i];
+                auto& T = g_trips[i];
+                if (!inScope(tripWas[i]))
+                    continue;
                 const WORKSPACEID NOW = FullscreenBook::compactedPlace(tripWas[i], ROW);
                 if (NOW != FullscreenBook::NO_PLACE && !T.owes)
                     trace(std::format("trip at place {} (now {}): owed back from now on", tripWas[i], NOW));
@@ -777,7 +779,12 @@ namespace Hyprdrive::FullscreenDesktop {
                 if (!T.home.lock())
                     T.homeAt = FullscreenBook::compactedPlace(homeWas[i], ROW);
             }
+            std::vector<SDebt> notHere; // given in another row: still to be counted by that row's compaction
             for (size_t i = 0; i < g_given.size() && i < givenWas.size(); ++i) {
+                if (!inScope(givenWas[i])) {
+                    notHere.push_back(g_given[i]);
+                    continue;
+                }
                 const WORKSPACEID NOW = FullscreenBook::compactedPlace(givenWas[i], ROW);
                 if (NOW == FullscreenBook::NO_PLACE || std::ranges::any_of(g_debts, [&](const SDebt& d) { return d.at == NOW; }))
                     continue;
@@ -785,8 +792,22 @@ namespace Hyprdrive::FullscreenDesktop {
                 g_debts.back().at = NOW;
                 trace(std::format("beside place {} (now {}): owed back from now on", givenWas[i], NOW));
             }
-            g_given.clear();
+            g_given = std::move(notHere);
             syncPlaces();
+            return true;
+        }
+
+        // Returns ms until it wants another look, or 0: nothing due.
+        int compactIfDue() {
+            if (!g_compactDue)
+                return 0;
+            const auto LEFT = COMPACT_SETTLE - std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_compactAt);
+            if (LEFT.count() > 0)
+                return std::max<int>(1, LEFT.count());
+            if (compactBlocked())
+                return 60;
+            const std::string WHY = std::exchange(g_compactDue, nullptr);
+            (void)compactNow(WHY, nullptr);
             return 0;
         }
 
@@ -1264,6 +1285,23 @@ namespace Hyprdrive::FullscreenDesktop {
             if (!g_trips.empty() || !g_debts.empty() || !g_heldOut.empty() || !g_origins.empty())
                 arm(1);
         });
+    }
+
+    bool compactRow(const PHLMONITOR& monitor, const char* why) {
+        if (!monitor || !g_pCompositor || g_pCompositor->m_isShuttingDown)
+            return false;
+        // What the display compaction waits for, but an overview: the button
+        // is ON the overview, which rebuilds its cards after (OverviewStrip.cpp).
+        if (anyDriving() || DesktopStrip::switching() || (g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress())) {
+            trace(std::format("{}: refused, a desktop is on the move", why));
+            return false;
+        }
+        const Row ROW = Rows::of(monitor);
+        if (ROW.provisional) {
+            trace(std::format("{}: refused, the monitor's block is not known yet", why));
+            return false;
+        }
+        return compactNow(why, &ROW);
     }
 
     void compactSoon(const char* why) {
