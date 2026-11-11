@@ -1,6 +1,7 @@
 // Geometry: autohide reveal, the arrangement animation, the base layout
 // and layout().
 #include "DockParts.hpp"
+#include "MotionCurves.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -20,8 +21,7 @@ float revealEase(float t) {
     // Any animation:curve preset but the house one: its DECEL, both ways.
     if (!Motion::housePreset())
         return Motion::ease(Motion::ERole::DECEL, t);
-    const float INV = 1.F - std::clamp(t, 0.F, 1.F);
-    return 1.F - (INV * INV);
+    return Hyprdrive::Motion::outQuad(std::clamp(t, 0.F, 1.F));
 }
 
 // 0 = fully out, 1 = fully tucked below the bottom edge.
@@ -89,9 +89,7 @@ bool autohideAnimating(PHLMONITOR monitor) {
 float arrangeEase(float t) { // ease-out cubic: fast away, soft landing
     if (!Motion::housePreset())
         return Motion::ease(Motion::ERole::DECEL, t);
-    t = std::clamp(t, 0.F, 1.F);
-    const float U = 1.F - t;
-    return 1.F - U * U * U;
+    return Hyprdrive::Motion::outCubic(std::clamp(t, 0.F, 1.F));
 }
 
 float spawnEase(float t) { // ease-out back, a touch of overshoot so it lands

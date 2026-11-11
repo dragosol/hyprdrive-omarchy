@@ -1,4 +1,5 @@
 #include "FullscreenDesktop.hpp"
+#include "MotionCurves.hpp"
 #include "MotionClock.hpp"
 #include "DesktopOrder.hpp"
 #include "DesktopStrip.hpp"
@@ -549,7 +550,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // fullscreen without doing the transition").
             const double   SLIDT = G && it->span > 0.5 ? std::clamp(1.0 - std::hypot(GO.x, GO.y) / it->span, 0.0, 1.0) : 1.0;
             const double   TIMEL = std::clamp(Hyprdrive::Motion::msBetween<double>(std::chrono::steady_clock::now(), it->at) / TRAVEL_MIN_MS, 0.0, 1.0);
-            const double   T     = std::min(SLIDT, 1.0 - std::pow(1.0 - TIMEL, 3.0));
+            const double   T     = std::min(SLIDT, Hyprdrive::Motion::outCubicPow(TIMEL));
             if (it->goal && it->drawn && (it->goal->first != GOAL || it->goal->second != GSIZE)) {
                 // Re-aimed: the rest of the trip sets off from where it is drawn.
                 it->seen     = it->screen ? it->drawn->first : it->drawn->first - offsetOf(W->m_workspace);

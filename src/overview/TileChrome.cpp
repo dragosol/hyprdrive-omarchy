@@ -1,4 +1,5 @@
 #include "TileChrome.hpp"
+#include "MotionCurves.hpp"
 #include "MotionClock.hpp"
 #include "Motion.hpp"
 
@@ -198,8 +199,7 @@ float eased(const SEase& ease) {
 float easedHover(const SEase& ease) {
     // The animation clock: the panel's speed stretches the hover too.
     const float T   = std::clamp(Hyprdrive::Config::animElapsedMs(ease.start) / std::max(1.F, sc<float>(ease.ms)), 0.F, 1.F);
-    const float INV = 1.F - T;
-    const float E   = Motion::housePreset() ? 1.F - INV * INV : Motion::ease(Motion::ERole::DECEL, T);
+    const float E = Motion::housePreset() ? Hyprdrive::Motion::outQuad(T) : Motion::ease(Motion::ERole::DECEL, T);
 
     return ease.from + (ease.to - ease.from) * E;
 }

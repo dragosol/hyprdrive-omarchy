@@ -2,6 +2,7 @@
 // scroll spring and layout. Split out of DockStacks.cpp; the state is still there
 // (StackParts.hpp).
 #include "StackParts.hpp"
+#include "MotionCurves.hpp"
 #include "MotionClock.hpp"
 
 using namespace StacksDetail;
@@ -110,13 +111,6 @@ namespace StacksDetail {
         // maybe 20% faster").
         static const SFanMotion SERP{224.F, 208.F, 32.F, 240.F, 120.F, 176.F, true};
         return Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_motion") == "extension" ? EXT : SERP;
-    }
-    float outQuad(float t) { return 1.F - (1.F - t) * (1.F - t); }
-    float outCubic(float t) { return 1.F - std::pow(1.F - t, 3.F); }
-    float outQuint(float t) { return 1.F - std::pow(1.F - t, 5.F); }
-    float outBack(float t, float s) { // Qt's Easing.OutBack
-        t -= 1.F;
-        return t * t * ((s + 1.F) * t + s) + 1.F;
     }
     std::string popupState() {
         if (!g_popup)
@@ -324,9 +318,10 @@ namespace StacksDetail {
         const float TR = std::clamp(T / M.rowMs, 0.F, 1.F);
         const float TA = std::clamp(T / M.alphaMs, 0.F, 1.F);
         if (!M.serp)
-            return {outQuad(TR), outQuad(TR), outQuad(TR), 1.F};
+            return {Hyprdrive::Motion::outQuad(TR), Hyprdrive::Motion::outQuad(TR), Hyprdrive::Motion::outQuad(TR), 1.F};
         // The spin settles with a small wobble past its tilt, as paper does.
-        return {outQuint(TR), outBack(TR, 1.1F), outCubic(TA), outBack(TR, 1.4F)};
+        // Qt's OutQuint / OutBack / OutCubic, through pow as Qt writes them.
+        return {Hyprdrive::Motion::outQuintPow(TR), Hyprdrive::Motion::outBack(TR, 1.1F), Hyprdrive::Motion::outCubicPow(TA), Hyprdrive::Motion::outBack(TR, 1.4F)};
     }
 
     // ------------------------------------------------------------ fan layout --

@@ -1,6 +1,7 @@
 // COverview: search UI: layout, draw, render, pill/letter animation, menu key handlers.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "MotionCurves.hpp"
 
 using namespace OverviewDetail;
 
@@ -533,8 +534,7 @@ namespace {
 // searchHoverEasing() for frames while it runs.
     constexpr float SEARCH_HOVER_MS = 140.F;
     float           searchLitT() {
-        const float T = std::clamp(Hyprdrive::Motion::msBetween(Time::steadyNow(), g_searchLitAt) / SEARCH_HOVER_MS, 0.F, 1.F);
-        return T * T * (3.F - 2.F * T);
+        return Hyprdrive::Motion::smoothstep(std::clamp(Hyprdrive::Motion::msBetween(Time::steadyNow(), g_searchLitAt) / SEARCH_HOVER_MS, 0.F, 1.F));
     }
     float searchLit(int index) {
         const float T = searchLitT();

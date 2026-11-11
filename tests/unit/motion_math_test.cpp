@@ -15,9 +15,13 @@
 // copy it replaced fails here.
 
 #include "MotionClock.hpp"
+#include "MotionCurves.hpp"
+#include "SearchLetters.hpp"
 #include "MotionMath.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <optional>
 
 #include <cstdint>
@@ -274,9 +278,200 @@ static void testA2() {
     report("A2 Config::realElapsedMs body == the inline form it replaced", n, bad[11]);
 }
 
+// ============================================================================
+// A3 -- the named curves. Each golden copy is the deleted definition (or the
+// inline expression a site spelled out), verbatim, as a function of t; the
+// "new" side is what the site now calls, clamp included, as the site writes it.
+// ============================================================================
+namespace old_a3 {
+    // dock/Dock.cpp:45 easeOutQuad
+    [[gnu::noinline]] float dockEaseOutQuad(float t) {
+        return 1.F - (1.F - t) * (1.F - t);
+    }
+    // dock/DockLayout.cpp:23 revealEase, the house branch
+    [[gnu::noinline]] float dockLayoutReveal(float t) {
+        const float INV = 1.F - std::clamp(t, 0.F, 1.F);
+        return 1.F - (INV * INV);
+    }
+    // overview/TileChrome.cpp:241 easedHover, the house branch (T arrives clamped)
+    [[gnu::noinline]] float tileChromeHover(float T) {
+        const float INV = 1.F - T;
+        return 1.F - INV * INV;
+    }
+    // dock/DockLayout.cpp:89 arrangeEase, the house branch
+    [[gnu::noinline]] float dockLayoutArrange(float t) {
+        t             = std::clamp(t, 0.F, 1.F);
+        const float U = 1.F - t;
+        return 1.F - U * U * U;
+    }
+    // stacks/StackFan.cpp:127-133 (StackRender.cpp:485 called the first two)
+    [[gnu::noinline]] float stackOutQuad(float t) { return 1.F - (1.F - t) * (1.F - t); }
+    [[gnu::noinline]] float stackOutCubic(float t) { return 1.F - std::pow(1.F - t, 3.F); }
+    [[gnu::noinline]] float stackOutQuint(float t) { return 1.F - std::pow(1.F - t, 5.F); }
+    [[gnu::noinline]] float stackOutBack(float t, float s) { // Qt's Easing.OutBack
+        t -= 1.F;
+        return t * t * ((s + 1.F) * t + s) + 1.F;
+    }
+    // search/SearchLetters.hpp:46 / :56 (clamp01 is unchanged, SearchLetters.hpp:41)
+    [[gnu::noinline]] float lettersOutBack(float t, float s) {
+        t = SearchLetters::clamp01(t) - 1.F;
+        return t * t * ((s + 1.F) * t + s) + 1.F;
+    }
+    [[gnu::noinline]] float lettersOutCubic(float t) {
+        const float INV = 1.F - SearchLetters::clamp01(t);
+        return 1.F - INV * INV * INV;
+    }
+    // dock/DockMenu.cpp:592-593 (P arrives clamped), :647-648
+    [[gnu::noinline]] float menuRowE(float P) {
+        const float E = 1.F - (1.F - P) * (1.F - P) * (1.F - P); // cubic out
+        return E;
+    }
+    [[gnu::noinline]] float menuRowA(float P) {
+        return P * P * (3.F - 2.F * P);
+    }
+    [[gnu::noinline]] float menuHover(float x) {
+        const float T = std::clamp(x, 0.F, 1.F);
+        return T * T * (3.F - 2.F * T);
+    }
+    // dock/DockPointer.cpp:533 easeOutQuint
+    [[gnu::noinline]] float pointerOutQuint(float t) {
+        const float INV = 1.F - std::clamp(t, 0.F, 1.F);
+        return 1.F - INV * INV * INV * INV * INV;
+    }
+    // dock/SpringLoad.cpp:235 (P is a float, the curve double), :259 smoothstep
+    [[gnu::noinline]] double springCommit(float P) {
+        const double E = 1.0 - std::pow(1.0 - P, 3.0);
+        return E;
+    }
+    [[gnu::noinline]] double springSmoothstep(double t) {
+        t = std::clamp(t, 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    }
+    // layout/FullscreenDesktop.cpp:551 (TIMEL is a double)
+    [[gnu::noinline]] double fullscreenTravel(double TIMEL) {
+        return 1.0 - std::pow(1.0 - TIMEL, 3.0);
+    }
+    // motion/FlightBlur.cpp:497 smoothstep01, :585 (T arrives clamped)
+    [[gnu::noinline]] float blurSmoothstep01(float t) {
+        const float T = std::clamp(t, 0.F, 1.F);
+        return T * T * (3.F - 2.F * T);
+    }
+    [[gnu::noinline]] float blurFadeKeep(float T) {
+        const float KEEP = 1.F - T * T * (3.F - 2.F * T);
+        return KEEP;
+    }
+    // overview/OverviewSearchView.cpp:536-537 (x = the raw ms ratio)
+    [[gnu::noinline]] float searchLit(float x) {
+        const float T = std::clamp(x, 0.F, 1.F);
+        return T * T * (3.F - 2.F * T);
+    }
+    // stacks/StackIcon.cpp:188 (TRI is a double), stacks/StackRender.cpp:446
+    [[gnu::noinline]] double stackIconSweep(double TRI) {
+        const double E = TRI * TRI * (3.0 - 2.0 * TRI);
+        return E;
+    }
+    [[gnu::noinline]] float stackBarAlpha(float barAlpha) {
+        const float E = barAlpha * barAlpha * (3.F - 2.F * barAlpha);
+        return E;
+    }
+}
+
+namespace M = Hyprdrive::Motion;
+
+static void testA3() {
+    // t: every 397th float bit pattern in [0, 1] (about 2.7 million, dense near
+    // 0 where float is), every 4093rd from -1.5 up to 0 and from 1 up to 2.5
+    // (the sites that do not clamp see overshoot), and the edges.
+    std::vector<float> T;
+    auto               bitsOf = [](float f) {
+        uint32_t u;
+        std::memcpy(&u, &f, 4);
+        return u;
+    };
+    auto floatOf = [](uint32_t u) {
+        float f;
+        std::memcpy(&f, &u, 4);
+        return f;
+    };
+    for (uint32_t u = 0; u <= bitsOf(1.F); u += 397)
+        T.push_back(floatOf(u));
+    for (uint32_t u = bitsOf(1.F); u <= bitsOf(2.5F); u += 4093)
+        T.push_back(floatOf(u));
+    for (uint32_t u = 0x80000000U; u <= bitsOf(-1.5F); u += 4093)
+        T.push_back(floatOf(u));
+    for (float e : {0.F, -0.F, 1.F, 0.5F, 1e-38F, -1e-38F, 0.99999994F, 1.0000001F, -1.F, 2.F})
+        T.push_back(e);
+    const float S[] = {1.1F, 1.4F, 1.70158F, 1.6F, 3.2F, 3.2F * 0.8F, 0.F, 1.75F};
+
+    long n = 0, bad[24] = {};
+    for (float t : T) {
+        ++n;
+        const float CT = std::clamp(t, 0.F, 1.F);
+        bad[0] += !sameBits(M::outQuad(t), old_a3::dockEaseOutQuad(t));
+        bad[1] += !sameBits(M::outQuad(std::clamp(t, 0.F, 1.F)), old_a3::dockLayoutReveal(t));
+        bad[2] += !sameBits(M::outQuad(t), old_a3::tileChromeHover(t));
+        bad[3] += !sameBits(M::outCubic(std::clamp(t, 0.F, 1.F)), old_a3::dockLayoutArrange(t));
+        bad[4] += !sameBits(M::outQuad(t), old_a3::stackOutQuad(t));
+        bad[5] += !sameBits(M::outCubicPow(t), old_a3::stackOutCubic(t));
+        bad[6] += !sameBits(M::outQuintPow(t), old_a3::stackOutQuint(t));
+        for (float s : S) {
+            bad[7] += !sameBits(M::outBack(t, s), old_a3::stackOutBack(t, s));
+            bad[8] += !sameBits(SearchLetters::easeOutBack(t, s), old_a3::lettersOutBack(t, s));
+        }
+        bad[9] += !sameBits(SearchLetters::easeOutCubic(t), old_a3::lettersOutCubic(t));
+        bad[10] += !sameBits(M::outCubic(CT), old_a3::menuRowE(CT));
+        bad[11] += !sameBits(M::smoothstep(CT), old_a3::menuRowA(CT));
+        bad[12] += !sameBits(M::smoothstep(std::clamp(t, 0.F, 1.F)), old_a3::menuHover(t));
+        bad[13] += !sameBits(M::outQuint(std::clamp(t, 0.F, 1.F)), old_a3::pointerOutQuint(t));
+        bad[14] += !sameBits(M::outCubicPow(static_cast<double>(CT)), old_a3::springCommit(CT));
+        bad[15] += !sameBits(M::smoothstep(std::clamp(static_cast<double>(t), 0.0, 1.0)), old_a3::springSmoothstep(t));
+        bad[16] += !sameBits(M::outCubicPow(static_cast<double>(CT)), old_a3::fullscreenTravel(CT));
+        bad[17] += !sameBits(M::smoothstep(std::clamp(t, 0.F, 1.F)), old_a3::blurSmoothstep01(t));
+        bad[18] += !sameBits(1.F - M::smoothstep(CT), old_a3::blurFadeKeep(CT));
+        bad[19] += !sameBits(M::smoothstep(std::clamp(t, 0.F, 1.F)), old_a3::searchLit(t));
+        bad[20] += !sameBits(M::smoothstep(static_cast<double>(CT)), old_a3::stackIconSweep(CT));
+        bad[21] += !sameBits(M::smoothstep(CT), old_a3::stackBarAlpha(CT));
+    }
+    // The double sites also see doubles that are not floats.
+    long nd = 0;
+    for (int i = -1000; i <= 1001000; ++i) {
+        const double D  = i / 1000000.0 + 1e-13 * (i % 7);
+        const double CD = std::clamp(D, 0.0, 1.0);
+        ++nd;
+        bad[22] += !sameBits(M::outCubicPow(CD), old_a3::fullscreenTravel(CD));
+        bad[23] += !sameBits(M::smoothstep(CD), old_a3::stackIconSweep(CD)) + !sameBits(M::smoothstep(std::clamp(D, 0.0, 1.0)), old_a3::springSmoothstep(D));
+    }
+    const long NS = n * static_cast<long>(std::size(S));
+    report("A3 outQuad == Dock.cpp easeOutQuad", n, bad[0]);
+    report("A3 outQuad(clamp) == DockLayout.cpp revealEase (house)", n, bad[1]);
+    report("A3 outQuad == TileChrome.cpp easedHover (house)", n, bad[2]);
+    report("A3 outCubic(clamp) == DockLayout.cpp arrangeEase (house)", n, bad[3]);
+    report("A3 outQuad == StackFan.cpp outQuad", n, bad[4]);
+    report("A3 outCubicPow == StackFan.cpp outCubic", n, bad[5]);
+    report("A3 outQuintPow == StackFan.cpp outQuint", n, bad[6]);
+    report("A3 outBack == StackFan.cpp outBack", NS, bad[7]);
+    report("A3 SearchLetters::easeOutBack on outBack == its old body", NS, bad[8]);
+    report("A3 SearchLetters::easeOutCubic on outCubic == its old body", n, bad[9]);
+    report("A3 outCubic == DockMenu.cpp row cubic", n, bad[10]);
+    report("A3 smoothstep == DockMenu.cpp row alpha", n, bad[11]);
+    report("A3 smoothstep(clamp) == DockMenu.cpp row hover", n, bad[12]);
+    report("A3 outQuint(clamp) == DockPointer.cpp easeOutQuint", n, bad[13]);
+    report("A3 outCubicPow(double) == SpringLoad.cpp commit", n, bad[14]);
+    report("A3 smoothstep(double, clamp) == SpringLoad.cpp smoothstep", n, bad[15]);
+    report("A3 outCubicPow(double) == FullscreenDesktop.cpp travel", n, bad[16]);
+    report("A3 smoothstep(clamp) == FlightBlur.cpp smoothstep01", n, bad[17]);
+    report("A3 1 - smoothstep == FlightBlur.cpp fadeMotion keep", n, bad[18]);
+    report("A3 smoothstep(clamp) == OverviewSearchView.cpp searchLitT", n, bad[19]);
+    report("A3 smoothstep(double) == StackIcon.cpp sweep", n, bad[20]);
+    report("A3 smoothstep == StackRender.cpp scrollbar alpha", n, bad[21]);
+    report("A3 outCubicPow(double) == FullscreenDesktop.cpp travel, double grid", nd, bad[22]);
+    report("A3 smoothstep(double) == StackIcon.cpp / SpringLoad.cpp, double grid", 2 * nd, bad[23]);
+}
+
 int main() {
     testA1();
     testA2();
+    testA3();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

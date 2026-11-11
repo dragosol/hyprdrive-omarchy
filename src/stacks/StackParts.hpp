@@ -6,6 +6,7 @@
 
 #include "Motion.hpp"
 #include "DebugPaths.hpp"
+#include "MotionCurves.hpp"
 #include "OverviewInternal.hpp"
 #include "DockStacks.hpp"
 #include "Locations.hpp"
@@ -333,8 +334,6 @@ namespace StacksDetail {
         extern std::string pickIconImpl(const std::string& names);
         extern StackReader::SListing sortedListing(const std::string& dir, StackModel::ESort sort);
         extern const SFanMotion& fanMotion();
-        extern float outQuad(float t);
-        extern float outCubic(float t);
         extern std::string g_trashStack;
         extern uint64_t g_trashSeenSeq;
         extern std::string g_trashError;

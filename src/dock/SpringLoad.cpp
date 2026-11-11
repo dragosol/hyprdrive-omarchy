@@ -1,5 +1,6 @@
 #include <optional>
 #include "SpringLoad.hpp"
+#include "MotionCurves.hpp"
 
 #include "Config.hpp"
 #include "Dock.hpp"
@@ -232,7 +233,7 @@ namespace Hyprdrive::SpringLoad {
             }
             if (g_swipe->phase == EPhase::Commit) {
                 const float  P = std::clamp(sincePhase() / SLIDE_MS, 0.F, 1.F);
-                const double E = 1.0 - std::pow(1.0 - P, 3.0);
+                const double E = Hyprdrive::Motion::outCubicPow(static_cast<double>(P));
                 setDelta(g_swipe->from + (g_swipe->dir * swipeDistance() - g_swipe->from) * E);
                 if (P >= 1.F) {
                     g_pUnifiedWorkspaceSwipe->end(); // the whole distance: it commits
@@ -257,8 +258,7 @@ namespace Hyprdrive::SpringLoad {
         }
 
         static double smoothstep(double t) {
-            t = std::clamp(t, 0.0, 1.0);
-            return t * t * (3.0 - 2.0 * t);
+            return Hyprdrive::Motion::smoothstep(std::clamp(t, 0.0, 1.0));
         }
 
         // The edge light's texture: a thin line of the theme accent with a soft

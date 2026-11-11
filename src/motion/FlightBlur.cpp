@@ -28,6 +28,7 @@
 #undef protected
 #undef private
 #include "FlightBlur.hpp"
+#include "MotionCurves.hpp"
 #include "MotionClock.hpp"
 
 #include "DesktopStrip.hpp"
@@ -495,8 +496,7 @@ namespace Hyprdrive::FlightBlur {
 
     namespace {
         float smoothstep01(float t) {
-            const float T = std::clamp(t, 0.F, 1.F);
-            return T * T * (3.F - 2.F * T);
+            return Hyprdrive::Motion::smoothstep(std::clamp(t, 0.F, 1.F));
         }
 
         // How much of the smear is left at `p` for each fade shape. "early" is
@@ -582,7 +582,7 @@ namespace Hyprdrive::FlightBlur {
 
     CBox fadeMotion(const CBox& prev, const CBox& cur, float progress) {
         const float T    = std::clamp(progress / 0.5F, 0.F, 1.F);
-        const float KEEP = 1.F - T * T * (3.F - 2.F * T);
+        const float KEEP = 1.F - Hyprdrive::Motion::smoothstep(T);
         if (KEEP < 0.03F)
             return cur;
         return CBox{cur.x + (prev.x - cur.x) * KEEP, cur.y + (prev.y - cur.y) * KEEP, cur.w + (prev.w - cur.w) * KEEP, cur.h + (prev.h - cur.h) * KEEP};

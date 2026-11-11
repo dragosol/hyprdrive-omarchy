@@ -1,6 +1,7 @@
 // Dock stacks: drawing the open popup (render) and its scrollbar arc. Split out of
 // DockStacks.cpp; the state is still there (StackParts.hpp).
 #include "StackParts.hpp"
+#include "MotionCurves.hpp"
 
 using namespace StacksDetail;
 
@@ -444,7 +445,7 @@ namespace Hyprdrive::Stacks {
                 pts.push_back(C + Vector2D{-D.y / L, D.x / L} * ICONCLEAR); // the right-hand normal of an upward curve
             }
             const float  N    = sc<float>(P.visible.size());
-            const float  E    = P.barAlpha * P.barAlpha * (3.F - 2.F * P.barAlpha);
+            const float  E    = Hyprdrive::Motion::smoothstep(P.barAlpha);
             drawArcBar(pts, P.scrollPos / N, (P.scrollPos + sc<float>(SL)) / N, BARTHICK, Config::themeForeground().modifyA(0.10F), Config::highlightColor().modifyA(0.95F),
                        Config::themeRounding() > 0, ALPHA * E);
         }
@@ -483,7 +484,7 @@ namespace Hyprdrive::Stacks {
             float HB = 1.F;
             if (const auto IT = g_popup->hoverAmt.find(ROWKEY); IT != g_popup->hoverAmt.end()) {
                 const float U = IT->second;
-                HB            = 1.F + (HOVER_SCALE - 1.F) * (fanMotion().serp ? outCubic(U) : outQuad(U));
+                HB            = 1.F + (HOVER_SCALE - 1.F) * (fanMotion().serp ? Hyprdrive::Motion::outCubicPow(U) : Hyprdrive::Motion::outQuad(U));
             }
 
             const float KT   = PREV ? 1.15F : 1.F; // the preview's enlargement (the size text is rasterised at)

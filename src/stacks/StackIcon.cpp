@@ -4,6 +4,7 @@
 // empty one. Everything here draws from cached textures; the listing comes from
 // StackReader, never from the disk on this thread.
 #include "BuiltinIcons.hpp"
+#include "MotionCurves.hpp"
 #include "DockStacks.hpp"
 #include "Thumbs.hpp"
 #include <chrono>
@@ -185,7 +186,7 @@ namespace Hyprdrive::Stacks {
             const double MS  = sc<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
             const double T   = std::fmod(MS, 1600.0) / 1600.0;           // one sweep there and back
             const double TRI = T < 0.5 ? T * 2.0 : 2.0 - T * 2.0;        // 0..1..0
-            const double E   = TRI * TRI * (3.0 - 2.0 * TRI);           // eased at both ends
+            const double E   = Hyprdrive::Motion::smoothstep(TRI);                      // eased at both ends
             const double SEG = fill.width * 0.32;
             fill.x += (fill.width - SEG) * E;
             fill.width = SEG;

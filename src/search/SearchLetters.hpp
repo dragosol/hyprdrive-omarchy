@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "MotionClock.hpp"
+#include "MotionCurves.hpp"
 
 namespace SearchLetters {
 
@@ -44,8 +45,7 @@ inline float clamp01(float t) {
 
 // Qt Easing.OutBack / InBack, cubic.
 inline float easeOutBack(float t, float s) {
-    t = clamp01(t) - 1.F;
-    return t * t * ((s + 1.F) * t + s) + 1.F;
+    return Hyprdrive::Motion::outBack(clamp01(t), s);
 }
 
 inline float easeInBack(float t, float s = INBACK_OVERSHOOT) {
@@ -54,8 +54,7 @@ inline float easeInBack(float t, float s = INBACK_OVERSHOOT) {
 }
 
 inline float easeOutCubic(float t) {
-    const float INV = 1.F - clamp01(t);
-    return 1.F - INV * INV * INV;
+    return Hyprdrive::Motion::outCubic(clamp01(t));
 }
 
 inline float easeInCubic(float t) {

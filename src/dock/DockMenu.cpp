@@ -1,5 +1,6 @@
 // The context menu: its rows (ERow, buildRows, info rows) and drawing.
 #include "DockParts.hpp"
+#include "MotionCurves.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -586,8 +587,8 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         const float  ST = N > 1 ? std::min(0.07F, 0.55F / sc<float>(N - 1)) : 0.F; // stagger, in CONTENT
         const float  K  = sc<float>(N - 1 - std::min(i, N - 1));                     // 0 = the row nearest the dock
         const float  P  = std::clamp(CONTENT * (1.F + ST * sc<float>(N - 1)) - ST * K, 0.F, 1.F);
-        const float  E  = 1.F - (1.F - P) * (1.F - P) * (1.F - P); // cubic out
-        ROWA            = P * P * (3.F - 2.F * P);
+        const float  E  = Hyprdrive::Motion::outCubic(P);
+        ROWA            = Hyprdrive::Motion::smoothstep(P);
         ROWDY           = (1.F - E) * 9.F * SCALE;
     };
     const auto   clipTo  = [&](CBox c) { return c.empty() ? VIS : c.intersection(VIS); };
@@ -641,8 +642,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         }
     }
     const float HT = [&] {
-        const float T = std::clamp(elapsedMs(M.hoverAt) / MENU_HOVER_MS, 0.F, 1.F);
-        return T * T * (3.F - 2.F * T);
+        return Hyprdrive::Motion::smoothstep(std::clamp(elapsedMs(M.hoverAt) / MENU_HOVER_MS, 0.F, 1.F));
     }();
     // The row's highlight (the row itself hovered, not one of its buttons).
     const auto rowLit = [&](int i) {

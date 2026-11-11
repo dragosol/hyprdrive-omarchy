@@ -1,6 +1,7 @@
 // Pointer and keyboard input: hit tests, drag-reorder, press, click,
 // scroll, the menu's keys and clicks, and the info-poll timer.
 #include "DockParts.hpp"
+#include "MotionCurves.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -529,10 +530,6 @@ void beginDesktopTearOut(PHLMONITOR monitor, const PHLWINDOW& window, const CBox
     }
 }
 
-float easeOutQuint(float t) {
-    const float INV = 1.F - std::clamp(t, 0.F, 1.F);
-    return 1.F - INV * INV * INV * INV * INV;
-}
 
 // A damped spring released from full depth at rest: 1 at t=0 with zero
 // velocity, swinging through 0 into a small negative overshoot and settling.
@@ -553,7 +550,7 @@ float pressDepth(MONITORID monitor, const std::string& subject) {
     if (!g_press || g_press->monitor != monitor || g_press->subject != subject)
         return 0.F;
 
-    const float IN = easeOutQuint(elapsedMs(g_press->since) / PRESS_IN_MS);
+    const float IN = Hyprdrive::Motion::outQuint(std::clamp(elapsedMs(g_press->since) / PRESS_IN_MS, 0.F, 1.F));
     if (!g_press->released)
         return IN;
 
