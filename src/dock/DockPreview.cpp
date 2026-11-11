@@ -183,16 +183,14 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
 // Entrances decelerate, exits accelerate (the house rule), from wherever the
 // fade was when it turned.
 static float panelAlpha(const SPanel& panel) {
-    const float T = std::clamp(elapsedMs(panel.fadeSince) / std::max(1.F, panel.fadeMs), 0.F, 1.F);
-    const float E = houseEase(panel.fadeTo > panel.fadeFrom, T);
-    return panel.fadeFrom + ((panel.fadeTo - panel.fadeFrom) * E);
+    const float T = std::clamp(elapsedMs(panel.fade.start) / std::max(1.F, panel.fadeMs), 0.F, 1.F);
+    const float E = houseEase(panel.fade.rising(), T);
+    return panel.fade.at(E);
 }
 
 static void panelFade(SPanel& panel, float to, float ms, const Time::steady_tp& now) {
-    panel.fadeFrom  = panelAlpha(panel);
-    panel.fadeTo    = to;
-    panel.fadeSince = now;
-    panel.fadeMs    = ms;
+    panel.fade.retarget(panelAlpha(panel), to, now);
+    panel.fadeMs = ms;
 }
 
 // [FLIGHT] dismissHoverPanelNow moved out of the anonymous namespace -- the
@@ -485,7 +483,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         if (!g_hover.panel) {
             // Rises off the dock's top edge, decelerating into place. Growing
             // from the icon box itself painted the live thumbnails over the pill.
-            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .scratchpadName = scratchpadName, .monitor = monitor->m_id, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true, .fadeSince = now};
+            g_hover.panel = SPanel{.wmClass = wmClass, .desktopId = desktopId, .scratchpadName = scratchpadName, .monitor = monitor->m_id, .anchor = anchor, .target = TARGET, .from = panelRiseOrigin(layout, anchor), .moveSince = now, .moveMs = PANEL_IN_MS, .decel = true, .fade = {.from = 0.F, .to = 1.F, .start = now}};
         } else {
             g_hover.panel->leaving = false;
             g_hover.panel->wmClass = wmClass;

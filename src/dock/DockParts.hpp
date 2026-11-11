@@ -42,6 +42,7 @@
 #include "DesktopSwitch.hpp"
 #include "Motion.hpp"
 #include "MotionMath.hpp"
+#include "MotionTween.hpp"
 #include "ConfigureHold.hpp"
 
 #include "Compat.hpp"
@@ -1368,10 +1369,8 @@ struct SPanel {
     // frame, so the plate sat at alpha 0 -- previews with no plate under them.
     // In on the entrance, out on the dismissal, from wherever it was; a slide
     // leaves it alone.
-    float           fadeFrom  = 0.F;
-    float           fadeTo    = 1.F;
-    Time::steady_tp fadeSince = Time::steadyNow();
-    float           fadeMs    = PANEL_IN_MS;
+    Hyprdrive::Motion::STween<Time::steady_tp> fade{.from = 0.F, .to = 1.F, .start = Time::steadyNow()};
+    float                                      fadeMs = PANEL_IN_MS;
 };
 
 // How far a parked window's preview is darkened, and the label's point size.

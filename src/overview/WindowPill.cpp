@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "WindowPill.hpp"
+#include "MotionTween.hpp"
 
 #include "Config.hpp"
 #include "Dock.hpp"
@@ -112,11 +113,8 @@ constexpr const char* ICON_CLOSE    = "window-close-symbolic";
 // ----------------------------------------------------------------- state ----
 bool            g_super = false;
 
-struct SReveal {
-    float           from  = 0.F;
-    float           to    = 0.F;
-    float           ms    = 1.F;
-    Time::steady_tp start = {};
+struct SReveal : Hyprdrive::Motion::STween<Time::steady_tp> {
+    float ms = 1.F;
 };
 
 SReveal g_reveal;
@@ -143,7 +141,7 @@ float ease() {
         return g_reveal.to;
 
     const float T = std::clamp(ELAPSED / std::max(1.F, g_reveal.ms), 0.F, 1.F);
-    return g_reveal.from + (g_reveal.to - g_reveal.from) * houseEase(g_reveal.to > g_reveal.from, T);
+    return g_reveal.at(houseEase(g_reveal.rising(), T));
 }
 
 // The window's rect as it sits on screen, in the monitor-local RENDER px
@@ -228,10 +226,10 @@ void setSuperHeld(bool held) {
     // From WHEREVER it is now, so tapping SUPER twice in quick succession does
     // not restart the pill from nothing -- the same retarget every ease in this
     // codebase makes.
-    g_reveal.from  = ease();
-    g_reveal.to    = held ? 1.F : 0.F;
-    g_reveal.ms    = held ? IN_MS : OUT_MS;
-    g_reveal.start = Time::steadyNow();
+    // (The current value is read before the new leg's clock stamp, as always.)
+    const float NOW_VALUE = ease();
+    g_reveal.ms           = held ? IN_MS : OUT_MS;
+    g_reveal.retarget(NOW_VALUE, held ? 1.F : 0.F, Time::steadyNow());
 
     if (!held)
         forgetPress();

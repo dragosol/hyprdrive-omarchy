@@ -22,6 +22,7 @@
 #include "MotionMath.hpp"
 #include "MotionPresets.hpp"
 #include "MotionSites.hpp"
+#include "MotionTween.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -781,6 +782,250 @@ static void testA6() {
     }
 }
 
+// ============================================================================
+// A7 -- the turning value (STween). For each adopting site: the old fields and
+// functions verbatim, and the site's new code on STween, transcribed. Both are
+// driven by one recorded sequence -- a fake clock advancing by frame-sized and
+// long steps, the target flipping at random moments (mid-way, at the end, twice
+// in one frame), the value sampled every step -- and every sample and every
+// stored field is compared bit for bit. The clock is a parameter: each site's
+// kind (anim-scaled for DockPreview and WindowPill, a held `now` for
+// BorderFade) is modelled as the site reads it.
+// ============================================================================
+namespace a7 {
+    using clock = std::chrono::steady_clock;
+    using TP    = clock::time_point;
+    TP    g_now{std::chrono::nanoseconds{259'200'123'456'789LL}};
+    float g_scale = 1.F;
+    // Config::animElapsedMs, with the scale as a parameter (its body).
+    float animElapsedMs(const TP& since) {
+        const float SCALE = g_scale;
+        if (SCALE <= 0.F)
+            return 1e9F;
+        return Hyprdrive::Motion::msBetween(g_now, since) / SCALE;
+    }
+    // houseEase under the house preset (Motion::ease: clamp, then the bake).
+    float houseEase(bool decel, float t) {
+        return Hyprdrive::Motion::Presets::bakedPresets()[0][decel ? 0 : 1].getYForPoint(std::clamp(t, 0.F, 1.F));
+    }
+
+    // ---- dock/DockPreview.cpp:184-196 + DockParts.hpp:1386-1389 ----
+    struct SOldPanel {
+        float fadeFrom  = 0.F;
+        float fadeTo    = 1.F;
+        TP    fadeSince = g_now;
+        float fadeMs    = 170.F;
+    };
+    [[gnu::noinline]] float oldPanelAlpha(const SOldPanel& panel) {
+        const float T = std::clamp(animElapsedMs(panel.fadeSince) / std::max(1.F, panel.fadeMs), 0.F, 1.F);
+        const float E = houseEase(panel.fadeTo > panel.fadeFrom, T);
+        return panel.fadeFrom + ((panel.fadeTo - panel.fadeFrom) * E);
+    }
+    [[gnu::noinline]] void oldPanelFade(SOldPanel& panel, float to, float ms, const TP& now) {
+        panel.fadeFrom  = oldPanelAlpha(panel);
+        panel.fadeTo    = to;
+        panel.fadeSince = now;
+        panel.fadeMs    = ms;
+    }
+    struct SNewPanel {
+        Hyprdrive::Motion::STween<TP> fade{.from = 0.F, .to = 1.F, .start = g_now};
+        float                         fadeMs = 170.F;
+    };
+    float newPanelAlpha(const SNewPanel& panel) {
+        const float T = std::clamp(animElapsedMs(panel.fade.start) / std::max(1.F, panel.fadeMs), 0.F, 1.F);
+        const float E = houseEase(panel.fade.rising(), T);
+        return panel.fade.at(E);
+    }
+    void newPanelFade(SNewPanel& panel, float to, float ms, const TP& now) {
+        panel.fade.retarget(newPanelAlpha(panel), to, now);
+        panel.fadeMs = ms;
+    }
+
+    // ---- overview/WindowPill.cpp:115-146, 231-234, 266 ----
+    struct SOldReveal {
+        float from  = 0.F;
+        float to    = 0.F;
+        float ms    = 1.F;
+        TP    start = {};
+    };
+    SOldReveal g_oldReveal;
+    [[gnu::noinline]] float oldPillEase() {
+        const float ELAPSED = animElapsedMs(g_oldReveal.start);
+        if (ELAPSED >= g_oldReveal.ms)
+            return g_oldReveal.to;
+        const float T = std::clamp(ELAPSED / std::max(1.F, g_oldReveal.ms), 0.F, 1.F);
+        return g_oldReveal.from + (g_oldReveal.to - g_oldReveal.from) * houseEase(g_oldReveal.to > g_oldReveal.from, T);
+    }
+    [[gnu::noinline]] void oldSetSuperHeld(bool held) {
+        g_oldReveal.from  = oldPillEase();
+        g_oldReveal.to    = held ? 1.F : 0.F;
+        g_oldReveal.ms    = held ? 140.F : 105.F;
+        g_oldReveal.start = g_now;
+    }
+    bool oldPillAnimating() {
+        return animElapsedMs(g_oldReveal.start) < g_oldReveal.ms;
+    }
+    struct SNewReveal : Hyprdrive::Motion::STween<TP> {
+        float ms = 1.F;
+    };
+    SNewReveal g_newReveal;
+    float      newPillEase() {
+        const float ELAPSED = animElapsedMs(g_newReveal.start);
+        if (ELAPSED >= g_newReveal.ms)
+            return g_newReveal.to;
+        const float T = std::clamp(ELAPSED / std::max(1.F, g_newReveal.ms), 0.F, 1.F);
+        return g_newReveal.at(houseEase(g_newReveal.rising(), T));
+    }
+    void newSetSuperHeld(bool held) {
+        const float NOW_VALUE = newPillEase();
+        g_newReveal.ms        = held ? 140.F : 105.F;
+        g_newReveal.retarget(NOW_VALUE, held ? 1.F : 0.F, g_now);
+    }
+    bool newPillAnimating() {
+        return animElapsedMs(g_newReveal.start) < g_newReveal.ms;
+    }
+
+    // ---- motion/BorderFade.cpp:20-26, 68-87, 101-121, 141 ----
+    struct SCurve {
+        float                                     ms     = 0.F;
+        const Hyprutils::Animation::CBezierCurve* bezier = nullptr;
+    };
+    float bfEase(const SCurve& c, float t) {
+        if (t >= 1.F)
+            return 1.F;
+        return c.bezier ? c.bezier->getYForPoint(t) : t;
+    }
+    struct SOldFade {
+        bool  lit  = false;
+        float from = 0.F;
+        TP    start;
+    };
+    [[gnu::noinline]] float oldValueAt(const SOldFade& f, const SCurve& c, TP now) {
+        const float TARGET = f.lit ? 1.F : 0.F;
+        if (c.ms <= 0.F)
+            return TARGET;
+        const float T = std::clamp(Hyprdrive::Motion::msBetween(now, f.start) / c.ms, 0.F, 1.F);
+        return f.from + ((TARGET - f.from) * bfEase(c, T));
+    }
+    [[gnu::noinline]] float oldMix(SOldFade& f, bool fresh, bool lit, const SCurve& C, TP NOW) {
+        if (fresh) {
+            f.lit   = lit;
+            f.from  = 0.F;
+            f.start = NOW;
+        } else if (f.lit != lit) {
+            f.from  = oldValueAt(f, C, NOW);
+            f.lit   = lit;
+            f.start = NOW;
+        }
+        return oldValueAt(f, C, NOW);
+    }
+    bool oldAnimating(const SOldFade& f, const SCurve& C, TP NOW) {
+        return oldValueAt(f, C, NOW) != (f.lit ? 1.F : 0.F);
+    }
+    struct SNewFade {
+        Hyprdrive::Motion::STween<TP> fade;
+    };
+    float newValueAt(const SNewFade& f, const SCurve& c, TP now) {
+        if (c.ms <= 0.F)
+            return f.fade.to;
+        const float T = std::clamp(Hyprdrive::Motion::msBetween(now, f.fade.start) / c.ms, 0.F, 1.F);
+        return f.fade.at(bfEase(c, T));
+    }
+    float newMix(SNewFade& f, bool fresh, bool lit, const SCurve& C, TP NOW) {
+        if (fresh) {
+            f.fade = {.from = 0.F, .to = lit ? 1.F : 0.F, .start = NOW};
+        } else if ((f.fade.to == 1.F) != lit) {
+            f.fade.retarget(newValueAt(f, C, NOW), lit ? 1.F : 0.F, NOW);
+        }
+        return newValueAt(f, C, NOW);
+    }
+    bool newAnimating(const SNewFade& f, const SCurve& C, TP NOW) {
+        return newValueAt(f, C, NOW) != f.fade.to;
+    }
+}
+
+static void testA7() {
+    using namespace a7;
+    std::mt19937_64                       rng(7);
+    std::uniform_real_distribution<float> U(0.F, 1.F);
+    auto                                  step = [&] {
+        const float R  = U(rng);
+        const long  NS = R < 0.03F ? 0 : R < 0.08F ? static_cast<long>(U(rng) * 2e9F) : static_cast<long>(U(rng) * 4.0e7F);
+        g_now += std::chrono::nanoseconds{NS};
+    };
+    const float SCALES[] = {1.F, 0.5F, 2.F, 10.F, 0.05F, 0.F};
+
+    // DockPreview: entrances at PANEL_IN_MS 170, dismissals at PANEL_OUT_MS 130.
+    long nP = 0, badP = 0;
+    for (float scale : SCALES) {
+        g_scale = scale;
+        SOldPanel o;
+        SNewPanel n;
+        for (int i = 0; i < 200000; ++i) {
+            step();
+            if (U(rng) < 0.04F) {
+                const bool IN = U(rng) < 0.5F;
+                oldPanelFade(o, IN ? 1.F : 0.F, IN ? 170.F : 130.F, g_now);
+                newPanelFade(n, IN ? 1.F : 0.F, IN ? 170.F : 130.F, g_now);
+            }
+            ++nP;
+            badP += !(sameBits(oldPanelAlpha(o), newPanelAlpha(n)) && sameBits(o.fadeFrom, n.fade.from) && sameBits(o.fadeTo, n.fade.to) && o.fadeSince == n.fade.start &&
+                      sameBits(o.fadeMs, n.fadeMs));
+        }
+    }
+    report("A7 DockPreview panel fade on STween == old, replayed (6 anim scales incl. 0)", nP, badP);
+
+    // WindowPill: SUPER pressed and released at random, IN 140 / OUT 105.
+    long nW = 0, badW = 0;
+    for (float scale : SCALES) {
+        g_scale     = scale;
+        g_oldReveal = {};
+        g_newReveal = {};
+        bool held   = false;
+        for (int i = 0; i < 200000; ++i) {
+            step();
+            if (U(rng) < 0.05F) {
+                held = !held;
+                oldSetSuperHeld(held);
+                newSetSuperHeld(held);
+            }
+            ++nW;
+            badW += !(sameBits(oldPillEase(), newPillEase()) && oldPillAnimating() == newPillAnimating() && sameBits(g_oldReveal.from, g_newReveal.from) &&
+                      sameBits(g_oldReveal.to, g_newReveal.to) && sameBits(g_oldReveal.ms, g_newReveal.ms) && g_oldReveal.start == g_newReveal.start);
+        }
+    }
+    report("A7 WindowPill reveal on STween == old, replayed (6 anim scales incl. 0)", nW, badW);
+
+    // BorderFade: rings lit and unlit at random (several a frame), forgotten
+    // and re-seen (fresh), under a bezier, a linear and a disabled curve.
+    Hyprutils::Animation::CBezierCurve quint;
+    quint.setup(std::array<Hyprutils::Math::Vector2D, 2>{Hyprutils::Math::Vector2D{0.23, 1.0}, Hyprutils::Math::Vector2D{0.32, 1.0}});
+    const SCurve CURVES[] = {{539.F, &quint}, {539.F, nullptr}, {0.F, &quint}, {149.F, &quint}};
+    long         nB = 0, badB = 0;
+    for (const auto& C : CURVES) {
+        SOldFade o;
+        SNewFade n;
+        bool     lit = false, fresh = true;
+        for (int i = 0; i < 200000; ++i) {
+            step();
+            const int CALLS = 1 + static_cast<int>(U(rng) * 3.F); // a key mixed more than once a frame
+            for (int k = 0; k < CALLS; ++k) {
+                if (U(rng) < 0.05F)
+                    lit = !lit;
+                if (U(rng) < 0.002F)
+                    fresh = true;
+                const float A = oldMix(o, fresh, lit, C, g_now);
+                const float B = newMix(n, fresh, lit, C, g_now);
+                fresh         = false;
+                ++nB;
+                badB += !(sameBits(A, B) && oldAnimating(o, C, g_now) == newAnimating(n, C, g_now) && sameBits(o.from, n.fade.from) &&
+                          sameBits(o.lit ? 1.F : 0.F, n.fade.to) && o.start == n.fade.start);
+            }
+        }
+    }
+    report("A7 BorderFade on STween == old, replayed (bezier, linear, disabled, short)", nB, badB);
+}
+
 int main() {
     testA1();
     testA2();
@@ -788,6 +1033,7 @@ int main() {
     testA4();
     testA5();
     testA6();
+    testA7();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

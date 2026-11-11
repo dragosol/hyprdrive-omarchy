@@ -1,6 +1,7 @@
 // See BorderFade.hpp.
 #include "BorderFade.hpp"
 #include "MotionClock.hpp"
+#include "MotionTween.hpp"
 #include "Config.hpp"
 
 #include <hyprland/src/animation/AnimationManager.hpp>
@@ -19,9 +20,9 @@ namespace Hyprdrive::BorderFade {
 
         struct SFade {
             MONITORID         monitor = MONITOR_INVALID; // where it was last drawn: animatingOn()
-            bool              lit  = false;
-            float             from = 0.F; // where the fade started (a reversal starts mid-way)
-            Clock::time_point start;
+            // to = 1 lit, 0 resting; from = where the fade started (a reversal
+            // starts mid-way).
+            Hyprdrive::Motion::STween<Clock::time_point> fade;
             Clock::time_point seen;
         };
 
@@ -79,11 +80,10 @@ namespace Hyprdrive::BorderFade {
         }
 
         float valueAt(const SFade& f, const SCurve& c, Clock::time_point now) {
-            const float TARGET = f.lit ? 1.F : 0.F;
             if (c.ms <= 0.F)
-                return TARGET;
-            const float T = std::clamp(Hyprdrive::Motion::msBetween(now, f.start) / c.ms, 0.F, 1.F);
-            return f.from + ((TARGET - f.from) * ease(c, T));
+                return f.fade.to;
+            const float T = std::clamp(Hyprdrive::Motion::msBetween(now, f.fade.start) / c.ms, 0.F, 1.F);
+            return f.fade.at(ease(c, T));
         }
     }
 
@@ -107,13 +107,9 @@ namespace Hyprdrive::BorderFade {
             // overview does not redraw an idle tile, so a tile's key is
             // forgotten while it sits there, and "first sight settles" made
             // every grid hover snap to lit (user, 2026-10-16).
-            f.lit   = lit;
-            f.from  = 0.F;
-            f.start = NOW;
-        } else if (f.lit != lit) {
-            f.from  = valueAt(f, C, NOW);
-            f.lit   = lit;
-            f.start = NOW;
+            f.fade = {.from = 0.F, .to = lit ? 1.F : 0.F, .start = NOW};
+        } else if ((f.fade.to == 1.F) != lit) {
+            f.fade.retarget(valueAt(f, C, NOW), lit ? 1.F : 0.F, NOW);
         }
         f.seen    = NOW;
         f.monitor = monitor ? monitor->m_id : MONITOR_INVALID;
@@ -138,7 +134,7 @@ namespace Hyprdrive::BorderFade {
         const auto  NOW = Clock::now();
         return std::ranges::any_of(g_fades, [&](const auto& kv) {
             const auto& F = kv.second;
-            return F.monitor == monitor->m_id && NOW - F.seen < FORGET && valueAt(F, C, NOW) != (F.lit ? 1.F : 0.F);
+            return F.monitor == monitor->m_id && NOW - F.seen < FORGET && valueAt(F, C, NOW) != F.fade.to;
         });
     }
 
@@ -146,7 +142,7 @@ namespace Hyprdrive::BorderFade {
         const auto IT = g_fades.find(k);
         if (IT == g_fades.end())
             return false;
-        return valueAt(IT->second, curve(), Clock::now()) != (IT->second.lit ? 1.F : 0.F);
+        return valueAt(IT->second, curve(), Clock::now()) != IT->second.fade.to;
     }
 
     void clear() {
