@@ -1,0 +1,24 @@
+"AppState"
+{
+	"appid"		"252950"
+	"universe"		"1"
+	"name"		"Rocket League"
+	"StateFlags"		"4"
+	"installdir"		"rocketleague"
+	"LastUpdated"		"1700000000"
+	"SizeOnDisk"		"1000"
+	"buildid"		"1"
+	"LastOwner"		"0"
+	"InstalledDepots"
+	{
+		"252951"
+		{
+			"manifest"		"1000000000000000000"
+			"size"		"1000"
+		}
+	}
+	"UserConfig"
+	{
+		"language"		"english"
+	}
+}

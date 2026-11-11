@@ -1,0 +1,6 @@
+id	slug	name	runner	directory	configpath	installed	service	service_id
+1	epic-games-store	Epic Games Store	wine	/home/user/Games/epic-games-store	epic-games-store-standard-1774236221	1	\N	\N
+2	hogwarts-legacy	Hogwarts Legacy	wine	/home/user/Games/epic-games-store	hogwarts-legacy-1774237481	1	egs	0123456789abcdef0123456789abcdef
+3	cyberpunk-2077	Cyberpunk 2077	wine		cyberpunk-2077-1767769963	1	gog	1423049311
+7	death-stranding	Death Stranding	wine		death-stranding-1774238544	0	\N	\N
+12	battlenet	Battle.net	wine	/home/user/Games/battlenet	battlenet-12	1	\N	\N

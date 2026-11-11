@@ -1,0 +1,6 @@
+Name: Office
+Path: Office
+Runner: soda-9.0-1
+Arch: win64
+Environment: Application
+Windows: win10

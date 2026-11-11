@@ -1,0 +1,24 @@
+"AppState"
+{
+	"appid"		"1826330"
+	"universe"		"1"
+	"name"		"Proton EasyAntiCheat Runtime"
+	"StateFlags"		"4"
+	"installdir"		"Proton EasyAntiCheat Runtime"
+	"LastUpdated"		"1700000000"
+	"SizeOnDisk"		"1000"
+	"buildid"		"1"
+	"LastOwner"		"0"
+	"InstalledDepots"
+	{
+		"1826331"
+		{
+			"manifest"		"1000000000000000000"
+			"size"		"1000"
+		}
+	}
+	"UserConfig"
+	{
+		"language"		"english"
+	}
+}

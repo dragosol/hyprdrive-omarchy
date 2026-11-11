@@ -77,6 +77,11 @@
 #                     settled colour and never shows more accent mid-fade (the
 #                     ring-under drawing as the control); a tween's and a lit
 #                     set's first sample is the leg's `from`.
+#   identity_parsers_test  src/apps/identity/'s parsers (KeyValues text and
+#                     binary, appmanifest, libraryfolders, shortcuts.vdf, the
+#                     Lutris yml and pga rows, .ico, PE) on the fixtures in
+#                     tests/fixtures/identity/, then every prefix truncation of
+#                     each fixture file and 10,000 seeded byte flips per parser.
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
@@ -108,9 +113,10 @@ if [ "${HOST_TEST_SANITIZE:-0}" = 1 ]; then
     export UBSAN_OPTIONS=${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=1}
 fi
 # Every src/<area>/ folder is on the include path, as in the Makefile: the tests
-# and the sources name headers bare ("StackModel.hpp").
+# and the sources name headers bare ("StackModel.hpp"), a module's folder
+# (src/apps/identity/) included.
 INC=()
-for d in src/*/; do INC+=("-I${d%/}"); done
+for d in src/*/ src/*/*/; do INC+=("-I${d%/}"); done
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0
@@ -154,6 +160,7 @@ run motion_spacing_test tests/unit/motion_spacing_test.cpp
 run motion_math_test tests/unit/motion_math_test.cpp $(pkg-config --cflags --libs hyprutils)
 run plate_color_test tests/unit/plate_color_test.cpp
 run icon_overrides_test tests/unit/icon_overrides_test.cpp
+run identity_parsers_test tests/unit/identity_parsers_test.cpp
 run dock_drop_test tests/unit/dock_drop_test.cpp
 run dock_menu_model_test tests/unit/dock_menu_model_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp

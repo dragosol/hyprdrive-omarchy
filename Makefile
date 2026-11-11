@@ -17,13 +17,14 @@ OPT ?= -O2
 PKGS := pixman-1 libdrm hyprland pangocairo libinput libudev wayland-server \
         xkbcommon libsystemd gio-2.0 gio-unix-2.0 $(LUA_PC)
 
-# The sources live in src/<area>/ (one folder per subsystem; see src/README.md).
+# The sources live in src/<area>/ (one folder per subsystem; see src/README.md),
+# and a module of an area in src/<area>/<module>/ (src/apps/identity/).
 # Every #include is still a bare name: each folder is on the include path, and no
 # two files share a name, so the objects stay flat in .build/. --embed-dir=. is
 # for BuiltinIcons.cpp's #embed "assets/icons/...", which resolves from the root.
-SRC_DIRS := $(sort $(dir $(wildcard src/*/*.cpp src/*/*.hpp)))
+SRC_DIRS := $(sort $(dir $(wildcard src/*/*.cpp src/*/*.hpp src/*/*/*.cpp src/*/*/*.hpp)))
 SRC_INC  := $(addprefix -I,$(SRC_DIRS:/=))
-SRCS := $(wildcard src/*/*.cpp)
+SRCS := $(wildcard src/*/*.cpp src/*/*/*.cpp)
 OBJS := $(addprefix .build/,$(notdir $(SRCS:.cpp=.o)))
 DEPS := $(OBJS:.o=.d)
 vpath %.cpp $(SRC_DIRS)

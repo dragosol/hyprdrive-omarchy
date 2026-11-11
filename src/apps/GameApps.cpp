@@ -1,7 +1,7 @@
 #include "GameApps.hpp"
 #include "AppSearch.hpp"
 #include "DebugPaths.hpp"
-#include "WinExe.hpp"
+#include "IconPng.hpp"
 #include "globals.hpp"
 
 #include <hyprland/src/desktop/view/Window.hpp>

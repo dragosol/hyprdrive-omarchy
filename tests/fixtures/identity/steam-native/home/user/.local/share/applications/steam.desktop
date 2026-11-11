@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Steam
+Exec=steam %U
+Icon=steam
+Terminal=false
+Type=Application
+StartupWMClass=steam
+Categories=Network;Game;

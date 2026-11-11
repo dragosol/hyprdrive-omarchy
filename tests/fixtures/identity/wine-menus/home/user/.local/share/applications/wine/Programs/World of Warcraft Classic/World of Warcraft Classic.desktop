@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=World of Warcraft Classic
+Exec=env "WINEPREFIX=/home/user/Games/battlenet" wine "C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\World of Warcraft Classic\\\\World of Warcraft Classic.lnk"
+Type=Application
+StartupNotify=true
+Path=/home/user/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft
+Icon=5298_World of Warcraft Launcher.0
+StartupWMClass=world of warcraft launcher.exe

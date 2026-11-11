@@ -1,0 +1,5 @@
+game:
+  exe: drive_c/Program Files (x86)/GOG Galaxy/GalaxyClient.exe
+  prefix: /home/user/Games/gog-galaxy
+wine:
+  version: wine-ge-8-26-x86_64

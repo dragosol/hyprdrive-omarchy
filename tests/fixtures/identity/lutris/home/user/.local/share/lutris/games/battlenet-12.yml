@@ -1,0 +1,15 @@
+game:
+  exe: drive_c/Program Files (x86)/Battle.net/Battle.net.exe
+  args: --in-process-gpu
+  prefix: /home/user/Games/battlenet
+system:
+  env:
+    STAGING_SHARED_MEMORY: '1'
+    DXVK_STATE_CACHE_PATH: /home/user/Games/battlenet
+wine:
+  version: wine-staging-11.2-x86_64
+  overrides:
+    locationapi: d
+    winemenubuilder.exe: d
+  battleye: false
+  eac: false

@@ -1,0 +1,5 @@
+game:
+  exe: "/home/user/Games/gog/Cyberpunk 2077/bin/x64/Cyberpunk2077.exe"
+  prefix: /home/user/Games/gog
+wine:
+  version: ge-proton

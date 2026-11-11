@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Alpha Launcher
+Exec=env "WINEPREFIX=/home/user/Games/alpha" wine "C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Alpha\\\\Alpha Launcher.lnk"
+Type=Application
+StartupNotify=true
+Path=/home/user/Games/alpha/drive_c/Alpha
+Icon=A1B2_launcher.0
+StartupWMClass=launcher.exe

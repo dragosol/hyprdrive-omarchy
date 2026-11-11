@@ -1,0 +1,35 @@
+"libraryfolders"
+{
+	"0"
+	{
+		"path"		"/home/user/.local/share/Steam"
+		"label"		""
+		"contentid"		"1000000000000000001"
+		"totalsize"		"0"
+		"apps"
+		{
+			"1826330"		"274110"
+			"2357570"		"1000"
+			"3321460"		"1000"
+		}
+	}
+	"1"
+	{
+		"path"		"/run/media/user/Games/SteamLibrary"
+		"label"		""
+		"contentid"		"1000000000000000002"
+		"totalsize"		"1000000"
+		"apps"
+		{
+			"252950"		"1000"
+		}
+	}
+	"2"
+	{
+		"path"		"/run/media/user/Gone/SteamLibrary"
+		"label"		"unplugged"
+		"apps"
+		{
+		}
+	}
+}
