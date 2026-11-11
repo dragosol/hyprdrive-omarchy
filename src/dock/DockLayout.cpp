@@ -128,13 +128,13 @@ SLayout arranged(MONITORID id, const SLayout& resting) {
 
     const float E   = arrangeEase(T);
     SLayout     out = resting;
-    out.pill        = lerpBox(A.fromPill, resting.pill, E);
+    out.pill        = Motion::lerp(A.fromPill, resting.pill, E);
     if (!A.fromShowApps.empty() && !resting.showApps.empty())
-        out.showApps = lerpBox(A.fromShowApps, resting.showApps, E);
+        out.showApps = Motion::lerp(A.fromShowApps, resting.showApps, E);
 
     for (auto& item : out.items) {
         if (const auto FROM = A.fromBoxes.find(item.subject); FROM != A.fromBoxes.end()) {
-            item.iconBox = lerpBox(FROM->second, item.iconBox, E);
+            item.iconBox = Motion::lerp(FROM->second, item.iconBox, E);
             continue;
         }
         const float S = std::max(0.F, spawnEase(T));

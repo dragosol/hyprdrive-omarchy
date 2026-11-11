@@ -19,6 +19,7 @@
 // a lucky picture.
 
 #include "OverviewGeometry.hpp"
+#include "MotionMath.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -276,11 +277,13 @@ int main() {
     ok(near(gridProgress(1.F, 1.F), 1), "gridProgress at target scale 1 is 1, not NaN");
 
     // ---- interpolation ------------------------------------------------------
-    ok(boxIs(lerpBox({0, 0, 10, 10}, {100, 200, 30, 50}, 0.F), 0, 0, 10, 10), "lerpBox at t=0");
-    ok(boxIs(lerpBox({0, 0, 10, 10}, {100, 200, 30, 50}, 1.F), 100, 200, 30, 50), "lerpBox at t=1");
-    ok(boxIs(lerpBox({0, 0, 10, 10}, {100, 200, 30, 50}, 0.5F), 50, 100, 20, 30), "lerpBox halfway");
-    ok(near(hyprlerp(10.F, 20.F, 0.25F), 12.5), "hyprlerp float");
-    ok(hyprlerp(Vector2D{0, 0}, Vector2D{10, 20}, 0.5F) == Vector2D(5, 10), "hyprlerp Vector2D");
+    // (Motion::lerp, MotionMath.hpp -- motion_math_test holds it to the copies it replaced.)
+    using Hyprdrive::Motion::lerp;
+    ok(boxIs(lerp(CBox{0, 0, 10, 10}, CBox{100, 200, 30, 50}, 0.F), 0, 0, 10, 10), "lerp box at t=0");
+    ok(boxIs(lerp(CBox{0, 0, 10, 10}, CBox{100, 200, 30, 50}, 1.F), 100, 200, 30, 50), "lerp box at t=1");
+    ok(boxIs(lerp(CBox{0, 0, 10, 10}, CBox{100, 200, 30, 50}, 0.5F), 50, 100, 20, 30), "lerp box halfway");
+    ok(near(lerp(10.F, 20.F, 0.25F), 12.5), "lerp float");
+    ok(lerp(Vector2D{0, 0}, Vector2D{10, 20}, 0.5F) == Vector2D(5, 10), "lerp Vector2D");
 
     std::printf("geometry_test: %d checks, %d failed\n", g_run, g_fail);
     return g_fail ? 1 : 0;

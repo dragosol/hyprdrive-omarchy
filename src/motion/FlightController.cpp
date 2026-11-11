@@ -27,6 +27,7 @@
 #include "DebugPaths.hpp"
 #include "FlightController.hpp"
 #include "Motion.hpp"
+#include "MotionMath.hpp"
 
 #include "AppSearch.hpp"
 #include "Config.hpp"
@@ -328,10 +329,6 @@ float flightProgress(const SFlight& flight) {
         return 1.F;
 
     return std::clamp(Hyprdrive::Config::animElapsedMs(flight.startedAt) / sc<float>(DURATION), 0.F, 1.F);
-}
-
-CBox lerpBox(const CBox& a, const CBox& b, float t) {
-    return CBox{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.w + (b.w - a.w) * t, a.h + (b.h - a.h) * t};
 }
 
 // The window as it sits on screen, in the monitor-local RENDER px the flight
@@ -955,10 +952,10 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             // retile mid-flight retargets the flight for free.
             const float SCALE = std::max(monitor->m_scale, 0.01F);
             const CBox  START = it->start.value_or(ITEM->iconBox);
-            box               = lerpBox(START, it->from, E);
+            box               = Motion::lerp(START, it->from, E);
             alpha             = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
             // The minimize blur setting (strength and fade, FlightBlur::shape), by the flight's own clock.
-            const CBox PREVBOX = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, lerpBox(START, it->from, it->lastE.value_or(E)), box, T);
+            const CBox PREVBOX = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, Motion::lerp(START, it->from, it->lastE.value_or(E)), box, T);
             it->lastE          = E;
 
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
@@ -992,14 +989,14 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             // Overview path: proxy machinery (Y5 divergence: GNOME does NOT fade
             // a window back in; the user asked for "fade out/in").
             const CBox START = it->start.value_or(ITEM->iconBox);
-            box              = lerpBox(START, it->from, E);
+            box              = Motion::lerp(START, it->from, E);
             alpha            = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
-            PREVBOX          = lerpBox(START, it->from, it->lastE.value_or(E));
+            PREVBOX          = Motion::lerp(START, it->from, it->lastE.value_or(E));
         } else {
             const CBox START = it->start.value_or(it->from);
-            box              = lerpBox(START, ITEM->iconBox, E);
+            box              = Motion::lerp(START, ITEM->iconBox, E);
             alpha            = it->alphaFrom.value_or(1.F) * (1.F - E);
-            PREVBOX          = lerpBox(START, ITEM->iconBox, it->lastE.value_or(E));
+            PREVBOX          = Motion::lerp(START, ITEM->iconBox, it->lastE.value_or(E));
         }
         it->lastE = E;
         PREVBOX   = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, PREVBOX, box, T); // the flight's own clock

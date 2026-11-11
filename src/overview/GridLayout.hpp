@@ -139,7 +139,6 @@ namespace OvInternal {
     // 0 while the overview is closed, 1 once it is fully open, so windows travel
     // between their real rect and their grid slot instead of snapping.
     float overviewGridProgress(float scale);
-    CBox  overviewGridLerpBox(const CBox& from, const CBox& to, float t);
     // A reflow is windows arriving at new slots, i.e. an entrance: house decel.
     // A RELEASE is the one exit, and takes the house accel curve instead.
     float gridReflowEase(float t, bool exiting = false);

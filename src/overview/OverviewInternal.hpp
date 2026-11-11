@@ -6,12 +6,13 @@
 //
 // ponytail: header-only, and it re-exports itself with a trailing using-directive so
 // the moved code needed no edits. The namespace is not decoration -- these compile to
-// exported symbols now, and `hyprlerp` / `axisValue` would otherwise collide with
+// exported symbols now, and `axisValue` would otherwise collide with
 // Hyprland's own. It is deliberately NOT nested under Hyprdrive:: -- that made
 // unqualified Config:: resolve to Hyprdrive::Config. Split into real .cpp files
 // when compile time starts to hurt.
 
 #include "FramePacing.hpp"
+#include "MotionMath.hpp"
 #include "Overview.hpp"
 
 #include <cctype>
@@ -1917,7 +1918,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         if (const float UNIT = scale * std::max(monitor->m_scale, 0.01F); UNIT > 0.01F && std::abs(offset) > 0.01F)
             home.translate(axisOffsetVector(offset / UNIT, layout));
 
-        geometry = overviewGridLerpBox(geometry, gridReflowBox(monitor, window, home, nullptr, false, true), overviewGridProgress(scale));
+        geometry = Hyprdrive::Motion::lerp(geometry, gridReflowBox(monitor, window, home, nullptr, false, true), overviewGridProgress(scale));
         offset   = 0.F;
     } else if (SGridSlot hit; overviewGridSlot(window, monitor, hit.slot, &hit.promoted)) {
         // The B2 answer comes back OUT of the slot lookup. It used to be asked
@@ -1946,7 +1947,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         CBox placed = slot;
         if (!PROMOTED && g_search.query.text.empty() && window->m_workspace)
             placed = overviewCardGridPush(slot, window->m_workspace, monitor, scale, viewOffset, offset, layout);
-        geometry = overviewGridLerpBox(geometry, gridReflowBox(monitor, window, placed, enterPtr, PROMOTED), overviewGridProgress(scale));
+        geometry = Hyprdrive::Motion::lerp(geometry, gridReflowBox(monitor, window, placed, enterPtr, PROMOTED), overviewGridProgress(scale));
 
         // The active card sits at offset 0. A promoted tile must ignore the
         // caller's per-workspace offset or it lands off-screen beside it.
@@ -1963,7 +1964,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         // rides its card offset: a desktop switch only slides.
         if (CBox slot; overviewGridLayout(HOME, monitor, window, slot)) {
             slot = overviewCardGridPush(slot, HOME, monitor, scale, viewOffset, offset, layout);
-            geometry = overviewGridLerpBox(geometry, slot, overviewGridProgress(scale));
+            geometry = Hyprdrive::Motion::lerp(geometry, slot, overviewGridProgress(scale));
         }
     }
 
@@ -2531,14 +2532,6 @@ inline PHLWINDOW getOverviewFullscreenVisibilityWindow(const PHLWORKSPACE& works
         return FULLSCREENWINDOW;
 
     return getOverviewWindowToShow(fallback);
-}
-
-inline float hyprlerp(const float& from, const float& to, const float perc) {
-    return OvGeom::hyprlerp(from, to, perc);
-}
-
-inline Vector2D hyprlerp(const Vector2D& from, const Vector2D& to, const float perc) {
-    return OvGeom::hyprlerp(from, to, perc);
 }
 
 // THE FULLSCREEN PATH: a fullscreen window on a non-scrolling desktop drawn,

@@ -54,12 +54,8 @@ float bounceCurve(float t) {
     return t < BOUNCE_UP_SHARE ? houseEase(true, t / BOUNCE_UP_SHARE) : 1.F - houseEase(false, (t - BOUNCE_UP_SHARE) / (1.F - BOUNCE_UP_SHARE));
 }
 
-// [FLIGHT] flightProgress moved to FlightController.cpp. lerpBox stays below --
-// the hover panel eases with it, and the flight module keeps its own copy.
-
-CBox lerpBox(const CBox& a, const CBox& b, float t) {
-    return CBox{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.w + (b.w - a.w) * t, a.h + (b.h - a.h) * t};
-}
+// [FLIGHT] flightProgress moved to FlightController.cpp; the box lerp the hover
+// panel and the flights ease with is Motion::lerp (MotionMath.hpp).
 
 // Pure, so the proportions can be asserted without a compositor. `icon-size-fixed`
 // is false in the reference, which is what licenses the shrink: over the
@@ -1371,7 +1367,7 @@ void render(PHLMONITOR monitor) {
         if (const auto TEX = OverviewRender::appIcon(g_dockDrag.ghostHome->icon, false, false, RESTPX); TEX && TEX->ok()) {
             CTexPassElement::SRenderData data;
             data.tex = TEX;
-            data.box = lerpBox(g_dockDrag.ghostHome->from, g_dockDrag.ghostHome->home, E).round();
+            data.box = Motion::lerp(g_dockDrag.ghostHome->from, g_dockDrag.ghostHome->home, E).round();
             // Fades as it arrives, so the clone and the real icon underneath it
             // are never two solid icons in one cell for a frame.
             data.a = DRAG_GHOST_ALPHA * (1.F - E);

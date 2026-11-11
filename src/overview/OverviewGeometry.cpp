@@ -256,21 +256,4 @@ namespace Hyprdrive::Geometry {
         return std::clamp((1.F - scale) / (1.F - targetScale), 0.F, 1.F);
     }
 
-    CBox lerpBox(const CBox& from, const CBox& to, float t) {
-        return CBox{
-            from.x + (to.x - from.x) * t,
-            from.y + (to.y - from.y) * t,
-            from.w + (to.w - from.w) * t,
-            from.h + (to.h - from.h) * t,
-        };
-    }
-
-    float hyprlerp(float from, float to, float perc) {
-        return (to - from) * perc + from;
-    }
-
-    Vector2D hyprlerp(const Vector2D& from, const Vector2D& to, float perc) {
-        return Vector2D{hyprlerp(static_cast<float>(from.x), static_cast<float>(to.x), perc), hyprlerp(static_cast<float>(from.y), static_cast<float>(to.y), perc)};
-    }
-
 } // namespace Hyprdrive::Geometry

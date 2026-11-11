@@ -567,10 +567,6 @@ namespace OvInternal {
         return Hyprdrive::Geometry::gridProgress(scale, overviewOpenScale());
     }
 
-    CBox overviewGridLerpBox(const CBox& from, const CBox& to, float t) {
-        return Hyprdrive::Geometry::lerpBox(from, to, t);
-    }
-
     // WHY THE RELEASE NEEDS ITS OWN CURVE, and it is not a taste question.
     //
     // A reflow ENDS somewhere the user is looking at -- a slot in the grid -- so
@@ -648,7 +644,7 @@ namespace OvInternal {
 
         const float ELAPSED = overviewAnimElapsedMs(entry.start);
         const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION), exiting);
-        const CBox  CURRENT = overviewGridLerpBox(entry.from, entry.to, T);
+        const CBox  CURRENT = Hyprdrive::Motion::lerp(entry.from, entry.to, T);
 
         if (gridBoxesDiffer(slot, entry.to)) {
             entry.from  = CURRENT; // retarget from where the tile actually is

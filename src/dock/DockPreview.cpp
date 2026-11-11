@@ -503,7 +503,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
                 if (g_hover.panel->out)
                     panelFade(*g_hover.panel, 1.F, PANEL_IN_MS, now);
 
-                g_hover.panel->from      = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
+                g_hover.panel->from      = Motion::lerp(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
                 g_hover.panel->target    = TARGET;
                 g_hover.panel->moveSince = now;
                 g_hover.panel->moveMs    = g_hover.panel->out ? PANEL_IN_MS : PANEL_SLIDE_MS;
@@ -524,7 +524,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         if (g_hover.panel->leaving && Hyprdrive::Config::realElapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
             const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
 
-            g_hover.panel->from      = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
+            g_hover.panel->from      = Motion::lerp(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
             g_hover.panel->target    = panelRiseOrigin(layout, g_hover.panel->anchor);
             g_hover.panel->moveSince = now;
             g_hover.panel->moveMs    = PANEL_OUT_MS;
@@ -554,7 +554,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         return;
     }
 
-    CBox        DRAWN = lerpBox(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
+    CBox        DRAWN = Motion::lerp(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
     const float SCALE = std::max(monitor->m_scale, 0.01F);
     // Never let the growing plate (or its live window thumbnails) eat the pill.
     // The rise origin sits on the dock's top edge; this is the belt.

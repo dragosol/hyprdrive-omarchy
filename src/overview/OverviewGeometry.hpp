@@ -130,9 +130,7 @@ namespace Hyprdrive::Geometry {
     // --- interpolation --------------------------------------------------------
     // 0 while the overview is closed, 1 once it is fully open. `targetScale` is
     // the configured open scale; at 1 there is nothing to travel and it is 1.
+    // (The box / float / point lerps are Motion::lerp, in MotionMath.hpp.)
     float    gridProgress(float scale, float targetScale);
-    CBox     lerpBox(const CBox& from, const CBox& to, float t);
-    float    hyprlerp(float from, float to, float perc);
-    Vector2D hyprlerp(const Vector2D& from, const Vector2D& to, float perc);
 
 } // namespace Hyprdrive::Geometry
