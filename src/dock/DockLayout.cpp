@@ -117,18 +117,22 @@ SLayout arranged(MONITORID id, const SLayout& resting) {
     if (T >= 1.F) {
         A.active = false;
         A.fromBoxes.clear();
+        A.kicks.clear();
+        A.pillKick = A.showAppsKick = {};
         return resting;
     }
 
     const float E   = Motion::curve(Motion::ESite::DOCK_ARRANGE, T);
     SLayout     out = resting;
-    out.pill        = Motion::lerp(A.fromPill, resting.pill, E);
+    out.pill        = Motion::withBoxKick(Motion::lerp(A.fromPill, resting.pill, E), A.pillKick, T);
     if (!A.fromShowApps.empty() && !resting.showApps.empty())
-        out.showApps = Motion::lerp(A.fromShowApps, resting.showApps, E);
+        out.showApps = Motion::withBoxKick(Motion::lerp(A.fromShowApps, resting.showApps, E), A.showAppsKick, T);
 
     for (auto& item : out.items) {
         if (const auto FROM = A.fromBoxes.find(item.subject); FROM != A.fromBoxes.end()) {
             item.iconBox = Motion::lerp(FROM->second, item.iconBox, E);
+            if (const auto K = A.kicks.find(item.subject); K != A.kicks.end())
+                item.iconBox = Motion::withBoxKick(item.iconBox, K->second, T);
             continue;
         }
         const float S = std::max(0.F, Motion::curve(Motion::ESite::DOCK_SPAWN, T));
@@ -158,11 +162,50 @@ void beginArrangement(MONITORID id, const SLayout& oldResting, const SLayout& ne
         std::ranges::equal(SHOWN.items, newResting.items, [&](const SItem& a, const SItem& b) { return a.subject == b.subject && SAMEBOX(a.iconBox, b.iconBox); }))
         return;
 
-    auto& A        = g_arrange[id];
+    auto& A = g_arrange[id];
+    // B6. Turned while gliding: each box that was moving leaves at the speed
+    // it had, toward its new place (MotionRetarget.hpp). The old glide is
+    // read BEFORE it is replaced: its from, its target (the old resting
+    // layout) and its kick, at its progress now.
+    const auto  NOW     = Time::steadyNow();
+    const float OLDT    = A.active ? Hyprdrive::Config::animElapsedMs(A.since) / ARRANGE_MS : 1.F;
+    const bool  TURNING = A.active && OLDT >= 0.F && OLDT < 1.F;
+    // One event re-arranges the items two or three times within a frame or
+    // two (a window closing): that is one turn, matched again each time.
+    const bool  BURST   = OLDT * ARRANGE_MS < ARRANGE_BURST_MS;
+    const auto  CURVE   = [](float t) { return Motion::curve(Motion::ESite::DOCK_ARRANGE, t); };
+    const Motion::SKickLimits LIM{.legMs = ARRANGE_MS, .maxCarry = ARRANGE_CARRY_PX, .arrive = 2.0};
+    const auto  turn    = [&](const CBox& oldFrom, const CBox& oldTo, const Motion::SBoxKick& oldKick, const CBox& cur, const CBox& to) {
+        return TURNING ? Motion::matchBoxKick(CURVE, oldFrom, oldTo, oldKick, OLDT, 1.0, cur, to, LIM, BURST ? 0.0 : Motion::REAIM_MIN_PX, !BURST) : Motion::SBoxKick{};
+    };
+    Motion::SBoxKick                                  pillKick = turn(A.fromPill, oldResting.pill, A.pillKick, SHOWN.pill, newResting.pill);
+    Motion::SBoxKick                                  showKick{};
+    std::unordered_map<std::string, Motion::SBoxKick> kicks;
+    if (TURNING) {
+        if (!A.fromShowApps.empty() && !oldResting.showApps.empty() && !SHOWN.showApps.empty() && !newResting.showApps.empty())
+            showKick = turn(A.fromShowApps, oldResting.showApps, A.showAppsKick, SHOWN.showApps, newResting.showApps);
+        for (const auto& NEW : newResting.items) {
+            const auto FROM = A.fromBoxes.find(NEW.subject); // a box that was gliding (not spawning)
+            if (NEW.subject.empty() || FROM == A.fromBoxes.end())
+                continue;
+            const auto OLDTO = std::ranges::find_if(oldResting.items, [&](const SItem& i) { return i.subject == NEW.subject; });
+            const auto CUR   = std::ranges::find_if(SHOWN.items, [&](const SItem& i) { return i.subject == NEW.subject; });
+            if (OLDTO == oldResting.items.end() || CUR == SHOWN.items.end())
+                continue;
+            const auto OLDK = A.kicks.find(NEW.subject);
+            const auto K    = turn(FROM->second, OLDTO->iconBox, OLDK == A.kicks.end() ? Motion::SBoxKick{} : OLDK->second, CUR->iconBox, NEW.iconBox);
+            if (Motion::boxKicked(K))
+                kicks.emplace(NEW.subject, K);
+        }
+    }
+
     A.active       = true;
-    A.since        = Time::steadyNow();
+    A.since        = NOW;
     A.fromPill     = SHOWN.pill;
     A.fromShowApps = SHOWN.showApps;
+    A.pillKick     = pillKick;
+    A.showAppsKick = showKick;
+    A.kicks        = std::move(kicks);
     A.fromBoxes.clear();
 
     std::unordered_set<std::string> staying;

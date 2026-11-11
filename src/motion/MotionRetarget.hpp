@@ -39,8 +39,9 @@
 //    there, so the leg moves at the plain curve's own speed).
 // tests/unit/motion_math_test.cpp holds all of this, per site curve.
 //
-// USED BY the infinite-canvas pan (L1), the border fade (B1) and the
-// minimize/restore flight reversed mid-air (F1). NOT by the
+// USED BY the infinite-canvas pan (L1), the border fade (B1), the
+// minimize/restore flight reversed mid-air (F1), the dock's arrangement glide
+// (D2). NOT by the
 // overview grid reflow (O1), which takes the plain retarget again: a query
 // typed and erased re-aims every tile inside the window, each leg then starts
 // behind the plain one, and the grid settled ~50 ms later at scale 2 (rig,
@@ -50,6 +51,7 @@
 // is the leg's progress 0..1 (its eased-before progress, not the eased one).
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace Hyprdrive::Motion {
@@ -223,5 +225,59 @@ namespace Hyprdrive::Motion {
     // The value with its kick: `plain` is the site's own from + delta * E(u).
     inline double withKick(double plain, const SKick& kick, double u) {
         return kick.kick == 0.0 ? plain : plain + kick.kick * kickBasis(u, kick.w);
+    }
+
+    // A BOX's turn (x, y, width, height; any type with those members): the
+    // old leg oldFrom -> oldTo with its own kick, at its progress u, re-aimed
+    // from `cur` (the box as drawn) to `to`. `perU` turns the old leg's
+    // velocity per old u into per new u (new ms / old ms). Off -- the plain
+    // retarget -- when the old leg is over, its own correction is still under
+    // way (one match per burst), or no edge moved by a real re-aim.
+    using SBoxKick = std::array<SKick, 4>;
+    inline bool boxKicked(const SBoxKick& k) {
+        return k[0].on() || k[1].on() || k[2].on() || k[3].on();
+    }
+    // ...the old leg on `oldCurve`, the new one on `newCurve` (a panel that
+    // slid decelerating and now dismisses accelerating).
+    // `oncePerBurst` false: a site whose re-aims come in a burst of one event
+    // (the dock: a window closing bumps its items two or three times in one
+    // frame) may match again inside the last correction, from the velocity
+    // that correction had -- the burst is one turn, not a stream.
+    template <typename FOld, typename FNew, typename TBox>
+    inline SBoxKick matchBoxKick2(FOld oldCurve, FNew newCurve, const TBox& oldFrom, const TBox& oldTo, const SBoxKick& oldKick, double u, double perU, const TBox& cur,
+                                  const TBox& to, const SKickLimits& lim, double minReaim = REAIM_MIN_PX, bool oncePerBurst = true) {
+        if (!(u >= 0.0 && u < 1.0) || !std::isfinite(perU))
+            return {};
+        for (const auto& K : oldKick)
+            if (oncePerBurst && inWindow(K, u))
+                return {};
+        const double OF[4] = {oldFrom.x, oldFrom.y, oldFrom.width, oldFrom.height}, OT[4] = {oldTo.x, oldTo.y, oldTo.width, oldTo.height};
+        const double C[4] = {cur.x, cur.y, cur.width, cur.height}, T[4] = {to.x, to.y, to.width, to.height};
+        bool         reaim = false;
+        for (int i = 0; i < 4; ++i)
+            reaim |= isReaim(OT[i], T[i], minReaim);
+        if (!reaim)
+            return {};
+        const double S = curveSlope(oldCurve, u);
+        SBoxKick     out{};
+        for (int i = 0; i < 4; ++i)
+            out[i] = matchKick(newCurve, T[i] - C[i], legSlope(OT[i] - OF[i], S, oldKick[i], u) * perU, lim);
+        return out;
+    }
+    template <typename FCurve, typename TBox>
+    inline SBoxKick matchBoxKick(FCurve curve, const TBox& oldFrom, const TBox& oldTo, const SBoxKick& oldKick, double u, double perU, const TBox& cur, const TBox& to,
+                                 const SKickLimits& lim, double minReaim = REAIM_MIN_PX, bool oncePerBurst = true) {
+        return matchBoxKick2(curve, curve, oldFrom, oldTo, oldKick, u, perU, cur, to, lim, minReaim, oncePerBurst);
+    }
+    // The box with its kick; `plain` untouched when there is none.
+    template <typename TBox>
+    inline TBox withBoxKick(TBox plain, const SBoxKick& k, double u) {
+        if (!boxKicked(k))
+            return plain;
+        plain.x      = withKick(plain.x, k[0], u);
+        plain.y      = withKick(plain.y, k[1], u);
+        plain.width  = std::max(2.0, withKick(plain.width, k[2], u));
+        plain.height = std::max(2.0, withKick(plain.height, k[3], u));
+        return plain;
     }
 }

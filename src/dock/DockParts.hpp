@@ -45,6 +45,7 @@
 #include "MotionTween.hpp"
 #include "MotionCurves.hpp"
 #include "MotionTimings.hpp"
+#include "MotionRetarget.hpp"
 #include "ConfigureHold.hpp"
 
 #include "Compat.hpp"
@@ -835,6 +836,10 @@ extern std::unordered_map<MONITORID, SBaseLayoutCache> g_baseLayouts;
 // and snaps as it always did.
 constexpr float ARRANGE_MS = 400.F; // 320 + two 40ms steps (user, 2026-09-19)
 constexpr float EXIT_MS    = 280.F; // 220 + two 30ms steps
+// B6: a turned glide carries on the old way at most this far (and a tenth of its leg).
+constexpr double ARRANGE_CARRY_PX = 16.0;
+// ...and re-arrangements this close (animated ms) after the last are one event.
+constexpr float ARRANGE_BURST_MS = 40.F;
 
 struct SArrangeExit {
     SItem           item; // as it was last displayed
@@ -847,6 +852,11 @@ struct SArrange {
     CBox                                  fromPill, fromShowApps;
     std::unordered_map<std::string, CBox> fromBoxes; // by subject
     std::vector<SArrangeExit>             exits;
+    // B6: re-arranged while gliding, a box leaves at the speed it had
+    // (MotionRetarget.hpp): a short correction per box, absent for a glide
+    // that started from rest -- that one is the plain lerp, to the bit.
+    Motion::SBoxKick                                  pillKick{}, showAppsKick{};
+    std::unordered_map<std::string, Motion::SBoxKick> kicks; // by subject
 };
 extern std::unordered_map<MONITORID, SArrange> g_arrange;
 extern CBox scaledAboutCentre(const CBox& box, float s);

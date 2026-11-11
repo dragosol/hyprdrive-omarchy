@@ -1446,6 +1446,7 @@ static void testB6() {
         {"linear", [](float t) { return t; }},
         {"outExpo", [](float t) { return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t); }},
         {"FLIGHT (site)", [](float t) { return M::houseCurve(M::ESite::FLIGHT, t); }},
+        {"DOCK_ARRANGE (site)", [](float t) { return M::houseCurve(M::ESite::DOCK_ARRANGE, t); }},
     };
     std::mt19937                           rng(6);
     std::uniform_real_distribution<double> U01(0.02, 0.97), POS(-2000.0, 2000.0), MS(80.0, 2000.0);
@@ -1582,6 +1583,54 @@ static void testB6Flight() {
         report("B6 F1 no reversal was kicked (the test proves nothing)", 1, 1);
 }
 
+// B6, boxes (matchBoxKick / withBoxKick): the dock glide, the preview panel.
+// No kick is the plain box to the bit; a turned box is continuous at the turn
+// and lands on the plain box; a nudge, a finished leg and a turn inside the
+// last correction take the plain retarget.
+static void testB6Box() {
+    namespace M = Hyprdrive::Motion;
+    struct SB {
+        double x = 0, y = 0, width = 0, height = 0;
+    };
+    const auto   CURVE = [](float t) { return M::houseCurve(M::ESite::DOCK_ARRANGE, t); };
+    const auto   LERP  = [](const SB& a, const SB& b, double e) { return SB{a.x + (b.x - a.x) * e, a.y + (b.y - a.y) * e, a.width + (b.width - a.width) * e, a.height + (b.height - a.height) * e}; };
+    std::mt19937 rng(62);
+    std::uniform_real_distribution<double> P(-800.0, 800.0), Z(4.0, 300.0), U(0.02, 0.95);
+    const M::SKickLimits LIM{.legMs = 400.0, .maxCarry = 16.0, .arrive = 0.5};
+    long n = 0, kicked = 0, badPlain = 0, badCont = 0, badLand = 0, badNudge = 0, badBurst = 0, badSize = 0;
+    for (int i = 0; i < 20000; ++i) {
+        const SB     F{P(rng), P(rng), Z(rng), Z(rng)}, T{P(rng), P(rng), Z(rng), Z(rng)}, W{P(rng), P(rng), Z(rng), Z(rng)};
+        const double U0  = U(rng);
+        const SB     CUR = LERP(F, T, CURVE(static_cast<float>(U0)));
+        const auto   K   = M::matchBoxKick(CURVE, F, T, M::SBoxKick{}, U0, 1.0, CUR, W, LIM);
+        ++n;
+        const SB P37 = LERP(CUR, W, CURVE(0.37F));
+        const SB Q37 = M::withBoxKick(P37, M::SBoxKick{}, 0.37);
+        badPlain += !(sameBits(Q37.x, P37.x) && sameBits(Q37.y, P37.y) && sameBits(Q37.width, P37.width) && sameBits(Q37.height, P37.height));
+        const SB NUDGE{T.x + 3.0, T.y - 2.0, T.width + 1.0, T.height};
+        badNudge += M::boxKicked(M::matchBoxKick(CURVE, F, T, M::SBoxKick{}, U0, 1.0, CUR, NUDGE, LIM));
+        badNudge += M::boxKicked(M::matchBoxKick(CURVE, F, T, M::SBoxKick{}, 1.0, 1.0, CUR, W, LIM));
+        if (!M::boxKicked(K))
+            continue;
+        ++kicked;
+        badBurst += M::boxKicked(M::matchBoxKick(CURVE, CUR, W, K, 0.01, 1.0, M::withBoxKick(LERP(CUR, W, CURVE(0.01F)), K, 0.01), T, LIM));
+        const SB A0 = M::withBoxKick(LERP(CUR, W, CURVE(0.F)), K, 0.0), A1 = M::withBoxKick(LERP(CUR, W, CURVE(1.F)), K, 1.0), P1 = LERP(CUR, W, CURVE(1.F));
+        badCont += std::abs(A0.x - CUR.x) > 1e-9 || std::abs(A0.y - CUR.y) > 1e-9 || std::abs(A0.width - CUR.width) > 1e-9 || std::abs(A0.height - CUR.height) > 1e-9;
+        badLand += !(A1.x == P1.x && A1.y == P1.y && A1.width == P1.width && A1.height == P1.height);
+        for (int j = 0; j <= 200; ++j) {
+            const SB B = M::withBoxKick(LERP(CUR, W, CURVE(j / 200.F)), K, j / 200.0);
+            badSize += !(B.width >= 2.0 && B.height >= 2.0 && std::isfinite(B.x) && std::isfinite(B.y));
+        }
+    }
+    report("B6 box: no kick is the plain box, bit for bit", n, badPlain);
+    report("B6 box: a nudge or a finished leg takes the plain retarget", n * 2, badNudge);
+    report("B6 box: a turn inside the last correction takes the plain retarget", kicked, badBurst);
+    report("B6 box: turned, continuous at the turn and lands on the plain box", kicked * 2, badCont + badLand);
+    report("B6 box: finite, never under 2 px", kicked * 201, badSize);
+    if (kicked == 0)
+        report("B6 box: nothing was kicked (the test proves nothing)", 1, 1);
+}
+
 int main() {
     testA1();
     testA2();
@@ -1596,6 +1645,7 @@ int main() {
     testB2();
     testB6();
     testB6Flight();
+    testB6Box();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;
