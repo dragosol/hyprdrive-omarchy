@@ -1,6 +1,7 @@
 // COverview: constructor/destructor, close, onPreRender, onWorkspaceChange, submap and passthrough binds, pointer handoff, desktop moves, DesktopTape.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "Rows.hpp"
 #include "Ripple.hpp"
 
 using namespace OverviewDetail;
@@ -1241,6 +1242,8 @@ void COverview::superChanged() {
 bool COverview::deskMovable(size_t idx) const {
     if (idx >= images.size() || !images[idx] || !Hyprdrive::DesktopOrder::ordinary(images[idx]->pWorkspace))
         return false;
+    if (!Hyprdrive::Rows::of(pMonitor.lock()).contains(images[idx]->pWorkspace->m_id))
+        return false; // a visitor: outside this monitor's row
     return std::ranges::any_of(images[idx]->windows, [](const PHLWINDOWREF& r) {
         const auto W = r.lock();
         return W && W->m_isMapped;
@@ -1257,13 +1260,21 @@ bool COverview::moveDesktop(size_t from, size_t to) {
     }
     std::vector<PHLWORKSPACE> order;
     std::vector<WORKSPACEID>  ids;
+    // Only the row's own desktops and their own numbers (visitors are drawn
+    // after them and never move).
+    const auto ROW = Hyprdrive::Rows::of(pMonitor.lock());
     for (const auto& I : images) {
         if (!I || !Hyprdrive::DesktopOrder::ordinary(I->pWorkspace))
             return false;
+        if (!ROW.contains(I->pWorkspace->m_id))
+            continue;
         order.push_back(I->pWorkspace);
         ids.push_back(I->pWorkspace->m_id);
     }
-    std::ranges::sort(ids);
+    if (from >= order.size())
+        return false;
+    to = std::min(to, order.size() - 1);
+    std::ranges::sort(ids, [&ROW](WORKSPACEID a, WORKSPACEID b) { return ROW.slot(a) < ROW.slot(b); });
     const auto W = order[from];
     order.erase(order.begin() + sc<std::ptrdiff_t>(from));
     order.insert(order.begin() + sc<std::ptrdiff_t>(to), W);

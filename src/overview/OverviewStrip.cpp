@@ -1,6 +1,7 @@
 // COverview: top strip, scratchpad cell, alt strips, detent badge.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "Rows.hpp"
 #include "MotionClock.hpp"
 
 using namespace OverviewDetail;
@@ -461,7 +462,7 @@ void COverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Tim
             renderOverviewWorkspaceShadow(monitor, CELL, renderScale, false, FADE);
 
             // The desktop's number, as every strip cell carries it.
-            if (const auto NUMTEX = OverviewRender::text(std::to_string(WIMG->pWorkspace->m_id), Hyprdrive::Config::themeForeground().modifyA(0.20F),
+            if (const auto NUMTEX = OverviewRender::text(Hyprdrive::Rows::label(WIMG->pWorkspace), Hyprdrive::Config::themeForeground().modifyA(0.20F),
                                                          std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
                 NUMTEX && NUMTEX->ok()) {
                 CTexPassElement::SRenderData num;
@@ -1048,7 +1049,7 @@ void COverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, const C
     // type at the overview's own scale, i.e. 250/1600 = 15.6% of a cell's
     // height, DemiBold, foreground at alpha 0.2. Reproduced as a fraction of
     // the strip cell so it tracks the strip instead of a fixed pixel size.
-    const auto NUMTEX = OverviewRender::text(std::to_string(wimg->pWorkspace->m_id), Hyprdrive::Config::themeForeground().modifyA(0.20F),
+    const auto NUMTEX = OverviewRender::text(Hyprdrive::Rows::label(wimg->pWorkspace), Hyprdrive::Config::themeForeground().modifyA(0.20F),
                                                     std::max(1, sc<int>(std::round(sc<float>(CELL.height) * 0.156F))), false, "", 0, 600);
     // Only the cell the badge is sitting on fades, and only while it is there.
     const float NUMFADE = restingNumberFade(workspaceIdx);
@@ -1226,7 +1227,8 @@ void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
     if (CELL.width < 1.0 || CELL.height < 1.0)
         return;
 
-    const auto NAME = wimg->pWorkspace->m_name.empty() ? std::to_string(wimg->pWorkspace->m_id) : wimg->pWorkspace->m_name;
+    // (a numeric name is the number: the row's place, Rows::label)
+    const auto NAME = wimg->pWorkspace->m_name.empty() || wimg->pWorkspace->m_name == std::to_string(wimg->pWorkspace->m_id) ? Hyprdrive::Rows::label(wimg->pWorkspace) : wimg->pWorkspace->m_name;
     const int  SIZE = std::max(1, sc<int>(std::round(sc<float>(CELL.height) * DETENT_BADGE_FRACTION)));
     const auto TEX  = OverviewRender::text(NAME, Hyprdrive::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
     if (!TEX || !TEX->ok())

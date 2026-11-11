@@ -336,6 +336,61 @@ int main() {
         ok(dupes == 0, "convergence: no two desktops ever share an id, dupes=" + std::to_string(dupes));
     }
 
+    // ---- ROWS (Omarchy's per-monitor blocks): the owner's case, one external
+    // monitor owning block 2 with desktops 21..24 -- no "20 empty desktops
+    // below 21", the spare is 25.
+    {
+        using Hyprdrive::Row;
+        const std::vector<SWorkspace> WS{{21, 1, 2}, {22, 1, 1}, {23, 1, 1}, {24, 1, 3}};
+        const auto                    P = plan({1}, WS, {}, {{1, Row::block(2, 10)}});
+        invariants("rows: block 2", P, WS);
+        ok(P.at(1).gaps.empty(), "rows: block 2 fills no gap below 21, got " + ids(P.at(1).gaps));
+        ok(P.at(1).spare == 25 && !P.at(1).existing, "rows: block 2's spare is 25");
+        // and with the implicit row the same desktops DO get 1..20 (the bug)
+        const auto OLD = plan({1}, WS);
+        ok(OLD.at(1).gaps.size() == 20, "rows: the implicit row fills 1..20 below 21 (the old behaviour), got " + std::to_string(OLD.at(1).gaps.size()));
+    }
+    // two monitors, blocks 0 and 1: holes only inside each block
+    {
+        using Hyprdrive::Row;
+        const std::vector<SWorkspace> WS{{1, 1, 1}, {3, 1, 1}, {11, 2, 1}, {14, 2, 1}};
+        const auto                    P = plan({1, 2}, WS, {}, {{1, Row::block(0, 10)}, {2, Row::block(1, 10)}});
+        invariants("rows: two blocks", P, WS);
+        ok(P.at(1).gaps == std::vector<ID>{2}, "rows: block 0 fills 2, got " + ids(P.at(1).gaps));
+        ok(P.at(2).gaps == (std::vector<ID>{12, 13}), "rows: block 1 fills 12,13, got " + ids(P.at(2).gaps));
+        ok(P.at(1).spare == 4 && P.at(2).spare == 15, "rows: spares 4 and 15");
+    }
+    // a full block: the spare is the row's first overflow place, never 21
+    {
+        using Hyprdrive::Row;
+        std::vector<SWorkspace> WS;
+        for (ID i = 11; i <= 20; ++i)
+            WS.push_back({i, 2, 1});
+        WS.push_back({21, 3, 1});
+        const auto P = plan({2, 3}, WS, {}, {{2, Row::block(1, 10)}, {3, Row::block(2, 10)}});
+        invariants("rows: full block", P, WS);
+        ok(P.at(2).spare == Row::block(1, 10).idOf(11), "rows: a full block's spare is its overflow, got " + std::to_string(P.at(2).spare.value_or(-1)));
+        ok(P.at(3).spare == 22, "rows: the next block's spare is its own");
+        // an overflow desktop with a hole in the block: the hole is filled, the spare follows the overflow
+        std::vector<SWorkspace> HOLE;
+        for (ID i = 11; i <= 20; ++i)
+            if (i != 13)
+                HOLE.push_back({i, 2, 1});
+        HOLE.push_back({Row::block(1, 10).idOf(11), 2, 1});
+        const auto Q = plan({2}, HOLE, {}, {{2, Row::block(1, 10)}});
+        invariants("rows: overflow + hole", Q, HOLE);
+        ok(Q.at(2).gaps == std::vector<ID>{13}, "rows: the hole under the overflow is filled, got " + ids(Q.at(2).gaps));
+        ok(Q.at(2).spare == Row::block(1, 10).idOf(12), "rows: the spare is the next overflow place");
+    }
+    // a visitor (an Omarchy guest at 3 on block 2's monitor) is not planned around
+    {
+        using Hyprdrive::Row;
+        const std::vector<SWorkspace> WS{{3, 1, 1}, {21, 1, 1}, {23, 1, 1}};
+        const auto                    P = plan({1}, WS, {}, {{1, Row::block(2, 10)}});
+        ok(P.at(1).gaps == std::vector<ID>{22}, "rows: a visitor is no part of the row, got " + ids(P.at(1).gaps));
+        ok(P.at(1).spare == 24, "rows: spare 24");
+    }
+
     std::printf("workspace_plan_test: %d checks, %d failed\n", g_run, g_fail);
     return g_fail ? 1 : 0;
 }

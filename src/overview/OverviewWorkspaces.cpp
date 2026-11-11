@@ -1,6 +1,7 @@
 // COverview: workspace model: offsets, phantoms, plans, trailing/gap workspaces, images.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "Rows.hpp"
 
 using namespace OverviewDetail;
 
@@ -133,10 +134,13 @@ Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
     if (!monitor)
         return {};
 
-    std::vector<WP::ID> monitors;
+    std::vector<WP::ID>                monitors;
+    std::map<WP::ID, Hyprdrive::Row>   rows; // each monitor's row (Rows.hpp; blocks off: the implicit one)
     for (const auto& MON : State::monitorState()->monitors()) {
-        if (MON)
+        if (MON) {
             monitors.push_back(MON->m_id);
+            rows[MON->m_id] = Hyprdrive::Rows::of(MON);
+        }
     }
 
     std::vector<WP::SWorkspace> facts;
@@ -155,7 +159,7 @@ Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
         return std::nullopt;
     };
 
-    auto       PLAN = WP::plan(monitors, facts, BOUND);
+    auto       PLAN = WP::plan(monitors, facts, BOUND, rows);
     const auto IT   = PLAN.find(monitor->m_id);
     return IT == PLAN.end() ? WP::SRow{} : IT->second;
 }
@@ -165,6 +169,9 @@ Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
 // workspace with an id that already exists rather than refusing, so nothing
 // here creates without checking first.
 static PHLWORKSPACE createWorkspaceIfFree(WORKSPACEID id, const PHLMONITOR& monitor) {
+    // Never a number outside the monitor's row (another monitor's block).
+    if (!monitor || !Hyprdrive::Rows::of(monitor).contains(id))
+        return nullptr;
     for (const auto& w : State::workspaceState()->workspaces()) {
         if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && WORKSPACE->m_id == id)
             return nullptr;
@@ -291,7 +298,16 @@ void COverview::rebuildWorkspaceImages() {
         images.emplace_back(makeShared<SWorkspaceImage>(WORKSPACE));
     }
 
-    std::sort(images.begin(), images.end(), [](const auto& a, const auto& b) { return a->pWorkspace->m_id < b->pWorkspace->m_id; });
+    // The row's desktops by place, then visitors (outside the row) by number,
+    // as Omarchy's bar lists its guests. (Blocks off: by number.)
+    const Hyprdrive::Row ROW = Hyprdrive::Rows::of(pMonitor.lock());
+    std::sort(images.begin(), images.end(), [&ROW](const auto& a, const auto& b) {
+        const WORKSPACEID A = a->pWorkspace->m_id, B = b->pWorkspace->m_id;
+        const bool        INA = ROW.contains(A), INB = ROW.contains(B);
+        if (INA != INB)
+            return INA;
+        return INA ? ROW.slot(A) < ROW.slot(B) : A < B;
+    });
 
     if (images.empty()) {
         viewportCurrentWorkspace = 0;

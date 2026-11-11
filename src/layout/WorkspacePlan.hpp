@@ -38,6 +38,15 @@
 //      one monitor that is every hole, exactly as before. With two, an id
 //      between the laptop's 3 and the external's 4 belongs to neither, and is
 //      left alone rather than claimed by whichever overview looked first.
+//   7. ROWS (Row.hpp, Omarchy's per-monitor blocks): each monitor plans on its
+//      own row's places -- holes from the row's first place, never below it
+//      (no "20 empty desktops below 21"), the spare in the row (a full block's
+//      spare is its first overflow place), neighbours only within the row, and
+//      desktops outside the row (visitors) are nobody's to plan around. No
+//      `rows` (blocks off): every monitor has the implicit row, slot == id, and
+//      rules 1-6 are exactly what they were.
+
+#include "Row.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -71,7 +80,12 @@ using BoundMonitor = std::function<std::optional<ID>(ID)>;
 // ponytail: X3's ceiling (v1.1 item 0), see ensureNoWorkspaceGaps in Overview.cpp.
 inline constexpr ID GAP_CEILING = 32;
 
-inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWorkspace>& workspaces, const BoundMonitor& bound = {}) {
+inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWorkspace>& workspaces, const BoundMonitor& bound = {},
+                               const std::map<ID, Hyprdrive::Row>& rows = {}) {
+    const auto rowOf = [&](ID monitor) {
+        const auto IT = rows.find(monitor);
+        return IT == rows.end() ? Hyprdrive::Row{} : IT->second;
+    };
     std::sort(monitors.begin(), monitors.end());
     monitors.erase(std::unique(monitors.begin(), monitors.end()), monitors.end());
 
@@ -98,12 +112,14 @@ inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWork
     std::map<ID, SRow> out;
 
     for (const ID MONITOR : monitors) {
-        auto& row = out[MONITOR];
+        auto&                row = out[MONITOR];
+        const Hyprdrive::Row R   = rowOf(MONITOR);
 
+        // (places on the row; implicit row: place == id)
         ID maxOccupied = 0;
         for (const auto& W : workspaces) {
-            if (W.id > 0 && W.monitor == MONITOR && W.windows > 0)
-                maxOccupied = std::max(maxOccupied, W.id);
+            if (W.id > 0 && W.monitor == MONITOR && W.windows > 0 && R.contains(W.id))
+                maxOccupied = std::max<ID>(maxOccupied, R.slot(W.id));
         }
 
         if (maxOccupied <= 0)
@@ -113,7 +129,7 @@ inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWork
         // the user jumped to, say) is not preferred over the nearer one.
         std::optional<ID> reuse;
         for (const auto& W : workspaces) {
-            if (W.id > maxOccupied && W.monitor == MONITOR && W.windows == 0 && (!reuse || W.id < *reuse))
+            if (W.monitor == MONITOR && W.windows == 0 && R.contains(W.id) && R.slot(W.id) > maxOccupied && (!reuse || R.slot(W.id) < R.slot(*reuse)))
                 reuse = W.id;
         }
 
@@ -121,11 +137,13 @@ inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWork
             row.spare    = reuse;
             row.existing = true;
         } else {
-            ID id = maxOccupied + 1;
-            while (taken.contains(id) || boundElsewhere(id, MONITOR))
-                ++id;
-            row.spare = id;
-            taken.insert(id); // rule 4
+            ID place = maxOccupied + 1;
+            while (R.idOf(place) > 0 && (taken.contains(R.idOf(place)) || boundElsewhere(R.idOf(place), MONITOR)))
+                ++place;
+            if (R.idOf(place) > 0) {
+                row.spare = R.idOf(place);
+                taken.insert(*row.spare); // rule 4
+            }
         }
     }
 
@@ -138,35 +156,48 @@ inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWork
     }
 
     for (const ID MONITOR : monitors) {
-        auto& row = out[MONITOR];
+        auto&                row = out[MONITOR];
+        const Hyprdrive::Row R   = rowOf(MONITOR);
+
+        // Rule 7: this row's neighbours, by place. (Implicit row: by id, as before.)
+        std::map<ID, ID> near;
+        for (const auto& [ID_, MON] : neighbours)
+            if (R.contains(ID_))
+                near[R.slot(ID_)] = MON;
 
         ID maxOccupied = 0, maxID = 0;
         for (const auto& W : workspaces) {
-            if (W.id <= 0 || W.monitor != MONITOR)
+            if (W.id <= 0 || W.monitor != MONITOR || !R.contains(W.id))
                 continue;
-            maxID = std::max(maxID, W.id);
+            maxID = std::max<ID>(maxID, R.slot(W.id));
             if (W.windows > 0)
-                maxOccupied = std::max(maxOccupied, W.id);
+                maxOccupied = std::max<ID>(maxOccupied, R.slot(W.id));
         }
 
         // With no windows at all, the highest desktop that exists: jumping to an
         // empty desktop 5 still shows five cells (the pre-plan behaviour).
-        const ID FILLTO = std::min(maxOccupied > 0 ? maxOccupied : maxID, GAP_CEILING + 1);
-        for (ID id = 1; id < FILLTO; ++id) {
-            if (neighbours.contains(id) || boundElsewhere(id, MONITOR))
+        // (The ceiling is the unbounded row's; a block's row ends by itself.)
+        const ID TOP    = maxOccupied > 0 ? maxOccupied : maxID;
+        const ID FILLTO = R.bounded() ? TOP : std::min(TOP, GAP_CEILING + 1);
+        for (ID place = 1; place < FILLTO; ++place) {
+            const ID id = R.idOf(place);
+            if (near.contains(place) || boundElsewhere(id, MONITOR))
                 continue;
 
             // Someone else's phantom: theirs to keep or release, never ours to
             // plan on top of.
             if (const auto PH = phantoms.find(id); PH != phantoms.end() && PH->second != MONITOR)
                 continue;
-
-            const auto ABOVE = neighbours.upper_bound(id); // first existing id > id
-            if (ABOVE == neighbours.end() || ABOVE->second != MONITOR)
+            // (an id held by a desktop of no row here -- a visitor elsewhere -- is never planned)
+            if (taken.contains(id) && !phantoms.contains(id))
                 continue;
 
-            const auto BELOW = neighbours.lower_bound(id); // == ABOVE here; the one before it is below
-            if (BELOW != neighbours.begin() && std::prev(BELOW)->second != MONITOR)
+            const auto ABOVE = near.upper_bound(place); // first existing place > place
+            if (ABOVE == near.end() || ABOVE->second != MONITOR)
+                continue;
+
+            const auto BELOW = near.lower_bound(place); // == ABOVE here; the one before it is below
+            if (BELOW != near.begin() && std::prev(BELOW)->second != MONITOR)
                 continue;
 
             row.gaps.push_back(id);

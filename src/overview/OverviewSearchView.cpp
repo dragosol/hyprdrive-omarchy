@@ -1,6 +1,7 @@
 // COverview: search UI: layout, draw, render, pill/letter animation, menu key handlers.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "Rows.hpp"
 #include "MotionCurves.hpp"
 
 using namespace OverviewDetail;
@@ -493,7 +494,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
                 if (!LIVE->m_title.empty())
                     out.inspector.detail1 = LIVE->m_title;
                 if (LIVE->m_workspace)
-                    out.inspector.detail2 = "Workspace " + std::to_string(LIVE->m_workspace->m_id);
+                    out.inspector.detail2 = "Workspace " + Hyprdrive::Rows::label(LIVE->m_workspace);
                 out.inspector.shortcutHint  = "Enter  Switch to window";
                 out.inspector.shortcutHint2 = "Shift×2  New window";
             } else {
