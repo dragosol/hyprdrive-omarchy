@@ -177,10 +177,10 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
 // still filtered by the query. Anything a new session has to forget goes here,
 // not into either caller.
 void resetSearchSession() {
-    OmarchySearch::closeSushi();
+    SearchBackend::closeSushi();
     g_search.reset();
     SearchLetters::g_searchLetters.reset();
-    OmarchySearch::resetMenuRoute();
+    SearchBackend::resetMenuRoute();
     Membership::bump("search session reset");
     resetCompose(); // a sequence abandoned last time must not eat the first key
     SearchProviders::query("");
@@ -275,7 +275,7 @@ SDispatchResult onOverviewDispatcher(std::string arg) {
     // compositor 0.3-1.4 s (measured 2026-10-23). The first keystroke's own
     // GetInitialResultSet auto-starts a cold provider instead: app rows are
     // in-memory and stay instant, provider rows land when the provider is up.
-    OmarchySearch::init();
+    SearchBackend::init();
 
     for (const auto& monitor : MONITORS) {
         if (!openOverview(monitor))

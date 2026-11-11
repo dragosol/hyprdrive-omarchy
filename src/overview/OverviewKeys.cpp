@@ -477,8 +477,8 @@ bool COverview::moveSelection(const std::string& direction) {
 
             if (LEFT) {
                 if (curHit->column == 0) {
-                    if (OmarchySearch::canNavigateMenuBack()) {
-                        OmarchySearch::navigateMenuBack();
+                    if (SearchBackend::canNavigateMenuBack()) {
+                        SearchBackend::navigateMenuBack();
                         g_search.nav.selection = 0;
                         damage();
                         return true;

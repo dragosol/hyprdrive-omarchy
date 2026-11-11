@@ -1029,7 +1029,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // The root browse (nothing typed, no submenu) runs only a row the
                 // keyboard walked onto: Enter in the bare pill still means "back
                 // to the window", never "run the first menu row" (Lock, Shut Down).
-                const bool PICKABLE = !g_search.query.text.empty() || OmarchySearch::canNavigateMenuBack() ||
+                const bool PICKABLE = !g_search.query.text.empty() || SearchBackend::canNavigateMenuBack() ||
                     (overviewSearchPaneUp() && g_search.nav.zone == EOverviewNavZone::Result);
                 if (PICKABLE && g_search.nav.zone != EOverviewNavZone::Tile && g_search.nav.zone != EOverviewNavZone::Desktop) {
                     const auto RESULTS = overviewSearchRows();
@@ -1037,7 +1037,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                     int launchIdx = -1;
                     if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
                         launchIdx = g_search.nav.selection;
-                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search || OmarchySearch::canNavigateMenuBack()))
+                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search || SearchBackend::canNavigateMenuBack()))
                         launchIdx = 0;
 
                     const std::string QUERY_BEFORE = g_search.query.text;

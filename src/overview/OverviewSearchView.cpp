@@ -353,7 +353,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
         cardOut.icon  = SECTION->icon;
         cardOut.more  = SECTION->total > SECTION->rows.size() ? SECTION->total - SECTION->rows.size() : 0;
         if (SECTION->rows.empty())
-            cardOut.emptyHint = (c == 1 && OmarchySearch::fileSearchBusy()) ? "Searching…" : "No items";
+            cardOut.emptyHint = (c == 1 && SearchBackend::fileSearchBusy()) ? "Searching…" : "No items";
 
         for (size_t n = 0; n < SECTION->rows.size(); ++n) {
             const size_t I      = SECTION->rows[n];
@@ -411,20 +411,20 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
             const auto& o = *ROW.omarchy;
             out.inspector.category     = o.category;
             out.inspector.canQuickLook = o.canQuickLook;
-            if (o.kind == OmarchySearch::EItemKind::File) {
+            if (o.kind == SearchBackend::EItemKind::File) {
                 out.inspector.detail1      = o.fileTypeStr;
                 out.inspector.detail2      = o.fileSizeStr + "  ·  " + o.fileModifiedStr;
                 out.inspector.detail3      = o.filePath;
                 out.inspector.shortcutHint = "Space  Quick Look";
                 out.inspector.shortcutHint2 = "Enter  Open";
-            } else if (o.kind == OmarchySearch::EItemKind::Menu) {
+            } else if (o.kind == SearchBackend::EItemKind::Menu) {
                 out.inspector.detail1      = "Opens this submenu in the left column";
                 out.inspector.shortcutHint = "Enter  Open submenu";
                 out.inspector.shortcutHint2 = "Left  Back";
-            } else if (o.kind == OmarchySearch::EItemKind::Back) {
+            } else if (o.kind == SearchBackend::EItemKind::Back) {
                 out.inspector.detail1      = "Return to the parent menu";
                 out.inspector.shortcutHint = "Enter  Go back";
-            } else if (o.kind == OmarchySearch::EItemKind::Action && (o.id == "tool:define" || o.id == "tool:translate")) {
+            } else if (o.kind == SearchBackend::EItemKind::Action && (o.id == "tool:define" || o.id == "tool:translate")) {
                 // THE TOOLS' OWN CARD (user, 2026-09-24): how to use it, and a
                 // quick answer for what is typed -- the translation into the last
                 // language used. The lookup is the same cached one the panel
@@ -461,19 +461,19 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
                     out.inspector.detail3 = "Languages by code or name: es, fr, de, ro, ja, spanish, german\u2026";
                 }
                 out.inspector.shortcutHint = DEFINE ? "Enter  Open the dictionary" : "Enter  Open the translator";
-            } else if (o.kind == OmarchySearch::EItemKind::Action) {
+            } else if (o.kind == SearchBackend::EItemKind::Action) {
                 out.inspector.detail1      = o.description.empty() ? o.name : o.description;
                 out.inspector.detail2      = o.actionCommand;
                 out.inspector.shortcutHint = "Enter  Run";
-            } else if (o.kind == OmarchySearch::EItemKind::Agent) {
+            } else if (o.kind == SearchBackend::EItemKind::Agent) {
                 out.inspector.detail1      = o.description;
                 out.inspector.shortcutHint = "Enter  Launch agent";
                 // Same "Key x2  Action" form as the app card's Shift x2 hint.
-                if (OmarchySearch::isDefaultAgent(o))
+                if (SearchBackend::isDefaultAgent(o))
                     out.inspector.shortcutHint2 = "Default agent";
-                else if (OmarchySearch::canBeDefaultAgent(o))
+                else if (SearchBackend::canBeDefaultAgent(o))
                     out.inspector.shortcutHint2 = "Ctrl×2  Set as default";
-            } else if (o.kind == OmarchySearch::EItemKind::Calculator) {
+            } else if (o.kind == SearchBackend::EItemKind::Calculator) {
                 out.inspector.detail1      = o.description;
                 out.inspector.detail2      = "Enter copies " + o.actionCommand + " to the clipboard";
                 out.inspector.shortcutHint = "Enter  Copy result";
@@ -801,7 +801,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             float       textIndent = ROWPAD;
 
             const float ICOND = std::round(18.F * SCALE);
-            if (OmarchySearch::isGlyphIcon(ITEM.icon)) {
+            if (SearchBackend::isGlyphIcon(ITEM.icon)) {
                 const int         GLYPHPX = std::max(1, sc<int>(std::round(16.F * SCALE)));
                 const std::string FAMILY  = ITEM.iconFont.empty() ? "JetBrainsMono Nerd Font" : ITEM.iconFont;
                 const auto        GLYPHTEX =
@@ -1423,7 +1423,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
 
     if (QUERIED && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size())) {
         if (RESULTS[g_search.nav.selection].omarchy && !RESULTS[g_search.nav.selection].omarchy->filePath.empty()) {
-            OmarchySearch::updateSushiIfActive(RESULTS[g_search.nav.selection].omarchy->filePath);
+            SearchBackend::updateSushiIfActive(RESULTS[g_search.nav.selection].omarchy->filePath);
         }
     }
 
@@ -1504,7 +1504,7 @@ bool overviewToggleSushiForSelection() {
     const std::string* PATH   = searchPreviewPath(RESULTS, g_search.nav.selection);
     if (!PATH)
         return false;
-    OmarchySearch::toggleSushi(*PATH);
+    SearchBackend::toggleSushi(*PATH);
     return true;
 }
 
@@ -1513,15 +1513,15 @@ bool overviewHandleSearchSpace() {
     const std::string* HOVER = searchPreviewPath(RESULTS, g_search.nav.hoverIndex);
     const std::string* SEL   = searchPreviewPath(RESULTS, g_search.nav.selection);
     if (!overviewSpacePreviews(g_search.nav.intent, HOVER != nullptr, SEL != nullptr, g_search.nav.explicitSelection)) {
-        if (OmarchySearch::isSushiActive())
-            OmarchySearch::closeSushi();
+        if (SearchBackend::isSushiActive())
+            SearchBackend::closeSushi();
         return false;
     }
 
     const std::string* PATH = (g_search.nav.intent == ESearchIntent::Hovering && HOVER) ? HOVER : SEL;
     if (!PATH)
         return false;
-    OmarchySearch::toggleSushi(*PATH);
+    SearchBackend::toggleSushi(*PATH);
     return true;
 }
 
@@ -1552,17 +1552,17 @@ bool overviewHandleShiftTap() {
 bool overviewHandleCtrlTap() {
     const auto RESULTS = overviewSearchRows();
 
-    const auto agentAt = [&](int idx) -> std::optional<OmarchySearch::SSearchItem> {
+    const auto agentAt = [&](int idx) -> std::optional<SearchBackend::SSearchItem> {
         if (idx < 0 || idx >= sc<int>(RESULTS.size()) || !RESULTS[sc<size_t>(idx)].omarchy)
             return std::nullopt;
         const auto& ITEM = *RESULTS[sc<size_t>(idx)].omarchy;
-        return OmarchySearch::canBeDefaultAgent(ITEM) ? std::optional{ITEM} : std::nullopt;
+        return SearchBackend::canBeDefaultAgent(ITEM) ? std::optional{ITEM} : std::nullopt;
     };
 
     auto item = g_search.nav.intent == ESearchIntent::Hovering ? agentAt(g_search.nav.hoverIndex) : std::nullopt;
     if (!item)
         item = agentAt(g_search.nav.selection);
-    if (!item || !OmarchySearch::setDefaultAgent(*item))
+    if (!item || !SearchBackend::setDefaultAgent(*item))
         return false;
 
     const auto REORDERED = overviewSearchRows();

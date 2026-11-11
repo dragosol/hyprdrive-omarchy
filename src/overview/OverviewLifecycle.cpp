@@ -331,7 +331,7 @@ void COverview::close() {
     // may survive into the next open as a phantom drop.
     Hyprdrive::Dock::dragCancel();
     Hyprdrive::Dock::setForeignInsert(-1);
-    OmarchySearch::closeSushi();
+    SearchBackend::closeSushi();
 
     // Click-to-close and swipe-commit never go through the dispatcher, so a
     // typed query used to still be in the bar on the next open. Ending the
@@ -881,8 +881,8 @@ void normalizeAllScrollingCameras() {
 void COverview::setClosing(bool closing_) {
     closing = closing_;
     if (closing) {
-        if (OmarchySearch::isSushiActive())
-            OmarchySearch::closeSushi();
+        if (SearchBackend::isSushiActive())
+            SearchBackend::closeSushi();
         transferSharedStateOwnership();
         inputFramePending = false;
         clearDragPending();

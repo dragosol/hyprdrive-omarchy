@@ -309,7 +309,7 @@ namespace {
     // than a gdbus process of its own: a closed one is let go and another
     // opened, at most once per 5 s while there is no bus to be had.
     // A connection of its own (sd_bus_open_user), not the thread's default:
-    // Quick Look (OmarchySearch.cpp) keeps a reference to that one, so letting
+    // Quick Look (SearchBackend.cpp) keeps a reference to that one, so letting
     // it go here did not free it, and asking for the default again handed the
     // same dead connection back.
     sd_bus* userBus() {

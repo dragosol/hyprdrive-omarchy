@@ -26,7 +26,7 @@
 #include "globals.hpp"
 #include "IOverview.hpp"
 #include "SearchSession.hpp"
-#include "OmarchySearch.hpp"
+#include "SearchBackend.hpp"
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <unordered_set>
@@ -407,14 +407,14 @@ namespace {
     // refill (the menu search is an in-memory scan).
     // Cached per inventory generation: the 3 s recheck would otherwise run the
     // 26 menu searches every time (~2.5 ms).
-    const std::vector<OmarchySearch::SSearchItem>& warmSearchItems() {
-        static std::vector<OmarchySearch::SSearchItem> items;
+    const std::vector<SearchBackend::SSearchItem>& warmSearchItems() {
+        static std::vector<SearchBackend::SSearchItem> items;
         static uint64_t                                 builtFor = 0;
         if (const auto GEN = AppSearch::inventoryGeneration(); GEN != builtFor || items.empty()) {
             builtFor = GEN;
-            items    = OmarchySearch::promptAllAgents("x");
+            items    = SearchBackend::promptAllAgents("x");
             for (char c = 'a'; c <= 'z'; ++c) {
-                auto menu = OmarchySearch::searchMenu(std::string(1, c));
+                auto menu = SearchBackend::searchMenu(std::string(1, c));
                 items.insert(items.end(), std::make_move_iterator(menu.begin()), std::make_move_iterator(menu.end()));
             }
         }
@@ -432,7 +432,7 @@ namespace {
         for (const auto& E : AppSearch::inventory())
             push(E.icon);
         for (const auto& I : warmSearchItems())
-            if (!OmarchySearch::isGlyphIcon(I.icon))
+            if (!SearchBackend::isGlyphIcon(I.icon))
                 push(I.icon);
         for (const char* SECTION : {"utilities-terminal", "folder", "system-run"}) // overviewSearchSections
             push(SECTION);

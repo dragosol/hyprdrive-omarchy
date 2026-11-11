@@ -667,11 +667,11 @@ bool onShownSpecial(const PHLWINDOW& window, const PHLMONITOR& monitor) {
 }
 
 PHLWINDOW overviewSushiWindowOn(const PHLMONITOR& monitor) {
-    if (!monitor || !OmarchySearch::isSushiActive())
+    if (!monitor || !SearchBackend::isSushiActive())
         return nullptr;
 
     for (const auto& w : Desktop::windowState()->windows()) {
-        if (Desktop::View::validMapped(w) && OmarchySearch::isOverviewSushiWindow(w->m_class, w->getPID()))
+        if (Desktop::View::validMapped(w) && SearchBackend::isOverviewSushiWindow(w->m_class, w->getPID()))
             return w->m_monitor == monitor ? w : nullptr;
     }
 

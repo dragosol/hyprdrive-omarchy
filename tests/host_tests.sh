@@ -89,7 +89,7 @@ run desktop_strip_test tests/unit/desktop_strip_test.cpp
 run builtin_icons_test tests/unit/builtin_icons_test.cpp src/apps/BuiltinIcons.cpp --embed-dir=. $(pkg-config --cflags --libs librsvg-2.0)
 # shellcheck disable=SC2046
 run stack_reader_test tests/unit/stack_reader_test.cpp src/stacks/StackReader.cpp src/stacks/StackModel.cpp $(pkg-config --cflags --libs gio-2.0)
-run omarchy_search_test tests/unit/omarchy_search_test.cpp src/search/OmarchySearch.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
+run search_backend_test tests/unit/search_backend_test.cpp src/search/SearchBackend.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 # shellcheck disable=SC2046
 run icon_size_test tests/unit/icon_size_test.cpp $(pkg-config --cflags --libs cairo)
 # shellcheck disable=SC2046

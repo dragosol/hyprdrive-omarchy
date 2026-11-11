@@ -1,4 +1,4 @@
-#include "OmarchySearch.hpp"
+#include "SearchBackend.hpp"
 #include "SearchIntent.hpp"
 #include <cassert>
 #include <chrono>
@@ -23,50 +23,50 @@ static int s_testsPassed = 0;
 int main() {
     // 1. Calculator tests
     {
-        auto calc1 = OmarchySearch::evaluateCalculator("2 + 2");
+        auto calc1 = SearchBackend::evaluateCalculator("2 + 2");
         CHECK(calc1.has_value());
         CHECK(calc1->name == "= 4");
         CHECK(calc1->actionCommand == "4");
         CHECK(calc1->category == "Calculator");
 
-        auto calc2 = OmarchySearch::evaluateCalculator("10 * 5 - 3");
+        auto calc2 = SearchBackend::evaluateCalculator("10 * 5 - 3");
         CHECK(calc2.has_value());
         CHECK(calc2->name == "= 47");
         CHECK(calc2->actionCommand == "47");
 
-        auto calc3 = OmarchySearch::evaluateCalculator("(10 + 20) / 3");
+        auto calc3 = SearchBackend::evaluateCalculator("(10 + 20) / 3");
         CHECK(calc3.has_value());
         CHECK(calc3->name == "= 10");
         CHECK(calc3->actionCommand == "10");
 
-        auto calc4 = OmarchySearch::evaluateCalculator("2^3");
+        auto calc4 = SearchBackend::evaluateCalculator("2^3");
         CHECK(calc4.has_value());
         CHECK(calc4->name == "= 8");
         CHECK(calc4->actionCommand == "8");
 
-        auto calc5 = OmarchySearch::evaluateCalculator("sqrt(16)");
+        auto calc5 = SearchBackend::evaluateCalculator("sqrt(16)");
         CHECK(calc5.has_value());
         CHECK(calc5->name == "= 4");
         CHECK(calc5->actionCommand == "4");
 
-        auto calc6 = OmarchySearch::evaluateCalculator("sin(0)");
+        auto calc6 = SearchBackend::evaluateCalculator("sin(0)");
         CHECK(calc6.has_value());
         CHECK(calc6->name == "= 0");
         CHECK(calc6->actionCommand == "0");
 
         // Non-math queries should return nullopt
-        auto calcNone1 = OmarchySearch::evaluateCalculator("hello world");
+        auto calcNone1 = SearchBackend::evaluateCalculator("hello world");
         CHECK(!calcNone1.has_value());
 
-        auto calcNone2 = OmarchySearch::evaluateCalculator("firefox");
+        auto calcNone2 = SearchBackend::evaluateCalculator("firefox");
         CHECK(!calcNone2.has_value());
 
         // Bare number without operator should return nullopt
-        auto calcNone3 = OmarchySearch::evaluateCalculator("42");
+        auto calcNone3 = SearchBackend::evaluateCalculator("42");
         CHECK(!calcNone3.has_value());
 
         // Division by zero should not crash
-        auto calcDivZero = OmarchySearch::evaluateCalculator("10 / 0");
+        auto calcDivZero = SearchBackend::evaluateCalculator("10 / 0");
         if (calcDivZero.has_value()) {
             CHECK(calcDivZero->name.find("Error") != std::string::npos || calcDivZero->name.find("inf") != std::string::npos);
         }
@@ -74,41 +74,41 @@ int main() {
 
     // 2. AI Agent queries
     {
-        CHECK(OmarchySearch::isAgentQuery("/grok what is the weather today"));
-        CHECK(OmarchySearch::isAgentQuery("/agy fix the build"));
-        CHECK(OmarchySearch::isAgentQuery("/gemini help me"));
-        CHECK(OmarchySearch::isAgentQuery("/claude review"));
-        CHECK(OmarchySearch::isAgentQuery("/opencode"));
-        CHECK(OmarchySearch::isAgentQuery("/codex"));
-        CHECK(OmarchySearch::isAgentQuery("/copilot"));
-        CHECK(!OmarchySearch::isAgentQuery("grok what is the weather"));
-        CHECK(!OmarchySearch::isAgentQuery("firefox"));
+        CHECK(SearchBackend::isAgentQuery("/grok what is the weather today"));
+        CHECK(SearchBackend::isAgentQuery("/agy fix the build"));
+        CHECK(SearchBackend::isAgentQuery("/gemini help me"));
+        CHECK(SearchBackend::isAgentQuery("/claude review"));
+        CHECK(SearchBackend::isAgentQuery("/opencode"));
+        CHECK(SearchBackend::isAgentQuery("/codex"));
+        CHECK(SearchBackend::isAgentQuery("/copilot"));
+        CHECK(!SearchBackend::isAgentQuery("grok what is the weather"));
+        CHECK(!SearchBackend::isAgentQuery("firefox"));
 
-        auto grokResults = OmarchySearch::searchAgents("/grok what is the weather today");
+        auto grokResults = SearchBackend::searchAgents("/grok what is the weather today");
         CHECK(!grokResults.empty());
         CHECK(grokResults.front().name.find("Grok") != std::string::npos);
         CHECK(grokResults.front().category == "AI Agent");
         CHECK(grokResults.front().agentPrompt == "what is the weather today" && grokResults.front().actionCommand.find("weather") == std::string::npos);
 
-        auto agyResults = OmarchySearch::searchAgents("/agy solve this problem");
+        auto agyResults = SearchBackend::searchAgents("/agy solve this problem");
         CHECK(!agyResults.empty());
         CHECK(agyResults.front().name.find("AGY") != std::string::npos || agyResults.front().name.find("Antigravity") != std::string::npos);
         CHECK(agyResults.front().category == "AI Agent");
         CHECK(agyResults.front().agentPrompt == "solve this problem" && agyResults.front().actionCommand.find("solve") == std::string::npos);
 
-        auto all = OmarchySearch::promptAllAgents("what is the weather today");
+        auto all = SearchBackend::promptAllAgents("what is the weather today");
         // Sentence queries only list agents that are installed and logged in
         // (usage record with ready:true), not the full catalog.
         CHECK(all.size() < 8);
         for (const auto& it : all) {
             CHECK(it.description == "what is the weather today");
             CHECK(it.agentPrompt == "what is the weather today" && it.actionCommand.find("weather") == std::string::npos);
-            CHECK(it.kind == OmarchySearch::EItemKind::Agent);
+            CHECK(it.kind == SearchBackend::EItemKind::Agent);
         }
 
-        CHECK(OmarchySearch::isGlyphIcon("\uF249"));
-        CHECK(!OmarchySearch::isGlyphIcon("folder"));
-        CHECK(!OmarchySearch::isGlyphIcon("/usr/share/pixmaps/x.svg"));
+        CHECK(SearchBackend::isGlyphIcon("\uF249"));
+        CHECK(!SearchBackend::isGlyphIcon("folder"));
+        CHECK(!SearchBackend::isGlyphIcon("/usr/share/pixmaps/x.svg"));
     }
 
     // 3. Omarchy Menu Actions Search — must not fork. The old path ran
@@ -116,33 +116,33 @@ int main() {
     // the compositor for seconds.
     {
         const auto t0 = std::chrono::steady_clock::now();
-        auto menuResults = OmarchySearch::searchMenu("lock", 5);
+        auto menuResults = SearchBackend::searchMenu("lock", 5);
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
         CHECK(ms < 250);
         (void)menuResults;
 
         const auto t1 = std::chrono::steady_clock::now();
-        auto again = OmarchySearch::searchMenu("firefox", 8);
+        auto again = SearchBackend::searchMenu("firefox", 8);
         const auto ms2 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
         CHECK(ms2 < 100);
         (void)again;
 
-        auto installHits = OmarchySearch::searchMenu("install", 8);
+        auto installHits = SearchBackend::searchMenu("install", 8);
         std::string installId;
         for (const auto& it : installHits) {
-            if (it.name == "Install" && it.kind == OmarchySearch::EItemKind::Menu) {
+            if (it.name == "Install" && it.kind == SearchBackend::EItemKind::Menu) {
                 installId = it.id;
                 CHECK(!it.icon.empty());
-                CHECK(OmarchySearch::isGlyphIcon(it.icon));
+                CHECK(SearchBackend::isGlyphIcon(it.icon));
                 break;
             }
         }
         CHECK(!installId.empty());
-        OmarchySearch::navigateMenu(installId);
-        auto kids = OmarchySearch::searchMenu("", 24);
+        SearchBackend::navigateMenu(installId);
+        auto kids = SearchBackend::searchMenu("", 24);
         bool hasBack = false, hasPackage = false;
         for (const auto& it : kids) {
-            if (it.kind == OmarchySearch::EItemKind::Back)
+            if (it.kind == SearchBackend::EItemKind::Back)
                 hasBack = true;
             if (it.name == "Package") {
                 hasPackage = true;
@@ -151,12 +151,12 @@ int main() {
         }
         CHECK(hasBack);
         CHECK(hasPackage);
-        OmarchySearch::resetMenuRoute();
+        SearchBackend::resetMenuRoute();
     }
 
     // 4. File search is idle until a query is issued
     {
-        CHECK(!OmarchySearch::fileSearchBusy());
+        CHECK(!SearchBackend::fileSearchBusy());
     }
 
     // 5. Space handling: typing intent must never trigger Quick Look
@@ -195,7 +195,7 @@ int main() {
         setenv("XDG_RUNTIME_DIR", RUN.c_str(), 1);
 
         // agent-run beside this binary, where agentRunner() looks.
-        const fs::path RUNNER = OmarchySearch::agentRunner();
+        const fs::path RUNNER = SearchBackend::agentRunner();
         CHECK(!RUNNER.empty());
         fs::copy_file("ui/bin/agent-run", RUNNER, fs::copy_options::overwrite_existing);
         fs::permissions(RUNNER, fs::perms::owner_all);
@@ -222,7 +222,7 @@ int main() {
         const fs::path    CANARY = DIR / "pwned";
         const std::string TOUCH  = "$(touch " + CANARY.string() + ")";
         const std::string PROMPT = "SECRET-7f3a fix " + TOUCH + " and `touch " + CANARY.string() + "` for $HOME's \"quoted\" \\ %P% it's\nsecond line";
-        const auto        ITEMS  = OmarchySearch::promptAllAgents(PROMPT);
+        const auto        ITEMS  = SearchBackend::promptAllAgents(PROMPT);
         CHECK(ITEMS.size() == 10);
         for (const auto& IT : ITEMS) {
             CHECK(IT.actionCommand.find("SECRET") == std::string::npos);
@@ -230,7 +230,7 @@ int main() {
             CHECK(IT.agentPrompt == PROMPT);
             CHECK(IT.actionCommand.find("--prompt-file @HYPRDRIVE_PROMPT_FILE@ -- ") != std::string::npos);
 
-            const std::string PATH = OmarchySearch::writePromptFile(IT.agentPrompt);
+            const std::string PATH = SearchBackend::writePromptFile(IT.agentPrompt);
             CHECK(!PATH.empty());
             struct stat st {};
             CHECK(stat(PATH.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
@@ -239,7 +239,7 @@ int main() {
             body << std::ifstream(PATH).rdbuf();
             CHECK(body.str() == PROMPT);
 
-            const std::string CMD = OmarchySearch::withPromptFile(IT.actionCommand, PATH);
+            const std::string CMD = SearchBackend::withPromptFile(IT.actionCommand, PATH);
             CHECK(CMD.find("@HYPRDRIVE_PROMPT_FILE@") == std::string::npos && CMD.find("SECRET") == std::string::npos);
             const fs::path GOT = DIR / "got";
             fs::remove(GOT);
@@ -258,19 +258,19 @@ int main() {
             CHECK(!fs::exists(CANARY));
         }
         // A path the command could not carry as it is: refused.
-        CHECK(OmarchySearch::withPromptFile(ITEMS.front().actionCommand, "/tmp/a b").empty());
-        CHECK(OmarchySearch::withPromptFile(ITEMS.front().actionCommand, "/tmp/a'$(id)").empty());
+        CHECK(SearchBackend::withPromptFile(ITEMS.front().actionCommand, "/tmp/a b").empty());
+        CHECK(SearchBackend::withPromptFile(ITEMS.front().actionCommand, "/tmp/a'$(id)").empty());
         // A row without a prompt opens the agent as it is, no runner.
-        for (const auto& IT : OmarchySearch::promptAllAgents(""))
+        for (const auto& IT : SearchBackend::promptAllAgents(""))
             CHECK(IT.agentPrompt.empty() && IT.actionCommand.find("agent-run") == std::string::npos);
         fs::remove_all(DIR);
     }
 
-    std::cout << "omarchy_search_test: " << s_testsPassed << " checks OK" << std::endl;
+    std::cout << "search_backend_test: " << s_testsPassed << " checks OK" << std::endl;
     return 0;
 }
 
-// OmarchySearch folds the dictionary/translator's generation into its own; the
+// SearchBackend folds the dictionary/translator's generation into its own; the
 // tool worker needs the compositor's config, so the host test stands it in.
 namespace ToolSearch {
     uint64_t generation() {

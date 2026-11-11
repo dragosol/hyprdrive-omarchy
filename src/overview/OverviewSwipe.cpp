@@ -376,7 +376,7 @@ void COverview::maybeTickDetent(size_t workspaceIdx) {
     // compositor thread inside a gesture update, so it may not fork and it may
     // not wait. The config value is an executable path, not a command line --
     // a shell here would be a process that cannot be killed promptly, which is
-    // the same reason OmarchySearch spawns the way it does.
+    // the same reason SearchBackend spawns the way it does.
     Hyprutils::OS::CProcess process(CMD, {});
     process.runAsync();
 }

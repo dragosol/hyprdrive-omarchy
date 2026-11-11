@@ -169,8 +169,8 @@ void                registerRawKeyHooks() {
                         }
                         // Not a preview: fall through to handleSearchPress and
                         // type the space into the query.
-                    } else if (OmarchySearch::isSushiActive()) {
-                        OmarchySearch::closeSushi();
+                    } else if (SearchBackend::isSushiActive()) {
+                        SearchBackend::closeSushi();
                         for (const auto& overview : scrollOverviews())
                             if (overview)
                                 overview->damage();

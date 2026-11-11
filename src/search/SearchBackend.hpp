@@ -6,7 +6,7 @@
 #include <optional>
 #include <functional>
 
-namespace OmarchySearch {
+namespace SearchBackend {
 
 enum class EItemKind : uint8_t {
     App,
@@ -63,7 +63,7 @@ bool isDefaultAgent(const SSearchItem& item);
 bool setDefaultAgent(const SSearchItem& item);
 std::optional<SSearchItem> evaluateCalculator(const std::string& query);
 // A prompt for an agent is typed into it by agent-run, never passed as an
-// argument (OmarchySearch.cpp, A PROMPT IS TYPED). Host-tested.
+// argument (SearchBackend.cpp, A PROMPT IS TYPED). Host-tested.
 std::string agentRunner();
 std::string agentLaunch(const std::string& tmpl, bool withPrompt);
 std::string writePromptFile(const std::string& prompt);
@@ -106,4 +106,4 @@ void updateSushiIfActive(const std::string& filePath);
 bool isOverviewSushiWindow(const std::string& windowClass, uint32_t pid = 0);
 std::vector<SSearchItem> recentFiles();
 
-} // namespace OmarchySearch
+} // namespace SearchBackend

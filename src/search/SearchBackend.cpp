@@ -1,4 +1,4 @@
-#include "OmarchySearch.hpp"
+#include "SearchBackend.hpp"
 #include "Launch.hpp"
 #include "ShellQuote.hpp"
 #include "ToolSearch.hpp"
@@ -42,7 +42,7 @@ extern char** environ;
 
 namespace fs = std::filesystem;
 
-namespace OmarchySearch {
+namespace SearchBackend {
 
 // ============================================================================
 // Quick Look (GNOME Sushi) State Machine
@@ -2082,4 +2082,4 @@ bool activate(const SSearchItem& item) {
     return false;
 }
 
-} // namespace OmarchySearch
+} // namespace SearchBackend
