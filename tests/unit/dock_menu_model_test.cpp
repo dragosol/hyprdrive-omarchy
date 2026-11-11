@@ -1,6 +1,6 @@
 // Host test for DockMenuModel.hpp: the "Always Open in" id lists (parse,
 // toggle, write), the open-fullscreen decision, the segmented rows' boxes, the
-// window rows' four buttons, and a preview's own menu.
+// window rows' four buttons, a preview's own menu, and where a row's preview goes.
 #include "DockMenuModel.hpp"
 
 #include <cmath>
@@ -133,6 +133,28 @@ int main() {
             for (size_t i = 1; i < R.size(); ++i)
                 CHECK(!(R[i] == W::Separator && R[i - 1] == W::Separator));
         }
+    }
+
+    // Where a row's preview goes.
+    {
+        const SRect MENU{100.0, 300.0, 280.0, 400.0};
+        // Room on the right: right of the menu, gap off it, centred on the row.
+        const auto R = peekPlacement(MENU, 500.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0);
+        CHECK(!R.left && R.box.x == 388.0 && R.box.y == 425.0 && R.box.w == 240.0 && R.box.h == 150.0);
+        // Near the right edge: on the left.
+        const SRect EDGE{1600.0, 300.0, 280.0, 400.0};
+        const auto  L = peekPlacement(EDGE, 500.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0);
+        CHECK(L.left && L.box.x == 1600.0 - 8.0 - 240.0);
+        // Room on neither side: the side with more, clamped to the monitor.
+        const SRect WIDE{150.0, 300.0, 600.0, 400.0};
+        const auto  N = peekPlacement(WIDE, 500.0, 240.0, 150.0, 8.0, 12.0, 900.0, 1080.0);
+        CHECK(!N.left && N.box.x == 900.0 - 12.0 - 240.0);
+        // A row near the top or bottom: clamped, not off the screen.
+        CHECK(peekPlacement(MENU, 20.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.y == 12.0);
+        CHECK(peekPlacement(MENU, 1075.0, 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.y == 1080.0 - 12.0 - 150.0);
+        // Guarded.
+        CHECK(peekPlacement(MENU, std::numeric_limits<double>::quiet_NaN(), 240.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.w == 0);
+        CHECK(peekPlacement(MENU, 500.0, 1.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.w == 0);
     }
 
     std::printf("dock_menu_model_test: %d checks, %d failed\n", g_checks, g_failed);

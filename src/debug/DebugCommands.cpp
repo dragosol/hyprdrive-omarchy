@@ -100,6 +100,9 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     // `motion`: which animation:curve preset the engine is ACTUALLY using, and
     // the three curves at t = 0.25 / 0.5 -- a preset that reads as the house
     // one here is not reaching the animations.
+    // `dockmenu`: the dock's hover pane cells and its open menu's row boxes.
+    if (TOPIC == "dockmenu")
+        return {.success = false, .error = Hyprdrive::Dock::debugMenuReport(Desktop::focusState()->monitor())};
     if (TOPIC == "glass") {
         const auto C = Hyprdrive::Config::dockBackgroundColor();
         return {.success = false, .error = std::format("hyprdrive glass: tint #{:02x}{:02x}{:02x} alpha {:.3f}", sc<int>(std::round(C.r * 255)), sc<int>(std::round(C.g * 255)),

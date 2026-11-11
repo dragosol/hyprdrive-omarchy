@@ -1166,6 +1166,22 @@ struct SMenu {
     // A window of a row closed: the rows are rebuilt at the next draw.
     bool stale = false;
 
+    // THE ROW'S PREVIEW (user, 2026-11-11: "if I hover over a context menu row
+    // for a particular window ... show me the window preview next to the
+    // row"). One SLitSet over windows (key = peekKey), so a move to another
+    // window's row turns both from the alpha they have; each keeps the row it
+    // was last beside, so one fading out stays where it was.
+    struct SPeek {
+        long         key = -1;
+        PHLWINDOWREF window;
+        CBox         row;
+    };
+    Hyprdrive::Motion::SLitSet<Time::steady_tp> peek;
+    std::vector<SPeek>                          peeks;
+    static long peekKey(const PHLWINDOW& w) {
+        return w ? static_cast<long>(reinterpret_cast<intptr_t>(w.get())) : Hyprdrive::Motion::SLitSet<Time::steady_tp>::NONE;
+    }
+
     // Dock stacks A: Rename in Dock turns the menu into a one-line field.
     bool        editing = false;
     std::string editText;
@@ -1180,6 +1196,13 @@ inline float menuHoverEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fa
 inline bool menuHoverRunning(const SMenu& menu) {
     const auto RUNNING = [](const Hyprdrive::Motion::STween<Time::steady_tp>& fade) { return elapsedMs(fade.start) < MENU_HOVER_MS + 20.F; };
     return menu.lit.anyRunning(RUNNING) || menu.lift.anyRunning(RUNNING);
+}
+// The row preview's fade: the hover pane's own -- in over PANEL_IN_MS,
+// decelerating; out over PANEL_OUT_MS, accelerating -- from where it was.
+float peekEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade);
+// Frames while a row preview is fading, or shown at all (it is live).
+inline bool menuPeekShowing(const SMenu& menu) {
+    return std::ranges::any_of(menu.peeks, [&](const SMenu::SPeek& p) { return menu.peek.level(p.key, peekEased) > 0.001F; });
 }
 extern std::optional<SMenu> g_menu;
 
@@ -1202,6 +1225,9 @@ extern bool menuOpening(const SMenu& M);
 extern std::string itemDesktopId(const SItem& item);
 extern std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor);
 extern std::vector<SRow> buildWindowRows(const SItem& item, const PHLWINDOW& window, const PHLMONITOR& monitor);
+// One window's preview beside a menu row, as the hover pane draws a cell
+// (DockPreview.cpp). Never hit-tested: nothing records where it is.
+extern void renderRowPeek(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& row, const CBox& menu, float alpha, const Time::steady_tp& now);
 extern std::vector<SRow> infoRows(const SItem& item);
 extern void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row);
 extern void renderMenu(PHLMONITOR monitor, const SLayout& layout);

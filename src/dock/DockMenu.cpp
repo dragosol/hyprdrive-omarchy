@@ -387,6 +387,12 @@ std::vector<SRow> buildWindowRows(const SItem& item, const PHLWINDOW& window, co
     return rows;
 }
 
+float peekEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade) {
+    const bool  IN = fade.rising();
+    const float T  = std::clamp(elapsedMs(fade.start) / (IN ? PANEL_IN_MS : PANEL_OUT_MS), 0.F, 1.F);
+    return houseEase(IN, T);
+}
+
 // GET INFO's rows: the .desktop entry's own answers straight away, the package
 // manager's as soon as AppInfo has them. Each value row carries the WHOLE value
 // in `exec` (the hint is elided to fit) so a click copies all of it.
@@ -812,6 +818,25 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
             M.lift.moveTo(SMenu::litKey(hr, -1), NOW, menuHoverEased);
         }
     }
+    // THE ROW'S PREVIEW: the window of the row the pointer is on -- its
+    // buttons count as the row -- and nothing for any other row, a scoped
+    // (preview's own) menu, the closing ghost or a menu still unfolding.
+    {
+        long      want = Hyprdrive::Motion::SLitSet<Time::steady_tp>::NONE;
+        PHLWINDOW wantW;
+        if (LIVE && !M.windowScope && !menuOpening(M) && M.hoverRow >= 0 && M.hoverRow < sc<int>(M.rows.size())) {
+            const auto& R = M.rows[M.hoverRow];
+            if (const auto W = R.kind == ERow::Window ? R.window.lock() : PHLWINDOW{}; W && W->m_isMapped) {
+                want  = SMenu::peekKey(W);
+                wantW = W;
+            }
+        }
+        M.peek.moveTo(want, Time::steadyNow(), peekEased);
+        if (wantW && std::ranges::none_of(M.peeks, [&](const SMenu::SPeek& p) { return p.key == want; }))
+            M.peeks.push_back({.key = want, .window = wantW, .row = M.rows[M.hoverRow].box});
+        std::erase_if(M.peeks, [&](const SMenu::SPeek& p) { return p.key != M.peek.lit && M.peek.level(p.key, peekEased) <= 0.001F; });
+    }
+
     // The row's highlight (the row itself hovered, not one of its buttons).
     const auto rowLit = [&](int i) {
         return M.lit.level(SMenu::litKey(i, -1), menuHoverEased);
@@ -1134,6 +1159,21 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         border.roundingPower = 2.F;
         if (Stacks::drawableBox(border.box))
             g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+    }
+
+    // The row previews, beside the plate as it is now: the lit one follows its
+    // row (a list that scrolls or reflows), one fading out stays where it was.
+    // Its row scrolled out of sight takes it away at once.
+    const auto PEEKNOW = Time::steadyNow();
+    for (auto& P : M.peeks) {
+        if (P.key == M.peek.lit) {
+            const auto ROW = std::ranges::find_if(M.rows, [&](const SRow& r) { return r.kind == ERow::Window && SMenu::peekKey(r.window.lock()) == P.key; });
+            P.row          = ROW != M.rows.end() ? ROW->box : CBox{};
+        }
+        const auto W = P.window.lock();
+        const float A = M.peek.level(P.key, peekEased);
+        if (W && A > 0.001F && !P.row.empty())
+            renderRowPeek(monitor, W, P.row, plate, A, PEEKNOW);
     }
 }
 

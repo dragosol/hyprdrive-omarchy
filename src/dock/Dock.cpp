@@ -569,6 +569,9 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
         return "menu-expand";
     if (g_menuGhost && g_menuGhost->menu.monitor == monitor->m_id)
         return "menu-collapse";
+    // A row's preview fades, and while it shows it is live.
+    if (g_menu && g_menu->monitor == monitor->m_id && menuPeekShowing(*g_menu))
+        return "menu-peek";
 
     // The press squish, and above all its spring-back, which runs after the
     // button came up with no pointer motion left to repaint it.

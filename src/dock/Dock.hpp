@@ -372,6 +372,8 @@ void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand 
 bool debugActivate(PHLMONITOR monitor, const std::string& wmClass);
 // ...and its context menu's "Move to this workspace" on that class's window.
 bool debugMoveHere(PHLMONITOR monitor, const std::string& wmClass);
+// `hyprdrive:debug dockmenu`: the hover pane's cells and the menu's rows.
+std::string debugMenuReport(PHLMONITOR monitor);
 // DockRoom.hpp: the pill tiled windows make room for, in global logical px --
 // its RESTING box (no hover magnification), and empty whenever they should not
 // (autohide on, dock off, dock:windows_make_room off).

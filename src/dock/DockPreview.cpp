@@ -493,6 +493,88 @@ CBox panelRiseOrigin(const SLayout& layout, const CBox& anchor) {
     return origin;
 }
 
+// ONE PREVIEW CELL, as the hover pane draws it: the live window rounded
+// concentric with its plate (INNERL logical px, never past half the cell), the
+// dim and label of a window parked on a scratchpad (`parkedLabel`) or asking
+// for attention, and the accent ring -- full while `hovered`. The plate fades
+// by ALPHA; the window itself by `contentAlpha` (the pane's rides its growing
+// box at full strength instead, which is why it passes 1). The pane draws
+// each of its cells through here, and a menu row's preview (renderRowPeek) its
+// one; `ringKey` keeps their border fades apart.
+static void drawPreviewCell(PHLMONITOR monitor, const PHLWINDOW& WINDOW, const CBox& cell, float ALPHA, float contentAlpha, float INNERL, bool IS_HOVERED, bool parkedLabel, uint64_t ringKey,
+                            const Time::steady_tp& now) {
+    if (!monitor || !WINDOW || !Stacks::drawableBox(cell))
+        return;
+    const float SCALE      = std::max(monitor->m_scale, 0.01F);
+    const int   BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
+    const auto  ACCENT     = Hyprdrive::Config::highlightColor();
+    const float ROUNDPWR   = Hyprdrive::Config::themeRoundingPower();
+    // Never past half the cell (a very short or narrow preview).
+    const int INNER = std::clamp(sc<int>(std::round(INNERL * SCALE)), 0, std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
+    renderLivePreview(monitor, WINDOW, cell, now, contentAlpha, false, false, INNER);
+
+    // A window parked on a SCRATCHPAD is not one of the app's ordinary
+    // windows, and the preview says so rather than leaving the user to
+    // wonder why clicking it slides a workspace in. Suppressed on the
+    // scratchpad's own panel, where every cell would carry the same label.
+    //
+    // A window ASKING FOR ATTENTION wears the same dimming, labelled
+    // "Needs attention" in yellow (user, 2026-11-04): the dock icon jumps
+    // for the app, and an app with several windows (Ghostty) leaves you
+    // guessing which one it is. Urgency wins over the scratchpad label.
+    const bool URGENT = WINDOW->m_isUrgent;
+    const bool PARKED = parkedLabel && Scratchpad::holdsWindow(WINDOW);
+    if (URGENT || PARKED) {
+        const int DIMROUND = INNER;
+
+        CRectPassElement::SRectData dim;
+        dim.box           = cell.copy().round();
+        dim.color         = CHyprColor{0.F, 0.F, 0.F, PANEL_PARKED_DIM * ALPHA};
+        dim.round         = DIMROUND;
+        dim.roundingPower = ROUNDPWR;
+        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(dim));
+
+        // Deliberately NOT a theme colour, and that is the whole point of
+        // the label: it is read over a DARKENED thumbnail, and a dark
+        // theme's own foreground is the one colour that disappears there.
+        // Wrapped, centred line by line (user, 2026-11-04): a narrow cell
+        // breaks "Needs attention" onto two lines instead of cutting it to
+        // "Needs attenti...". The ellipsis is left for a cell too small
+        // even for that.
+        const int LABELPX = std::max(1, sc<int>(std::round(PANEL_PARKED_PT * SCALE)));
+        const int LABELPAD = sc<int>(std::round(8.F * SCALE));
+        if (const auto TEX = OverviewRender::textWrapped(URGENT ? "Needs attention" : "in scratchpad",
+                                                         URGENT ? CHyprColor{1.F, 0.86F, 0.2F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 0.96F}, LABELPX,
+                                                         std::max(8, sc<int>(cell.width) - 2 * LABELPAD), std::max(8, sc<int>(cell.height) - 2 * LABELPAD), false, "",
+                                                         URGENT ? 700 : 400, true);
+            TEX && TEX->ok()) {
+            CTexPassElement::SRenderData label;
+            label.tex = TEX;
+            label.box = CBox{std::round(sc<float>(cell.x) + (sc<float>(cell.width) - sc<float>(TEX->m_size.x)) / 2.F),
+                             std::round(sc<float>(cell.y) + (sc<float>(cell.height) - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x),
+                             sc<float>(TEX->m_size.y)};
+            label.a   = ALPHA;
+            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(label));
+        }
+    }
+
+    // Theme inactive_border is often fully transparent (Omarchy border_size
+    // 0), which is why Gemini's ring was queued and still invisible. Same
+    // accent the pill uses, thinner when the cell is not hovered.
+    // The step between the two fades on Hyprland's `border` animation, as
+    // a window's border does when it takes focus (BorderFade.hpp).
+    const int  ROUND      = INNER;
+    CBorderPassElement::SBorderData border;
+    border.box = cell.copy().round();
+    border.grad1.reset(BorderFade::color(monitor, BorderFade::key(WINDOW.get(), (sc<uint64_t>(monitor->m_id) << 8) | ringKey), IS_HOVERED, ACCENT.modifyA(ALPHA * 0.55F),
+                                         ACCENT.modifyA(ALPHA)));
+    border.a             = 1.F;
+    border.borderSize    = BORDERSIZE;
+    border.round         = ROUND;
+    border.roundingPower = ROUNDPWR;
+    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
+}
+
 // Pass an empty class when nothing is hovered; like the tooltip, the panel
 // outlives the hover so that it can animate AWAY instead of blinking out.
 void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& anchor, const std::string& wmClass, const std::string& desktopId,
@@ -708,9 +790,6 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
     g_hover.cells.reserve(windows.size());
 
     const auto  MOUSE      = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
-    const int   BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
-    const auto  ACCENT     = Hyprdrive::Config::highlightColor();
-    const float ROUNDPWR   = Hyprdrive::Config::themeRoundingPower();
 
     const float BLOCKH = NROWS * CELLH + (NROWS - 1.F) * CGAP * FIT;
     float       y      = sc<float>(DRAWN.y) + (sc<float>(DRAWN.height) - BLOCKH) / 2.F;
@@ -730,74 +809,10 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         const float WIDTH = CELLH * previewAspect(WINDOW);
 
         CBox cell{std::round(x), std::round(y), std::round(WIDTH), std::round(CELLH)};
-        // Never past half the cell (a very short or narrow preview).
-        const int INNER = std::clamp(sc<int>(std::round(INNERL * SCALE)), 0, std::max(0, sc<int>(std::min(cell.width, cell.height) / 2.0) - BORDERSIZE));
-        renderLivePreview(monitor, WINDOW, cell, now, 1.F, false, false, INNER);
-        g_hover.cells.emplace_back(cell, PHLWINDOWREF{WINDOW});
-
-        // A window parked on a SCRATCHPAD is not one of the app's ordinary
-        // windows, and the preview says so rather than leaving the user to
-        // wonder why clicking it slides a workspace in. Suppressed on the
-        // scratchpad's own panel, where every cell would carry the same label.
-        //
-        // A window ASKING FOR ATTENTION wears the same dimming, labelled
-        // "Needs attention" in yellow (user, 2026-11-04): the dock icon jumps
-        // for the app, and an app with several windows (Ghostty) leaves you
-        // guessing which one it is. Urgency wins over the scratchpad label.
-        const bool URGENT = WINDOW->m_isUrgent;
-        const bool PARKED = g_hover.panel->scratchpadName.empty() && Scratchpad::holdsWindow(WINDOW);
-        if (URGENT || PARKED) {
-            const int DIMROUND = INNER;
-
-            CRectPassElement::SRectData dim;
-            dim.box           = cell.copy().round();
-            dim.color         = CHyprColor{0.F, 0.F, 0.F, PANEL_PARKED_DIM * ALPHA};
-            dim.round         = DIMROUND;
-            dim.roundingPower = ROUNDPWR;
-            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(dim));
-
-            // Deliberately NOT a theme colour, and that is the whole point of
-            // the label: it is read over a DARKENED thumbnail, and a dark
-            // theme's own foreground is the one colour that disappears there.
-            // Wrapped, centred line by line (user, 2026-11-04): a narrow cell
-            // breaks "Needs attention" onto two lines instead of cutting it to
-            // "Needs attenti...". The ellipsis is left for a cell too small
-            // even for that.
-            const int LABELPX = std::max(1, sc<int>(std::round(PANEL_PARKED_PT * SCALE)));
-            const int LABELPAD = sc<int>(std::round(8.F * SCALE));
-            if (const auto TEX = OverviewRender::textWrapped(URGENT ? "Needs attention" : "in scratchpad",
-                                                             URGENT ? CHyprColor{1.F, 0.86F, 0.2F, 1.F} : CHyprColor{1.F, 1.F, 1.F, 0.96F}, LABELPX,
-                                                             std::max(8, sc<int>(cell.width) - 2 * LABELPAD), std::max(8, sc<int>(cell.height) - 2 * LABELPAD), false, "",
-                                                             URGENT ? 700 : 400, true);
-                TEX && TEX->ok()) {
-                CTexPassElement::SRenderData label;
-                label.tex = TEX;
-                label.box = CBox{std::round(sc<float>(cell.x) + (sc<float>(cell.width) - sc<float>(TEX->m_size.x)) / 2.F),
-                                 std::round(sc<float>(cell.y) + (sc<float>(cell.height) - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x),
-                                 sc<float>(TEX->m_size.y)};
-                label.a   = ALPHA;
-                g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(label));
-            }
-        }
-
-        // Theme inactive_border is often fully transparent (Omarchy border_size
-        // 0), which is why Gemini's ring was queued and still invisible. Same
-        // accent the pill uses, thinner when the cell is not hovered.
-        // The step between the two fades on Hyprland's `border` animation, as
-        // a window's border does when it takes focus (BorderFade.hpp).
         // Its own menu open keeps its ring lit: the menu is for THIS preview.
-        const bool SCOPED     = g_menu && g_menu->windowScope && g_menu->scope.lock() == WINDOW;
-        const bool IS_HOVERED = !g_hover.panel->out && (cell.containsPoint(MOUSE) || SCOPED);
-        const int  ROUND      = INNER;
-        CBorderPassElement::SBorderData border;
-        border.box = cell.copy().round();
-        border.grad1.reset(BorderFade::color(monitor, BorderFade::key(WINDOW.get(), (sc<uint64_t>(monitor->m_id) << 8) | 0xD0), IS_HOVERED, ACCENT.modifyA(ALPHA * 0.55F),
-                                             ACCENT.modifyA(ALPHA)));
-        border.a             = 1.F;
-        border.borderSize    = BORDERSIZE;
-        border.round         = ROUND;
-        border.roundingPower = ROUNDPWR;
-        g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
+        const bool SCOPED = g_menu && g_menu->windowScope && g_menu->scope.lock() == WINDOW;
+        drawPreviewCell(monitor, WINDOW, cell, ALPHA, 1.F, INNERL, !g_hover.panel->out && (cell.containsPoint(MOUSE) || SCOPED), g_hover.panel->scratchpadName.empty(), 0xD0, now);
+        g_hover.cells.emplace_back(cell, PHLWINDOWREF{WINDOW});
 
         x += WIDTH + CGAP * FIT;
         if (++inRow >= ROWS.counts[row] && row + 1 < ROWS.counts.size()) {
@@ -806,6 +821,35 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             y += CELLH + CGAP * FIT;
         }
     }
+}
+
+// THE ROW'S PREVIEW (user, 2026-11-11: "if I hover over a context menu row for
+// a particular window ... show me the window preview next to the row
+// (normally to the right of the row) re-use same dock preview as when hovering
+// over icon"). One cell of the hover pane, at the pane's cell height, on the
+// pane's plate with its concentric corners, beside the menu and centred on the
+// row (MenuModel::peekPlacement). It is drawn and nothing else: no box of it is
+// recorded anywhere a pointer test reads, so it can never be hovered, hold the
+// menu open or reach past the menu's own hit area.
+void renderRowPeek(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& row, const CBox& menu, float alpha, const Time::steady_tp& now) {
+    if (!monitor || !window || !window->m_isMapped || alpha <= 0.001F || !Stacks::drawableBox(row) || !Stacks::drawableBox(menu))
+        return;
+    const float SCALE = std::max(monitor->m_scale, 0.01F);
+    const float CELLH = panelRows(monitor, {window}).cellH;
+    const float CELLW = CELLH * previewAspect(window);
+    const float PAD   = PANEL_PAD * SCALE;
+    const auto  PLACE = MenuModel::peekPlacement({menu.x, menu.y, menu.width, menu.height}, row.y + row.height / 2.0, CELLW + 2.F * PAD, CELLH + 2.F * PAD,
+                                                 PANEL_GAP * SCALE, std::round(MENU_EDGE_MARGIN * SCALE), monitor->m_size.x * SCALE, monitor->m_size.y * SCALE);
+    const CBox PLATE{PLACE.box.x, PLACE.box.y, PLACE.box.w, PLACE.box.h};
+    const CBox CELL = CBox{PLATE.x + PAD, PLATE.y + PAD, PLATE.width - 2.0 * PAD, PLATE.height - 2.0 * PAD}.round();
+    if (!Stacks::drawableBox(PLATE) || !Stacks::drawableBox(CELL))
+        return;
+    // CONCENTRIC CORNERS, the pane's: the plate follows decoration:rounding
+    // out by its padding, the window inside it that padding less.
+    const float OUTERL = std::clamp(sc<float>(Hyprdrive::Config::themeRounding()) + PANEL_PAD, PANEL_RADIUS, PANEL_RADIUS_MAX);
+    const float INNERL = std::clamp(std::min(sc<float>(Hyprdrive::Config::themeRounding()), OUTERL - PANEL_PAD), 0.F, OUTERL);
+    frostedPlate(monitor, PLATE, sc<int>(std::round(OUTERL * SCALE)), alpha, {}, Hyprdrive::Config::themeRoundingPower(), true);
+    drawPreviewCell(monitor, window, CELL, alpha, alpha, INNERL, true, true, 0xD1, now);
 }
 
 // Y1. The autohide's question, answered against the plate on screen. Declared

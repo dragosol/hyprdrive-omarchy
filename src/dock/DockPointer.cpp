@@ -828,6 +828,43 @@ bool menuOpen() {
     return g_menu.has_value();
 }
 
+// `hyprdrive:debug dockmenu`: the hover pane's cells and the
+// open menu's rows, buttons and row previews, in global LOGICAL px -- where a
+// test puts the pointer.
+std::string debugMenuReport(PHLMONITOR monitor) {
+    if (!monitor)
+        return "dockmenu: no monitor";
+    const double S   = std::max(monitor->m_scale, 0.01F);
+    const auto   BOX = [&](const CBox& b) {
+        return std::format("{},{} {}x{}", sc<int>(std::round(b.x / S + monitor->m_position.x)), sc<int>(std::round(b.y / S + monitor->m_position.y)), sc<int>(std::round(b.width / S)),
+                           sc<int>(std::round(b.height / S)));
+    };
+    std::string out = "dockmenu:";
+    if (panelOn(monitor)) {
+        out += std::format(" pane {}{}", BOX(g_hover.drawn), g_hover.panel->out ? " (out)" : "");
+        for (const auto& [B, W] : g_hover.cells)
+            if (const auto L = W.lock())
+                out += std::format("\n cell \"{}\" {}", L->m_title, BOX(B));
+    } else
+        out += " no pane";
+    if (!g_menu || g_menu->monitor != monitor->m_id)
+        return out + "\n no menu";
+    out += std::format("\n menu {} {}", g_menu->windowScope ? "window" : "app", BOX(g_menu->box));
+    for (size_t i = 0; i < g_menu->rows.size(); ++i) {
+        const auto& R = g_menu->rows[i];
+        if (R.kind == ERow::Separator)
+            continue;
+        out += std::format("\n row {} kind {} \"{}\" {}", i, sc<int>(R.kind), R.label, BOX(R.box));
+        for (const auto& B : R.inlines)
+            if (B.kind != ERow::Separator && !B.box.empty())
+                out += std::format(" | {} {}", B.label, BOX(B.box));
+    }
+    for (const auto& P : g_menu->peeks)
+        if (const auto W = P.window.lock())
+            out += std::format("\n peek \"{}\" {:.2f}{}", W->m_title, g_menu->peek.level(P.key, peekEased), P.key == g_menu->peek.lit ? " lit" : "");
+    return out;
+}
+
 void closeMenu() {
     if (g_menu && !g_menu->box.empty() && menuAnimOn() && !g_menu->editing) {
         const float P = menuOpenP(*g_menu);

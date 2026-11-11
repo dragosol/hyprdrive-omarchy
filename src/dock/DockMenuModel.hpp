@@ -156,4 +156,34 @@ namespace Hyprdrive::Dock::MenuModel {
         r.push_back(EWinRow::Close);
         return r;
     }
+
+    // WHERE A WINDOW ROW'S PREVIEW GOES (user, 2026-11-11: "show me the window
+    // preview next to the row (normally to the right of the row)"): `w` x `h`
+    // beside the menu, `gap` off it, centred on the row's centre line; to the
+    // left when the right has no room, and on whichever side has more when
+    // neither does, then clamped to the monitor `edge` px in. Nothing (w == 0)
+    // for a box that is not finite or under 2 px.
+    struct SRect {
+        double x = 0, y = 0, w = 0, h = 0;
+    };
+    struct SPeekPlace {
+        SRect box;
+        bool  left = false;
+    };
+    inline SPeekPlace peekPlacement(const SRect& menu, double rowCenterY, double w, double h, double gap, double edge, double monW, double monH) {
+        for (const double V : {menu.x, menu.y, menu.w, menu.h, rowCenterY, w, h, gap, edge, monW, monH})
+            if (!std::isfinite(V))
+                return {};
+        if (w < 2.0 || h < 2.0)
+            return {};
+        const double RIGHTX = menu.x + menu.w + gap, LEFTX = menu.x - gap - w;
+        const double ROOMR = monW - edge - (RIGHTX + w), ROOML = LEFTX - edge;
+        SPeekPlace   out;
+        out.left  = ROOMR < 0.0 && ROOML > ROOMR;
+        double x  = out.left ? LEFTX : RIGHTX;
+        x         = std::clamp(x, edge, std::max(edge, monW - edge - w));
+        double y  = std::clamp(rowCenterY - h / 2.0, edge, std::max(edge, monH - edge - h));
+        out.box   = {std::round(x), std::round(y), std::round(w), std::round(h)};
+        return out;
+    }
 }
