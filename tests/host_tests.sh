@@ -85,6 +85,12 @@
 #   steam_library_test  SteamLibrary: the Steam index from the fixture trees,
 #                     the icon chain (theme -> .ico as PNG -> jpg), the 30 s
 #                     retry for a miss, the newest shortcut; FileSources' caps.
+#   app_identity_test  AppIdentity::resolve(): window + process facts against
+#                     the fixture trees -> the Identity (Steam by env, class or
+#                     reaper; shortcuts; umu x2; Battle.net + Overwatch; two
+#                     prefixes; Flatpak PID; helpers; Lutris's configpath
+#                     mismatch; native; no /proc; Wine's systray window), the
+#                     fast tier, canonicalKey on today's stores, /proc parsers.
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
@@ -166,6 +172,9 @@ run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run identity_parsers_test tests/unit/identity_parsers_test.cpp
 # shellcheck disable=SC2046
 run steam_library_test tests/unit/steam_library_test.cpp src/apps/identity/SteamLibrary.cpp src/apps/identity/Sources.cpp $(pkg-config --cflags --libs cairo)
+# shellcheck disable=SC2046
+run app_identity_test tests/unit/app_identity_test.cpp src/apps/identity/AppIdentity.cpp src/apps/identity/Resolvers.cpp src/apps/identity/Facts.cpp \
+    src/apps/identity/SteamLibrary.cpp src/apps/identity/LutrisLibrary.cpp src/apps/identity/Sources.cpp $(pkg-config --cflags --libs cairo)
 run dock_drop_test tests/unit/dock_drop_test.cpp
 run dock_menu_model_test tests/unit/dock_menu_model_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp
