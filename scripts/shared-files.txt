@@ -1,0 +1,30 @@
+# Files the native and Omarchy trees carry byte for byte (scripts/check-shared.sh).
+# One path per line, relative to the tree root; a directory is every file below it.
+# Keep it to files that are meant to stay identical: a file that is only identical
+# today does not belong here.
+
+# the check itself
+scripts/check-shared.sh
+scripts/shared-files.txt
+
+# AppIdentity (the module, its live API and debug dump, the GameApps resolvers)
+src/apps/identity
+src/apps/IdentityLive.cpp
+src/apps/IdentityLive.hpp
+src/apps/IdentityDebug.cpp
+src/apps/IdentityDebug.hpp
+src/apps/GameApps.cpp
+src/apps/GameApps.hpp
+
+# its tests, fixtures, rig client and gate
+tests/unit/identity_parsers_test.cpp
+tests/unit/steam_library_test.cpp
+tests/unit/app_identity_test.cpp
+tests/unit/identity_engine_test.cpp
+tests/unit/identity_live_test.cpp
+tests/fixtures/identity
+tests/rig/identity
+tests/gates/identity.sh
+
+# "Shared verbatim by both trees" (its header)
+src/desktops/DesktopStrip.hpp

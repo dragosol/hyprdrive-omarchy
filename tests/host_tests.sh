@@ -97,6 +97,12 @@
 #                     prefixes; Flatpak PID; helpers; Lutris's configpath
 #                     mismatch; native; no /proc; Wine's systray window), the
 #                     fast tier, canonicalKey on today's stores, /proc parsers.
+#   check-shared      scripts/check-shared.sh: the files both trees must carry
+#                     byte for byte (scripts/shared-files.txt: AppIdentity, its
+#                     tests and fixtures) against the native tree, found at
+#                     $HYPRDRIVE_SIBLING_TREE (default ../hyprdrive-native, beside
+#                     this checkout); SKIP when it is not there or does not
+#                     carry the list. HYPRDRIVE_SIBLING_TREE= skips it.
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
@@ -243,6 +249,15 @@ if raw=$(grep -n 'std::chrono::duration<' "${MOTION_CLOCK_FILES[@]}"); then
     fail=1
 else
     echo "host_tests: motion_clock_reads OK -- ${#MOTION_CLOCK_FILES[@]} files, no raw duration read"
+fi
+
+# The shared files against the other tree (scripts/check-shared.sh).
+if shared=$(scripts/check-shared.sh "${HYPRDRIVE_SIBLING_TREE-$PWD/../hyprdrive-native}" 2>&1); then
+    echo "host_tests: check-shared ${shared#check-shared: }"
+else
+    echo "host_tests: check-shared FAILED" >&2
+    echo "$shared" >&2
+    fail=1
 fi
 
 exit $fail
