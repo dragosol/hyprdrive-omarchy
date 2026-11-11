@@ -1446,6 +1446,7 @@ static void testB6() {
     };
     std::mt19937                           rng(6);
     std::uniform_real_distribution<double> U01(0.02, 0.97), POS(-800.0, 800.0);
+    long badWorse = 0;
     long n = 0, badPlain = 0, badVel = 0, clamped = 0, badBound = 0, badLand = 0, oldKicks = 0;
     double worstOld = 0.0, worstNew = 0.0;
     for (const auto& C : CURVES) {
@@ -1480,7 +1481,8 @@ static void testB6() {
             for (int j = 0; j <= 64; ++j) {
                 const double UU = j / 64.0;
                 const double S  = D == 0 ? 0 : (M::withKick(CUR + D * C.f(static_cast<float>(UU)), K, UU) - CUR) / D;
-                badBound += S > 1.0 + 1e-6 || (TOWARD && S < -1e-6);
+                badBound += S > 1.0 + 1e-6 || (TOWARD && S < -1e-6) || S < -M::REVERSAL_ROOM - 1e-3; // the room is measured on 96 points: 1e-3 slack between them
+                badWorse += j == 0 && ERR > OLDJ + 1e-6 * (1 + std::abs(VEL));
             }
             const double END = CUR + D * C.f(1.F);
             badLand += !sameBits(M::withKick(END, K, 1.0), END);
@@ -1488,12 +1490,11 @@ static void testB6() {
     }
     report("B6 a leg with no kick is the site's plain value, bit for bit", n, badPlain);
     report("B6 turned: value continuous at the turn", n, badVel);
-    report("B6 turned: never past the target, never back past the start when heading there", n * 65, badBound);
+    report("B6 turned: never past the target, never back past the start when heading there, a reversal at most REVERSAL_ROOM back", n * 65, badBound);
     report("B6 turned: lands exactly where the plain leg lands", n, badLand);
     std::printf("B6 velocity at the turn: matched in %ld of %ld (worst rel err %.2e); the clamp bound in %ld; the plain retarget jumped in %ld (worst rel %.1f)\n",
                 n - clamped, n, worstNew, clamped, oldKicks, worstOld);
-    if (n - clamped < n / 2)
-        report("B6 velocity matched in under half the turns", 1, 1);
+    report("B6 turned: the start velocity is never further from the old one than the plain retarget's", n, badWorse);
 }
 
 int main() {

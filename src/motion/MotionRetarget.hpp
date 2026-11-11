@@ -24,7 +24,7 @@
 // leg never passes `to`, and -- when the old velocity already pointed at the
 // target -- never moves back past `from`. A reversal (the old velocity pointing
 // away) may carry on a little the old way before it comes back: that is the
-// speed it had, not a bounce. A component whose target is where it already is
+// speed it had, not a bounce -- by at most REVERSAL_ROOM of the new leg. A component whose target is where it already is
 // cannot move at all without passing it, so it stops there (kick 0).
 // tests/unit/motion_math_test.cpp holds all of this, per site curve.
 //
@@ -64,7 +64,15 @@ namespace Hyprdrive::Motion {
         double slope0 = 0.0;
         double lo     = -1e300;
         double hi     = 1e300;
+        double back   = -1e300; // a reversal: never more than REVERSAL_ROOM back past the start
     };
+    // How far (of the new leg's distance) a reversal may carry on the old way.
+    // Full velocity continuity would cancel the curve's own start slope too (the
+    // house DECEL leaves at 6.25x), which on a long leg ran the view most of the
+    // way back to the OLD target before turning (rig, canvas pan): the turn
+    // looked ignored. Bounded here, the reversal still eases out of its speed
+    // instead of snapping to full speed the other way.
+    inline constexpr double REVERSAL_ROOM = 0.10;
     template <typename FCurve>
     inline SKickRoom kickRoom(FCurve curve) {
         SKickRoom room;
@@ -76,6 +84,7 @@ namespace Hyprdrive::Motion {
             const double E = curve(static_cast<float>(U));
             room.hi        = std::min(room.hi, (1.0 - E) / K);
             room.lo        = std::max(room.lo, -E / K);
+            room.back      = std::max(room.back, -(E + REVERSAL_ROOM) / K);
         }
         return room;
     }
@@ -90,8 +99,7 @@ namespace Hyprdrive::Motion {
         double       k      = TOWARD - room.slope0;
         // "Never back past the start" only binds when the old velocity already
         // pointed at the target, and gives way to "never past the target".
-        if (TOWARD >= 0.0)
-            k = std::max(k, room.lo);
+        k = std::max(k, TOWARD >= 0.0 ? room.lo : room.back);
         k = std::min(k, room.hi);
         return std::isfinite(k) ? k * delta : 0.0;
     }
