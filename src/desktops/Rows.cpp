@@ -1,6 +1,7 @@
 #include "Rows.hpp"
 #include "RowsFile.hpp"
 #include "DesktopOrder.hpp"
+#include "FullscreenDesktop.hpp"
 
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
@@ -167,7 +168,8 @@ namespace Hyprdrive::Rows {
                     continue;
                 for (Row::Id s = 1; s <= ROW.capacity; ++s)
                     if (!exists(ROW.idOf(s))) {
-                        return 0; // (compaction: wired with the per-row compaction)
+                        FullscreenDesktop::compactSoon("an overflow desktop has room in its block");
+                        return 0;
                     }
             }
             return 0;
@@ -282,6 +284,8 @@ namespace Hyprdrive::Rows {
         // (FullscreenDesktop's compaction, per row).
         g_reloadHook = Event::bus()->m_events.config.reloaded.listen([AGAIN] {
             AGAIN();
+            if (g_pCompositor && !g_pCompositor->m_isShuttingDown)
+                FullscreenDesktop::compactSoon("the config reloaded");
         });
         g_removedHook = Event::bus()->m_events.workspace.removed.listen([](PHLWORKSPACEREF) {
             if (g_roomTimer && blocks())

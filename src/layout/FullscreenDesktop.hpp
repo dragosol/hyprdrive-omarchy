@@ -26,6 +26,11 @@
 namespace Hyprdrive::FullscreenDesktop {
     void init();
     void shutdown();
+    // Remove the empty desktops between, per row, once things settle -- as
+    // after a display change, and on the same timer (a burst restarts it):
+    // a config reload (where Omarchy reconciles its blocks), an overflow
+    // desktop with room in its block (Rows.cpp).
+    void compactSoon(const char* why);
     // render.pre, after the desktop strip's: a window on its way to or from a
     // fullscreen desktop sets off from where it was seen.
     void preRender(PHLMONITOR monitor);

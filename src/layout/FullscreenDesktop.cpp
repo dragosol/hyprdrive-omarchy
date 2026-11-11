@@ -1135,6 +1135,15 @@ namespace Hyprdrive::FullscreenDesktop {
         });
     }
 
+    void compactSoon(const char* why) {
+        if (!g_pCompositor || g_pCompositor->m_isShuttingDown || !g_timer)
+            return;
+        if (!g_compactDue)
+            g_compactDue = why;
+        g_compactAt = std::chrono::steady_clock::now();
+        arm(1);
+    }
+
     void shutdown() {
         // (Also at Hyprland's exit: the handover then goes with the process.)
         save();
