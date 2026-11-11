@@ -367,6 +367,8 @@ void feedPointerMotion(const Vector2D& delta);
 void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand = false, std::optional<CBox> startBox = std::nullopt);
 // The test rig's dock click: activate the item whose class is `wmClass`.
 bool debugActivate(PHLMONITOR monitor, const std::string& wmClass);
+// ...and its context menu's "Move to this workspace" on that class's window.
+bool debugMoveHere(PHLMONITOR monitor, const std::string& wmClass);
 // DockRoom.hpp: the pill tiled windows make room for, in global logical px --
 // its RESTING box (no hover magnification), and empty whenever they should not
 // (autohide on, dock off, dock:windows_make_room off).

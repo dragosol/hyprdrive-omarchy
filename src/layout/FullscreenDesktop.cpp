@@ -83,6 +83,7 @@ namespace Hyprdrive::FullscreenDesktop {
         std::vector<SDebt>   g_given;
         std::vector<PHLWINDOWREF> g_settled; // fullscreen, deliberately left where it is
         std::vector<PHLWINDOWREF> g_besides; // opened over a fullscreen app and moved on: shown once mapped
+        std::vector<PHLWINDOWREF> g_moved;   // fullscreen, not on a trip, moved to another desktop (movedOntoOthers)
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
         std::chrono::steady_clock::time_point g_leftAt;
         PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
@@ -772,6 +773,64 @@ namespace Hyprdrive::FullscreenDesktop {
         // move and close -- never inside one: Hyprland takes a window out of
         // fullscreen to move it and puts it back after, so only the state once
         // the event is done means anything.
+        // MOVED ONTO A POPULATED DESKTOP, IT LEAVES FULLSCREEN (user, 2026-11-11:
+        // "if I move a fullscreen window 'to this workspace' and there's other
+        // apps on that workspace it should un-fullscreen it"; "Fullscreen game
+        // moved to a populated desktop yes should also leave fullscreen"). The
+        // trips have this rule below ("sent elsewhere"); this is the same for
+        // a fullscreen window that is not on one -- alone on its own desktop
+        // (g_settled), or fullscreen under fullscreen_desktop = "stay" -- however
+        // it was moved: the dock's "Move to this workspace", a drag in the
+        // overview or the strip, a dispatcher, Super+Shift+N. Only a MOVE:
+        // another window put on a fullscreen app's desktop is not one (a game
+        // keeps its fullscreen, FullscreenGuard). Moved to an empty desktop it
+        // stays fullscreen there, alone -- its own desktop again. Real
+        // fullscreen only, as for the trips (not maximize).
+        // ...AND STAYS OUT: a Wine game asks for fullscreen again the moment
+        // it is taken out (rig: wine_state.exe was back in fullscreen and on a
+        // trip of its own within a second). While it stays on that desktop
+        // with others, the client's own requests for fullscreen are ignored
+        // (Hyprland's SUPPRESS_FULLSCREEN, as `suppress_event fullscreen`);
+        // the user's fullscreen (a keybind, the dock) still works, and so
+        // does the client's again once the window is moved on or alone there.
+        struct SHeldOut {
+            PHLWINDOWREF    win;
+            PHLWORKSPACEREF space;
+        };
+        std::vector<SHeldOut> g_heldOut;
+        void releaseHeld(bool all) {
+            std::erase_if(g_heldOut, [&](const SHeldOut& h) {
+                const auto W = h.win.lock();
+                if (!W)
+                    return true;
+                if (!all && W->m_isMapped && W->m_workspace == h.space.lock() && !fullscreen(W) && othersOn(W->m_workspace, W) > 0)
+                    return false;
+                W->m_suppressedEvents = sc<decltype(W->m_suppressedEvents)>(W->m_suppressedEvents & ~Desktop::View::SUPPRESS_FULLSCREEN);
+                return true;
+            });
+        }
+        void holdOut(const PHLWINDOW& w) {
+            if (!w || (w->m_suppressedEvents & Desktop::View::SUPPRESS_FULLSCREEN))
+                return; // the user's own rule, or ours already
+            w->m_suppressedEvents = sc<decltype(w->m_suppressedEvents)>(w->m_suppressedEvents | Desktop::View::SUPPRESS_FULLSCREEN);
+            g_heldOut.push_back({w, w->m_workspace});
+        }
+
+        void movedOntoOthers() {
+            releaseHeld(false);
+            for (const auto& REF : std::exchange(g_moved, {})) {
+                const auto W = REF.lock();
+                if (!W || !W->m_isMapped || tripOf(W) || !fullscreen(W) || !DesktopOrder::ordinary(W->m_workspace) || othersOn(W->m_workspace, W) == 0)
+                    continue;
+                trace(std::format("{} moved onto {} with other windows: out of fullscreen", W->m_class, W->m_workspace->m_id));
+                std::erase_if(g_settled, [&](const PHLWINDOWREF& r) { return !r || r.lock() == W; });
+                ++g_busy;
+                Fullscreen::controller()->setFullscreenMode(W, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
+                --g_busy;
+                holdOut(W);
+            }
+        }
+
         int reconcile(void*) {
             if (!g_pCompositor || g_pCompositor->m_isShuttingDown)
                 return 0;
@@ -783,6 +842,7 @@ namespace Hyprdrive::FullscreenDesktop {
             if (const char* WHY = std::exchange(g_healDue, nullptr))
                 (void)DesktopOrder::heal(WHY);
             showBesides();
+            movedOntoOthers();
             origins();
             std::erase_if(g_settled, [](const PHLWINDOWREF& r) { const auto W = r.lock(); return !W || !W->m_isMapped || !fullscreen(W); });
             // Trips.
@@ -830,8 +890,10 @@ namespace Hyprdrive::FullscreenDesktop {
                     // windows that it was intended to go into"): it stays.
                     trace(std::format("{} sent to {}: it stays there", W->m_class, W->m_workspace->m_id));
                     ++g_busy;
-                    if (fullscreen(W) && othersOn(W->m_workspace, W) > 0)
+                    if (fullscreen(W) && othersOn(W->m_workspace, W) > 0) {
                         Fullscreen::controller()->setFullscreenMode(W, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
+                        holdOut(W);
+                    }
                     --g_busy;
                     if (fullscreen(W))
                         g_settled.emplace_back(W);
@@ -1054,13 +1116,20 @@ namespace Hyprdrive::FullscreenDesktop {
             if (!g_busy)
                 arm(1);
         });
-        g_moveHook  = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) {
-            if (!g_busy && (!g_trips.empty() || !g_debts.empty()))
+        g_moveHook  = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW w, PHLWORKSPACE) {
+            if (g_busy)
+                return;
+            // Moved by anyone but us: looked at once the move is done
+            // (movedOntoOthers; Hyprland takes a fullscreen window out of
+            // fullscreen for the move and puts it back after).
+            if (w && !tripOf(w))
+                g_moved.emplace_back(w);
+            if (!g_trips.empty() || !g_debts.empty() || !g_moved.empty() || !g_heldOut.empty())
                 arm(1);
         });
         g_openHook  = Event::bus()->m_events.window.openEarly.listen([](PHLWINDOW w) { besideFullscreen(w); });
         g_closeHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
-            if (!g_trips.empty() || !g_debts.empty())
+            if (!g_trips.empty() || !g_debts.empty() || !g_heldOut.empty() || !g_origins.empty())
                 arm(1);
         });
     }
@@ -1086,6 +1155,8 @@ namespace Hyprdrive::FullscreenDesktop {
         g_settled.clear();
         g_compactDue = nullptr;
         g_besides.clear();
+        g_moved.clear();
+        releaseHeld(true);
         g_origins.clear();
         g_travels.clear();
     }

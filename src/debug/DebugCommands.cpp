@@ -27,6 +27,14 @@ SDispatchResult onDebugDispatcher(std::string arg) {
             return {.success = false, .error = std::format("hyprdrive:debug activate: no dock item for class {}", CLASS)};
         return {};
     }
+    // `movehere <class>`: the dock menu's "Move to this workspace" on that
+    // app's window, to the focused monitor's desktop.
+    if (TOPIC == "movehere") {
+        const std::string CLASS = data.size() > 1 ? std::string{data[1]} : std::string{};
+        if (!Hyprdrive::Dock::debugMoveHere(Desktop::focusState()->monitor(), CLASS))
+            return {.success = false, .error = std::format("hyprdrive:debug movehere: no window of class {}", CLASS)};
+        return {};
+    }
     // `tile <class>`: where that app's window is drawn in the focused
     // monitor's open overview (monitor-local render px), so a test clicks it
     // with a real pointer instead of guessing at a screenshot.
@@ -162,7 +170,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         return {};
     }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|mem|activate <class>|scratchpad|type [text]|press <keycode>"};
+        return {.success = false, .error = "hyprdrive:debug frames|mem|activate <class>|movehere <class>|scratchpad|type [text]|press <keycode>"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

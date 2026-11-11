@@ -1103,6 +1103,19 @@ bool dragRelease(PHLMONITOR monitor, const Vector2D& point) {
     }
 }
 
+// The test rig's context-menu "Move to this workspace" on the window of class
+// `wmClass` (the menu row's own call).
+bool debugMoveHere(PHLMONITOR monitor, const std::string& wmClass) {
+    if (!monitor)
+        return false;
+    for (const auto& W : Desktop::windowState()->windows())
+        if (W && W->m_isMapped && W->m_class == wmClass) {
+            moveToThisWorkspace(monitor, W);
+            return true;
+        }
+    return false;
+}
+
 bool debugActivate(PHLMONITOR monitor, const std::string& wmClass) {
     if (!monitor)
         return false;

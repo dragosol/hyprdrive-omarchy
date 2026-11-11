@@ -104,10 +104,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|desktop|type|type \\S+|activate \\S+|tile \\S+|xgeom|hooks|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|desktop|type|type \\S+|activate \\S+|movehere \\S+|tile \\S+|xgeom|hooks|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | desktop | type [text] | activate <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | desktop | type [text] | activate <class> | movehere <class> | tile <class> | xgeom | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
