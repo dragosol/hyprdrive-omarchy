@@ -19,6 +19,21 @@ namespace PluginDetail {
 SDispatchResult onDebugDispatcher(std::string arg) {
     CConstVarList     data(arg, 0, 's', true);
     const std::string TOPIC = std::string{data[0]};
+    // `gesture state`: how many overviews are open, and the modifiers held --
+    // the line native's synthetic-gesture topic reports, which the shared
+    // behaviour gates read ("N overview(s) open"). This build has no synthetic
+    // gestures (native's DebugGesture), so a script is refused.
+    if (TOPIC == "gesture") {
+        if (data.size() > 1 && data[1] == "state") {
+            size_t open = 0;
+            for (const auto& O : scrollOverviews())
+                if (O && !O->isClosing())
+                    ++open;
+            return {.success = false,
+                    .error   = std::format("hyprdrive gesture: {} overview(s) open, mods {}", open, g_pInputManager ? g_pInputManager->getModsFromAllKBs() : 0)};
+        }
+        return {.success = false, .error = "hyprdrive:debug gesture: only `gesture state` in this build (no synthetic gestures)"};
+    }
     // `activate <class>`: exactly a left click on that app's dock icon, for the
     // nested test rig (whose dock no real pointer can reach).
     if (TOPIC == "activate") {
@@ -145,6 +160,26 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     }
     // `lockstate`: the lock and the overview search, for the lock gate
     // (tests/rig/headless/lock_gate.sh). The query's LENGTH, never its text.
+    // `exclusive`: the layer surfaces holding the keyboard EXCLUSIVELY. While
+    // any is mapped Hyprland refuses every window focus (rawWindowFocus) --
+    // clicks and typing on windows go nowhere, the overview and dock still work
+    // (user, 2026-11-06, after a lock + unlock). Names who holds it.
+    if (TOPIC == "exclusive") {
+        std::string report = std::format("hyprdrive exclusive: {}", g_pInputManager ? g_pInputManager->m_exclusiveLSes.size() : 0);
+        if (g_pInputManager)
+            for (const auto& REF : g_pInputManager->m_exclusiveLSes) {
+                const auto LS = REF.lock();
+                if (!LS) {
+                    report += " | (expired)";
+                    continue;
+                }
+                const auto MON = LS->m_monitor.lock();
+                const pid_t pid = LS->getPID();
+                report += std::format(" | ns={} pid={} mon={} mapped={} layer={} box={},{} {}x{}", LS->m_namespace, pid, MON ? MON->m_name : std::string{"(none)"},
+                                      LS->m_mapped ? 1 : 0, LS->m_layer, (int)LS->m_geometry.x, (int)LS->m_geometry.y, (int)LS->m_geometry.width, (int)LS->m_geometry.height);
+            }
+        return {.success = false, .error = report};
+    }
     if (TOPIC == "lockstate")
         return {.success = false,
                 .error   = std::format("hyprdrive lockstate: locked={} overviews={} accepting={} qlen={}", hyprdriveSessionLocked() ? 1 : 0, scrollOverviews().size(),
