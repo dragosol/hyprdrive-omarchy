@@ -70,6 +70,10 @@
 #                     trip goes back to its place only if its desktop is unchanged.
 #   motion_math_test  MotionMath.hpp: each shared motion function against
 #                     verbatim copies of the definitions it replaced, bit for bit.
+#   plate_color_test  PlateColor.hpp: a ringed plate's body fades backdrop ->
+#                     settled colour and never shows more accent mid-fade (the
+#                     ring-under drawing as the control); a tween's and a lit
+#                     set's first sample is the leg's `from`.
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
@@ -145,6 +149,7 @@ run preview_grid_test tests/unit/preview_grid_test.cpp
 run motion_spacing_test tests/unit/motion_spacing_test.cpp
 # shellcheck disable=SC2046
 run motion_math_test tests/unit/motion_math_test.cpp $(pkg-config --cflags --libs hyprutils)
+run plate_color_test tests/unit/plate_color_test.cpp
 run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run dock_drop_test tests/unit/dock_drop_test.cpp
 run dock_menu_model_test tests/unit/dock_menu_model_test.cpp
