@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "MotionSpring.hpp"
+
 namespace Hyprdrive::ShowDesktopMath {
     struct SRect {
         double x = 0, y = 0, w = 0, h = 0;
@@ -47,13 +49,10 @@ namespace Hyprdrive::ShowDesktopMath {
         // `dt` seconds toward `target` at angular frequency `omega` (1/s): from
         // rest, 95% of the way takes ~4.74/omega seconds, 99% ~6.64/omega.
         void step(double dt, double target, double omega) {
+            // (dt <= 0 skips the clamp below as well, as it always has.)
             if (dt <= 0)
                 return;
-            const double Y0 = x - target;
-            const double C  = v + omega * Y0;
-            const double E  = std::exp(-omega * dt);
-            x               = target + (Y0 + C * dt) * E;
-            v               = (v - omega * C * dt) * E;
+            Hyprdrive::Motion::criticalStep(x, v, target, omega, dt);
             // Critically damped from rest never crosses its target; from a
             // reversal it may graze it by rounding. Progress stays 0..1.
             x = std::clamp(x, 0.0, 1.0);

@@ -32,6 +32,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "MotionSpring.hpp"
+
 namespace Hyprdrive::StripModel {
 
     inline constexpr int      NOTCH        = 120;   // value120 per wheel notch
@@ -61,13 +63,7 @@ namespace Hyprdrive::StripModel {
         double pos = 0, vel = 0;
 
         void step(double goal, double omega, double dt) {
-            if (dt <= 0)
-                return;
-            const double X = pos - goal;
-            const double B = vel + omega * X;
-            const double E = std::exp(-omega * dt);
-            pos            = goal + (X + B * dt) * E;
-            vel            = (vel - omega * B * dt) * E;
+            Hyprdrive::Motion::criticalStep(pos, vel, goal, omega, dt);
         }
         // At rest on `goal` to within `eps` (index units), and barely moving.
         bool settled(double goal, double eps) const {

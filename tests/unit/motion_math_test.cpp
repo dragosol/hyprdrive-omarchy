@@ -17,12 +17,15 @@
 #include "MotionClock.hpp"
 #include "MotionCurves.hpp"
 #include "SearchLetters.hpp"
+#include "ShowDesktopMath.hpp"
+#include "DesktopStripModel.hpp"
 #include "MotionMath.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <optional>
+#include <random>
 
 #include <cstdint>
 #include <cstdio>
@@ -468,10 +471,94 @@ static void testA3() {
     report("A3 smoothstep(double) == StackIcon.cpp / SpringLoad.cpp, double grid", 2 * nd, bad[23]);
 }
 
+// ============================================================================
+// A4 -- the critically damped spring. Both old structs verbatim; each is
+// driven through the same long sequence of steps (random dt including 0,
+// negative and long frames, goals that jump mid-flight, both directions,
+// several omegas) next to the new one, and the whole state is compared after
+// EVERY step -- a trace, so a difference cannot hide by settling out.
+// ============================================================================
+namespace old_a4 {
+    // layout/ShowDesktopMath.hpp:43 SSpring
+    struct SShowDesktop {
+        double x = 0; // progress
+        double v = 0; // progress per second
+        [[gnu::noinline]] void step(double dt, double target, double omega) {
+            if (dt <= 0)
+                return;
+            const double Y0 = x - target;
+            const double C  = v + omega * Y0;
+            const double E  = std::exp(-omega * dt);
+            x               = target + (Y0 + C * dt) * E;
+            v               = (v - omega * C * dt) * E;
+            x               = std::clamp(x, 0.0, 1.0);
+        }
+        bool settled(double target) const {
+            return std::abs(x - target) < 1e-3 && std::abs(v) < 1e-2;
+        }
+    };
+    // desktops/DesktopStripModel.hpp:60 SSpring
+    struct SStrip {
+        double pos = 0, vel = 0;
+        [[gnu::noinline]] void step(double goal, double omega, double dt) {
+            if (dt <= 0)
+                return;
+            const double X = pos - goal;
+            const double B = vel + omega * X;
+            const double E = std::exp(-omega * dt);
+            pos            = goal + (X + B * dt) * E;
+            vel            = (vel - omega * B * dt) * E;
+        }
+        bool settled(double goal, double eps) const {
+            return std::abs(pos - goal) < eps && std::abs(vel) < eps * 20.0;
+        }
+    };
+}
+
+static void testA4() {
+    std::mt19937_64                        rng(20261110);
+    std::uniform_real_distribution<double> DT(0.0, 0.05), LONGDT(0.05, 2.0), GOAL(-3.0, 12.0), U(0.0, 1.0);
+    const double                           OMEGAS[] = {Hyprdrive::ShowDesktopMath::OUT_OMEGA, Hyprdrive::ShowDesktopMath::IN_OMEGA, 13.0, 4.7 / 0.06, 4.7 / 0.06 * 2.5, 1.0, 120.0};
+    long                                   n = 0, badShow = 0, badStrip = 0;
+    for (int run = 0; run < 400; ++run) {
+        old_a4::SShowDesktop                 oldShow;
+        Hyprdrive::ShowDesktopMath::SSpring newShow;
+        old_a4::SStrip                       oldStrip;
+        Hyprdrive::StripModel::SSpring       newStrip;
+        // Start somewhere moving, as a turned-round slide does.
+        oldShow.x = newShow.x = U(rng);
+        oldShow.v = newShow.v = (U(rng) - 0.5) * 40.0;
+        oldStrip.pos = newStrip.pos = GOAL(rng);
+        oldStrip.vel = newStrip.vel = (U(rng) - 0.5) * 80.0;
+        double target = U(rng) < 0.5 ? 0.0 : 1.0, goal = GOAL(rng);
+        double omega  = OMEGAS[run % std::size(OMEGAS)];
+        for (int i = 0; i < 2000; ++i) {
+            const double R  = U(rng);
+            double       dt = R < 0.02 ? 0.0 : R < 0.03 ? -DT(rng) : R < 0.06 ? LONGDT(rng) : DT(rng);
+            if (U(rng) < 0.01)
+                target = 1.0 - target; // a second press: turn round mid-flight
+            if (U(rng) < 0.01)
+                goal = GOAL(rng);
+            if (U(rng) < 0.005)
+                omega = OMEGAS[static_cast<size_t>(U(rng) * std::size(OMEGAS)) % std::size(OMEGAS)];
+            oldShow.step(dt, target, omega);
+            newShow.step(dt, target, omega);
+            oldStrip.step(goal, omega, dt);
+            newStrip.step(goal, omega, dt);
+            ++n;
+            badShow += !(sameBits(oldShow.x, newShow.x) && sameBits(oldShow.v, newShow.v) && oldShow.settled(target) == newShow.settled(target));
+            badStrip += !(sameBits(oldStrip.pos, newStrip.pos) && sameBits(oldStrip.vel, newStrip.vel) && oldStrip.settled(goal, 1e-3) == newStrip.settled(goal, 1e-3));
+        }
+    }
+    report("A4 ShowDesktopMath SSpring trace == its old step", n, badShow);
+    report("A4 StripModel SSpring trace == its old step", n, badStrip);
+}
+
 int main() {
     testA1();
     testA2();
     testA3();
+    testA4();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;
