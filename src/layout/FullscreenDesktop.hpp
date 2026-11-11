@@ -41,4 +41,8 @@ namespace Hyprdrive::FullscreenDesktop {
     // only then does the overview show the card coming out from under. Merely
     // scrolling to a fullscreen app's desktop is a plain pan.
     bool justEntered(const PHLWORKSPACE& ws);
+    // `w` is being carried, right now, out of its home to its fullscreen
+    // desktop (`home` false) or back home at the end of that trip (`home`
+    // true): Mosaic puts it back where it stood (MosaicTripHold.hpp).
+    bool carrying(const PHLWINDOW& w, bool home);
 }

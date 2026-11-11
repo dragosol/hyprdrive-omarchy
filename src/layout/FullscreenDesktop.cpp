@@ -84,6 +84,11 @@ namespace Hyprdrive::FullscreenDesktop {
         PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
         std::chrono::steady_clock::time_point g_enteredAt;
         int                g_busy  = 0; // our own moves: their fullscreen changes are not the user's
+        // The trip's own move of its window, while it happens (carrying()).
+        struct SCarrying {
+            PHLWINDOWREF win;
+            bool         home = false;
+        } g_carrying;
         wl_event_source*   g_timer = nullptr;
         CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook, g_monAddHook, g_monGoneHook, g_monLayoutHook;
         const char*         g_healDue = nullptr; // why desktops sharing a number are pulled apart at the next pass
@@ -354,7 +359,9 @@ namespace Hyprdrive::FullscreenDesktop {
             // is not on screen -- Hyprland suspends windows there, and a game
             // (Wine) stops drawing: it arrived blank for a frame or two.
             show(MON, space);
+            g_carrying = {.win = w, .home = false};
             carry(w, space, true);
+            g_carrying = {};
             travel(w, SEEN, SEENSIZE, space);
             travelOthers(WAS, space);
             Desktop::focusState()->fullWindowFocus(w, Desktop::FOCUS_REASON_OTHER);
@@ -404,7 +411,9 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto WAS  = others(home, w);
             if (MON && MON->m_activeWorkspace == SPACE && home->m_monitor.lock() == MON)
                 show(MON, home);
+            g_carrying = {.win = w, .home = true};
             carry(w, home, false);
+            g_carrying = {};
             if (w->m_workspace == home)
                 travel(w, SEEN.first, SEEN.second, home);
             travelOthers(WAS, home);
@@ -833,6 +842,10 @@ namespace Hyprdrive::FullscreenDesktop {
 
     bool justEntered(const PHLWORKSPACE& ws) {
         return ws && g_enteredSpace.lock() == ws && std::chrono::steady_clock::now() - g_enteredAt < std::chrono::seconds(1);
+    }
+
+    bool carrying(const PHLWINDOW& w, bool home) {
+        return w && g_carrying.home == home && g_carrying.win.lock() == w;
     }
 
     bool isFullscreenDesktop(const PHLWORKSPACE& ws) {

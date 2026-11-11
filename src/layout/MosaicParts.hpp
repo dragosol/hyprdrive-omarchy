@@ -12,6 +12,8 @@
 #include "MosaicPack.hpp"
 #include "MosaicCanvas.hpp"
 #include "MosaicDrive.hpp"
+#include "MosaicTripHold.hpp"
+#include "FullscreenDesktop.hpp"
 #include "Motion.hpp"
 #include "globals.hpp"
 #include "IOverview.hpp"
@@ -802,10 +804,70 @@ namespace Hyprdrive::Mosaic {
             return std::nullopt;
         }
 
+        // A FULLSCREEN ROUND TRIP PUTS EVERYTHING BACK (MosaicTripHold.hpp).
+        // The trip starts: what this desktop was, without the window leaving.
+        // Any other window leaving (closed, moved, dragged off) is an edit.
+        // A window opening or arriving consumes the hold (backFromTrip).
+        void holdForTrip(const SP<Layout::ITarget>& target) {
+            ++m_edits;
+            const int  I = indexOf(target);
+            const auto W = target ? target->window() : PHLWINDOW{};
+            // Not a trip: a hold kept for another window's trip stays, outdated
+            // by the edit (backFromTrip will see it and say so).
+            if (I < 0 || !W || !Hyprdrive::FullscreenDesktop::carrying(W, false))
+                return;
+            STripHold hold{.entry = m_entries[sc<size_t>(I)], .tree = m_tree, .tiledHold = m_tiledHold, .dropAt = m_dropAt, .canvasDrop = m_canvasDrop};
+            hold.keys.traveller = target.get();
+            hold.keys.index     = sc<size_t>(I);
+            for (const auto& E : m_entries)
+                if (E.target.lock() != target)
+                    hold.keys.rest.push_back(tripKey(E));
+            hold.keys.edits = m_edits;
+            m_tripHold      = std::move(hold);
+            trace(std::format("trip: {} leaves place {} of {}", appOf(W), I, m_entries.size()));
+        }
+        // It comes home from that trip: back in its place, its tile and the
+        // arrangement as they were -- if nothing changed here meanwhile (else
+        // false, and it arrives as any window does: the normal rules).
+        bool backFromTrip(const SP<Layout::ITarget>& target) {
+            if (!m_tripHold)
+                return false;
+            auto       hold = std::move(*m_tripHold);
+            m_tripHold.reset();
+            const auto W = target ? target->window() : PHLWINDOW{};
+            std::vector<MosaicTripHold::SKey> now;
+            for (const auto& E : m_entries)
+                now.push_back(tripKey(E));
+            if (!MosaicTripHold::restorable(hold.keys, target.get(), W && Hyprdrive::FullscreenDesktop::carrying(W, true), now, m_edits,
+                                            m_dropAt.has_value() || m_canvasDrop.has_value())) {
+                ++m_edits;
+                if (W && hold.keys.traveller == target.get())
+                    trace(std::format("trip: {} home, but its desktop changed meanwhile: it arrives as any window", appOf(W)));
+                return false;
+            }
+            ++m_edits;
+            m_dragHold.reset();
+            hold.entry.target = target;
+            m_entries.insert(m_entries.begin() + sc<std::ptrdiff_t>(MosaicTripHold::homeIndex(hold.keys, m_entries.size())), hold.entry);
+            m_tree        = std::move(hold.tree);
+            m_tiledHold   = hold.tiledHold;
+            m_dropAt      = hold.dropAt;
+            m_canvasDrop  = hold.canvasDrop;
+            trace(std::format("trip: {} home to place {} of {}", appOf(W), hold.keys.index, m_entries.size()));
+            return true;
+        }
+        static MosaicTripHold::SKey tripKey(const SMosaicEntry& e) {
+            return {.who = e.target.lock().get(), .w = e.natural.x, .h = e.natural.y, .id = e.id};
+        }
+
         void newTarget(SP<Layout::ITarget> target) override {
             // First: placed as what it is, a fullscreen window keeps its box.
             carryFullscreenInto(target, this);
             m_revealPending = true;
+            if (backFromTrip(target)) {
+                recalculate();
+                return;
+            }
             // A Super+drag let go is the same window put down, not one arriving:
             // the tiles keep their hold (m_tiledHold) through it.
             const bool DROP = droppingNow();
@@ -845,6 +907,10 @@ namespace Hyprdrive::Mosaic {
 
         void movedTarget(SP<Layout::ITarget> target, std::optional<Vector2D> focalPoint = std::nullopt) override {
             m_revealPending = true;
+            if (indexOf(target) < 0 && backFromTrip(target)) {
+                recalculate();
+                return;
+            }
             const bool DROP = droppingNow();
             m_dragHold.reset();
             if (indexOf(target) < 0) {
@@ -1045,6 +1111,8 @@ namespace Hyprdrive::Mosaic {
             // their hold, and its tile waits for it (placeInTiles).
             const bool DRAGGED = target && g_layoutManager && g_layoutManager->dragController()->target() == target;
             if (!DRAGGED)
+                holdForTrip(target);
+            if (!DRAGGED)
                 m_tiledHold = false;
             forgetArrangement();
             leftMosaic(target);
@@ -1132,6 +1200,7 @@ namespace Hyprdrive::Mosaic {
             const int I = indexOf(target);
             if (I < 0)
                 return;
+            ++m_edits;
             // IN THE TILES, DWINDLE'S RESIZE (user, 2026-10-23: "behave exactly
             // like dwindle"): live, the splits DwindleAlgorithm::resizeTarget
             // moves (dwindle:smart_resizing or not), every tile following.
@@ -2251,6 +2320,7 @@ namespace Hyprdrive::Mosaic {
 
         void swapTargets(SP<Layout::ITarget> a, SP<Layout::ITarget> b) override {
             m_revealPending = true;
+            ++m_edits;
             const int IA = indexOf(a), IB = indexOf(b);
             if (IA >= 0 && IB >= 0)
                 tradePlaces(sc<size_t>(IA), sc<size_t>(IB));
@@ -2263,6 +2333,7 @@ namespace Hyprdrive::Mosaic {
         // asks of every layout.
         void moveTargetInDirection(SP<Layout::ITarget> t, Math::eDirection dir, bool silent) override {
             m_revealPending = true;
+            ++m_edits;
             (void)silent;
             const int I = indexOf(t);
             if (I < 0 || !t)
@@ -2727,6 +2798,18 @@ namespace Hyprdrive::Mosaic {
             MosaicPack::SCanvasDrop drop;
         };
         std::optional<SCanvasDropAt> m_canvasDrop;
+        // A FULLSCREEN ROUND TRIP (holdForTrip / backFromTrip): this desktop as
+        // the trip found it, and every edit since.
+        struct STripHold {
+            MosaicTripHold::SHold        keys;
+            SMosaicEntry                 entry;
+            MosaicPack::CDwindleTree     tree;
+            bool                         tiledHold = false;
+            std::optional<SDropAt>       dropAt;
+            std::optional<SCanvasDropAt> canvasDrop;
+        };
+        std::optional<STripHold> m_tripHold;
+        uint64_t                 m_edits = 0;
         MosaicPack::CDwindleTree  m_tree;              // the tiles; empty while the mosaic stands
         long long                 m_nextId = 0;
         long long                 m_dragLeaf = -1;     // the tile a Super+drag picked its window out of
