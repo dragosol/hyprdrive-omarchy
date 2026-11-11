@@ -823,22 +823,47 @@ void onWindowOpen(const PHLWINDOW& window) {
     // (the launcher, a keybind, a terminal, its own "new window"): its new main
     // window moves to the nearest empty desktop. Not a dialog, a child, a
     // floating window (picture-in-picture, a popup), nor one already alone.
-    if (!window || window->m_isFloating || window->parent() || window->isModal() || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
+    //
+    // ALWAYS OPEN IN FULLSCREEN (user, 2026-11-11): the same main windows go
+    // fullscreen, ONCE -- a window the user takes out of fullscreen stays out,
+    // a re-map included. Through the compositor's own action, so the fullscreen
+    // event fires and `fullscreen_desktop` gives it its desktop exactly as the
+    // keybind would (user: "if only fullscreen is on it should still open in an
+    // empty desktop per my fullscreen functionality design"). With both on it
+    // is moved first, and alone on its desktop the trip keeps it there.
+    static std::vector<PHLWINDOWREF> s_sentFullscreen;
+    std::erase_if(s_sentFullscreen, [](const PHLWINDOWREF& r) { return !r.lock(); });
+    if (!window)
         return;
-    if (!opensInEmptyDesktop(AppSearch::idForClass(window->m_class)))
+    const auto ID      = AppSearch::idForClass(window->m_class);
+    const bool SPECIAL = !window->m_workspace || window->m_workspace->m_isSpecialWorkspace;
+    const bool MAIN    = !window->m_isFloating && !window->parent() && !window->isModal() && !SPECIAL;
+    const bool EMPTY   = MAIN && opensInEmptyDesktop(ID);
+    const bool FULL    = MenuModel::shouldOpenFullscreen({.listed   = opensInFullscreen(ID),
+                                                          .floating = window->m_isFloating,
+                                                          .child    = window->parent() != nullptr,
+                                                          .modal    = window->isModal(),
+                                                          .special  = SPECIAL,
+                                                          .applied  = std::ranges::any_of(s_sentFullscreen, [&](const PHLWINDOWREF& r) { return r.lock() == window; })});
+    if (!EMPTY && !FULL)
         return;
+    if (FULL)
+        s_sentFullscreen.emplace_back(window);
     // Next turn of the loop: not from inside the window's own map.
-    g_pEventLoopManager->doLater([REF = PHLWINDOWREF{window}] {
+    g_pEventLoopManager->doLater([REF = PHLWINDOWREF{window}, EMPTY, FULL] {
         const auto W = REF.lock();
         if (!W || !W->m_isMapped || !W->m_workspace || W->m_workspace->m_isSpecialWorkspace)
             return;
-        const bool ALONE = std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& O) {
-            return O && O != W && O->m_isMapped && !O->isHidden() && O->m_workspace == W->m_workspace;
-        });
-        if (ALONE)
-            return;
-        if (const auto MONITOR = W->m_workspace->m_monitor.lock())
-            moveToEmptyWorkspace(MONITOR, W);
+        if (EMPTY) {
+            const bool ALONE = std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& O) {
+                return O && O != W && O->m_isMapped && !O->isHidden() && O->m_workspace == W->m_workspace;
+            });
+            if (!ALONE)
+                if (const auto MONITOR = W->m_workspace->m_monitor.lock())
+                    moveToEmptyWorkspace(MONITOR, W);
+        }
+        if (FULL && W->m_isMapped && !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
+            (void)::Config::Actions::fullscreenWindow(::Fullscreen::FSMODE_FULLSCREEN, true, W);
     });
 }
 

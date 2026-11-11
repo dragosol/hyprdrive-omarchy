@@ -29,6 +29,7 @@
 #                     URIs, and Show in Files reaching a stand-in FileManager1.
 #   launcher_states_test  LauncherStates.hpp: badge and progress state is its
 #                     sender's, and goes when the sender leaves the bus.
+#   dock_menu_model_test  DockMenuModel.hpp: "Always Open in" lists, open-fullscreen rule, segment boxes
 #   debug_paths_test  DebugPaths.hpp: debug logs under $XDG_RUNTIME_DIR, /tmp
 #                     only without one.
 #   desktop_plan_test  DesktopPlan.hpp: a renumber plan is refused whole when
@@ -130,6 +131,7 @@ run motion_spacing_test tests/unit/motion_spacing_test.cpp
 run motion_math_test tests/unit/motion_math_test.cpp $(pkg-config --cflags --libs hyprutils)
 run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run dock_drop_test tests/unit/dock_drop_test.cpp
+run dock_menu_model_test tests/unit/dock_menu_model_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp
 run workers_test tests/unit/workers_test.cpp src/core/Workers.cpp -pthread
 run terminate_log_test tests/unit/terminate_log_test.cpp src/debug/TerminateLog.cpp

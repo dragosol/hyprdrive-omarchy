@@ -268,9 +268,12 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
     // Running or not: a new window of it, alone on a desktop of its own.
     if (!ID.empty()) {
         rows.emplace_back(SRow{.kind = ERow::OpenEmptyWorkspace, .label = "Open in Empty Workspace", .glyph = MenuGlyph::NEW});
-        rows.emplace_back(SRow{.kind  = ERow::AlwaysEmptyWorkspace,
-                               .label = "Always Open in Empty Workspace",
-                               .glyph = opensInEmptyDesktop(ID) ? std::string{MenuGlyph::CHECK} : std::string{}});
+        // ALWAYS OPEN IN, as two chips on one row (user, 2026-11-11: "space
+        // saving"): each its own toggle, lit while it is on; both may be.
+        SRow ALWAYS{.kind = ERow::AlwaysOpenIn, .label = "Always Open in", .segmented = true};
+        ALWAYS.inlines.push_back({.kind = ERow::AlwaysEmptyWorkspace, .label = "Empty Workspace", .on = opensInEmptyDesktop(ID)});
+        ALWAYS.inlines.push_back({.kind = ERow::AlwaysFullscreen, .label = "Fullscreen", .on = opensInFullscreen(ID)});
+        rows.emplace_back(std::move(ALWAYS));
         rows.emplace_back(SRow{.kind = ERow::OpenScratchpad, .label = "Open in Scratchpad", .glyph = MenuGlyph::STASH});
     }
 
@@ -281,6 +284,26 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
         rows.emplace_back(SRow{.kind = ERow::Separator});
 
     appendWindowRows(rows, WINDOWS, item, monitor);
+
+    // MAXIMIZE | FULLSCREEN, one split row (user, 2026-11-11), for the window a
+    // click on the icon would bring up: the app's most recently focused one
+    // that is out on a desktop. Each half names what it will do -- a window
+    // already maximized (fullscreen) lights that half and offers to undo it.
+    {
+        std::vector<PHLWINDOW> out;
+        for (const auto& W : WINDOWS)
+            if (W && !Minimize::isMinimized(W) && !Scratchpad::workspaceFor(W))
+                out.push_back(W);
+        if (const auto TARGET = out.empty() ? PHLWINDOW{} : recentWindow(out)) {
+            const auto& FS  = ::Fullscreen::controller();
+            const bool  MAX = FS && FS->isFullscreen(TARGET, ::Fullscreen::FSMODE_MAXIMIZED);
+            const bool  FUL = FS && FS->isFullscreen(TARGET, ::Fullscreen::FSMODE_FULLSCREEN);
+            SRow        SIZE{.kind = ERow::WindowSize, .window = TARGET, .segmented = true};
+            SIZE.inlines.push_back({.kind = ERow::Maximize, .glyph = MAX ? MenuGlyph::RESTORE : MenuGlyph::WINDOW, .label = MAX ? "Restore" : "Maximize", .on = MAX});
+            SIZE.inlines.push_back({.kind = ERow::Fullscreen, .glyph = FUL ? MenuGlyph::COMPRESS : MenuGlyph::EXPAND, .label = FUL ? "Exit Fullscreen" : "Fullscreen", .on = FUL});
+            rows.emplace_back(std::move(SIZE));
+        }
+    }
 
     // A class no desktop entry claims has nothing to show the details of and
     // nothing to favourite by id, so both rows are left out rather than drawn
@@ -479,6 +502,10 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     struct SRowTex {
         SP<Render::ITexture> label, glyph, hint;
         std::vector<SP<Render::ITexture>> inlineGlyphs;
+        // A segmented row: each segment's label and glyph, and the line height
+        // the row is laid out on (its label's, or its first segment's).
+        std::vector<SP<Render::ITexture>> segLabels, segGlyphs;
+        float                             lineH = 0.F;
     };
     std::vector<SRowTex> textures;
     textures.reserve(M.rows.size());
@@ -489,12 +516,61 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     const float GLYPHCOLW = GLYPHS ? std::round(sc<float>(FONTPX) * 1.9F) : 0.F;
     const float HINTGAP   = std::round(18.F * SCALE);
 
+    // SEGMENTED ROWS (Maximize | Fullscreen, Always Open in's chips): a
+    // segment's plate sits SEG_EDGE in from the plate's side, so its radius is
+    // the plate's less that -- concentric where it meets the corner -- and its
+    // content SEG_PAD in from its own sides.
+    const float SEG_EDGE   = std::round(4.F * SCALE);
+    const float SEG_GAP    = std::round(4.F * SCALE);
+    const float SEG_PAD    = std::round(10.F * SCALE);
+    const float SEG_GLYPHG = std::round(6.F * SCALE);
+    const float SEG_INSETY = std::round(3.F * SCALE);
+    const int   SEG_RADIUS = std::max(0, sc<int>(std::round(MENU_RADIUS * SCALE - SEG_EDGE)));
+    const auto  segContentW = [&](const auto& T, size_t b) {
+        const float GW = b < T.segGlyphs.size() && T.segGlyphs[b] && T.segGlyphs[b]->ok() ? sc<float>(T.segGlyphs[b]->m_size.x) + SEG_GLYPHG : 0.F;
+        const float LW = b < T.segLabels.size() && T.segLabels[b] && T.segLabels[b]->ok() ? sc<float>(T.segLabels[b]->m_size.x) : 0.F;
+        return GW + LW;
+    };
+
     float width  = MENU_MIN_W * SCALE;
     float height = 0.F;
     for (const auto& ROW : M.rows) {
         if (ROW.kind == ERow::Separator) {
             textures.emplace_back();
             height += MENU_SEP_H * SCALE;
+            continue;
+        }
+
+        if (ROW.segmented) {
+            SRowTex t;
+            if (!ROW.label.empty())
+                t.label = OverviewRender::text(ROW.label, DIM_COLOR, FONTPX, false, "", 0, 500);
+            for (const auto& B : ROW.inlines) {
+                const bool CHIP = !ROW.label.empty();
+                t.segLabels.push_back(OverviewRender::text(B.label, CHIP && !B.on ? DIM_COLOR : LABEL_COLOR, FONTPX, false, "", 0, 500));
+                t.segGlyphs.push_back(B.glyph.empty() ? SP<Render::ITexture>{} :
+                                                        OverviewRender::text(B.glyph, B.on ? LABEL_COLOR : DIM_COLOR.modifyA(0.8F), FONTPX, false, "JetBrainsMono Nerd Font", 0, 400));
+            }
+            const auto FIRST = t.label && t.label->ok() ? t.label : !t.segLabels.empty() ? t.segLabels.front() : SP<Render::ITexture>{};
+            if (!FIRST || !FIRST->ok()) {
+                textures.emplace_back();
+                height += MENU_SEP_H * SCALE;
+                continue;
+            }
+            t.lineH         = sc<float>(FIRST->m_size.y);
+            float segs      = 0.F, widest = 0.F;
+            const size_t NS = ROW.inlines.size();
+            for (size_t b = 0; b < NS; ++b) {
+                segs += segContentW(t, b) + 2.F * SEG_PAD;
+                widest = std::max(widest, segContentW(t, b) + 2.F * SEG_PAD);
+            }
+            segs += SEG_GAP * sc<float>(NS > 0 ? NS - 1 : 0);
+            if (t.label && t.label->ok()) // label, then the chips at the right end
+                width = std::max(width, MENU_PAD_X * SCALE + GLYPHCOLW + sc<float>(t.label->m_size.x) + HINTGAP + segs + SEG_EDGE);
+            else // equal halves across the row
+                width = std::max(width, 2.F * SEG_EDGE + widest * sc<float>(NS) + SEG_GAP * sc<float>(NS > 0 ? NS - 1 : 0));
+            height += t.lineH + 2.F * MENU_ROW_PAD_Y * SCALE;
+            textures.emplace_back(std::move(t));
             continue;
         }
 
@@ -660,6 +736,36 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         return M.lit.level(SMenu::litKey(i, b), menuHoverEased);
     };
 
+    // Text that may run past `right` fades out over its last few px there
+    // instead of being cut: drawn whole up to the fade, then in thin slices
+    // that thin out, each clipped to its own strip.
+    const auto fadedText = [&](CTexPassElement::SRenderData d, float right) {
+        if (!d.tex || !Stacks::drawableBox(d.box))
+            return;
+        if (d.box.x + d.box.width <= right + 0.5) {
+            ADDTEX(d);
+            return;
+        }
+        const float FADE   = std::round(12.F * SCALE);
+        const float SOLIDR = right - FADE;
+        if (SOLIDR > d.box.x) {
+            auto solid    = d;
+            solid.clipBox = CBox{d.box.x, d.box.y - 2, SOLIDR - d.box.x, d.box.height + 4};
+            ADDTEX(solid);
+        }
+        constexpr int STEPS = 6;
+        for (int k = 0; k < STEPS; ++k) {
+            const float X0 = SOLIDR + FADE * sc<float>(k) / STEPS, X1 = SOLIDR + FADE * sc<float>(k + 1) / STEPS;
+            if (X1 <= d.box.x)
+                continue;
+            auto slice    = d;
+            slice.clipBox = CBox{std::max<double>(X0, d.box.x), d.box.y - 2, X1 - std::max<double>(X0, d.box.x), d.box.height + 4};
+            slice.a       = d.a * (1.F - (sc<float>(k) + 0.5F) / STEPS);
+            if (slice.clipBox.width > 0)
+                ADDTEX(slice);
+        }
+    };
+
     const auto chevron = [&](float atY, bool up, bool more) {
         if (!more)
             return;
@@ -696,6 +802,106 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
                 }
                 continue;
             }
+        }
+
+        if (row.segmented && TEX.lineH > 0.F) {
+            const float ROWH = TEX.lineH + 2.F * MENU_ROW_PAD_Y * SCALE;
+            row.box          = CBox{plate.x, std::round(y), plate.width, std::round(ROWH)};
+            const size_t NS  = row.inlines.size();
+            const bool   CHIPS = TEX.label && TEX.label->ok();
+
+            // Where each segment goes, guarded (MenuModel: finite, >= 2 px).
+            std::vector<MenuModel::SSpan> spans;
+            if (CHIPS) {
+                std::vector<double> widths;
+                for (size_t b = 0; b < NS; ++b)
+                    widths.push_back(segContentW(TEX, b) + 2.F * SEG_PAD);
+                spans = MenuModel::chipsEndingAt(plate.x + plate.width - SEG_EDGE, widths, SEG_GAP);
+            } else
+                spans = MenuModel::splitSpan(plate.x + SEG_EDGE, plate.width - 2.F * SEG_EDGE, sc<int>(NS), SEG_GAP);
+
+            // The chips' caption, where every other row's label starts.
+            float captionRight = sc<float>(plate.x + plate.width);
+            if (CHIPS) {
+                const float TEXTX = std::round(plate.x + MENU_PAD_X * SCALE + GLYPHCOLW);
+                const float LH    = sc<float>(TEX.label->m_size.y);
+                captionRight      = !spans.empty() && spans.front().w > 0 ? sc<float>(spans.front().x) - SEG_GAP : captionRight;
+                CTexPassElement::SRenderData cap;
+                cap.tex     = TEX.label;
+                cap.box     = CBox{TEXTX, std::round(y + (ROWH - LH) / 2.F), sc<float>(TEX.label->m_size.x), LH};
+                cap.a       = 1.F;
+                fadedText(cap, captionRight);
+            }
+
+            for (size_t b = 0; b < NS; ++b) {
+                auto&      B    = row.inlines[b];
+                const auto SPAN = b < spans.size() ? spans[b] : MenuModel::SSpan{};
+                const auto HALF = CBox{SPAN.x, std::round(y), SPAN.w, std::round(ROWH)};
+                if (SPAN.w <= 0 || !Stacks::drawableBox(HALF)) {
+                    B.box = {};
+                    continue;
+                }
+                B.box = HALF; // the whole row's height is the hit area
+
+                // Its plate: always there, faint, so the halves read as
+                // buttons; lit in the accent while ON, and the hover's chip
+                // eases in over it from a little smaller, as a row's buttons do.
+                const float BL    = buttonLit(sc<int>(i), sc<int>(b));
+                const CBox  PLATE = CBox{HALF.x, HALF.y + SEG_INSETY, HALF.width, HALF.height - 2.0 * SEG_INSETY};
+                if (Stacks::drawableBox(PLATE)) {
+                    const int R = std::min(SEG_RADIUS, sc<int>(PLATE.height / 2.0));
+                    CRectPassElement::SRectData rest;
+                    rest.box           = PLATE;
+                    rest.color         = B.on ? Hyprdrive::Config::highlightColor().modifyA(0.48F) : CHyprColor{INK.r, INK.g, INK.b, LIGHT ? 0.08F : 0.07F};
+                    rest.round         = R;
+                    rest.roundingPower = 2.F;
+                    ADDRECT(rest);
+                    if (BL > 0.01F) {
+                        const double INSET = (1.F - BL) * 3.F * SCALE;
+                        CRectPassElement::SRectData hov;
+                        hov.box           = CBox{PLATE.x + INSET, PLATE.y + INSET, PLATE.width - 2 * INSET, PLATE.height - 2 * INSET};
+                        hov.color         = Hyprdrive::Config::highlightColor().modifyA((B.on ? 0.12F : 0.26F) * BL);
+                        hov.round         = std::max(0, R - sc<int>(std::round(INSET)));
+                        hov.roundingPower = 2.F;
+                        if (Stacks::drawableBox(hov.box))
+                            ADDRECT(hov);
+                    }
+                }
+
+                // Glyph and label, centred together; the hover grows them a
+                // touch, as it lifts a row's. A label too long for its half
+                // fades out at the half's inner edge rather than being cut.
+                const float GROW = 1.F + 0.035F * BL;
+                const auto  G    = b < TEX.segGlyphs.size() ? TEX.segGlyphs[b] : SP<Render::ITexture>{};
+                const auto  L    = b < TEX.segLabels.size() ? TEX.segLabels[b] : SP<Render::ITexture>{};
+                const float GW   = G && G->ok() ? sc<float>(G->m_size.x) * GROW : 0.F;
+                const float LW   = L && L->ok() ? sc<float>(L->m_size.x) * GROW : 0.F;
+                const float CW   = GW + (GW > 0.F && LW > 0.F ? SEG_GLYPHG : 0.F) + LW;
+                // Centred on the segment, so the hover's growth spends a px
+                // of padding each side; the fade starts only past the padding
+                // less a hair -- i.e. only for a label that does not fit.
+                const float INL  = sc<float>(HALF.x) + SEG_INSETY, INR = sc<float>(HALF.x + HALF.width) - SEG_INSETY;
+                float       cx   = std::max(INL, std::round(sc<float>(HALF.x) + (sc<float>(HALF.width) - CW) / 2.F));
+                if (GW > 0.F) {
+                    CTexPassElement::SRenderData g;
+                    g.tex = G;
+                    const float GH = sc<float>(G->m_size.y) * GROW;
+                    g.box          = CBox{cx, std::round(y + (ROWH - GH) / 2.F), GW, GH};
+                    g.a            = 1.F;
+                    fadedText(g, INR);
+                    cx += GW + SEG_GLYPHG;
+                }
+                if (LW > 0.F) {
+                    CTexPassElement::SRenderData t;
+                    t.tex          = L;
+                    const float LH = sc<float>(L->m_size.y) * GROW;
+                    t.box          = CBox{cx, y + (ROWH - LH) / 2.F, LW, LH};
+                    t.a            = 1.F;
+                    fadedText(t, INR);
+                }
+            }
+            y += ROWH;
+            continue;
         }
 
         if (!TEX.label) {

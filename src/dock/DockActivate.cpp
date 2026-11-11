@@ -840,6 +840,30 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
 
         case ERow::Favorite: toggleFavorite(itemDesktopId(item)); return;
         case ERow::AlwaysEmptyWorkspace: toggleEmptyDesktop(itemDesktopId(item)); return;
+        case ERow::AlwaysFullscreen: toggleOpenFullscreen(itemDesktopId(item)); return;
+        // The segmented rows themselves are not buttons; their segments are.
+        case ERow::WindowSize:
+        case ERow::AlwaysOpenIn: return;
+
+        case ERow::Maximize:
+        case ERow::Fullscreen: {
+            // The window it was opened for -- which may have closed meanwhile.
+            const auto WINDOW = row.window.lock();
+            if (!WINDOW || !WINDOW->m_isMapped)
+                return;
+            // Brought up first, as its own row's click would: the change is
+            // made where the user can see it. Then the window pill's toggle,
+            // through the compositor's own action, so `fullscreen_desktop`
+            // hears the ordinary fullscreen event and makes its trip exactly as
+            // it does for the keybind.
+            if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
+                OVERVIEW->selectAndClose(WINDOW);
+            else
+                activateWindow(WINDOW);
+            const auto MODE = row.kind == ERow::Maximize ? ::Fullscreen::FSMODE_MAXIMIZED : ::Fullscreen::FSMODE_FULLSCREEN;
+            (void)::Config::Actions::fullscreenWindow(::Fullscreen::controller()->isFullscreen(WINDOW, MODE) ? ::Fullscreen::FSMODE_NONE : MODE, true, WINDOW);
+            return;
+        }
 
         case ERow::ShowWindows: {
             if (!item.uri.empty()) {

@@ -1,5 +1,5 @@
 // The dock's persistence: the favourites store (polled) and the
-// empty-desktop app list.
+// "Always Open in" app lists.
 #include "DockParts.hpp"
 
 namespace Hyprdrive::Dock {
@@ -108,23 +108,18 @@ void writeFavorites() {
 }
 
 // ALWAYS OPEN IN AN EMPTY WORKSPACE (user, 2026-10-29: "Add an option in dock
-// context menu to always spawn certain apps in an empty desktop"). The apps, by
-// desktop id, one per line, beside the favourites; read again only when the
-// file moved. A missing file is an empty list.
-std::filesystem::path emptyDesktopAppsPath() {
+// context menu to always spawn certain apps in an empty desktop") and ALWAYS
+// OPEN IN FULLSCREEN (user, 2026-11-11). The apps, by desktop id, one per line,
+// beside the favourites (`empty-desktop-apps`, `fullscreen-apps`); each read
+// again only when its file moved. A missing file is an empty list.
+static std::filesystem::path idListPath(const char* name) {
     const auto FAV = favoritesPath();
-    return FAV.empty() ? FAV : FAV.parent_path() / "empty-desktop-apps";
+    return FAV.empty() ? FAV : FAV.parent_path() / name;
 }
 
-SEmptyDesktopStore& emptyDesktopStore() {
-    static SEmptyDesktopStore store;
-    return store;
-}
-
-const std::vector<std::string>& emptyDesktopApps() {
-    auto&           STORE = emptyDesktopStore();
+static const std::vector<std::string>& idList(SEmptyDesktopStore& STORE, const char* name) {
     std::error_code ec;
-    const auto      PATH = emptyDesktopAppsPath();
+    const auto      PATH = idListPath(name);
     if (PATH.empty() || !std::filesystem::exists(PATH, ec)) {
         STORE.ids.clear();
         STORE.present = false;
@@ -135,44 +130,45 @@ const std::vector<std::string>& emptyDesktopApps() {
         return STORE.ids;
     STORE.present = true;
     STORE.stamp   = WRITTEN;
-    STORE.ids.clear();
     std::ifstream file(PATH);
-    std::string   line;
-    while (std::getline(file, line)) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-            line.pop_back();
-        if (!line.empty())
-            STORE.ids.emplace_back(line);
-    }
+    STORE.ids = MenuModel::parseIdLines(file);
     return STORE.ids;
 }
 
-bool opensInEmptyDesktop(const std::string& id) {
-    return !id.empty() && std::ranges::contains(emptyDesktopApps(), id);
-}
-
-void toggleEmptyDesktop(const std::string& id) {
+static void toggleIdList(SEmptyDesktopStore& STORE, const char* name, const std::string& id) {
     if (id.empty())
         return;
-    auto IDS = emptyDesktopApps();
-    if (const auto IT = std::ranges::find(IDS, id); IT != IDS.end())
-        IDS.erase(IT);
-    else
-        IDS.emplace_back(id);
-    const auto PATH = emptyDesktopAppsPath();
+    const auto IDS  = MenuModel::toggledId(idList(STORE, name), id);
+    const auto PATH = idListPath(name);
     if (PATH.empty())
         return;
     std::error_code ec;
     std::filesystem::create_directories(PATH.parent_path(), ec);
     {
         std::ofstream out(PATH, std::ios::trunc);
-        for (const auto& I : IDS)
-            out << I << "\n";
+        out << MenuModel::serializeIds(IDS);
     }
-    auto& STORE   = emptyDesktopStore();
     STORE.ids     = IDS;
     STORE.present = true;
     STORE.stamp   = std::filesystem::last_write_time(PATH, ec);
+}
+
+static SEmptyDesktopStore g_emptyDesktopStore, g_fullscreenStore;
+
+bool opensInEmptyDesktop(const std::string& id) {
+    return !id.empty() && std::ranges::contains(idList(g_emptyDesktopStore, "empty-desktop-apps"), id);
+}
+
+void toggleEmptyDesktop(const std::string& id) {
+    toggleIdList(g_emptyDesktopStore, "empty-desktop-apps", id);
+}
+
+bool opensInFullscreen(const std::string& id) {
+    return !id.empty() && std::ranges::contains(idList(g_fullscreenStore, "fullscreen-apps"), id);
+}
+
+void toggleOpenFullscreen(const std::string& id) {
+    toggleIdList(g_fullscreenStore, "fullscreen-apps", id);
 }
 
 void toggleFavorite(const std::string& id) {

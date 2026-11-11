@@ -884,10 +884,23 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
             return true; // an empty slot: not a button, and not the row either
         const auto ITEM = g_menu->item;
         SRow       PICK{.kind = B.kind, .label = B.label, .window = ROW->window};
+        // An "Always Open in" chip is a setting, not an action: it flips and
+        // the menu stays up, the chip lit (or not) where the pointer is.
+        if (B.kind == ERow::AlwaysEmptyWorkspace || B.kind == ERow::AlwaysFullscreen) {
+            activateRow(monitor, ITEM, PICK);
+            // Re-read in place, not rebuilt: the rows keep the boxes the
+            // pointer is being hit-tested against, so the hover does not blink.
+            const auto ID = itemDesktopId(ITEM);
+            for (auto& C : ROW->inlines)
+                C.on = C.kind == ERow::AlwaysFullscreen ? opensInFullscreen(ID) : C.kind == ERow::AlwaysEmptyWorkspace ? opensInEmptyDesktop(ID) : C.on;
+            return true;
+        }
         closeMenu();
         activateRow(monitor, ITEM, PICK);
         return true;
     }
+    if (ROW->segmented)
+        return true; // between two segments, or on the row's own label: nothing
 
     // Get Info / Back: the menu stays up and changes what it shows.
     // Dock stacks A: Empty Folder asks first, in place; Rename becomes a field.
