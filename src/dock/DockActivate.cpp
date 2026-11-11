@@ -880,6 +880,13 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
                 WINDOW->sendClose();
             return;
 
+        // One window, asked to close (the overview's close-X makes the same
+        // call). It may have closed already, or may ask its user first.
+        case ERow::CloseWindow:
+            if (const auto WINDOW = row.window.lock(); WINDOW && WINDOW->m_isMapped)
+                WINDOW->sendClose();
+            return;
+
         case ERow::NewWindow: launchApp(monitor, item, nullptr, true); return;
 
         case ERow::OpenEmptyWorkspace: launchInEmptyWorkspace(monitor, item); return;

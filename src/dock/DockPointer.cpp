@@ -774,6 +774,19 @@ bool openMenu(PHLMONITOR monitor, const Vector2D& point) {
     return true;
 }
 
+// A window closed: an app menu listing it drops its row at the next draw (the
+// window is unmapped by then).
+void onWindowClose(const PHLWINDOW& window) {
+    if (!g_menu || !window)
+        return;
+    if (!std::ranges::any_of(g_menu->rows, [&](const SRow& r) { return r.kind == ERow::Window && r.window.lock() == window; }))
+        return;
+    g_menu->stale = true;
+    for (const auto& MON : State::monitorState()->monitors())
+        if (MON && MON->m_id == g_menu->monitor)
+            g_pHyprRenderer->damageMonitor(MON);
+}
+
 bool menuOpen() {
     return g_menu.has_value();
 }
@@ -894,6 +907,21 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
             for (auto& C : ROW->inlines)
                 C.on = C.kind == ERow::AlwaysFullscreen ? opensInFullscreen(ID) : C.kind == ERow::AlwaysEmptyWorkspace ? opensInEmptyDesktop(ID) : C.on;
             return true;
+        }
+        // A window row's close: the menu stays up for the app's other
+        // windows, and the row leaves it once the window has really gone
+        // (onWindowClose; a client that asks its user first keeps its row).
+        // The last window's close is Quit's flow: the menu goes with it.
+        if (B.kind == ERow::CloseWindow) {
+            const auto MINE   = ROW->window.lock();
+            const bool OTHERS = std::ranges::any_of(g_menu->rows, [&](const SRow& r) {
+                const auto W = r.kind == ERow::Window ? r.window.lock() : PHLWINDOW{};
+                return W && W != MINE && W->m_isMapped;
+            });
+            if (OTHERS) {
+                activateRow(monitor, ITEM, PICK);
+                return true;
+            }
         }
         closeMenu();
         activateRow(monitor, ITEM, PICK);

@@ -304,6 +304,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pMembCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
         Membership::bump("window.close");
         Hyprdrive::Mosaic::onWindowClose(w); // its mosaic size, remembered per app
+        Hyprdrive::Dock::onWindowClose(w);   // a menu row for it leaves the menu
     });
     g_pMembKillHook  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
     g_pDockFocusHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason reason) { Hyprdrive::Dock::noteFocus(w, reason); });

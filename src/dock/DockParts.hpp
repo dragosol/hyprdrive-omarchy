@@ -1037,6 +1037,10 @@ enum class ERow : uint8_t {
     Fullscreen,       // segment: toggles FSMODE_FULLSCREEN on the row's window
     AlwaysOpenIn,     // the chips row; its chips are AlwaysEmptyWorkspace and AlwaysFullscreen
     AlwaysFullscreen, // chip: the app's main windows open fullscreen
+    // user, 2026-11-11: "add a close glyph next to the 'move to scratchpad'
+    // button": asks THE row's window to close (sendClose, as the overview's
+    // close-X), never a kill.
+    CloseWindow,
 };
 namespace MenuGlyph {
 
@@ -1052,6 +1056,7 @@ namespace MenuGlyph {
     inline constexpr const char* FAV_ADD  = "\uf005"; // star
     inline constexpr const char* FAV_DEL  = "\uf006"; // star-o
     inline constexpr const char* QUIT     = "\uf00d"; // times
+    inline constexpr const char* CLOSE    = "\uf00d"; // times: one window's close
     inline constexpr const char* KILL     = "\uf05e"; // ban
     inline constexpr const char* TRASH    = "\uf1f8"; // trash
     inline constexpr const char* DRIVE    = "\uf0a0"; // hdd
@@ -1145,6 +1150,9 @@ struct SMenu {
     }
     // When it opened: the plate grows out of its icon from here (menuOpenP).
     Time::steady_tp openedAt{};
+
+    // A window of a row closed: the rows are rebuilt at the next draw.
+    bool stale = false;
 
     // Dock stacks A: Rename in Dock turns the menu into a one-line field.
     bool        editing = false;

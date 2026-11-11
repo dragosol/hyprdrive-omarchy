@@ -103,4 +103,16 @@ namespace Hyprdrive::Dock::MenuModel {
         }
         return out;
     }
+    // A window row's buttons, laid left to right so the last ends at `right`,
+    // each `btn` square-ish px wide, touching (the row's own hover chip gives
+    // them their spacing). Always `n` slots, so the buttons line up down the
+    // list; a slot left empty is still a slot.
+    inline std::vector<SSpan> rowButtons(double right, double btn, size_t n) {
+        std::vector<SSpan> out;
+        if (!std::isfinite(right) || !std::isfinite(btn))
+            return std::vector<SSpan>(n);
+        for (size_t b = 0; b < n; ++b)
+            out.push_back(guarded(std::round(right - btn * static_cast<double>(n - b)), std::round(btn)));
+        return out;
+    }
 }

@@ -436,6 +436,8 @@ void dismissHoverPanelNow();
 // A window opened (main.cpp's window.open listener): an app the dock menu set to
 // "Always Open in Empty Workspace" gets its new main window moved to one.
 void onWindowOpen(const PHLWINDOW& window);
+// A window closed (main.cpp's window.close listener): a menu row for it goes.
+void onWindowClose(const PHLWINDOW& window);
 
 // Y5. Draw one flight frame: the REAL window, live, through the same path the
 // overview draws a tile with. `now` and `ownsPass` are this frame's render

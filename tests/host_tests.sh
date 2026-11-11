@@ -29,7 +29,8 @@
 #                     URIs, and Show in Files reaching a stand-in FileManager1.
 #   launcher_states_test  LauncherStates.hpp: badge and progress state is its
 #                     sender's, and goes when the sender leaves the bus.
-#   dock_menu_model_test  DockMenuModel.hpp: "Always Open in" lists, open-fullscreen rule, segment boxes
+#   dock_menu_model_test  DockMenuModel.hpp: "Always Open in" lists, open-fullscreen rule, segment boxes,
+#                     window-row buttons
 #   debug_paths_test  DebugPaths.hpp: debug logs under $XDG_RUNTIME_DIR, /tmp
 #                     only without one.
 #   desktop_plan_test  DesktopPlan.hpp: a renumber plan is refused whole when

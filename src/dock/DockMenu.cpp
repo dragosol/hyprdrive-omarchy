@@ -99,7 +99,7 @@ void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WIN
         SRow row{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where};
         // Its moves ride ITS row, as buttons, so which window they move is
         // never a question (user, 2026-10-08) and a window costs one row, not
-        // four (user, 2026-11-03). Always three slots, so the buttons line up
+        // four (user, 2026-11-03). Always four slots, so the buttons line up
         // down the list; a move that does nothing is left out of its slot.
         // Onto the desktop this monitor is showing -- only for a window that is
         // somewhere else (another desktop or a scratchpad). A minimized one is
@@ -109,6 +109,9 @@ void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WIN
         row.inlines.push_back({.kind = HEREOK ? ERow::MoveHere : ERow::Separator, .glyph = MenuGlyph::HERE, .label = "Move to This Workspace"});
         row.inlines.push_back({.kind = ERow::MoveEmptyWorkspace, .glyph = MenuGlyph::NEW, .label = "Move to Empty Workspace"});
         row.inlines.push_back({.kind = STASHOK ? ERow::MoveScratchpad : ERow::Separator, .glyph = MenuGlyph::STASH, .label = "Move to Scratchpad"});
+        // And closing it, last (user, 2026-11-11: "add a close glyph next to
+        // the 'move to scratchpad' button"): the client is asked, not killed.
+        row.inlines.push_back({.kind = ERow::CloseWindow, .glyph = MenuGlyph::CLOSE, .label = "Close Window"});
         rows.emplace_back(std::move(row));
     }
 
@@ -483,6 +486,29 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     if (M.infoView && AppInfo::generation() != M.infoGen) {
         M.infoGen = AppInfo::generation();
         M.rows    = infoRows(M.item);
+    }
+
+    const bool LIVE = g_menu && &*g_menu == &M; // not the closing ghost
+
+    // A window of a row closed (onWindowClose): the rows again, without it.
+    // The boxes carry over by index, so the hover is tested this frame against
+    // where the rows were, and the row that moves up under the pointer lights
+    // rather than the whole menu blinking unlit for a frame.
+    if (M.stale && LIVE && !M.infoView && !M.editing) {
+        M.stale   = false;
+        auto rows = buildRows(M.item, monitor);
+        for (size_t i = 0; i < rows.size() && i < M.rows.size(); ++i) {
+            rows[i].box = M.rows[i].box;
+            if (rows[i].inlines.size() == M.rows[i].inlines.size())
+                for (size_t b = 0; b < rows[i].inlines.size(); ++b)
+                    rows[i].inlines[b].box = M.rows[i].inlines[b].box;
+        }
+        M.rows = std::move(rows);
+        if (std::ranges::none_of(M.rows, [](const SRow& r) { return r.kind == ERow::Window; })) {
+            // The app's last window went with the menu still up: as after Quit.
+            closeMenu();
+            return;
+        }
     }
 
     const float SCALE  = std::max(monitor->m_scale, 0.01F);
@@ -923,10 +949,11 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         // The row's buttons, right to left from the plate's inner edge.
         const SRow::SInline* hoveredInline = nullptr;
         const float          BTN           = std::round(ROWH);
+        const auto           SPANS         = MenuModel::rowButtons(plate.x + plate.width - MENU_PAD_X * SCALE * 0.5F, BTN, row.inlines.size());
         for (size_t b = 0; b < row.inlines.size(); ++b) {
             auto& B = row.inlines[b];
-            B.box   = CBox{std::round(plate.x + plate.width - MENU_PAD_X * SCALE * 0.5F - BTN * sc<float>(row.inlines.size() - b)), std::round(y), BTN, std::round(ROWH)};
-            if (B.kind == ERow::Separator)
+            B.box   = SPANS[b].w > 0 ? CBox{SPANS[b].x, std::round(y), SPANS[b].w, std::round(ROWH)} : CBox{};
+            if (B.kind == ERow::Separator || B.box.empty())
                 continue;
             if (B.box.containsPoint(MOUSE))
                 hoveredInline = &B;
@@ -991,7 +1018,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         for (size_t b = 0; b < row.inlines.size(); ++b) {
             const auto& B = row.inlines[b];
             const auto  G = b < TEX.inlineGlyphs.size() ? TEX.inlineGlyphs[b] : SP<Render::ITexture>{};
-            if (B.kind == ERow::Separator || !G || !G->ok())
+            if (B.kind == ERow::Separator || B.box.empty() || !G || !G->ok())
                 continue;
             // A hovered button's chip pops in from smaller, and its glyph grows.
             const float BL = buttonLit(sc<int>(i), sc<int>(b));

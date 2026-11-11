@@ -1,9 +1,11 @@
 // Host test for DockMenuModel.hpp: the "Always Open in" id lists (parse,
-// toggle, write), the open-fullscreen decision, and the segmented rows' boxes.
+// toggle, write), the open-fullscreen decision, the segmented rows' boxes, the
+// window rows' four buttons.
 #include "DockMenuModel.hpp"
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <limits>
 #include <sstream>
 
@@ -81,6 +83,27 @@ int main() {
         CHECK(C[0].x + C[0].w == C[1].x - 4.0 && C[0].w == 120.0);
         const auto BAD = chipsEndingAt(400.0, {1.0, std::numeric_limits<double>::infinity()}, 4.0);
         CHECK(BAD[0].w == 0 && BAD[1].w == 0);
+    }
+
+
+    // A window row's four buttons (Move Here, Move to Empty, Scratchpad, the
+    // new Close): touching, equal, the last ending at the row's right.
+    {
+        const auto B = rowButtons(500.0, 30.0, 4);
+        CHECK(B.size() == 4);
+        CHECK(B[3].x + B[3].w == 500.0);
+        for (size_t i = 0; i < B.size(); ++i) {
+            CHECK(B[i].w == 30.0);
+            if (i > 0)
+                CHECK(B[i].x == B[i - 1].x + B[i - 1].w);
+        }
+        // The first three sit where the three-button row had them, one button left.
+        const auto THREE = rowButtons(470.0, 30.0, 3);
+        for (size_t i = 0; i < 3; ++i)
+            CHECK(THREE[i].x == B[i].x);
+        const auto NAN_ = rowButtons(std::numeric_limits<double>::quiet_NaN(), 30.0, 4);
+        CHECK(NAN_.size() == 4 && std::ranges::all_of(NAN_, [](const SSpan& s) { return s.w == 0; }));
+        CHECK(rowButtons(500.0, 1.0, 4)[0].w == 0); // under 2 px: no button
     }
 
     std::printf("dock_menu_model_test: %d checks, %d failed\n", g_checks, g_failed);
