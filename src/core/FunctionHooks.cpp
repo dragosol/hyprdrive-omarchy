@@ -1,5 +1,6 @@
 #include "FunctionHooks.hpp"
 #include "globals.hpp"
+#include "Demangle.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
@@ -17,7 +18,8 @@ namespace Hyprdrive::FunctionHooks {
         struct SRecord {
             std::string owner;
             std::string name;
-            std::string demangled;
+            std::string signature; // the raw symbol
+            std::string demangled; // nm's line for it, as Hyprland read it
             void*       address = nullptr;
         };
         std::vector<SRecord> g_records;
@@ -35,7 +37,7 @@ namespace Hyprdrive::FunctionHooks {
         CFunctionHook* create(const char* owner, const std::string& name, const SFunctionMatch& fn, void* destination) {
             auto* hook = HyprlandAPI::createFunctionHook(HYPRDRIVE_HANDLE, fn.address, destination);
             if (hook)
-                g_records.push_back({.owner = owner, .name = name, .demangled = fn.demangled, .address = fn.address});
+                g_records.push_back({.owner = owner, .name = name, .signature = fn.signature, .demangled = fn.demangled, .address = fn.address});
             return hook;
         }
     }
@@ -107,7 +109,7 @@ namespace Hyprdrive::FunctionHooks {
         std::vector<std::string> lines;
         lines.reserve(g_records.size());
         for (const auto& r : g_records)
-            lines.push_back(std::format("{} {} at {} -- {}", r.owner, r.name, r.address, r.demangled));
+            lines.push_back(std::format("{} {} at {} -- {}", r.owner, demangle(r.name), r.address, readableSignature(r.signature, r.demangled)));
         return lines;
     }
 }

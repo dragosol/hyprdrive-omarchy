@@ -30,6 +30,20 @@ namespace Hyprdrive {
         return result;
     }
 
+    // The signature `hyprdrive:debug hooks` shows for a hooked function.
+    // Hyprland's findFunctionsByName hands back the raw symbol and nm's
+    // demangled line for it, and reads that line from a second listing by its
+    // line number, so it can come back empty or still mangled. The symbol
+    // itself, demangled, is the one to trust; nm's line only when the symbol
+    // will not demangle (a C function).
+    inline std::string readableSignature(std::string_view symbol, std::string_view nmDemangled) {
+        if (auto d = demangle(symbol); d != symbol)
+            return d;
+        if (!nmDemangled.empty())
+            return demangle(nmDemangled);
+        return std::string{symbol};
+    }
+
     // A type's name from typeid(T).name() / std::type_info::name(), which is
     // mangled WITHOUT the _Z prefix ("St13runtime_error").
     inline std::string demangleType(const char* name) {

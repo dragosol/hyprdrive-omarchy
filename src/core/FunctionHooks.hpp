@@ -40,6 +40,7 @@ namespace Hyprdrive::FunctionHooks {
     CFunctionHook* firstMatch(const char* owner, const std::string& name, void* destination, std::string_view demangledNeedle = {}, bool* found = nullptr);
 
     // One line per hook created, in creation order: owner, name, address,
-    // demangled signature.
+    // signature -- the name and the signature both demangled (Demangle.hpp:
+    // a hook asked for by its mangled name printed it mangled).
     std::vector<std::string> dump();
 }
