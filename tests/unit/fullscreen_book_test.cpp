@@ -76,6 +76,26 @@ static void decisions() {
     CHECK(!start("free", 1, 2, [](Id i) { return i == 5; }).makeRoom);
     CHECK(beside(2, NONE_FREE).at == 3 && beside(2, NONE_FREE).makeRoom);
     CHECK(!beside(2, ALL_FREE).makeRoom);
+    // ON A ROW (block 1, 11..20 + overflow): every slot's trip has a place
+    // after it in the row -- the 10th's is the first overflow place, never
+    // 21 (the next block's); a visitor (outside the row) settles
+    {
+        const Hyprdrive::Row B1 = Hyprdrive::Row::block(1, 10);
+        for (Id s = 1; s <= 12; ++s) {
+            const Id HOME = B1.idOf(s), AT = start("next", B1, HOME, 1, NONE_FREE).at;
+            CHECK(AT == B1.idOf(s + 1) && B1.contains(AT) && start("next", B1, HOME, 1, NONE_FREE).makeRoom);
+        }
+        CHECK(start("next", B1, 20, 1, ALL_FREE).at == 1'001'001);
+        CHECK(start("next", B1, 25, 1, ALL_FREE).settle);
+        CHECK(start("free", B1, 19, 1, [](Id i) { return i == 1'001'002; }).at == 1'001'002);
+        CHECK(beside(B1, 20, NONE_FREE).at == 1'001'001);
+        CHECK(beside(B1, 5, NONE_FREE).settle);
+        // kept numbers move with their own row only
+        CHECK(movedPlace(B1, 15, 13, +1) == 16 && movedPlace(B1, 20, 13, +1) == 1'001'001);
+        CHECK(movedPlace(B1, 1'001'001, 16, -1) == 20 && movedPlace(B1, 12, 13, +1) == 12);
+        CHECK(movedPlace(B1, 21, 13, +1) == 21 && movedPlace(B1, 1'002'001, 13, +1) == 1'002'001);
+        CHECK(movedPlace(Hyprdrive::Row{}, 21, 13, +1) == 22); // the implicit row: the number line
+    }
 }
 
 

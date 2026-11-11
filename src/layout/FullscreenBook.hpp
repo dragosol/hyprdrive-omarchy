@@ -14,6 +14,8 @@
 // number from the desktop alone, -1 when it had already gone, and was paid back
 // at place -1: shift(0, -1).
 
+#include "Row.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -38,6 +40,28 @@ namespace Hyprdrive::FullscreenBook {
         return kept >= from ? kept + delta : kept;
     }
 
+    // ON A MONITOR'S ROW (Row.hpp): places are the row's slots. The place
+    // after `id` is its next slot -- a block's last desktop is followed by
+    // the row's first overflow place, never by the next block's first id --
+    // NO_PLACE for an id outside the row (a visitor's). A kept number moves
+    // only with its own row's desktops. The implicit row is the number line.
+    constexpr Id nextPlace(const Row& row, Id id) {
+        if (!row.bounded())
+            return id + 1;
+        const Id S = row.slot(id);
+        const Id N = S ? row.idOf(S + 1) : 0;
+        return N ? N : NO_PLACE;
+    }
+    constexpr Id movedPlace(const Row& row, Id kept, Id from, int delta) {
+        if (!row.bounded())
+            return movedPlace(kept, from, delta);
+        const Id K = row.slot(kept), F = row.slot(from);
+        if (!K || !F || K < F)
+            return kept;
+        const Id TO = row.idOf(K + delta);
+        return TO > 0 ? TO : kept;
+    }
+
     // GOING FULLSCREEN with others on its desktop (`home`):
     //   stay, or alone      -> settle: it keeps its desktop
     //   next (the default)  -> home + 1: that place if it is free, else room is
@@ -48,26 +72,42 @@ namespace Hyprdrive::FullscreenBook {
         Id   at       = NO_PLACE;
         bool makeRoom = false;
     };
+    // On a row, "after" is along the row (nextPlace); a home outside it has
+    // no place after it: it settles.
     template <class FREE>
-    SStart start(std::string_view mode, Id home, int othersOnHome, FREE&& isFree) {
+    SStart start(std::string_view mode, const Row& row, Id home, int othersOnHome, FREE&& isFree) {
         if (mode == "stay" || othersOnHome == 0 || home < 1)
             return {.settle = true};
-        Id at = home + 1;
+        Id at = nextPlace(row, home);
+        if (at == NO_PLACE)
+            return {.settle = true};
         if (mode == "free") {
-            while (!isFree(at) && at < home + 1000)
-                ++at;
+            for (int n = 0; !isFree(at) && n < 1000; ++n)
+                if (const Id NEXT = nextPlace(row, at); NEXT != NO_PLACE)
+                    at = NEXT;
+                else
+                    return {.settle = true};
             return {.at = at};
         }
         return {.at = at, .makeRoom = !isFree(at)};
+    }
+    template <class FREE>
+    SStart start(std::string_view mode, Id home, int othersOnHome, FREE&& isFree) {
+        return start(mode, Row{}, home, othersOnHome, isFree);
     }
 
     // A WINDOW OPENED OVER A FULLSCREEN APP on desktop `appDesk`: it gets the
     // next place, made if it is not free -- and then owed back, like a trip's.
     template <class FREE>
-    SStart beside(Id appDesk, FREE&& isFree) {
-        if (appDesk < 1)
+    SStart beside(const Row& row, Id appDesk, FREE&& isFree) {
+        const Id AT = appDesk < 1 ? NO_PLACE : nextPlace(row, appDesk);
+        if (AT == NO_PLACE)
             return {.settle = true};
-        return {.at = appDesk + 1, .makeRoom = !isFree(appDesk + 1)};
+        return {.at = AT, .makeRoom = !isFree(AT)};
+    }
+    template <class FREE>
+    SStart beside(Id appDesk, FREE&& isFree) {
+        return beside(Row{}, appDesk, isFree);
     }
 
     // PAYING A DEBT BACK. Two kinds:

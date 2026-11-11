@@ -289,16 +289,17 @@ namespace Hyprdrive::FullscreenDesktop {
             for (auto& D : g_debts)
                 D.at = placeOf(D);
         }
-        void moved(WORKSPACEID from, int delta) {
+        // (Along `row`: kept numbers in other rows stay.)
+        void moved(const Row& row, WORKSPACEID from, int delta) {
             for (auto& T : g_trips) {
                 if (!T.space.lock())
-                    T.at = FullscreenBook::movedPlace(T.at, from, delta);
+                    T.at = FullscreenBook::movedPlace(row, T.at, from, delta);
                 if (!T.home.lock())
-                    T.homeAt = FullscreenBook::movedPlace(T.homeAt, from, delta);
+                    T.homeAt = FullscreenBook::movedPlace(row, T.homeAt, from, delta);
             }
             for (auto& D : g_debts)
                 if (!D.space.lock())
-                    D.at = FullscreenBook::movedPlace(D.at, from, delta);
+                    D.at = FullscreenBook::movedPlace(row, D.at, from, delta);
         }
         bool isTripSpace(const PHLWORKSPACE& ws) {
             return std::ranges::any_of(g_trips, [&](const STrip& t) { return t.space.lock() == ws; });
@@ -318,11 +319,13 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto HOME = w->m_workspace;
             const auto MON  = HOME->m_monitor.lock();
             const auto MODE = mode();
-            const auto PLAN = FullscreenBook::start(MODE, HOME->m_id, othersOn(HOME, w), [&](WORKSPACEID id) { return freePlace(id, MON); });
-            // (A place outside the monitor's row -- past a block's last
-            // desktop, until the book counts in rows -- is never taken: it
-            // stays where it is.)
-            if (PLAN.settle || !MON || !Rows::of(MON).contains(PLAN.at)) {
+            // The place after home along the monitor's row: a block's last
+            // desktop is followed by its overflow, never by the next block.
+            const Row  ROW  = Rows::of(MON);
+            const auto PLAN = FullscreenBook::start(MODE, ROW, HOME->m_id, othersOn(HOME, w), [&](WORKSPACEID id) { return freePlace(id, MON); });
+            // (A home outside the row -- a visitor -- has no place after it:
+            // it stays where it is, and nothing is ever taken outside a row.)
+            if (PLAN.settle || !MON || !ROW.contains(PLAN.at)) {
                 g_settled.emplace_back(w); // alone on its desktop: that is its own already
                 return;
             }
@@ -331,13 +334,15 @@ namespace Hyprdrive::FullscreenDesktop {
             if (PLAN.makeRoom) {
                 // No room after it: the desktops from there on move along a place.
                 DesktopStrip::finishNow(); // (the strip lands first: its row is numbers)
-                if (!DesktopOrder::shift(Rows::of(MON), at, +1)) {
-                    // Refused (DesktopOrder logged why): no room is made, so it
-                    // stays where it is, as Hyprland has it.
+                if (!DesktopOrder::shift(ROW, at, +1)) {
+                    // Refused (DesktopOrder logged why; only a real collision
+                    // now -- another monitor's desktop numbered in this row):
+                    // no room is made, so it stays where it is, as Hyprland
+                    // has it.
                     g_settled.emplace_back(w);
                     return;
                 }
-                moved(at, +1);
+                moved(ROW, at, +1);
                 owes = true;
             }
             // A debt in that place is this trip's now (spamming: the place it
@@ -564,24 +569,21 @@ namespace Hyprdrive::FullscreenDesktop {
                         for (const auto& W : Desktop::windowState()->windows())
                             if (W && W->m_isMapped && W->m_workspace == E)
                                 carry(W, HOME, false);
-                // The empty desktop in the place goes to the end of the row
-                // (Hyprland drops it once nothing holds it); the ones after
-                // it come back a place.
-                std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
-                WORKSPACEID                                       top = AT;
-                for (const auto& REF : State::workspaceState()->workspaces())
-                    if (const auto WS = REF.lock(); DesktopOrder::ordinary(WS) && WS != E && WS->m_id > AT) {
-                        top = std::max(top, WS->m_id);
-                        moves.emplace_back(WS, WS->m_id - 1);
-                    }
-                if (top > AT) {
-                    moves.emplace_back(E, top);
-                    if (!DesktopOrder::renumber(moves))
-                        return EPaid::Done; // refused (logged): never half-paid
-                }
-            } else if (const Row R = Rows::containing(AT); !DesktopOrder::shift(R, R.idOf(R.slot(AT) + 1), -1))
+                // The empty desktop in the place goes to the end of its row
+                // (Hyprland drops it once nothing holds it); the row's ones
+                // after it come back a place (other rows are not touched).
+                if (!DesktopOrder::payBack(Rows::ofWorkspace(E), AT, E))
+                    return EPaid::Done; // refused (logged): never half-paid
+                const Row R = Rows::ofWorkspace(E);
+                if (const WORKSPACEID NEXT = FullscreenBook::nextPlace(R, AT); NEXT != FullscreenBook::NO_PLACE)
+                    moved(R, NEXT, -1);
+                return EPaid::Done;
+            }
+            const Row         R    = Rows::containing(AT);
+            const WORKSPACEID NEXT = FullscreenBook::nextPlace(R, AT);
+            if (NEXT == FullscreenBook::NO_PLACE || !DesktopOrder::shift(R, NEXT, -1))
                 return EPaid::Done; // refused (logged): never half-paid
-            moved(AT + 1, -1);
+            moved(R, NEXT, -1);
             return EPaid::Done;
         }
 
@@ -616,16 +618,17 @@ namespace Hyprdrive::FullscreenDesktop {
             // app's (it was never: each window opened over a fullscreen app
             // with a desktop after it left every desktop after it a place up
             // for good). Paid once that desktop is empty.
-            const auto        PLAN = FullscreenBook::beside(WS->m_id, [&](WORKSPACEID id) { return freePlace(id, MON); });
+            const Row         ROW  = Rows::of(MON);
+            const auto        PLAN = FullscreenBook::beside(ROW, WS->m_id, [&](WORKSPACEID id) { return freePlace(id, MON); });
             const WORKSPACEID at   = PLAN.at;
             bool              owes = false;
             if (PLAN.settle || !Rows::of(MON).contains(at))
                 return;
             if (PLAN.makeRoom) {
                 DesktopStrip::finishNow();
-                if (!DesktopOrder::shift(Rows::of(MON), at, +1))
+                if (!DesktopOrder::shift(ROW, at, +1))
                     return; // refused (logged): Hyprland's own behaviour
-                moved(at, +1);
+                moved(ROW, at, +1);
                 owes = true;
             }
             // A debt in that place (a trip that just ended there) is this

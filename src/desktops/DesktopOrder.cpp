@@ -162,6 +162,16 @@ namespace Hyprdrive::DesktopOrder {
         return renumber(moves);
     }
 
+    bool payBack(const Row& row, WORKSPACEID at, const PHLWORKSPACE& e) {
+        const auto                                        ALL = desktops();
+        std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
+        for (const auto& M : DesktopPlan::payMoves(desks(ALL, false), row, at, keyOf(e)))
+            for (const auto& WS : ALL)
+                if (keyOf(WS) == M.key)
+                    moves.emplace_back(WS, M.to);
+        return renumber(moves);
+    }
+
     std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why) {
         const auto                    ALL = desktops();
         std::vector<DesktopPlan::Room> rooms;

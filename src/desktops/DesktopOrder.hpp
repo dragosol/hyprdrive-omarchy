@@ -35,6 +35,11 @@ namespace Hyprdrive::DesktopOrder {
     // is refused. Blocks off: every ordinary desktop numbered `from` or more.
     // Same check.
     bool shift(const Row& row, WORKSPACEID from, int delta);
+    // A place `at` of `row` paid back while its empty desktop `e` is still
+    // there: the row's desktops after it come back a place and `e` goes to
+    // the row's top (DesktopPlan::payMoves). Nothing after it: no moves,
+    // true. Same check.
+    bool payBack(const Row& row, WORKSPACEID at, const PHLWORKSPACE& e);
     // Two ordinary desktops on one number: the fuller (else the older) keeps
     // it, each other one gets the first free place in its own row (blocks off:
     // the next free number above the highest). Logged.
