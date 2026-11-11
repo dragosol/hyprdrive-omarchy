@@ -13,6 +13,7 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
@@ -56,6 +57,7 @@ namespace Hyprdrive::FullscreenDesktop {
             PHLWORKSPACEREF space; // the desktop it is fullscreen on
             PHLMONITORREF   mon;
             WORKSPACEID     at   = WORKSPACE_INVALID; // its place (kept up as numbers move: its desktop can go before it is done)
+            WORKSPACEID     homeAt = WORKSPACE_INVALID; // its home's place, the same way (every other window there can close)
             bool            owes = false; // its place was made for it: owed back when it is done
         };
         struct SDebt {
@@ -64,7 +66,8 @@ namespace Hyprdrive::FullscreenDesktop {
             PHLMONITORREF   mon;
             PHLWORKSPACEREF home;  // where the app's own leftovers go
             std::string     cls;
-            pid_t           pid = 0;
+            pid_t           pid    = 0;
+            bool            beside = false; // a window opened over a fullscreen app was given this place: paid once it is empty
         };
         std::vector<STrip>   g_trips;
         std::vector<SDebt>   g_debts;
@@ -248,21 +251,29 @@ namespace Hyprdrive::FullscreenDesktop {
         // (syncPlaces, DesktopOrder's after-renumber hook -- the overview's
         // drag included); a place whose desktop has gone moves with our own
         // shifts (moved).
+        WORKSPACEID placeOf(const PHLWORKSPACEREF& ref, WORKSPACEID kept) {
+            const auto S = ref.lock();
+            return FullscreenBook::placeOf(S && DesktopOrder::ordinary(S), S ? S->m_id : WORKSPACE_INVALID, kept);
+        }
         template <class T>
         WORKSPACEID placeOf(const T& t) {
-            const auto S = t.space.lock();
-            return FullscreenBook::placeOf(S && DesktopOrder::ordinary(S), S ? S->m_id : WORKSPACE_INVALID, t.at);
+            return placeOf(t.space, t.at);
         }
         void syncPlaces() {
-            for (auto& T : g_trips)
-                T.at = placeOf(T);
+            for (auto& T : g_trips) {
+                T.at     = placeOf(T);
+                T.homeAt = placeOf(T.home, T.homeAt);
+            }
             for (auto& D : g_debts)
                 D.at = placeOf(D);
         }
         void moved(WORKSPACEID from, int delta) {
-            for (auto& T : g_trips)
+            for (auto& T : g_trips) {
                 if (!T.space.lock())
                     T.at = FullscreenBook::movedPlace(T.at, from, delta);
+                if (!T.home.lock())
+                    T.homeAt = FullscreenBook::movedPlace(T.homeAt, from, delta);
+            }
             for (auto& D : g_debts)
                 if (!D.space.lock())
                     D.at = FullscreenBook::movedPlace(D.at, from, delta);
@@ -271,7 +282,12 @@ namespace Hyprdrive::FullscreenDesktop {
             return std::ranges::any_of(g_trips, [&](const STrip& t) { return t.space.lock() == ws; });
         }
         // A free place: `id` has no desktop, or an empty one on `mon` that no trip holds.
+        // Never a fullscreen app's home, even emptied meanwhile (still on
+        // screen, or gone and its number kept): the app goes back there
+        // (goHome), and another fullscreen app put there shared it.
         bool freePlace(WORKSPACEID id, const PHLMONITOR& mon) {
+            if (std::ranges::any_of(g_trips, [&](const STrip& t) { return placeOf(t.home, t.homeAt) == id; }))
+                return false;
             const auto E = byId(id);
             return !E || (E->m_monitor.lock() == mon && othersOn(E, nullptr) == 0 && !isTripSpace(E));
         }
@@ -280,16 +296,14 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto HOME = w->m_workspace;
             const auto MON  = HOME->m_monitor.lock();
             const auto MODE = mode();
-            if (MODE == "stay" || othersOn(HOME, w) == 0) {
+            const auto PLAN = FullscreenBook::start(MODE, HOME->m_id, othersOn(HOME, w), [&](WORKSPACEID id) { return freePlace(id, MON); });
+            if (PLAN.settle || !MON) {
                 g_settled.emplace_back(w); // alone on its desktop: that is its own already
                 return;
             }
-            WORKSPACEID at   = HOME->m_id + 1;
-            bool        owes = false;
-            if (MODE == "free")
-                while (!freePlace(at, MON) && at < HOME->m_id + 1000)
-                    ++at;
-            else if (!freePlace(at, MON)) {
+            const WORKSPACEID at   = PLAN.at;
+            bool              owes = false;
+            if (PLAN.makeRoom) {
                 // No room after it: the desktops from there on move along a place.
                 DesktopStrip::finishNow(); // (the strip lands first: its row is numbers)
                 if (!DesktopOrder::shift(at, +1)) {
@@ -311,9 +325,15 @@ namespace Hyprdrive::FullscreenDesktop {
             auto space = byId(at);
             if (!space)
                 space = State::workspaceState()->create(at, MON->m_id);
-            if (!space)
+            if (!space) {
+                // No desktop for it after all: it stays where it is, and room
+                // made for it is owed back at once (it was a silent +1).
+                if (owes)
+                    g_debts.push_back({.at = at, .mon = MON, .home = HOME, .cls = w->m_class, .pid = w->getPID()});
+                g_settled.emplace_back(w);
                 return;
-            g_trips.push_back({.win = w, .home = HOME, .space = space, .mon = MON, .at = space->m_id, .owes = owes});
+            }
+            g_trips.push_back({.win = w, .home = HOME, .space = space, .mon = MON, .at = space->m_id, .homeAt = HOME->m_id, .owes = owes});
             g_enteredSpace = space;
             g_enteredAt    = std::chrono::steady_clock::now();
             trace(std::format("{} fullscreen on {}: to {}{}", w->m_class, HOME->m_id, at, owes ? " (owed back)" : ""));
@@ -346,12 +366,28 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto SPACE = t.space.lock();
             const auto MON   = t.mon.lock();
             auto       home  = t.home.lock();
-            if (!home && SPACE) // its home went meanwhile: the desktop before
-                home = byId(std::max<WORKSPACEID>(1, SPACE->m_id - 1));
-            if (!home && SPACE && MON)
-                home = State::workspaceState()->create(std::max<WORKSPACEID>(1, SPACE->m_id - 1), MON->m_id);
-            if (!home)
-                return;
+            if (!home) {
+                // ITS HOME WENT MEANWHILE (every other window there closed): a
+                // desktop again in its home's place if that place is free. Not
+                // "the desktop before": that could be another fullscreen app's
+                // own desktop, and the two shared it. Else it stays where it
+                // is, out of fullscreen: that desktop is its own now.
+                const auto HMON = MON ? MON : (SPACE ? SPACE->m_monitor.lock() : nullptr);
+                if (t.homeAt >= 1 && HMON) {
+                    if (const auto E = byId(t.homeAt); !E)
+                        home = State::workspaceState()->create(t.homeAt, HMON->m_id);
+                    else if (othersOn(E, nullptr) == 0 && !isTripSpace(E))
+                        home = E;
+                }
+                if (!home) {
+                    trace(std::format("{} out of fullscreen: its home went and place {} is taken: it stays", w->m_class, t.homeAt));
+                    return;
+                }
+                // The others that came from that home come back to this one.
+                for (auto& T : g_trips)
+                    if (!T.home.lock() && T.homeAt == t.homeAt)
+                        T.home = home;
+            }
             trace(std::format("{} out of fullscreen: home to {}", w->m_class, home->m_id));
             const auto SEEN = seenAt(w);
             const auto WAS  = others(home, w);
@@ -365,34 +401,66 @@ namespace Hyprdrive::FullscreenDesktop {
                 Desktop::focusState()->fullWindowFocus(w, Desktop::FOCUS_REASON_OTHER);
         }
 
-        // A debt is paid once its place holds nothing of anyone else's, it is
-        // not on screen and the strip is not sliding. The app's own leftovers
-        // (a game's small window) go home first; a window of another app put
-        // there in the meantime makes it a desktop of its own: nothing owed.
-        // Returns false while it has to wait.
-        bool pay(const SDebt& d) {
-            const auto MON = d.mon.lock();
-            if (!MON)
-                return true;
+        bool anyDriving() {
+            for (const auto& M : State::monitorState()->monitors())
+                if (M && DesktopStrip::driving(M))
+                    return true;
+            return false;
+        }
+        bool onScreen(const PHLWORKSPACE& ws) {
+            for (const auto& M : State::monitorState()->monitors())
+                if (M && M->m_activeWorkspace == ws)
+                    return true;
+            return false;
+        }
+
+        // A DEBT IS PAID BACK BY NUMBER (FullscreenBook::decide), wherever its
+        // desktop lives now: a debt's monitor gone, or its place moved to
+        // another monitor, no longer drops it (each was a desktop owed and
+        // never given back). A trip's place is paid once it holds nothing of
+        // anyone else's -- the app's own leftovers (a game's small window) go
+        // home first; a window of another app put there meanwhile makes it a
+        // desktop of its own: nothing owed. A beside place is paid once its
+        // desktop is empty. Never while the place is on screen or a strip is
+        // sliding.
+        enum class EPaid { Done, WaitScreen, WaitWindows };
+        EPaid pay(const SDebt& d) {
+            using FullscreenBook::EPay;
             const WORKSPACEID AT = placeOf(d);
-            if (AT < 1) {
-                // No place (it can no longer arise; never pay at one).
-                trace(std::format("a debt with no place ({}): dropped, nothing moves", AT));
-                return true;
-            }
-            const auto        E  = byId(AT);
+            const auto        E  = AT >= 1 ? byId(AT) : nullptr;
+            FullscreenBook::SFacts facts{.at = AT, .exists = !!E, .driving = anyDriving()};
+            bool own = false;
             if (E) {
                 const auto OWN = [&](const PHLWINDOW& W) { return (d.pid > 0 && W->getPID() == d.pid) || (!d.cls.empty() && W->m_class == d.cls); };
-                bool       foreign = false, own = false;
                 for (const auto& W : Desktop::windowState()->windows())
-                    if (W && W->m_isMapped && W->m_workspace == E)
-                        (OWN(W) ? own : foreign) = true;
-                if (foreign || isTripSpace(E) || E->m_monitor.lock() != MON) {
+                    if (W && W->m_isMapped && W->m_workspace == E) {
+                        facts.any = true;
+                        (OWN(W) ? own : facts.foreign) = true;
+                    }
+                facts.trip     = isTripSpace(E);
+                facts.onScreen = onScreen(E);
+                facts.homeGone = !d.home.lock();
+            }
+            switch (FullscreenBook::decide(d.beside ? FullscreenBook::EKind::Beside : FullscreenBook::EKind::Trip, facts)) {
+                case EPay::Refuse:
+                    // No place (it can no longer arise; never pay at one).
+                    trace(std::format("a debt with no place ({}): dropped, nothing moves", AT));
+                    return EPaid::Done;
+                case EPay::NothingOwed:
                     trace(std::format("place {} is a desktop of its own now: nothing owed", AT));
-                    return true;
-                }
-                if (MON->m_activeWorkspace == E || DesktopStrip::driving(MON))
-                    return false;
+                    return EPaid::Done;
+                case EPay::ToTrip:
+                    for (auto& T : g_trips)
+                        if (T.space.lock() == E)
+                            T.owes = true;
+                    trace(std::format("place {} is a fullscreen app's desktop now: its trip owes it", AT));
+                    return EPaid::Done;
+                case EPay::WaitScreen: return EPaid::WaitScreen;
+                case EPay::WaitWindows: return EPaid::WaitWindows;
+                case EPay::Pay: break;
+            }
+            trace(std::format("paying back place {}{}", AT, d.beside ? " (beside)" : ""));
+            if (E) {
                 if (own)
                     if (const auto HOME = d.home.lock(); HOME && HOME != E)
                         for (const auto& W : Desktop::windowState()->windows())
@@ -401,29 +469,22 @@ namespace Hyprdrive::FullscreenDesktop {
                 // The empty desktop in the place goes to the end of the row
                 // (Hyprland drops it once nothing holds it); the ones after
                 // it come back a place.
-                WORKSPACEID top = AT;
                 std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
+                WORKSPACEID                                       top = AT;
                 for (const auto& REF : State::workspaceState()->workspaces())
                     if (const auto WS = REF.lock(); DesktopOrder::ordinary(WS) && WS != E && WS->m_id > AT) {
                         top = std::max(top, WS->m_id);
                         moves.emplace_back(WS, WS->m_id - 1);
                     }
-                trace(std::format("paying back place {}", AT));
                 if (top > AT) {
                     moves.emplace_back(E, top);
                     if (!DesktopOrder::renumber(moves))
-                        return true; // refused (logged): never half-paid
+                        return EPaid::Done; // refused (logged): never half-paid
                 }
-                moved(AT + 1, -1);
-                return true;
-            }
-            if (DesktopStrip::driving(MON))
-                return false;
-            trace(std::format("paying back place {}", AT));
-            if (!DesktopOrder::shift(AT + 1, -1))
-                return true; // refused (logged): never half-paid
+            } else if (!DesktopOrder::shift(AT + 1, -1))
+                return EPaid::Done; // refused (logged): never half-paid
             moved(AT + 1, -1);
-            return true;
+            return EPaid::Done;
         }
 
         // A WINDOW OPENED OVER A FULLSCREEN APP (user, 2026-11-08: "if I'm in a
@@ -453,19 +514,41 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto MON = WS->m_monitor.lock();
             if (!MON)
                 return;
-            const WORKSPACEID at = WS->m_id + 1;
-            if (!freePlace(at, MON)) {
+            // ...and the room made for it is OWED BACK like a fullscreen
+            // app's (it was never: each window opened over a fullscreen app
+            // with a desktop after it left every desktop after it a place up
+            // for good). Paid once that desktop is empty.
+            const auto        PLAN = FullscreenBook::beside(WS->m_id, [&](WORKSPACEID id) { return freePlace(id, MON); });
+            const WORKSPACEID at   = PLAN.at;
+            bool              owes = false;
+            if (PLAN.settle)
+                return;
+            if (PLAN.makeRoom) {
                 DesktopStrip::finishNow();
                 if (!DesktopOrder::shift(at, +1))
                     return; // refused (logged): Hyprland's own behaviour
                 moved(at, +1);
+                owes = true;
+            }
+            // A debt in that place (a trip that just ended there) is this
+            // window's now: its desktop takes the place.
+            if (const auto IT = std::ranges::find_if(g_debts, [&](const SDebt& d) { return placeOf(d) == at; }); IT != g_debts.end()) {
+                owes = true;
+                g_debts.erase(IT);
             }
             auto space = byId(at);
             if (!space)
                 space = State::workspaceState()->create(at, MON->m_id);
-            if (!space || space == WS)
+            if (!space || space == WS) {
+                if (owes)
+                    g_debts.push_back({.at = at, .mon = MON, .beside = true});
+                arm(1);
                 return;
-            trace(std::format("{} opened over fullscreen {} on {}: to {}{}", w->m_class, APP->m_class, WS->m_id, at, w->m_noInitialFocus ? " (unasked: not shown)" : ""));
+            }
+            if (owes)
+                g_debts.push_back({.space = space, .at = at, .mon = MON, .home = WS, .cls = w->m_class, .pid = w->getPID(), .beside = true});
+            trace(std::format("{} opened over fullscreen {} on {}: to {}{}{}", w->m_class, APP->m_class, WS->m_id, at, owes ? " (owed back)" : "",
+                              w->m_noInitialFocus ? " (unasked: not shown)" : ""));
             w->m_workspace = space;
             w->m_monitor   = MON;
             if (!w->m_noInitialFocus)
@@ -547,10 +630,16 @@ namespace Hyprdrive::FullscreenDesktop {
                     startTrip(W);
             // Debts.
             syncPlaces();
-            for (auto it = g_debts.begin(); it != g_debts.end();)
-                it = pay(*it) ? g_debts.erase(it) : std::next(it);
-            if (g_timer && (!g_trips.empty() || !g_debts.empty()))
-                wl_event_source_timer_update(g_timer, g_debts.empty() ? 250 : 60);
+            bool watch = false; // a debt waits on the screen or a strip: no event says when that ends
+            for (auto it = g_debts.begin(); it != g_debts.end();) {
+                const EPaid P = pay(*it);
+                watch |= P == EPaid::WaitScreen;
+                it = P == EPaid::Done ? g_debts.erase(it) : std::next(it);
+            }
+            // (A beside debt waiting for its windows to go is looked at again
+            // when one closes or moves: the hooks below.)
+            if (g_timer && (watch || !g_trips.empty()))
+                wl_event_source_timer_update(g_timer, watch ? 60 : 250);
             return 0;
         }
         void arm(int ms) {
@@ -638,12 +727,12 @@ namespace Hyprdrive::FullscreenDesktop {
                 arm(1);
         });
         g_moveHook  = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) {
-            if (!g_busy && !g_trips.empty())
+            if (!g_busy && (!g_trips.empty() || !g_debts.empty()))
                 arm(1);
         });
         g_openHook  = Event::bus()->m_events.window.openEarly.listen([](PHLWINDOW w) { besideFullscreen(w); });
         g_closeHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
-            if (!g_trips.empty())
+            if (!g_trips.empty() || !g_debts.empty())
                 arm(1);
         });
     }

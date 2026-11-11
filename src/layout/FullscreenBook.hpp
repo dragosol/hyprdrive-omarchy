@@ -68,7 +68,9 @@ namespace Hyprdrive::FullscreenBook {
     //           (its own leftovers go home first). A window of another app put
     //           there meanwhile makes it a desktop of its own: nothing owed.
     //   Beside  the place a window opened over a fullscreen app was given: once
-    //           that desktop is empty -- every window on it gone.
+    //           that desktop is empty -- that app's windows on it all gone. A
+    //           window of another app put there makes it a desktop of its own,
+    //           as above.
     // Either way: never while the place's desktop is on screen or a desktop
     // strip is sliding (its row is numbers). A place a fullscreen app holds now
     // is that trip's debt (it pays when it is done). A place below 1 is no
@@ -90,6 +92,7 @@ namespace Hyprdrive::FullscreenBook {
         bool trip     = false; // ...that is a fullscreen app's desktop
         bool onScreen = false; // ...shown on a monitor
         bool driving  = false; // a desktop strip is sliding
+        bool homeGone = false; // the app's own windows there have no home to go to
     };
     constexpr EPay decide(EKind kind, const SFacts& f) {
         if (f.at < 1)
@@ -97,7 +100,11 @@ namespace Hyprdrive::FullscreenBook {
         if (f.exists) {
             if (f.trip)
                 return EPay::ToTrip;
-            if (kind == EKind::Trip && f.foreign)
+            if (f.foreign)
+                return EPay::NothingOwed;
+            // (Trip: the app's own windows there and no home to send them --
+            // its home emptied meanwhile -- it is theirs now.)
+            if (kind == EKind::Trip && f.any && f.homeGone)
                 return EPay::NothingOwed;
             if (kind == EKind::Beside && f.any)
                 return EPay::WaitWindows;
