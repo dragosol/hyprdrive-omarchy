@@ -20,11 +20,13 @@
 #include "ShowDesktopMath.hpp"
 #include "DesktopStripModel.hpp"
 #include "MotionMath.hpp"
+#include "MotionPresets.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <optional>
+#include <string_view>
 #include <random>
 
 #include <cstdint>
@@ -554,11 +556,134 @@ static void testA4() {
     report("A4 StripModel SSpring trace == its old step", n, badStrip);
 }
 
+// ============================================================================
+// A5 -- the preset bakes. The old Motion.cpp table verbatim (motion/Motion.cpp
+// :42-60 before the move), and the three ways it used to be baked: the live
+// slots re-baked IN PLACE on every preset change (ease), easeNamed's
+// single-slot cache (also in place, whenever the name changed), and
+// houseFixed's own pair. Each is compared to the one shared bake.
+// ============================================================================
+namespace old_a5 {
+    using Hyprutils::Math::Vector2D;
+    struct SCurve {
+        float x1, y1, x2, y2;
+    };
+    struct SPreset {
+        std::string_view name;
+        SCurve           decel, accel, pop;
+    };
+        constexpr SCurve SERP_EXIT{0.33F, 0.F, 0.67F, 0.F};      // InCubic
+        constexpr SCurve SERP_POP{0.33F, 1.39F, 0.66F, 1.F};     // OutBack, overshoot 1.2
+        constexpr std::array<SPreset, 9> PRESETS{{
+            {"hyprdrive", {0.16F, 1.F, 0.3F, 1.F}, {0.7F, 0.F, 0.84F, 0.F}, {0.34F, 1.56F, 0.64F, 1.F}},
+            // myBezier, compositors/hyprland/config/settings.lua -- used in
+            // and out alike, so the exit is the same curve.
+            {"serpantinum", {0.05F, 0.9F, 0.1F, 1.05F}, {0.05F, 0.9F, 0.1F, 1.05F}, SERP_POP},
+            {"serpantinum_glide", {0.22F, 1.09F, 0.46F, 1.F}, SERP_EXIT, SERP_POP},  // OutQuint
+            {"serpantinum_soft", {0.33F, 1.F, 0.66F, 1.F}, SERP_EXIT, SERP_POP},     // OutCubic
+            {"serpantinum_intro", {0.15F, 1.04F, 0.35F, 0.99F}, SERP_EXIT, SERP_POP}, // OutExpo
+            {"serpantinum_pop", SERP_POP, SERP_EXIT, SERP_POP},                        // OutBack 1.2
+            // Quick off the mark: OutCirc / InCirc.
+            {"swift", {0.F, 0.55F, 0.45F, 1.F}, {0.55F, 0.F, 1.F, 0.45F}, {0.F, 0.55F, 0.45F, 1.F}},
+            // Everything lands with a little overshoot.
+            {"springy", {0.34F, 1.30F, 0.64F, 1.F}, {0.36F, 0.F, 0.66F, -0.3F}, {0.34F, 1.70F, 0.64F, 1.F}},
+            {"linear", {0.F, 0.F, 1.F, 1.F}, {0.F, 0.F, 1.F, 1.F}, {0.F, 0.F, 1.F, 1.F}},
+        }};
+
+    // motion/Motion.cpp:79 bake
+    void bake(Hyprutils::Animation::CBezierCurve& curve, const SCurve& c) {
+        curve.setup(std::array<Vector2D, 2>{Vector2D{c.x1, c.y1}, Vector2D{c.x2, c.y2}});
+    }
+}
+
+static void testA5() {
+    namespace P = Hyprdrive::Motion::Presets;
+    // The table itself moved: names and every control point, bit for bit.
+    long nt = 0, badT = 0;
+    for (size_t i = 0; i < old_a5::PRESETS.size(); ++i) {
+        const auto& O = old_a5::PRESETS[i];
+        const auto& N = P::PRESETS[i];
+        const old_a5::SCurve* oc[] = {&O.decel, &O.accel, &O.pop};
+        const P::SCurve*      nc[] = {&N.decel, &N.accel, &N.pop};
+        for (int r = 0; r < 3; ++r) {
+            ++nt;
+            badT += !(sameBits(oc[r]->x1, nc[r]->x1) && sameBits(oc[r]->y1, nc[r]->y1) && sameBits(oc[r]->x2, nc[r]->x2) && sameBits(oc[r]->y2, nc[r]->y2));
+        }
+        ++nt;
+        badT += O.name != N.name || &P::presetNamed(O.name) != &N || P::indexOf(N) != i;
+    }
+    ++nt;
+    badT += old_a5::PRESETS.size() != P::PRESETS.size() || &P::presetNamed("no-such-preset") != &P::PRESETS[0];
+    report("A5 PRESETS moved unchanged (names, points, lookup)", nt, badT);
+
+    // t: every 4093rd float in [0, 1], a sweep past both ends (the callers
+    // clamp; ease / easeNamed / houseFixed clamp with std::clamp), and the edges.
+    std::vector<float> T;
+    for (uint32_t u = 0; u <= 0x3f800000U; u += 4093) {
+        float f;
+        std::memcpy(&f, &u, 4);
+        T.push_back(f);
+    }
+    for (float e : {-1.F, -0.F, 1.F, 1.5F, 0.5F, 0.99999994F})
+        T.push_back(e);
+    const auto& TABLE = P::bakedPresets();
+
+    // ease(): the live slots, re-baked in place, through a preset sequence
+    // that visits every preset and comes back to some (as the panel does).
+    std::array<Hyprutils::Animation::CBezierCurve, 3> live;
+    std::vector<size_t>                               seq;
+    for (size_t i = 0; i < old_a5::PRESETS.size(); ++i)
+        seq.push_back(i);
+    for (size_t i : {3, 0, 7, 7, 1, 8, 0, 5, 2, 6, 4, 0})
+        seq.push_back(i);
+    long ne = 0, badE = 0;
+    for (size_t i : seq) {
+        old_a5::bake(live[0], old_a5::PRESETS[i].decel);
+        old_a5::bake(live[1], old_a5::PRESETS[i].accel);
+        old_a5::bake(live[2], old_a5::PRESETS[i].pop);
+        for (int r = 0; r < 3; ++r)
+            for (float t : T) {
+                const float CT = std::clamp(t, 0.F, 1.F);
+                ++ne;
+                badE += !sameBits(live[r].getYForPoint(CT), TABLE[i][r].getYForPoint(CT));
+            }
+    }
+    report("A5 shared bake == ease()'s live slots, re-baked in place (21 preset changes, 3 roles)", ne, badE);
+
+    // easeNamed(): one fresh bake per preset (its cache's first fill), all roles.
+    long nn = 0, badN = 0;
+    for (size_t i = 0; i < old_a5::PRESETS.size(); ++i) {
+        std::array<Hyprutils::Animation::CBezierCurve, 3> fresh;
+        old_a5::bake(fresh[0], old_a5::PRESETS[i].decel);
+        old_a5::bake(fresh[1], old_a5::PRESETS[i].accel);
+        old_a5::bake(fresh[2], old_a5::PRESETS[i].pop);
+        for (int r = 0; r < 3; ++r)
+            for (float t : T) {
+                ++nn;
+                badN += !sameBits(fresh[r].getYForPoint(std::clamp(t, 0.F, 1.F)), TABLE[i][r].getYForPoint(std::clamp(t, 0.F, 1.F)));
+            }
+    }
+    report("A5 shared bake == easeNamed()'s bake, all 9 presets x 3 roles", nn, badN);
+
+    // houseFixed(): its own house pair.
+    Hyprutils::Animation::CBezierCurve hd, ha;
+    old_a5::bake(hd, old_a5::PRESETS[0].decel);
+    old_a5::bake(ha, old_a5::PRESETS[0].accel);
+    long nh = 0, badH = 0;
+    for (float t : T) {
+        const float CT = std::clamp(t, 0.F, 1.F);
+        nh += 2;
+        badH += !sameBits(hd.getYForPoint(CT), TABLE[0][0].getYForPoint(CT)) + !sameBits(ha.getYForPoint(CT), TABLE[0][1].getYForPoint(CT));
+    }
+    report("A5 shared bake == houseFixed()'s pair", nh, badH);
+}
+
 int main() {
     testA1();
     testA2();
     testA3();
     testA4();
+    testA5();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;
