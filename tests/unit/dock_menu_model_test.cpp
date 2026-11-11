@@ -1,6 +1,6 @@
 // Host test for DockMenuModel.hpp: the "Always Open in" id lists (parse,
 // toggle, write), the open-fullscreen decision, the segmented rows' boxes, the
-// window rows' four buttons.
+// window rows' four buttons, and a preview's own menu.
 #include "DockMenuModel.hpp"
 
 #include <cmath>
@@ -104,6 +104,35 @@ int main() {
         const auto NAN_ = rowButtons(std::numeric_limits<double>::quiet_NaN(), 30.0, 4);
         CHECK(NAN_.size() == 4 && std::ranges::all_of(NAN_, [](const SSpan& s) { return s.w == 0; }));
         CHECK(rowButtons(500.0, 1.0, 4)[0].w == 0); // under 2 px: no button
+    }
+
+    // A preview's own menu: the rows for the window's state.
+    {
+        using W        = EWinRow;
+        const auto HAS = [](const std::vector<W>& r, W k) { return std::ranges::find(r, k) != r.end(); };
+        // On the current desktop, out: no Move Here; size row; Minimize; Close last.
+        const auto HERE = windowMenuRows({});
+        CHECK(HERE.front() == W::Header && HERE.back() == W::Close);
+        CHECK(!HAS(HERE, W::MoveHere) && HAS(HERE, W::MoveEmptyWorkspace) && HAS(HERE, W::MoveScratchpad));
+        CHECK(HAS(HERE, W::Size) && HAS(HERE, W::Minimize) && !HAS(HERE, W::Show));
+        // Close nearest the pointer (the menu hangs above the pane), then
+        // Minimize, then the size row.
+        CHECK(HERE[HERE.size() - 3] == W::Minimize && HERE[HERE.size() - 4] == W::Size);
+        // Elsewhere: Move to This Workspace, first of the moves.
+        const auto AWAY = windowMenuRows({.elsewhere = true});
+        CHECK(HAS(AWAY, W::MoveHere) && AWAY[2] == W::MoveHere);
+        // Minimized: Show instead, no size row, no Move Here (Show brings it back).
+        const auto MIN = windowMenuRows({.elsewhere = true, .minimized = true});
+        CHECK(HAS(MIN, W::Show) && !HAS(MIN, W::Minimize) && !HAS(MIN, W::Size) && !HAS(MIN, W::MoveHere));
+        // On a scratchpad: no Move to Scratchpad and no size row.
+        const auto PAD = windowMenuRows({.elsewhere = true, .scratchpad = true});
+        CHECK(!HAS(PAD, W::MoveScratchpad) && !HAS(PAD, W::Size) && HAS(PAD, W::MoveHere) && HAS(PAD, W::Close));
+        // Never two separators in a row, never one first or last.
+        for (const auto& R : {HERE, AWAY, MIN, PAD}) {
+            CHECK(R.front() != W::Separator && R.back() != W::Separator);
+            for (size_t i = 1; i < R.size(); ++i)
+                CHECK(!(R[i] == W::Separator && R[i - 1] == W::Separator));
+        }
     }
 
     std::printf("dock_menu_model_test: %d checks, %d failed\n", g_checks, g_failed);

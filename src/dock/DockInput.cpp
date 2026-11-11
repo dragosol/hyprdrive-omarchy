@@ -38,6 +38,16 @@ SClaim handleMenu(PHLMONITOR mon, const Vector2D& local, EButton role, bool pres
         return out;
     }
 
+    // A right-click on a preview in the hover pane: that window's own menu
+    // (reopened for another preview if one is up). Ahead of panelClick, which
+    // would take it for a left-click and go to the window.
+    if (role == EButton::Menu && pressed && !windowDragActive && Dock::openWindowMenu(mon, local)) {
+        Stacks::close();
+        Stacks::abandonItemDrag();
+        out.claimed = true;
+        return out;
+    }
+
     // While the menu is up it is modal and takes every press: a press inside runs
     // the row, a press that misses closes it. On the plain desktop that miss is
     // LET THROUGH (menuMissLetsThrough) -- the menu there may have no drawn

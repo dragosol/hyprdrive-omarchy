@@ -1038,8 +1038,8 @@ enum class ERow : uint8_t {
     AlwaysOpenIn,     // the chips row; its chips are AlwaysEmptyWorkspace and AlwaysFullscreen
     AlwaysFullscreen, // chip: the app's main windows open fullscreen
     // user, 2026-11-11: "add a close glyph next to the 'move to scratchpad'
-    // button": asks THE row's window to close (sendClose, as the overview's
-    // close-X), never a kill.
+    // button", and the window menu's Close row: asks THE row's window to close
+    // (sendClose, as the overview's close-X), never a kill.
     CloseWindow,
 };
 namespace MenuGlyph {
@@ -1115,6 +1115,10 @@ struct SRow {
     // row is split into equal halves; with one, the segments are chips at its
     // right end. A segment acts as its kind; the row itself does nothing.
     bool segmented = false;
+    // Minimize / Show for `window` alone (the window menu) rather than the
+    // whole item's: the same rows, scoped. A scoped row whose window has gone
+    // does nothing -- never the whole app.
+    bool oneWindow = false;
 };
 
 struct SMenu {
@@ -1151,6 +1155,14 @@ struct SMenu {
     // When it opened: the plate grows out of its icon from here (menuOpenP).
     Time::steady_tp openedAt{};
 
+    // THE WINDOW'S OWN MENU (user, 2026-11-11), opened by a right-click on a
+    // preview in the hover pane: the same plate, rows and motion, its rows for
+    // `scope` alone (buildWindowRows). It hangs off the preview (`anchor` is
+    // the cell) above the pane, which stays up under it; `bottom` is where its
+    // plate's bottom edge sat last frame, kept for a frame with no pane.
+    bool         windowScope = false;
+    PHLWINDOWREF scope;
+    double       bottom = -1.0;
     // A window of a row closed: the rows are rebuilt at the next draw.
     bool stale = false;
 
@@ -1189,6 +1201,7 @@ extern float menuOpenP(const SMenu& M);
 extern bool menuOpening(const SMenu& M);
 extern std::string itemDesktopId(const SItem& item);
 extern std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor);
+extern std::vector<SRow> buildWindowRows(const SItem& item, const PHLWINDOW& window, const PHLMONITOR& monitor);
 extern std::vector<SRow> infoRows(const SItem& item);
 extern void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row);
 extern void renderMenu(PHLMONITOR monitor, const SLayout& layout);

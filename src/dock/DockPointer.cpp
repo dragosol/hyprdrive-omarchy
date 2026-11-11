@@ -774,16 +774,53 @@ bool openMenu(PHLMONITOR monitor, const Vector2D& point) {
     return true;
 }
 
-// A window closed: an app menu listing it drops its row at the next draw (the
-// window is unmapped by then).
+// THE WINDOW'S OWN MENU, off a right-click on its preview in the hover pane.
+// The pane stays up under it (Dock.cpp's PANELWANTED), the cell is what the
+// plate grows out of, and the item is the pane's app, so the rows act as the
+// app menu's rows for that window would.
+bool openWindowMenu(PHLMONITOR monitor, const Vector2D& point) {
+    if (!monitor || !g_hover.panel || !panelContains(monitor, point))
+        return false;
+    const auto CELL = panelCellAt(monitor, point);
+    if (!CELL || !CELL->second)
+        return false;
+    closeMenu();
+
+    const auto& P      = *g_hover.panel;
+    const auto  LAYOUT = layout(monitor);
+    SItem       item;
+    if (const auto IT = std::ranges::find_if(LAYOUT.items, [&](const SItem& i) { return i.wmClass == P.wmClass && i.desktopId == P.desktopId && i.scratchpadName == P.scratchpadName; });
+        IT != LAYOUT.items.end())
+        item = *IT;
+    else {
+        item.wmClass        = P.wmClass;
+        item.desktopId      = P.desktopId;
+        item.scratchpadName = P.scratchpadName;
+    }
+
+    g_menuGhost.reset();
+    g_menu = SMenu{.monitor = monitor->m_id, .item = item, .anchor = CELL->first, .box = {}, .rows = buildWindowRows(item, CELL->second, monitor)};
+    g_menu->windowScope = true;
+    g_menu->scope       = CELL->second;
+    g_menu->openedAt    = Time::steadyNow();
+    return true;
+}
+
+// A window closed. Its own menu goes with it; an app menu listing it drops
+// its row at the next draw (the window is unmapped by then).
 void onWindowClose(const PHLWINDOW& window) {
     if (!g_menu || !window)
         return;
-    if (!std::ranges::any_of(g_menu->rows, [&](const SRow& r) { return r.kind == ERow::Window && r.window.lock() == window; }))
+    if (g_menu->windowScope) {
+        const auto SCOPE = g_menu->scope.lock();
+        if (!SCOPE || SCOPE == window)
+            closeMenu();
+    } else if (std::ranges::any_of(g_menu->rows, [&](const SRow& r) { return r.kind == ERow::Window && r.window.lock() == window; }))
+        g_menu->stale = true;
+    else
         return;
-    g_menu->stale = true;
     for (const auto& MON : State::monitorState()->monitors())
-        if (MON && MON->m_id == g_menu->monitor)
+        if (MON && MON->m_id == (g_menu ? g_menu->monitor : g_menuGhost ? g_menuGhost->menu.monitor : MONITOR_INVALID))
             g_pHyprRenderer->damageMonitor(MON);
 }
 
@@ -912,7 +949,7 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
         // windows, and the row leaves it once the window has really gone
         // (onWindowClose; a client that asks its user first keeps its row).
         // The last window's close is Quit's flow: the menu goes with it.
-        if (B.kind == ERow::CloseWindow) {
+        if (B.kind == ERow::CloseWindow && !g_menu->windowScope) {
             const auto MINE   = ROW->window.lock();
             const bool OTHERS = std::ranges::any_of(g_menu->rows, [&](const SRow& r) {
                 const auto W = r.kind == ERow::Window ? r.window.lock() : PHLWINDOW{};

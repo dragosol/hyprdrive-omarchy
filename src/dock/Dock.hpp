@@ -298,6 +298,9 @@ void setForeignInsert(int index);
 // menuContains/menuClick answer against the LAST frame's geometry. That is the
 // frame the user is looking at when they click, which is the one that matters.
 bool openMenu(PHLMONITOR monitor, const Vector2D& point);
+// A right-click on a preview in the hover pane: the menu of THAT window alone
+// (false: no preview under `point`).
+bool openWindowMenu(PHLMONITOR monitor, const Vector2D& point);
 bool menuOpen();
 void closeMenu();
 // Dock stacks A: while Rename in Dock's field is up the menu owns the keyboard.

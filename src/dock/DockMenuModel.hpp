@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <istream>
 #include <string>
 #include <vector>
@@ -103,6 +104,7 @@ namespace Hyprdrive::Dock::MenuModel {
         }
         return out;
     }
+
     // A window row's buttons, laid left to right so the last ends at `right`,
     // each `btn` square-ish px wide, touching (the row's own hover chip gives
     // them their spacing). Always `n` slots, so the buttons line up down the
@@ -114,5 +116,44 @@ namespace Hyprdrive::Dock::MenuModel {
         for (size_t b = 0; b < n; ++b)
             out.push_back(guarded(std::round(right - btn * static_cast<double>(n - b)), std::round(btn)));
         return out;
+    }
+
+    // THE WINDOW'S OWN MENU (user, 2026-11-11: "a context menu for window
+    // previews too ... functions limited to that window including closing
+    // it"), opened over its preview. It hangs ABOVE the preview pane, so the
+    // bottom row is the one nearest the pointer: Close, then the window's size
+    // and Minimize, then its moves, and its title at the top.
+    enum class EWinRow : uint8_t {
+        Header, // the title, with where it is
+        Separator,
+        MoveHere,
+        MoveEmptyWorkspace,
+        MoveScratchpad,
+        Size, // Maximize | Fullscreen
+        Minimize,
+        Show,
+        Close,
+    };
+    struct SWindowFacts {
+        bool elsewhere  = false; // on another desktop than the one the monitor shows (and not minimized)
+        bool minimized  = false;
+        bool scratchpad = false;
+    };
+    inline std::vector<EWinRow> windowMenuRows(const SWindowFacts& w) {
+        std::vector<EWinRow> r{EWinRow::Header, EWinRow::Separator};
+        if (w.elsewhere && !w.minimized)
+            r.push_back(EWinRow::MoveHere);
+        r.push_back(EWinRow::MoveEmptyWorkspace);
+        if (!w.scratchpad)
+            r.push_back(EWinRow::MoveScratchpad);
+        r.push_back(EWinRow::Separator);
+        // The app menu's split row offers itself only for a window out on a
+        // desktop; the same rule here.
+        if (!w.minimized && !w.scratchpad)
+            r.push_back(EWinRow::Size);
+        r.push_back(w.minimized ? EWinRow::Show : EWinRow::Minimize);
+        r.push_back(EWinRow::Separator);
+        r.push_back(EWinRow::Close);
+        return r;
     }
 }

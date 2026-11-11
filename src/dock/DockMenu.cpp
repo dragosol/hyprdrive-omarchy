@@ -66,45 +66,53 @@ std::string itemDesktopId(const SItem& item) {
     return !item.desktopId.empty() ? item.desktopId : AppSearch::idForClass(item.wmClass);
 }
 
+// Where a window is, as its row's hint says it -- its desktop, the scratchpad,
+// or minimized, "\u00b7 current" on the desktop this monitor is showing -- and
+// whether Move to This Workspace has anything to do for it.
+//
+// The ones on the desktop this monitor is showing say so (user, 2026-10-08)
+// -- in the hint, the dim words the row already has, so the marker costs no
+// new ink: "3 \u00b7 current". A minimized window counts by the desktop it
+// came off and comes back to. A scratchpad's is never the current one.
+static std::pair<std::string, bool> windowWhere(const PHLWINDOW& WINDOW, const PHLMONITOR& monitor) {
+    const auto  ACTIVE   = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
+    const auto  ACTIVEID = ACTIVE && !ACTIVE->m_isSpecialWorkspace ? ACTIVE->m_id : WORKSPACE_INVALID;
+    std::string where;
+    WORKSPACEID on = WORKSPACE_INVALID;
+    if (Minimize::isMinimized(WINDOW)) {
+        where = "minimized";
+        on    = Minimize::originalWorkspace(WINDOW);
+    } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
+        where = Scratchpad::label(SCRATCH);
+    else if (WINDOW->m_workspace) {
+        where = WINDOW->m_workspace->m_name;
+        on    = WINDOW->m_workspace->m_id;
+    }
+    if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
+        where += " \u00b7 current";
+    // Onto the desktop this monitor is showing -- only for a window that is
+    // somewhere else (another desktop or a scratchpad). A minimized one is
+    // left to Show, which brings it back where it came from.
+    return {where, ACTIVEID != WORKSPACE_INVALID && on != ACTIVEID && !Minimize::isMinimized(WINDOW)};
+}
+
 // The rows an item's WINDOWS get, shared by an app and a location (the Trash):
 // each window with where it is and its own Move to Empty Workspace, then Show
 // Windows and whole-item Minimize / Show.
 void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WINDOWS, const SItem& item, const PHLMONITOR& monitor) {
     // Each window with WHERE it is: its desktop, the scratchpad, or minimized.
     // A list of identical app names with nothing to tell them apart was the
-    // commonest reason to open the hover panel instead.
-    //
-    // The ones on the desktop this monitor is showing say so (user, 2026-10-08)
-    // -- in the hint, the dim words the row already has, so the marker costs no
-    // new ink: "3 \u00b7 current". A minimized window counts by the desktop it
-    // came off and comes back to. A scratchpad's is never the current one.
-    const auto  ACTIVE    = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
-    const auto  ACTIVEID  = ACTIVE && !ACTIVE->m_isSpecialWorkspace ? ACTIVE->m_id : WORKSPACE_INVALID;
-    size_t      minimized = 0;
+    // commonest reason to open the hover panel instead (windowWhere).
+    size_t minimized = 0;
     for (const auto& WINDOW : WINDOWS) {
-        std::string where;
-        WORKSPACEID on = WORKSPACE_INVALID;
-        if (Minimize::isMinimized(WINDOW)) {
-            where = "minimized";
-            on    = Minimize::originalWorkspace(WINDOW);
+        const auto [where, HEREOK] = windowWhere(WINDOW, monitor);
+        if (Minimize::isMinimized(WINDOW))
             ++minimized;
-        } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
-            where = Scratchpad::label(SCRATCH);
-        else if (WINDOW->m_workspace) {
-            where = WINDOW->m_workspace->m_name;
-            on    = WINDOW->m_workspace->m_id;
-        }
-        if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
-            where += " \u00b7 current";
         SRow row{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where};
         // Its moves ride ITS row, as buttons, so which window they move is
         // never a question (user, 2026-10-08) and a window costs one row, not
         // four (user, 2026-11-03). Always four slots, so the buttons line up
         // down the list; a move that does nothing is left out of its slot.
-        // Onto the desktop this monitor is showing -- only for a window that is
-        // somewhere else (another desktop or a scratchpad). A minimized one is
-        // left to Show, which brings it back where it came from.
-        const bool HEREOK  = ACTIVEID != WORKSPACE_INVALID && on != ACTIVEID && !Minimize::isMinimized(WINDOW);
         const bool STASHOK = !Scratchpad::workspaceFor(WINDOW);
         row.inlines.push_back({.kind = HEREOK ? ERow::MoveHere : ERow::Separator, .glyph = MenuGlyph::HERE, .label = "Move to This Workspace"});
         row.inlines.push_back({.kind = ERow::MoveEmptyWorkspace, .glyph = MenuGlyph::NEW, .label = "Move to Empty Workspace"});
@@ -330,6 +338,52 @@ std::vector<SRow> buildRows(const SItem& item, const PHLMONITOR& monitor) {
         rows.emplace_back(SRow{.kind = ERow::ForceQuit, .label = "Force Quit", .glyph = MenuGlyph::KILL, .danger = true});
     }
 
+    return rows;
+}
+
+// THE WINDOW'S OWN MENU (user, 2026-11-11: "a context menu for window previews
+// too, similar to the app context menu but with functions limited to that
+// window including closing it"). The app menu's rows for one window, in the
+// order MenuModel::windowMenuRows gives -- every row the same ERow the app
+// menu's row or button is, so each acts through activateRow exactly as there.
+// Nothing app-wide: no New Window, Always Open in, favourites or Quit.
+std::vector<SRow> buildWindowRows(const SItem& item, const PHLWINDOW& window, const PHLMONITOR& monitor) {
+    std::vector<SRow> rows;
+    if (!window)
+        return rows;
+    const auto [where, HEREOK] = windowWhere(window, monitor);
+    const bool MINIMIZED       = Minimize::isMinimized(window);
+    const bool SCRATCH         = Scratchpad::workspaceFor(window) != nullptr;
+    const auto& FS             = ::Fullscreen::controller();
+    for (const auto K : MenuModel::windowMenuRows({.elsewhere = HEREOK, .minimized = MINIMIZED, .scratchpad = SCRATCH})) {
+        using W = MenuModel::EWinRow;
+        switch (K) {
+            case W::Header:
+                rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(window->m_title.empty() ? item.wmClass : window->m_title), .window = window, .glyph = MenuGlyph::WINDOW,
+                                       .hint = where});
+                break;
+            case W::Separator: rows.emplace_back(SRow{.kind = ERow::Separator}); break;
+            case W::MoveHere: rows.emplace_back(SRow{.kind = ERow::MoveHere, .label = "Move to This Workspace", .window = window, .glyph = MenuGlyph::HERE}); break;
+            case W::MoveEmptyWorkspace:
+                rows.emplace_back(SRow{.kind = ERow::MoveEmptyWorkspace, .label = "Move to Empty Workspace", .window = window, .glyph = MenuGlyph::NEW});
+                break;
+            case W::MoveScratchpad: rows.emplace_back(SRow{.kind = ERow::MoveScratchpad, .label = "Move to Scratchpad", .window = window, .glyph = MenuGlyph::STASH}); break;
+            case W::Size: {
+                const bool MAX = FS && FS->isFullscreen(window, ::Fullscreen::FSMODE_MAXIMIZED);
+                const bool FUL = FS && FS->isFullscreen(window, ::Fullscreen::FSMODE_FULLSCREEN);
+                SRow       SIZE{.kind = ERow::WindowSize, .window = window, .segmented = true};
+                SIZE.inlines.push_back({.kind = ERow::Maximize, .glyph = MAX ? MenuGlyph::RESTORE : MenuGlyph::WINDOW, .label = MAX ? "Restore" : "Maximize", .on = MAX});
+                SIZE.inlines.push_back({.kind = ERow::Fullscreen, .glyph = FUL ? MenuGlyph::COMPRESS : MenuGlyph::EXPAND, .label = FUL ? "Exit Fullscreen" : "Fullscreen", .on = FUL});
+                rows.emplace_back(std::move(SIZE));
+                break;
+            }
+            case W::Minimize:
+                rows.emplace_back(SRow{.kind = ERow::MinimizeAll, .label = "Minimize", .window = window, .glyph = MenuGlyph::MINIMIZE, .oneWindow = true});
+                break;
+            case W::Show: rows.emplace_back(SRow{.kind = ERow::RestoreAll, .label = "Show", .window = window, .glyph = MenuGlyph::RESTORE, .oneWindow = true}); break;
+            case W::Close: rows.emplace_back(SRow{.kind = ERow::CloseWindow, .label = "Close Window", .window = window, .glyph = MenuGlyph::CLOSE}); break;
+        }
+    }
     return rows;
 }
 
@@ -639,7 +693,15 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     // dock, the window list scrolls inside the plate, a row at a time, between
     // two chevron strips; the rows above and below it stay put.
     const double EDGEPX  = std::round(MENU_EDGE_MARGIN * SCALE);
-    const float  ROOM    = sc<float>(layout.pill.y) - MENU_GAP * SCALE - sc<float>(EDGEPX);
+    // Where the plate's bottom edge sits: MENU_GAP over the pill, or -- a
+    // preview's menu -- over the pane it came from, following the pane while
+    // it reflows (a window of it closing). The ghost keeps where it was.
+    if (M.windowScope && LIVE && panelOn(monitor) && !g_hover.panel->out && g_hover.drawn.height >= 1)
+        M.bottom = sc<double>(g_hover.drawn.y) - MENU_GAP * SCALE;
+    if (M.windowScope && M.bottom < 0.0)
+        M.bottom = sc<double>(M.anchor.y) - MENU_GAP * SCALE;
+    const float  BOTTOM  = M.windowScope ? sc<float>(M.bottom) : sc<float>(layout.pill.y) - MENU_GAP * SCALE;
+    const float  ROOM    = BOTTOM - sc<float>(EDGEPX);
     const float  CHEV    = std::round(MENU_SEP_H * SCALE * 1.6F);
     int          segFirst = -1, segLast = -1;
     for (size_t i = 0; i < M.rows.size(); ++i) {
@@ -666,7 +728,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         M.scrollTop = 0;
 
     const float CX = sc<float>(M.anchor.x) + sc<float>(M.anchor.width) / 2.F;
-    CBox        plate{std::round(CX - width / 2.F), std::round(sc<float>(layout.pill.y) - MENU_GAP * SCALE - height), std::round(width), std::round(height)};
+    CBox        plate{std::round(CX - width / 2.F), std::round(BOTTOM - height), std::round(width), std::round(height)};
     // Wholly on screen, border and all, with room to breathe: clamped flush to
     // 0 the plate's left border sat ON the screen edge and half of it was cut
     // away (user, 2026-09-29, an app far left on the dock).

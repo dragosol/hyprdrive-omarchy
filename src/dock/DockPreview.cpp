@@ -785,7 +785,9 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // accent the pill uses, thinner when the cell is not hovered.
         // The step between the two fades on Hyprland's `border` animation, as
         // a window's border does when it takes focus (BorderFade.hpp).
-        const bool IS_HOVERED = !g_hover.panel->out && cell.containsPoint(MOUSE);
+        // Its own menu open keeps its ring lit: the menu is for THIS preview.
+        const bool SCOPED     = g_menu && g_menu->windowScope && g_menu->scope.lock() == WINDOW;
+        const bool IS_HOVERED = !g_hover.panel->out && (cell.containsPoint(MOUSE) || SCOPED);
         const int  ROUND      = INNER;
         CBorderPassElement::SBorderData border;
         border.box = cell.copy().round();

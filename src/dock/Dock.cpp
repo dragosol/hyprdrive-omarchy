@@ -1132,13 +1132,18 @@ void render(PHLMONITOR monitor) {
         // under the press would make every preview click look broken.
         const bool ICONDRAG    = g_dockDrag.drag.has_value();
         const bool TEAROUT     = g_dockDrag.panel && g_dockDrag.panel->live;
-        const bool PANELWANTED = (HASHOVER || OVERPANEL) && !g_menu && !ICONDRAG && !TEAROUT;
+        // A preview's own menu keeps its pane up whatever the pointer does
+        // (it is on the menu, above the pane), and keeps it on its app: no
+        // other icon's hover takes it over while the menu is open. Closed with
+        // the pointer off the pane, the pane leaves on its ordinary grace.
+        const bool WINMENU     = g_menu && g_menu->windowScope && g_menu->monitor == monitor->m_id && g_hover.panel && g_hover.panel->monitor == monitor->m_id;
+        const bool PANELWANTED = (WINMENU || ((HASHOVER || OVERPANEL) && !g_menu)) && !ICONDRAG && !TEAROUT;
         CBox        panelAnchor;
         std::string panelClass;
         std::string panelDesktopId;
         std::string panelScratchpad;
         if (PANELWANTED) {
-            const bool FROMICON = HASHOVER;
+            const bool FROMICON = HASHOVER && !WINMENU;
             panelAnchor         = FROMICON ? HOVEREDITEM->iconBox : g_hover.panel->anchor;
             panelClass          = FROMICON ? HOVEREDITEM->wmClass : g_hover.panel->wmClass;
             panelDesktopId      = FROMICON ? HOVEREDITEM->desktopId : g_hover.panel->desktopId;

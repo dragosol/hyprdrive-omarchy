@@ -72,6 +72,15 @@ std::vector<PHLWINDOW> menuWindows(const SItem& item) {
     return itemWindows(item);
 }
 
+// What a row acts on: its own window when it is scoped to one (the window
+// menu), else every window of the item.
+static std::vector<PHLWINDOW> rowWindows(const SItem& item, const SRow& row) {
+    if (!row.oneWindow)
+        return menuWindows(item);
+    const auto WINDOW = row.window.lock();
+    return WINDOW && WINDOW->m_isMapped ? std::vector<PHLWINDOW>{WINDOW} : std::vector<PHLWINDOW>{};
+}
+
 std::vector<PHLWINDOW> itemWindows(const SItem& item) {
     // A location's windows are the file manager's windows showing it, so a
     // click, the menu's window rows and the hover previews treat the Trash the
@@ -911,19 +920,24 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         }
 
         case ERow::MinimizeAll: {
+            // The window menu's Minimize is this row for its window alone, and
+            // a window that has gone meanwhile is nothing to act on -- never
+            // the whole app.
+            const auto              WINDOWS = rowWindows(item, row);
             ConfigureHold::CHold    oneResize;
-            Minimize::CGestureBoxes boxesBeforeAnyMoves(menuWindows(item));
-            for (const auto& WINDOW : menuWindows(item))
+            Minimize::CGestureBoxes boxesBeforeAnyMoves(WINDOWS);
+            for (const auto& WINDOW : WINDOWS)
                 if (!Minimize::isMinimized(WINDOW))
                     Flight::minimize(monitor, WINDOW, false);
             return;
         }
 
         case ERow::RestoreAll: {
+            const auto           WINDOWS = rowWindows(item, row);
             ConfigureHold::CHold oneResize;
             {
-                Minimize::CRestoreSlots ownSlots(menuWindows(item));
-                for (const auto& WINDOW : menuWindows(item))
+                Minimize::CRestoreSlots ownSlots(WINDOWS);
+                for (const auto& WINDOW : WINDOWS)
                     if (Minimize::isMinimized(WINDOW))
                         Flight::restore(monitor, WINDOW);
             }
