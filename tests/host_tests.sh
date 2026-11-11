@@ -29,6 +29,9 @@
 #                     URIs, and Show in Files reaching a stand-in FileManager1.
 #   launcher_states_test  LauncherStates.hpp: badge and progress state is its
 #                     sender's, and goes when the sender leaves the bus.
+#   placement_model_test  PlacementModel.hpp: where a new window goes, every
+#                     fact against the rulings, and random open/float/close
+#                     sequences over a fullscreen app (Beside and the way back).
 #   dock_menu_model_test  DockMenuModel.hpp: "Always Open in" lists, open-fullscreen rule, segment boxes,
 #                     window-row buttons, a preview's own menu rows, row-preview placement
 #   debug_paths_test  DebugPaths.hpp: debug logs under $XDG_RUNTIME_DIR, /tmp
@@ -211,6 +214,7 @@ run row_test tests/unit/row_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
 run strip_cleanup_test tests/unit/strip_cleanup_test.cpp
 run desktop_rows_test tests/unit/desktop_rows_test.cpp
+run placement_model_test tests/unit/placement_model_test.cpp
 run fullscreen_book_test tests/unit/fullscreen_book_test.cpp
 run fullscreen_carry_test tests/unit/fullscreen_carry_test.cpp
 run desktop_row_test tests/unit/desktop_row_test.cpp
