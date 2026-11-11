@@ -98,6 +98,8 @@ namespace Hyprdrive::FullscreenBook {
 
     // A WINDOW OPENED OVER A FULLSCREEN APP on desktop `appDesk`: it gets the
     // next place, made if it is not free -- and then owed back, like a trip's.
+    // In the app's monitor's row: a block's 10th desktop is followed by the
+    // row's overflow, never by the next block's first id.
     template <class FREE>
     SStart beside(const Row& row, Id appDesk, FREE&& isFree) {
         const Id AT = appDesk < 1 ? NO_PLACE : nextPlace(row, appDesk);
@@ -108,6 +110,41 @@ namespace Hyprdrive::FullscreenBook {
     template <class FREE>
     SStart beside(Id appDesk, FREE&& isFree) {
         return beside(Row{}, appDesk, isFree);
+    }
+    // A BESIDE LINK (Placement.cpp, FullscreenDesktop::beside): windows that
+    // opened over a fullscreen app were given the desktop after it. While the
+    // link lives that desktop is the app's companion: further windows of the
+    // same app join it, and when the last of them closes the user who was
+    // there for them (he asked for it -- `wanted` -- and is looking at it) is
+    // taken back to the app (the way back, owner 2026-11-11: "upon closing the
+    // window, user should be sent back to the fullscreen app"). Then the link
+    // ends, and what it owes is a Beside debt like any other.
+    //   Hold        keep it (windows there, a strip sliding, a remap's gap)
+    //   ReturnToApp the view goes back to the app, then the link ends
+    //   Drop        the link ends, nobody moves
+    enum class ELink { Hold, ReturnToApp, Drop };
+    struct SLinkFacts {
+        bool appAlive      = false; // the fullscreen app's window is mapped
+        bool appFullscreen = false; // ...and still fullscreen on its own desktop
+        bool spaceAlive    = false; // the link's desktop exists
+        bool any           = false; // ...holding windows of the link
+        bool foreign       = false; // ...or a window of someone else
+        bool wanted        = false; // prompted, or the user went to it since
+        bool viewOn        = false; // the monitor shows the link's desktop
+        bool driving       = false; // a desktop strip is sliding
+        bool settling      = false; // emptied a moment ago (a Wine remap is a close, then a map)
+    };
+    constexpr ELink link(const SLinkFacts& f) {
+        if (!f.spaceAlive || f.foreign)
+            return ELink::Drop;
+        if (f.any)
+            return f.appAlive && f.appFullscreen ? ELink::Hold : ELink::Drop;
+        // Empty.
+        if (!f.appAlive || !f.appFullscreen)
+            return ELink::Drop;
+        if (f.settling || f.driving)
+            return ELink::Hold;
+        return f.wanted && f.viewOn ? ELink::ReturnToApp : ELink::Drop;
     }
 
     // PAYING A DEBT BACK. Two kinds:
@@ -208,12 +245,23 @@ namespace Hyprdrive::FullscreenBook {
         bool           beside = false;
         std::string    cls;
     };
+    struct SSavedBeside {
+        std::uintptr_t app = 0, appSpace = 0, space = 0, mon = 0;
+        Id             at = NO_PLACE;
+        bool           owes = false, wanted = false;
+        long long      pid  = 0;
+        std::string    cls;
+    };
     struct SSaved {
         std::vector<SSavedTrip>     trips;
         std::vector<SSavedDebt>     debts;
         std::vector<std::uintptr_t> settled;
+        std::vector<SSavedBeside>   besides;
     };
-    inline constexpr std::string_view SAVED_TAG = "fsdesk1";
+    // fsdesk2 adds the beside links (B); an fsdesk1 handover (the build before)
+    // still loads.
+    inline constexpr std::string_view SAVED_TAG    = "fsdesk2";
+    inline constexpr std::string_view SAVED_TAG_V1 = "fsdesk1";
 
     inline std::string hexOf(std::string_view s) {
         std::string out;
@@ -252,6 +300,9 @@ namespace Hyprdrive::FullscreenBook {
             o << " D " << D.space << ' ' << D.mon << ' ' << D.home << ' ' << D.at << ' ' << D.pid << ' ' << int(D.beside) << ' ' << hexOf(D.cls);
         for (const auto W : s.settled)
             o << " S " << W;
+        for (const auto& B : s.besides)
+            o << " B " << B.app << ' ' << B.appSpace << ' ' << B.space << ' ' << B.mon << ' ' << B.at << ' ' << int(B.owes) << ' ' << int(B.wanted) << ' ' << B.pid << ' '
+              << hexOf(B.cls);
         return o.str();
     }
     // Anything malformed, or another build's format: nothing (a fresh start,
@@ -259,8 +310,9 @@ namespace Hyprdrive::FullscreenBook {
     inline std::optional<SSaved> load(std::string_view text) {
         std::istringstream in{std::string{text}};
         std::string        tag;
-        if (!(in >> tag) || tag != SAVED_TAG)
+        if (!(in >> tag) || (tag != SAVED_TAG && tag != SAVED_TAG_V1))
             return std::nullopt;
+        const bool V2 = tag == SAVED_TAG;
         SSaved      out;
         std::string kind;
         while (in >> kind) {
@@ -288,6 +340,19 @@ namespace Hyprdrive::FullscreenBook {
                 if (!(in >> W))
                     return std::nullopt;
                 out.settled.push_back(W);
+            } else if (kind == "B" && V2) {
+                SSavedBeside B;
+                int          owes = 0, wanted = 0;
+                std::string  cls;
+                if (!(in >> B.app >> B.appSpace >> B.space >> B.mon >> B.at >> owes >> wanted >> B.pid >> cls))
+                    return std::nullopt;
+                const auto CLS = unhex(cls);
+                if (!CLS)
+                    return std::nullopt;
+                B.owes   = owes != 0;
+                B.wanted = wanted != 0;
+                B.cls    = *CLS;
+                out.besides.push_back(B);
             } else
                 return std::nullopt;
         }

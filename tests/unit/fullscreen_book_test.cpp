@@ -994,8 +994,65 @@ static void savedAcrossReload() {
     CHECK(!load("fsdesk1 X").has_value());
 }
 
+// THE BESIDE LINK (link()): every combination of its facts, against the rule
+// in words -- and the way back only ever for a wanted link the user is
+// looking at, emptied, with the app still fullscreen and nothing sliding.
+static void besideLinks() {
+    for (int m = 0; m < (1 << 9); ++m) {
+        const SLinkFacts F{.appAlive = !!(m & 1), .appFullscreen = !!(m & 2), .spaceAlive = !!(m & 4), .any = !!(m & 8), .foreign = !!(m & 16),
+                           .wanted = !!(m & 32), .viewOn = !!(m & 64), .driving = !!(m & 128), .settling = !!(m & 256)};
+        const ELink L   = link(F);
+        const bool  APP = F.appAlive && F.appFullscreen;
+        ELink       want;
+        if (!F.spaceAlive || F.foreign)
+            want = ELink::Drop; // gone, or a desktop of its own now
+        else if (F.any)
+            want = APP ? ELink::Hold : ELink::Drop;
+        else if (!APP)
+            want = ELink::Drop; // nothing to go back to
+        else if (F.settling || F.driving)
+            want = ELink::Hold;
+        else
+            want = F.wanted && F.viewOn ? ELink::ReturnToApp : ELink::Drop;
+        CHECK(L == want);
+        if (L == ELink::ReturnToApp)
+            CHECK(F.wanted && F.viewOn && !F.any && APP && !F.driving && !F.settling);
+    }
+    // In a row: the place after the app's, the 10th's next is the overflow,
+    // never the next block; outside the row, none.
+    const auto FREE = [](Id) { return true; };
+    using Hyprdrive::Row;
+    const Row  B1   = Row::block(1, 10);
+    CHECK(beside(B1, 12, FREE).at == 13 && !beside(B1, 12, FREE).makeRoom);
+    CHECK(beside(B1, 20, FREE).at == B1.overflow + 1);
+    CHECK(beside(B1, 5, FREE).settle);
+    CHECK(beside(Row{}, 3, FREE).at == 4);
+    CHECK(beside(Row{}, 3, [](Id) { return false; }).makeRoom);
+}
+
+static void savedBesides() {
+    SSaved S;
+    S.besides.push_back({.app = 0x10, .appSpace = 0x20, .space = 0x30, .mon = 0x40, .at = 3, .owes = true, .wanted = false, .pid = 77, .cls = "a b"});
+    S.besides.push_back({.app = 1, .at = 9, .wanted = true});
+    const auto L = load(save(S));
+    CHECK(L.has_value() && L->besides.size() == 2);
+    if (L && L->besides.size() == 2) {
+        CHECK(L->besides[0].app == 0x10 && L->besides[0].appSpace == 0x20 && L->besides[0].space == 0x30 && L->besides[0].mon == 0x40);
+        CHECK(L->besides[0].at == 3 && L->besides[0].owes && !L->besides[0].wanted && L->besides[0].pid == 77 && L->besides[0].cls == "a b");
+        CHECK(L->besides[1].wanted && !L->besides[1].owes && L->besides[1].cls.empty());
+    }
+    // The build before's handover still loads (no B lines in it)...
+    const auto V1 = load("fsdesk1 T 1 2 3 4 5 6 1 S 9");
+    CHECK(V1.has_value() && V1->trips.size() == 1 && V1->settled.size() == 1 && V1->besides.empty());
+    // ...and a B line in an fsdesk1 one is malformed.
+    CHECK(!load("fsdesk1 B 1 2 3 4 5 1 0 7 -").has_value());
+    CHECK(!load("fsdesk2 B 1 2 3").has_value());
+}
+
 int main() {
     places();
+    besideLinks();
+    savedBesides();
     decisions();
     fiftyCycles();
     closedWhileAway();
