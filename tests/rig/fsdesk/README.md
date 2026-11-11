@@ -194,3 +194,70 @@ Variants:
 - Disable and re-enable the output, or unplug a headless output
   (`hyprctl output remove`): the same compaction, logged `a monitor went` / `a
   monitor came`.
+
+## 7. A reload on Mosaic keeps every window's fullscreen
+
+The bug: `hyprdrive reload` took every fullscreen window on a Mosaic desktop out
+of fullscreen (a running game dropped to windowed), and the fsdesk handover then
+sent the windows home and paid their desktops back. The desktops shifted on every
+reload. With dwindle, fullscreen survived. Hyprland keeps a tiled window's modes
+in the handler owned by the desktop's tiled algorithm. Removing or adding the
+`mosaic` algo swaps that object, and the modes go with it. On load,
+`CDwindleAlgorithm::removeTarget` also sends a real fullscreen exit. The fix
+(`FullscreenCarry.hpp`, `Mosaic::registerLayout` / `unregisterLayout`) writes the
+modes into the new handler silently. The trace shows `unload: <app> kept
+fullscreen I/C` and `load: ...` for windows on desktops that stayed on their
+layout.
+
+Smallest repro, which fails on 5338fd3: Mosaic, one kitty fullscreen, then
+`$R h plugin unload "$SO"`. `fullscreen` is 0 afterwards. With this build it is
+still 2.
+
+Build `wine_state` and find the X display as in `tests/rig/xstate/README.md`
+(steps 1 and 2).
+
+```sh
+$R eval 'hl.config({ general = { layout = "mosaic" } })' >/dev/null
+SO=/tmp/hl-fsd/staged/hyprdrive.so
+# Starting layout (above) plus: one kitty on 5, two on 6, wine_state on 7
+go 5; $R win kitty; go 6; $R win kitty; $R win kitty
+go 7; $R win env DISPLAY=:N /tmp/hl-xstate/wine_state fs 60; sleep 2
+LONE=$(addr 5 1); MAXW=$(addr 6 1); A=$(addr 1 1); X=$(addr 7 1)
+fs $LONE set                                   # a lone fullscreen window: no trip
+$R eval "hl.dispatch(hl.dsp.window.fullscreen({ window = [[address:$MAXW]], mode = \"maximized\", action = \"set\" }))" >/dev/null
+go 1; fs $A set; sleep 1                       # a trip: A leaves populated 1 for a desktop of its own
+state() { $R h -j clients | jq -c '[.[] | {address, ws: .workspace.id, fullscreen, fullscreenClient}] | sort_by(.address)'; }
+lay()   { $R h -j workspaces | jq -c '[.[] | select(.id > 0) | {id, l: .tiledLayout}] | sort_by(.id)'; }
+B=$(state); L=$(lay); I=$(ids); T0=$(wc -l < $TRACE)
+$R h plugin unload "$SO"; sleep 0.8; state; $R h plugin load "$SO"; sleep 1.5
+[ "$(state)" = "$B" ] && echo KEPT || { echo "CHANGED"; diff <(echo "$B" | jq .) <(state | jq .); }
+[ "$(ids)" = "$I" ] && echo IDS-SAME; [ "$(lay)" = "$L" ] && echo LAYOUT-SAME
+$R h getoption general:layout
+tail -n +$((T0 + 1)) $TRACE | grep -E 'home to|paying back|kept fullscreen|reloaded:'
+tail -5 /tmp/hl-xs/client.*.log                # wine_state: changes= does not jump at the reload
+```
+
+If the workspace JSON has no `tiledLayout` field, read each desktop's layout
+another way. One option: `hyprctl layoutmsg` on a window there, which only Mosaic
+answers. Another: check that a new kitty on 1 lands Mosaic-style, not as a dwindle
+split.
+
+Pass:
+- `KEPT`: every window has the same `fullscreen` / `fullscreenClient` (lone and
+  trip kitty 2/2, the maximized one 1/1, wine_state 2/2) and the same desktop
+  as before. The `state` taken while the plugin is unloaded already shows them
+  unchanged (dwindle holds the modes in between).
+- `IDS-SAME` and `LAYOUT-SAME`. `general:layout` still reads `mosaic`, and the
+  desktops that were Mosaic are Mosaic again after the load.
+- The trace after `T0` has `reloaded: 1 trips, ...` and no `home to` or `paying
+  back`. `kept fullscreen` lines are expected for unload. Load lines appear
+  only where a desktop stayed on its layout.
+- The client sees no flap. wine_state's `changes=` does not grow at the reload,
+  because it re-requests FULLSCREEN only when the state is lost. kitty's window
+  size is unchanged: compare `$R h -j clients | jq '.[] | .size'` before and
+  after.
+- Then `fs $A unset`: A goes home to 1, and its place is paid back once. This is
+  the normal case-4 ending, and the trip and its debt are intact.
+
+Variant: the same run with `general:layout = "dwindle"` gives the same result,
+and the trace has no `kept fullscreen` line (nothing is swapped).
