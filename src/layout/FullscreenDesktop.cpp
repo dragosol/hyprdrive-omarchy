@@ -84,11 +84,21 @@ namespace Hyprdrive::FullscreenDesktop {
         std::vector<SDebt>   g_given;
         std::vector<PHLWINDOWREF> g_settled; // fullscreen, deliberately left where it is
         std::vector<PHLWINDOWREF> g_besides; // opened over a fullscreen app and moved on: shown once mapped
-        // Moved to another desktop, not on a trip, not by us (movedOntoOthers).
+        // Moved to another desktop, not on a trip, not by us (movedOntoOthers);
+        // `arrived`: from an ordinary desktop -- not out of the minimize stash
+        // or a scratchpad, which are not a move onto it (g_lastSpace says).
         struct SMoved {
             PHLWINDOWREF win;
+            bool         arrived = true;
+            // The fullscreen (`true`) or maximized windows on the desktop it
+            // arrived on, as the move happened: Hyprland may take them out
+            // itself before the pass (focusing the arrival under them).
+            std::vector<std::pair<PHLWINDOWREF, bool>> hosts;
         };
         std::vector<SMoved> g_moved;
+        // The desktop each window was last moved to (the move event names only
+        // the new one).
+        std::vector<std::pair<PHLWINDOWREF, PHLWORKSPACEREF>> g_lastSpace;
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
         std::chrono::steady_clock::time_point g_leftAt;
         PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
@@ -871,6 +881,47 @@ namespace Hyprdrive::FullscreenDesktop {
         // No hold-out for an ordinary app; one whose client maximizes it again
         // gets one (reasserted, above). XGeometry's storm guard only strips a
         // request for the state the window already HAS, so it never fights this.
+        // A WINDOW MOVED ONTO A FULLSCREEN APP'S DESKTOP TAKES IT OUT (owner,
+        // 2026-11-11: "if I move a window into a desktop with a fullscreen app
+        // it should un-fullscreen the app in the target desktop"). The rule
+        // above, the other way round: after a move a desktop never holds a
+        // fullscreen or maximized window together with others. The app there
+        // leaves fullscreen (maximize) and both are tiled by the layout
+        // (Mosaic: the arriving window at its size, the app back at the size
+        // it had before fullscreen). A GAME too -- a deliberate move overrides
+        // the game exception -- held out (SUPPRESS_FULLSCREEN) while it shares
+        // the desktop, so Wine does not put it back. An app on a fullscreen
+        // TRIP ends it where it is: it no longer is alone, the desktop is its
+        // own now and nothing is owed -- no flight home, no place paid back.
+        // Not a move: a window opening over a fullscreen app (besideFullscreen
+        // sends it on), our own trip moves (g_busy), a window coming back out
+        // of the minimize stash or a scratchpad (SMoved::arrived).
+        void arrivedOnFullscreen(const PHLWINDOW& w, const std::vector<std::pair<PHLWINDOWREF, bool>>& hosts) {
+            for (const auto& [REF, WASFS] : hosts) {
+                const auto X = REF.lock();
+                if (!X || X == w || !X->m_isMapped || X->m_workspace != w->m_workspace)
+                    continue;
+                if (!WASFS) {
+                    trace(std::format("{} moved onto {}: maximized {} un-maximized", w->m_class, w->m_workspace->m_id, X->m_class));
+                    if (maximized(X))
+                        unmaximize(X);
+                    std::erase_if(g_unmaxed, [&](const SUnmaxed& u) { return !u.win || u.win.lock() == X; });
+                    g_unmaxed.push_back({X, X->m_workspace, Time::steadyNow()});
+                    continue;
+                }
+                const bool TRIP = std::erase_if(g_trips, [&](const STrip& t) { return t.win.lock() == X; }) > 0;
+                trace(std::format("{} moved onto {}: fullscreen {} out of fullscreen{}", w->m_class, w->m_workspace->m_id, X->m_class,
+                                  TRIP ? ", its trip ends here (nothing owed)" : ""));
+                std::erase_if(g_settled, [&](const PHLWINDOWREF& r) { return !r || r.lock() == X; });
+                if (fullscreen(X)) {
+                    ++g_busy;
+                    Fullscreen::controller()->setFullscreenMode(X, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
+                    --g_busy;
+                }
+                holdOut(X);
+            }
+        }
+
         void movedOntoOthers() {
             releaseHeld(false);
             reasserted();
@@ -878,6 +929,8 @@ namespace Hyprdrive::FullscreenDesktop {
                 const auto W = M.win.lock();
                 if (!W || !W->m_isMapped || !DesktopOrder::ordinary(W->m_workspace) || othersOn(W->m_workspace, W) == 0)
                     continue;
+                if (M.arrived && !maximized(W) && !fullscreen(W))
+                    arrivedOnFullscreen(W, M.hosts);
                 if (maximized(W)) {
                     trace(std::format("{} moved onto {} with other windows: un-maximized", W->m_class, W->m_workspace->m_id));
                     unmaximize(W);
@@ -1187,8 +1240,22 @@ namespace Hyprdrive::FullscreenDesktop {
             // Moved by anyone but us: looked at once the move is done
             // (movedOntoOthers; Hyprland takes a fullscreen window out of
             // fullscreen for the move and puts it back after).
-            if (w && !tripOf(w))
-                g_moved.push_back({w});
+            if (w) {
+                std::erase_if(g_lastSpace, [&](const auto& e) { return !e.first || !e.second; });
+                auto       LAST    = std::ranges::find_if(g_lastSpace, [&](const auto& e) { return e.first.lock() == w; });
+                const bool ARRIVED = LAST == g_lastSpace.end() || DesktopOrder::ordinary(LAST->second.lock());
+                if (LAST == g_lastSpace.end())
+                    g_lastSpace.emplace_back(w, w->m_workspace);
+                else
+                    LAST->second = w->m_workspace;
+                if (!tripOf(w)) {
+                    SMoved m{.win = w, .arrived = ARRIVED};
+                    for (const auto& X : Desktop::windowState()->windows())
+                        if (X && X != w && X->m_isMapped && X->m_workspace == w->m_workspace && (fullscreen(X) || maximized(X)))
+                            m.hosts.emplace_back(X, fullscreen(X));
+                    g_moved.push_back(std::move(m));
+                }
+            }
             if (!g_trips.empty() || !g_debts.empty() || !g_moved.empty() || !g_heldOut.empty())
                 arm(1);
         });
