@@ -1,6 +1,7 @@
 #include "PluginParts.hpp"
 #include "FunctionHooks.hpp"
 #include "Workers.hpp"
+#include "TerminateLog.hpp"
 using namespace PluginDetail;
 
 namespace PluginDetail {
@@ -730,6 +731,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Decode icons ahead of the first open / first keystroke (OverviewRender.hpp).
     OverviewRender::startIconWarmer();
 
+    // LAST: a std::terminate while the plugin is loaded leaves its exception
+    // and a backtrace in $XDG_STATE_HOME/hyprdrive/terminate.log, then aborts
+    // as before (TerminateLog.hpp). Not earlier: an init that throws is
+    // dlclosed with no PLUGIN_EXIT, which would leave the handler in unmapped code.
+    Hyprdrive::TerminateLog::install();
+
     return {Hyprdrive::Compat::NAME, "Mission-control overview + dock for Hyprland", "Vaxry, yayuuu, dragos", SCROLLOVERVIEW_VERSION};
 }
 
@@ -907,4 +914,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     Hyprdrive::Workers::finishShutdown();
 
     HyprlandAPI::reloadConfig(); // re-adds built-in gestures cleared above
+
+    // The very last thing: a terminate anywhere in the exit above is still
+    // logged. The previous handler goes back unless another was installed
+    // over ours meanwhile, which is then left as it is (and said so).
+    if (!Hyprdrive::TerminateLog::uninstall())
+        Log::logger->log(Log::ERR, "[hyprdrive] another std::terminate handler was installed over hyprdrive's: left in place, and the plugin's code kept loaded for it");
 }

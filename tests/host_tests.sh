@@ -42,6 +42,8 @@
 #                     change compacted them; no stale debt reopens a hole).
 #   workers_test      Workers.hpp: the owner of every worker thread -- start,
 #                     stop, join, the shutdown deadline and abandonment.
+#   terminate_log_test  TerminateLog.hpp, in children that really terminate:
+#                     the record, the chain to the previous handler, the cap.
 #   motion_math_test  MotionMath.hpp: each shared motion function against
 #                     verbatim copies of the definitions it replaced, bit for bit.
 #
@@ -123,6 +125,7 @@ run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run dock_drop_test tests/unit/dock_drop_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp
 run workers_test tests/unit/workers_test.cpp src/core/Workers.cpp -pthread
+run terminate_log_test tests/unit/terminate_log_test.cpp src/debug/TerminateLog.cpp
 run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
