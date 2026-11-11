@@ -1,4 +1,5 @@
 #include "Ripple.hpp"
+#include "MotionClock.hpp"
 
 #include "Config.hpp"
 
@@ -125,7 +126,7 @@ void main() {
         }
 
         float ageOf(const SRipple& r) {
-            return std::chrono::duration<float>(Time::steadyNow() - r.born).count();
+            return Hyprdrive::Motion::secondsBetween(Time::steadyNow(), r.born);
         }
 
         bool finiteBox(const CBox& b) {

@@ -1,4 +1,5 @@
 #include "ScratchpadExit.hpp"
+#include "MotionClock.hpp"
 
 #include "OverviewInternal.hpp"
 #include "OverviewRender.hpp"
@@ -178,7 +179,7 @@ namespace Hyprdrive::ScratchpadExit {
                     st.hoverSince = Time::steadyNow();
                     continue;
                 }
-                if (std::chrono::duration<float, std::milli>(Time::steadyNow() - *st.hoverSince).count() >= BAR_DWELL_MS) {
+                if (Hyprdrive::Config::realElapsedMs(*st.hoverSince) >= BAR_DWELL_MS) {
                     if (const auto SPECIAL = shownScratchpad(MON)) {
                         Scratchpad::hide(SPECIAL);
                         g_pHyprRenderer->damageMonitor(MON);
@@ -393,9 +394,9 @@ namespace Hyprdrive::ScratchpadExit {
         const float S       = sc<float>(monitor->m_scale);
         const CBox  BAR{0.0, 0.0, std::round(sc<float>(monitor->m_size.x) * S), std::round(BARL * S)};
         const auto  NOW     = Time::steadyNow();
-        const float ELAPSED = std::chrono::duration<float, std::milli>(NOW - st.barSince).count();
+        const float ELAPSED = Hyprdrive::Motion::msBetween(NOW, st.barSince);
         const float IN      = std::clamp(ELAPSED / FADE_IN_MS, 0.F, 1.F);
-        const float DWELL   = st.hoverSince ? std::clamp(std::chrono::duration<float, std::milli>(NOW - *st.hoverSince).count() / BAR_DWELL_MS, 0.F, 1.F) : 0.F;
+        const float DWELL   = st.hoverSince ? std::clamp(Hyprdrive::Motion::msBetween(NOW, *st.hoverSince) / BAR_DWELL_MS, 0.F, 1.F) : 0.F;
 
         const int PHASE = sc<int>(std::fmod(ELAPSED, DRIFT_MS) / DRIFT_MS * PHASES);
         if (const auto STRIPES = stripeFrame(monitor, SURF_BAR, Vector2D{BAR.width, BAR.height}, PHASE); STRIPES) {
@@ -408,7 +409,7 @@ namespace Hyprdrive::ScratchpadExit {
 
         // The words: after the left cluster, in the theme's text colour.
         auto& scan = g_barScan[monitor->m_id];
-        if (!scan.valid || std::chrono::duration<float, std::milli>(NOW - scan.at).count() >= BAR_SCAN_MS) {
+        if (!scan.valid || Hyprdrive::Motion::msBetween(NOW, scan.at) >= BAR_SCAN_MS) {
             scan    = scanBar(topBar(monitor));
             scan.at = NOW;
         }
@@ -454,7 +455,7 @@ namespace Hyprdrive::ScratchpadExit {
             return;
 
         const auto  NOW     = Time::steadyNow();
-        const float ELAPSED = std::chrono::duration<float, std::milli>(NOW - st.since).count();
+        const float ELAPSED = Hyprdrive::Motion::msBetween(NOW, st.since);
         const float ALPHA   = std::clamp(ELAPSED / FADE_IN_MS, 0.F, 1.F);
 
         const float S    = sc<float>(monitor->m_scale);

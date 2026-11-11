@@ -2,6 +2,7 @@
 // scroll spring and layout. Split out of DockStacks.cpp; the state is still there
 // (StackParts.hpp).
 #include "StackParts.hpp"
+#include "MotionClock.hpp"
 
 using namespace StacksDetail;
 
@@ -141,10 +142,6 @@ namespace StacksDetail {
         return !g_popup || !g_popup->grid || g_popup->gridBox.empty() || g_popup->gridBox.containsPoint(point);
     }
 
-    float elapsed(const Time::steady_tp& since) {
-        return std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count();
-    }
-
     // Hops and shakes that have run their course. Only Stacks::render() used
     // to retire them, and the HIDDEN dock never reaches it: a file landing
     // while the dock was away kept animating() true, and every monitor
@@ -153,8 +150,8 @@ namespace StacksDetail {
     // kept for the hidden dock's longer peek (Dock::STACK_PEEK_MS); on the
     // dock it is over at HOP_MS and draws nothing after.
     void retireHops() {
-        std::erase_if(g_bounces, [](const SHop& h) { return elapsed(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
-        std::erase_if(g_shakes, [](const SHop& h) { return elapsed(h.startedAt) > SHAKE_MS; });
+        std::erase_if(g_bounces, [](const SHop& h) { return Hyprdrive::Config::realElapsedMs(h.startedAt) > std::max(Dock::HOP_MS, Dock::STACK_PEEK_MS); });
+        std::erase_if(g_shakes, [](const SHop& h) { return Hyprdrive::Config::realElapsedMs(h.startedAt) > SHAKE_MS; });
     }
 
     // Rows the fan shows at once: every visible entry, up to its slots -- and
@@ -243,7 +240,7 @@ namespace StacksDetail {
 
     void tick(SPopup& p) {
         const auto NOW = Time::steadyNow();
-        float      DT  = p.ticked ? std::min(std::chrono::duration<float, std::milli>(NOW - p.lastTick).count(), MAX_TICK_MS) : 0.F;
+        float      DT  = p.ticked ? std::min(Hyprdrive::Motion::msBetween(NOW, p.lastTick), MAX_TICK_MS) : 0.F;
         // anim_scale, like every other hyprdrive animation: 10 = ten times
         // slower, 0 = snap.
         if (const float AS = Hyprdrive::Config::animScale(); AS <= 0.F)
@@ -255,7 +252,7 @@ namespace StacksDetail {
         p.lastDT       = DT;
         // Only a FIRST read holds it: a folder re-reading after a change still
         // has its previous entries to show, and shows them.
-        if (!p.leaving && p.loading && p.entries.empty() && elapsed(p.since) < OPEN_WAIT_MS)
+        if (!p.leaving && p.loading && p.entries.empty() && Hyprdrive::Config::realElapsedMs(p.since) < OPEN_WAIT_MS)
             DT = 0.F;
         // The hover blow-ups ride the same frame clock.
         p.hoverMoving = false;
@@ -267,12 +264,12 @@ namespace StacksDetail {
         std::erase_if(p.hoverAmt, [&](const auto& kv) { return kv.second <= 0.F && kv.first != p.hoverKey; });
 
         // The fan's scroll, and the scrollbar that shows while it moves.
-        if (p.fingerScroll && elapsed(p.lastScrollAt) > FINGER_REST_MS) {
+        if (p.fingerScroll && Hyprdrive::Config::realElapsedMs(p.lastScrollAt) > FINGER_REST_MS) {
             p.scrollGoal   = std::round(p.scrollGoal);
             p.fingerScroll = false;
         }
         stepScroll(p, DT);
-        const bool BARON = !p.grid && fanMaxScroll(p) > 0.F && (scrollMoving(p) || p.fingerScroll || elapsed(p.lastScrollAt) < BAR_HOLD_MS);
+        const bool BARON = !p.grid && fanMaxScroll(p) > 0.F && (scrollMoving(p) || p.fingerScroll || Hyprdrive::Config::realElapsedMs(p.lastScrollAt) < BAR_HOLD_MS);
         p.barAlpha       = std::clamp(p.barAlpha + (BARON ? DT / BAR_IN_MS : -DT / BAR_OUT_MS), 0.F, 1.F);
 
         // The filter field: the overview pill's springs (SSearchFieldMotion's

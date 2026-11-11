@@ -1,4 +1,5 @@
 #include "DesktopStrip.hpp"
+#include "MotionClock.hpp"
 #include "FunctionHooks.hpp"
 
 #include "Mosaic.hpp"
@@ -207,7 +208,7 @@ namespace Hyprdrive::DesktopStrip {
         }
 
         void advance(Clock::time_point now) {
-            const double DT = std::clamp(std::chrono::duration<double>(now - g.last).count(), 0.0, 0.25);
+            const double DT = std::clamp(Hyprdrive::Motion::secondsBetween<double>(now, g.last), 0.0, 0.25);
             g.last          = now;
             const double W  = g.settings.smooth && g.drive.dragging ? g.omega * DRAG_STIFFER : g.omega;
             g.spring.step(g.drive.goal(g.settings), W, DT);
@@ -539,8 +540,8 @@ namespace Hyprdrive::DesktopStrip {
         // The fingers' speed as they let go: the last two frames, if recent.
         double v = 0;
         if (g_swipe.mon.lock() == mon && g_swipe.n >= 2) {
-            const double DT  = std::chrono::duration<double>(g_swipe.t[1] - g_swipe.t[0]).count();
-            const double AGE = std::chrono::duration<double>(Clock::now() - g_swipe.t[1]).count();
+            const double DT  = Hyprdrive::Motion::secondsBetween<double>(g_swipe.t[1], g_swipe.t[0]);
+            const double AGE = Hyprdrive::Motion::secondsBetween<double>(Clock::now(), g_swipe.t[1]);
             if (DT > 0.001 && AGE < 0.06)
                 v = (g_swipe.o[1] - g_swipe.o[0]) / DT;
         }

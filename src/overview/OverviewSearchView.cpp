@@ -533,7 +533,7 @@ namespace {
 // searchHoverEasing() for frames while it runs.
     constexpr float SEARCH_HOVER_MS = 140.F;
     float           searchLitT() {
-        const float T = std::clamp(SearchLetters::msSince(Time::steadyNow(), g_searchLitAt) / SEARCH_HOVER_MS, 0.F, 1.F);
+        const float T = std::clamp(Hyprdrive::Motion::msBetween(Time::steadyNow(), g_searchLitAt) / SEARCH_HOVER_MS, 0.F, 1.F);
         return T * T * (3.F - 2.F * T);
     }
     float searchLit(int index) {
@@ -556,11 +556,11 @@ namespace OverviewDetail {
 
 bool pillPlaying() {
     return g_pillPress.moving || g_placeholderLetters.busy(Time::steadyNow()) ||
-        (g_pillReleasedAt.time_since_epoch().count() != 0 && SearchLetters::msSince(Time::steadyNow(), g_pillReleasedAt) < PILL_TAIL_RETURN_MS + 20.F);
+        (g_pillReleasedAt.time_since_epoch().count() != 0 && Hyprdrive::Motion::msBetween(Time::steadyNow(), g_pillReleasedAt) < PILL_TAIL_RETURN_MS + 20.F);
 }
 
 bool searchHoverEasing() {
-    return g_searchLitAt.time_since_epoch().count() != 0 && SearchLetters::msSince(Time::steadyNow(), g_searchLitAt) < SEARCH_HOVER_MS + 20.F;
+    return g_searchLitAt.time_since_epoch().count() != 0 && Hyprdrive::Motion::msBetween(Time::steadyNow(), g_searchLitAt) < SEARCH_HOVER_MS + 20.F;
 }
 }
 
@@ -1194,7 +1194,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             if (ENGAGED)
                 return bornAt < engagedAt ? 1.F : 0.F;
             return g_pillReleasedAt.time_since_epoch().count() == 0 ? 1.F :
-                                                                       std::clamp(SearchLetters::msSince(NOW, g_pillReleasedAt) / PILL_TAIL_RETURN_MS, 0.F, 1.F);
+                                                                       std::clamp(Hyprdrive::Motion::msBetween(NOW, g_pillReleasedAt) / PILL_TAIL_RETURN_MS, 0.F, 1.F);
         };
         const auto  TAILALPHA  = [&](float centreX, SearchLetters::clock::time_point bornAt) {
             if (tailTo <= tailFrom)

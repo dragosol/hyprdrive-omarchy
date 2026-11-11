@@ -60,18 +60,16 @@ void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alp
         g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(blur));
 }
 
-// REAL milliseconds, deliberately NOT the dock's elapsedMs. That one divides by
+// The staleness windows below read REAL milliseconds (Config::realElapsedMs),
+// deliberately NOT the dock's elapsedMs. That one divides by
 // plugin:scrolloverview:anim_scale, which is right for every animation in this
 // file and wrong here: this is a staleness window on a frame-callback policy,
 // not a curve. At anim_scale 10 it would hold entries for 2.5s, and at 0.05 it
 // would expire them in 12ms and starve the previews it exists to keep alive.
-float realElapsedMs(const Time::steady_tp& since) {
-    return sc<float>(std::chrono::duration<float, std::milli>(Time::steadyNow() - since).count());
-}
 
 void notePreviewing(const PHLWINDOW& window) {
     const auto NOW = Time::steadyNow();
-    std::erase_if(g_previewed, [&](const auto& e) { return !e.first.lock() || realElapsedMs(e.second) >= PREVIEWING_MS; });
+    std::erase_if(g_previewed, [&](const auto& e) { return !e.first.lock() || Hyprdrive::Config::realElapsedMs(e.second) >= PREVIEWING_MS; });
 
     for (auto& [REF, AT] : g_previewed) {
         if (REF.lock() == window) {
@@ -90,7 +88,7 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
     if (Membership::previewShadowEnabled()) {
         static std::unordered_map<const void*, Time::steady_tp> LASTDRAWN;
         const auto IT   = LASTDRAWN.find(window.get());
-        const float GAP = IT == LASTDRAWN.end() ? -1.F : realElapsedMs(IT->second);
+        const float GAP = IT == LASTDRAWN.end() ? -1.F : Hyprdrive::Config::realElapsedMs(IT->second);
         Membership::previewGap(window->m_class, GAP, !isPreviewing(window), window->m_suspended);
         LASTDRAWN[window.get()] = Time::steadyNow();
         if (LASTDRAWN.size() > 64)
@@ -1000,7 +998,7 @@ void noteRetiled(const PHLWINDOW& window) {
     if (!window)
         return;
 
-    std::erase_if(g_retiled, [&](const auto& e) { return !e.first.lock() || realElapsedMs(e.second) >= RETILED_MS; });
+    std::erase_if(g_retiled, [&](const auto& e) { return !e.first.lock() || Hyprdrive::Config::realElapsedMs(e.second) >= RETILED_MS; });
     for (auto& e : g_retiled) {
         if (e.first.lock() == window) {
             e.second = Time::steadyNow();
@@ -1014,7 +1012,7 @@ bool isRetiling(const PHLWINDOW& window) {
     if (!window)
         return false;
 
-    return std::ranges::any_of(g_retiled, [&](const auto& e) { return e.first.lock() == window && realElapsedMs(e.second) < RETILED_MS; });
+    return std::ranges::any_of(g_retiled, [&](const auto& e) { return e.first.lock() == window && Hyprdrive::Config::realElapsedMs(e.second) < RETILED_MS; });
 }
 
 void pumpRetiled(const PHLWINDOW& window, PHLMONITOR monitor, const Time::steady_tp& now) {
@@ -1031,7 +1029,7 @@ bool isPreviewing(const PHLWINDOW& window) {
     if (!window)
         return false;
 
-    return std::ranges::any_of(g_previewed, [&](const auto& e) { return e.first.lock() == window && realElapsedMs(e.second) < PREVIEWING_MS; });
+    return std::ranges::any_of(g_previewed, [&](const auto& e) { return e.first.lock() == window && Hyprdrive::Config::realElapsedMs(e.second) < PREVIEWING_MS; });
 }
 
 // A live preview let go of. Near where it was picked up it is still the click

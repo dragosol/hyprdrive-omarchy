@@ -28,6 +28,7 @@
 #undef protected
 #undef private
 #include "FlightBlur.hpp"
+#include "MotionClock.hpp"
 
 #include "DesktopStrip.hpp"
 #include "Mosaic.hpp"
@@ -211,7 +212,7 @@ namespace Hyprdrive::FlightBlur {
                 g_shutter = 1.F;
                 return;
             }
-            const float DT       = std::chrono::duration<float, std::milli>(NOW - it->at).count();
+            const float DT       = Hyprdrive::Motion::msBetween(NOW, it->at);
             const float INTERVAL = 1000.F / std::max(monitor->m_refreshRate, 1.F);
             it->at               = NOW;
             g_shutter            = std::clamp(SHUTTER_MS / std::max(DT, INTERVAL), 1.F, MAX_SHUTTER);
@@ -250,7 +251,7 @@ namespace Hyprdrive::FlightBlur {
                 it->flippedAt = now;
             }
             return it->flippedAt.time_since_epoch().count() != 0 &&
-                std::chrono::duration<float, std::milli>(now - it->flippedAt).count() < MODE_FLIP_QUIET_MS;
+                Hyprdrive::Motion::msBetween(now, it->flippedAt) < MODE_FLIP_QUIET_MS;
         }
 
         // A scrolling desktop's tape is blurred only above this speed: a
@@ -477,7 +478,7 @@ namespace Hyprdrive::FlightBlur {
             auto* T = transformerOf(window);
             if (!T || (stillFlying && stillFlying(window)))
                 continue;
-            const float AGE = std::chrono::duration<float, std::milli>(NOW - T->m_fedAt).count();
+            const float AGE = Hyprdrive::Motion::msBetween(NOW, T->m_fedAt);
             // Not fed this frame: no smear from here on, whatever it held.
             if (AGE > 20.F)
                 disarm(T);
@@ -619,7 +620,7 @@ namespace Hyprdrive::FlightBlur {
         }
         s_wasSwiping         = SWIPING;
         const bool SWIPEHOME = !SWIPING && s_swipeEndedAt.time_since_epoch().count() != 0 &&
-            std::chrono::duration<float, std::milli>(Time::steadyNow() - s_swipeEndedAt).count() < 1000.F;
+            Hyprdrive::Config::realElapsedMs(s_swipeEndedAt) < 1000.F;
 
         // A SCRATCHPAD UNDER THE FINGERS (user, 2026-10-08: "when i do the
         // gesture (4 finger up/down) to show scratchpad there is no motion
@@ -725,7 +726,7 @@ namespace Hyprdrive::FlightBlur {
                     continue;
                 }
                 const CBox  RAWPREV = IT->box;
-                const float DTMS    = std::chrono::duration<float, std::milli>(NOW - IT->at).count();
+                const float DTMS    = Hyprdrive::Motion::msBetween(NOW, IT->at);
                 IT->box             = NOWBOX;
                 IT->at              = NOW;
                 // Whatever this frame decides, a window that is not smeared

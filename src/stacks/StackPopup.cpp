@@ -691,7 +691,7 @@ namespace Hyprdrive::Stacks {
         const auto MONITOR = popupMonitorPtr();
         if (!MONITOR)
             return false;
-        if (elapsed(g_popup->lastDrawn) < 500.F)
+        if (Hyprdrive::Config::realElapsedMs(g_popup->lastDrawn) < 500.F)
             return true;
         if (!g_popup->grid && fanFocused())
             return true;

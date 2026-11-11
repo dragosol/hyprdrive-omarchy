@@ -1,5 +1,6 @@
 // The overview's easter egg: see KeyboardCat.hpp.
 #include "KeyboardCat.hpp"
+#include "MotionClock.hpp"
 
 #include "Config.hpp"
 #include "Motion.hpp"
@@ -51,10 +52,6 @@ namespace {
     constexpr int   MAX_W      = 480;
     // No frame drawn for this long while playing: the overview went away.
     constexpr float WATCHDOG_MS = 600.F;
-
-    float msSince(clock::time_point t) {
-        return std::chrono::duration<float, std::milli>(clock::now() - t).count();
-    }
 
     // ------------------------------------------------------------- trigger --
     bool                          g_lastTyped = false;
@@ -260,7 +257,7 @@ namespace Hyprdrive::KeyboardCat {
             return false;
         const auto NOW = clock::now();
         g_cycles.push_back(NOW);
-        while (!g_cycles.empty() && std::chrono::duration<float, std::milli>(NOW - g_cycles.front()).count() > WINDOW_MS)
+        while (!g_cycles.empty() && Hyprdrive::Motion::msBetween(NOW, g_cycles.front()) > WINDOW_MS)
             g_cycles.pop_front();
         if (sc<int>(g_cycles.size()) < CYCLES)
             return false;
@@ -289,7 +286,7 @@ namespace Hyprdrive::KeyboardCat {
             case 29: case 42: case 54: case 56: case 97: case 100: case 125: case 126: return true;
             default: break;
         }
-        if (g_phase == EPhase::Open && msSince(g_startedAt) >= GRACE_MS)
+        if (g_phase == EPhase::Open && Hyprdrive::Config::realElapsedMs(g_startedAt) >= GRACE_MS)
             beginClose();
         return true;
     }
@@ -299,7 +296,7 @@ namespace Hyprdrive::KeyboardCat {
     }
 
     void watchdog() {
-        if (g_phase != EPhase::Idle && msSince(g_lastRender) > WATCHDOG_MS) {
+        if (g_phase != EPhase::Idle && Hyprdrive::Config::realElapsedMs(g_lastRender) > WATCHDOG_MS) {
             // The overview closed under it: no frame, no point, and no sound.
             stopDecoder();
             g_phase = EPhase::Idle;
@@ -317,14 +314,14 @@ namespace Hyprdrive::KeyboardCat {
         g_lastRender = clock::now();
 
         // Over: the video finished, or never started.
-        if (g_phase == EPhase::Open && g_dec && (g_dec->failed || (g_dec->ended && msSince(g_startedAt) > 500.F)))
+        if (g_phase == EPhase::Open && g_dec && (g_dec->failed || (g_dec->ended && Hyprdrive::Config::realElapsedMs(g_startedAt) > 500.F)))
             beginClose();
         // How open: the band's own progress, so the frame and the strip share a
         // curve. (A results panel under it keeps the band up; the clock ends
         // the fold anyway.)
         const float FULLBAND = std::max(1.F, VIDEO_HL + 2.F * MARGIN_L - OVERVIEW_PILL_HL);
         const float BANDE    = std::clamp(bandNow / FULLBAND, 0.F, 1.F);
-        if (g_phase == EPhase::Closing && (BANDE < 0.01F || msSince(g_closingAt) >= 4.F * CLOSE_MS)) {
+        if (g_phase == EPhase::Closing && (BANDE < 0.01F || Hyprdrive::Config::realElapsedMs(g_closingAt) >= 4.F * CLOSE_MS)) {
             g_phase = EPhase::Idle;
             g_tex.reset();
             return;

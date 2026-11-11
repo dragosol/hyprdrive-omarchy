@@ -2,6 +2,7 @@
 // and the hover veto -- the gestures that span desktops. Split out of Mosaic.cpp; the state
 // is still there (MosaicParts.hpp).
 #include "MosaicParts.hpp"
+#include "MotionClock.hpp"
 
 
 // main.cpp: Super held to pan the canvas is not a Super tap.
@@ -162,7 +163,7 @@ namespace Hyprdrive::Mosaic {
         constexpr float LABEL_FADE_OUT_MS = 110.F; // exits ~25% quicker, house rule
 
         float labelFadeProgress(const SLabelFade& f) {
-            const float MS = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - f.since).count();
+            const float MS = Hyprdrive::Config::realElapsedMs(f.since);
             return std::clamp(MS / (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS), 0.F, 1.F);
         }
         float labelFadeAlpha(const SLabelFade& f) {
@@ -395,7 +396,7 @@ namespace Hyprdrive::Mosaic {
     bool labelsAnimating() {
         const auto NOW = std::chrono::steady_clock::now();
         return std::ranges::any_of(g_labelFades, [&](const SLabelFade& f) {
-            return f.window.lock() && std::chrono::duration<float, std::milli>(NOW - f.since).count() < (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS) + 16.F;
+            return f.window.lock() && Hyprdrive::Motion::msBetween(NOW, f.since) < (f.out ? LABEL_FADE_OUT_MS : LABEL_FADE_MS) + 16.F;
         });
     }
 
@@ -687,7 +688,7 @@ namespace Hyprdrive::Mosaic {
             g_edgePush = {};
             return false;
         }
-        const double DT = std::min(0.05, std::chrono::duration<double>(now - g_edgeLast).count());
+        const double DT = std::min(0.05, Hyprdrive::Motion::secondsBetween<double>(now, g_edgeLast));
         g_edgeLast      = now;
         const auto O    = A->canvasOffset();
         A->setCanvasOffset(O + g_edgePush * (EDGE_SPEED * DT), true);

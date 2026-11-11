@@ -1,5 +1,6 @@
 // See BorderFade.hpp.
 #include "BorderFade.hpp"
+#include "MotionClock.hpp"
 #include "Config.hpp"
 
 #include <hyprland/src/animation/AnimationManager.hpp>
@@ -81,7 +82,7 @@ namespace Hyprdrive::BorderFade {
             const float TARGET = f.lit ? 1.F : 0.F;
             if (c.ms <= 0.F)
                 return TARGET;
-            const float T = std::clamp(std::chrono::duration<float, std::milli>(now - f.start).count() / c.ms, 0.F, 1.F);
+            const float T = std::clamp(Hyprdrive::Motion::msBetween(now, f.start) / c.ms, 0.F, 1.F);
             return f.from + ((TARGET - f.from) * ease(c, T));
         }
     }

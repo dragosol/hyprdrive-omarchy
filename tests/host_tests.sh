@@ -109,4 +109,23 @@ run file_uri_test tests/unit/file_uri_test.cpp $(pkg-config --cflags --libs glib
 # shellcheck disable=SC2046
 run launcher_states_test tests/unit/launcher_states_test.cpp $(pkg-config --cflags libsystemd)
 
+# The animation clocks are measured through MotionClock.hpp (msBetween /
+# secondsBetween against a `now` the site already holds) or Config's
+# realElapsedMs / animElapsedMs -- never a raw std::chrono::duration read, so
+# a site's clock kind is visible at the call. The files that animate; their
+# raw reads went in the A2 merge, and a new one fails here.
+MOTION_CLOCK_FILES=(src/motion/BorderFade.cpp src/motion/FlightBlur.cpp src/motion/FlightController.cpp src/motion/Motion.cpp
+    src/overview/TileChrome.cpp src/overview/OverviewStrip.cpp src/overview/OverviewCards.cpp src/overview/Ripple.cpp
+    src/layout/MosaicGestures.cpp src/layout/MosaicParts.hpp src/layout/FullscreenDesktop.cpp src/layout/ShowDesktop.cpp
+    src/desktops/DesktopStrip.cpp src/dock/SpringLoad.cpp src/dock/ScratchpadExit.cpp src/dock/DockPreview.cpp
+    src/dock/DockSpringLoad.cpp src/stacks/StackFan.cpp src/search/SearchSession.hpp src/search/SearchLetters.hpp
+    src/search/KeyboardCat.cpp)
+if raw=$(grep -n 'std::chrono::duration<' "${MOTION_CLOCK_FILES[@]}"); then
+    echo "host_tests: motion_clock_reads FAILED -- a raw duration read in motion code (use MotionClock.hpp):" >&2
+    echo "$raw" >&2
+    fail=1
+else
+    echo "host_tests: motion_clock_reads OK -- ${#MOTION_CLOCK_FILES[@]} files, no raw duration read"
+fi
+
 exit $fail

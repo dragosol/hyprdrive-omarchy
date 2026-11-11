@@ -21,6 +21,7 @@
 #define protected public
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #include "ShowDesktop.hpp"
+#include "MotionClock.hpp"
 #include "ShowDesktopMath.hpp"
 #include "Config.hpp"
 #include "DebugPaths.hpp"
@@ -351,7 +352,7 @@ namespace Hyprdrive::ShowDesktop {
         const double TARGET = S.out ? 1.0 : 0.0;
         const auto   NOW    = Time::steadyNow();
         // A stalled frame does not throw the windows: at most 50 ms a step.
-        const double DT    = std::min(0.05, std::chrono::duration<double>(NOW - S.last).count());
+        const double DT    = std::min(0.05, Hyprdrive::Motion::secondsBetween<double>(NOW, S.last));
         S.last             = NOW;
         const float  SCALE = Config::animScale();
         if (SCALE <= 0.F || !Config::motionEnabled())

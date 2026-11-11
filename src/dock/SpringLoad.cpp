@@ -218,7 +218,7 @@ namespace Hyprdrive::SpringLoad {
         }
 
         float sincePhase() {
-            return std::chrono::duration<float, std::milli>(Time::steadyNow() - g_swipe->phaseStart).count();
+            return Hyprdrive::Config::realElapsedMs(g_swipe->phaseStart);
         }
 
         // Commit and Rewind play on their own; Peek follows the hold.
@@ -253,7 +253,7 @@ namespace Hyprdrive::SpringLoad {
         }
 
         float holdMs() {
-            return g_edge.since ? std::chrono::duration<float, std::milli>(Time::steadyNow() - *g_edge.since).count() : 0.F;
+            return g_edge.since ? Hyprdrive::Config::realElapsedMs(*g_edge.since) : 0.F;
         }
 
         static double smoothstep(double t) {

@@ -1,6 +1,7 @@
 // COverview: workspace card rendering, window draw, redrawAll.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "MotionClock.hpp"
 
 using namespace OverviewDetail;
 
@@ -274,7 +275,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         // And the grid panning to another desktop from the KEYBOARD (user,
         // 2026-09-30), at the same 0.25 -- a trackpad pan follows the fingers
         // and stays sharp.
-        const auto KEYRECENT = [](const Time::steady_tp& at) { return at.time_since_epoch().count() != 0 && SearchLetters::msSince(Time::steadyNow(), at) < 1000.F; };
+        const auto KEYRECENT = [](const Time::steady_tp& at) { return at.time_since_epoch().count() != 0 && Hyprdrive::Motion::msBetween(Time::steadyNow(), at) < 1000.F; };
         // The wheel's own site when the wheel moved it last.
         const bool WHEELLAST = KEYRECENT(wheelPanAt) && wheelPanAt >= keyPanAt && wheelPanAt >= keyBadgeBornAt;
         const bool KEYPAN    = viewOffset->isBeingAnimated() && (KEYRECENT(keyBadgeBornAt) || KEYRECENT(keyPanAt) || KEYRECENT(wheelPanAt));
@@ -458,7 +459,7 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
             continue;
         }
 
-        const float ELAPSED = std::chrono::duration<float, std::milli>(now - tile.start).count();
+        const float ELAPSED = Hyprdrive::Motion::msBetween(now, tile.start);
         const float T       = DURMS <= 0.F ? 1.F : std::clamp(ELAPSED / DURMS, 0.F, 1.F);
         if (T < 1.F)
             animating = true; // keep frames coming even from the cards that do not draw it
@@ -491,7 +492,7 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
     }
 
     std::erase_if(closingTiles, [&](const SClosingTile& t) {
-        const float SINCE = std::chrono::duration<float, std::milli>(now - t.start).count();
+        const float SINCE = Hyprdrive::Motion::msBetween(now, t.start);
         if (!t.captured) {
             const auto W = t.window.lock();
             // Refused close (still mapped past the wait), or unmapped with no

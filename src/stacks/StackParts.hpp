@@ -352,7 +352,6 @@ namespace StacksDetail {
         extern size_t livePartials(const std::vector<int64_t>& mtimes);
         extern std::unordered_map<std::string, std::unordered_set<std::string>> g_seenNames;
         extern std::vector<SHop> g_shakes;
-        extern float elapsed(const Time::steady_tp& since);
         extern void retireHops();
         extern size_t fanRows(const SPopup& p);
         extern float fanMaxScroll(const SPopup& p);

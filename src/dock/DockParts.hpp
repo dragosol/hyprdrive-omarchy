@@ -1333,7 +1333,6 @@ namespace DockDetail {
 // PREVIEWING_MS is being previewed; nothing else has to be true.
 constexpr float                                            PREVIEWING_MS = 250.F;
 extern std::vector<std::pair<PHLWINDOWREF, Time::steady_tp>> g_previewed;
-extern float realElapsedMs(const Time::steady_tp& since);
 
 // The panel GROWS OUT OF THE ICON rather than fading in on the spot -- the same
 // trick X54's flight uses, and it is why this needs no alpha on the window

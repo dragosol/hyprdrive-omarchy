@@ -6,7 +6,7 @@ using namespace DockDetail;
 namespace DockDetail {
 
     float springSinceMs(const std::optional<Time::steady_tp>& t) {
-        return t ? std::chrono::duration<float, std::milli>(Time::steadyNow() - *t).count() : 0.F;
+        return t ? Hyprdrive::Config::realElapsedMs(*t) : 0.F;
     }
 
     void springDamage() {

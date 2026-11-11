@@ -414,7 +414,7 @@ namespace Hyprdrive::Stacks {
         if (S && S->isDir)
             if (const auto L = StackReader::status(CANON); L.ready && L.missing)
                 return "Folder not found";
-        if (CANON == g_trashStack && !g_trashError.empty() && elapsed(g_trashErrorAt) < 3000.F)
+        if (CANON == g_trashStack && !g_trashError.empty() && Hyprdrive::Config::realElapsedMs(g_trashErrorAt) < 3000.F)
             return g_trashError;
         return {};
     }
@@ -598,7 +598,7 @@ namespace Hyprdrive::Stacks {
         float      age   = -1.F;
         for (const auto& B : g_bounces)
             if (B.path == CANON)
-                age = age < 0.F ? elapsed(B.startedAt) : std::min(age, elapsed(B.startedAt));
+                age = age < 0.F ? Hyprdrive::Config::realElapsedMs(B.startedAt) : std::min(age, Hyprdrive::Config::realElapsedMs(B.startedAt));
         return age;
     }
 
@@ -608,7 +608,7 @@ namespace Hyprdrive::Stacks {
         for (const auto& B : g_bounces) {
             if (B.path != CANON)
                 continue;
-            out = std::max(out, Dock::hopLift(elapsed(B.startedAt) / Dock::HOP_MS, iconHeight));
+            out = std::max(out, Dock::hopLift(Hyprdrive::Config::realElapsedMs(B.startedAt) / Dock::HOP_MS, iconHeight));
         }
         return out;
     }
@@ -619,7 +619,7 @@ namespace Hyprdrive::Stacks {
         for (const auto& S : g_shakes) {
             if (S.path != CANON)
                 continue;
-            const float T = std::clamp(elapsed(S.startedAt) / SHAKE_MS, 0.F, 1.F);
+            const float T = std::clamp(Hyprdrive::Config::realElapsedMs(S.startedAt) / SHAKE_MS, 0.F, 1.F);
             // Decaying sine: full amplitude at the start, nothing at the end,
             // so it stops rather than being cut off mid-swing.
             out += std::sin(T * SHAKE_CYCLES * 2.F * 3.14159265F) * SHAKE_AMP * iconWidth * (1.F - T);

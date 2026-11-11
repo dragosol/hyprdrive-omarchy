@@ -25,6 +25,7 @@
 //     the whole grid on toggle-close with results on screen).
 
 #include "globals.hpp"
+#include "MotionClock.hpp"
 
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
@@ -193,7 +194,7 @@ struct SSearchFieldMotion {
             return false;
         }
 
-        const float DTMS = std::chrono::duration<float, std::milli>(now - *last).count();
+        const float DTMS = Hyprdrive::Motion::msBetween(now, *last);
         last             = now;
 
         // Landing: a critically damped glide (no overshoot by construction) that

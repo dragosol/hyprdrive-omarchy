@@ -74,10 +74,6 @@ struct STilt {
 // only the icons that are, or were just, hovered on that output.
 std::unordered_map<MONITORID, std::unordered_map<std::string, STilt>> g_tilts;
 
-float msSince(const Time::steady_tp& t) {
-    return std::chrono::duration<float, std::milli>(Time::steadyNow() - t).count();
-}
-
 void spring(float& x, float& v, float target, float omega, float zeta, float h) {
     const float ACC = omega * omega * (target - x) - 2.F * zeta * omega * v;
     v += ACC * h;
@@ -85,7 +81,7 @@ void spring(float& x, float& v, float target, float omega, float zeta, float h) 
 }
 
 void advance(STilt& s, std::optional<Vector2D> pointer) {
-    float gap = std::min(msSince(s.last), MAX_GAP_MS);
+    float gap = std::min(Hyprdrive::Config::realElapsedMs(s.last), MAX_GAP_MS);
     s.last    = Time::steadyNow();
     s.hovered = pointer.has_value();
 
@@ -369,7 +365,7 @@ bool animating(MONITORID monitor) {
     for (auto it = ICONS.begin(); it != ICONS.end();) {
         // An icon that left the dock mid-spring is never advanced again; its
         // entry would otherwise ask for frames forever.
-        if (msSince(it->second.last) > 1000.F || settled(it->second)) {
+        if (Hyprdrive::Config::realElapsedMs(it->second.last) > 1000.F || settled(it->second)) {
             it = ICONS.erase(it);
             continue;
         }

@@ -1,4 +1,5 @@
 #include "FullscreenDesktop.hpp"
+#include "MotionClock.hpp"
 #include "DesktopOrder.hpp"
 #include "DesktopStrip.hpp"
 #include "Config.hpp"
@@ -547,7 +548,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // (user, 2026-11-06: "sometimes spamming super+f ... snaps it to
             // fullscreen without doing the transition").
             const double   SLIDT = G && it->span > 0.5 ? std::clamp(1.0 - std::hypot(GO.x, GO.y) / it->span, 0.0, 1.0) : 1.0;
-            const double   TIMEL = std::clamp(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - it->at).count() / TRAVEL_MIN_MS, 0.0, 1.0);
+            const double   TIMEL = std::clamp(Hyprdrive::Motion::msBetween<double>(std::chrono::steady_clock::now(), it->at) / TRAVEL_MIN_MS, 0.0, 1.0);
             const double   T     = std::min(SLIDT, 1.0 - std::pow(1.0 - TIMEL, 3.0));
             if (it->goal && it->drawn && (it->goal->first != GOAL || it->goal->second != GSIZE)) {
                 // Re-aimed: the rest of the trip sets off from where it is drawn.
