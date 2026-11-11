@@ -68,4 +68,8 @@ namespace Hyprdrive::FullscreenDesktop {
     // the user asked for it -- the view goes there; else it goes quietly.
     // The desktop it went to, or nullptr (it stays: Hyprland's behaviour).
     PHLWORKSPACE beside(const PHLWINDOW& w, bool prompted);
+    // At window.openEarly, any other window: one that OPENS on a beside
+    // desktop (a dialog's own dialog, the next one right after) is that
+    // link's and keeps it alive; one MOVED there makes it a desktop of its own.
+    void openedOn(const PHLWINDOW& w);
 }

@@ -16,6 +16,7 @@
 #include <hyprland/src/desktop/rule/windowRule/WindowRuleApplicator.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/layout/target/WindowTarget.hpp>
+#include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
@@ -229,6 +230,7 @@ namespace Hyprdrive::WindowPlacement {
                 else
                     remember(w, o, false);
             } else {
+                FullscreenDesktop::openedOn(w);
                 bool own = false;
                 if (o.kind == EOutcome::Tile && (w->m_isFloating || o.ownSize))
                     own = tile(w, o.ownSize);
@@ -249,8 +251,9 @@ namespace Hyprdrive::WindowPlacement {
         // first box after the layout filed it; an own-size tile's is its own.
         void onOpen(const PHLWINDOW& w) {
             for (const auto& P : g_placed)
-                if (P.ownSize && P.win.lock() == w && !w->m_isFloating)
-                    (void)OwnSizeTile::tileAtOwnSize(w);
+                if (P.ownSize && P.win.lock() == w && !w->m_isFloating && OwnSizeTile::tileAtOwnSize(w))
+                    if (const auto T = w->layoutTarget(); T && T->space())
+                        T->space()->recalculate();
         }
     }
 
@@ -357,8 +360,14 @@ namespace Hyprdrive::WindowPlacement {
             wl_event_source_remove(g_timer);
             g_timer = nullptr;
         }
-        // (The hook goes with the plugin: HyprlandAPI removes it at unload.)
-        g_floatHook = nullptr;
+        // Unhooked first: OwnSizeTile's shutdown (after this one) floats its
+        // windows through setFloating, and so can Hyprland's exit; a hook left
+        // standing would call into a trampoline nobody keeps (the rig's
+        // SIGSEGV at exit, 2026-11-11).
+        if (g_floatHook) {
+            g_floatHook->unhook();
+            g_floatHook = nullptr;
+        }
         g_placed.clear();
         g_due.clear();
         g_budgets.clear();

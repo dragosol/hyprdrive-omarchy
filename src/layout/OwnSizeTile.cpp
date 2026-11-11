@@ -59,7 +59,13 @@ namespace Hyprdrive::OwnSizeTile {
             const auto T = w->layoutTarget();
             if (!T)
                 return;
-            const auto R = w->getFullWindowReservedArea();
+            auto R = w->getFullWindowReservedArea();
+            // As the window maps (Placement, window.openEarly) its decorations
+            // are not positioned yet and reserve nothing: its border, then.
+            if (R.topLeft == Vector2D{} && R.bottomRight == Vector2D{}) {
+                const double B = w->getRealBorderSize();
+                R.topLeft = R.bottomRight = Vector2D{B, B};
+            }
             T->setPseudoSize(size + R.topLeft + R.bottomRight);
             T->setPseudo(true);
             w->m_ruleApplicator->noMaxSize().set(true, Desktop::Types::PRIORITY_SET_PROP);
