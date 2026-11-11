@@ -81,6 +81,14 @@ namespace {
 constexpr const char* KEY_MINIMIZE_MS = "plugin:hyprdrive:dock:minimize_ms";
 constexpr const char* KEY_FLIGHT_LOG  = "plugin:hyprdrive:dock:flight_log";
 
+// dock:minimize_ms, a hot read (Config.hpp): every flight, every frame.
+int minimizeMs() {
+    if (!Hyprdrive::Config::g_pluginKeysRegistered)
+        return 0;
+    static auto& VAL = Hyprdrive::Config::valueRef<Hyprlang::INT>(KEY_MINIMIZE_MS);
+    return sc<int>(*VAL);
+}
+
 // Z4: restore-then-erase in ONE frame left a frame with neither proxy nor real
 // window on screen; the proxy holds its landing box while the real window works
 // its way back through moveWindowToWorkspace + retile + damage, and one held
@@ -316,7 +324,7 @@ void warpRestoredWindowAnims(const PHLWINDOW& window) {
 }
 
 float flightProgress(const SFlight& flight) {
-    const int DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
+    const int DURATION = minimizeMs();
     if (DURATION <= 0)
         return 1.F;
 
@@ -696,7 +704,7 @@ void minimize(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::opti
             monitor = WINDOWMON;
     }
 
-    const int  DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
+    const int  DURATION = minimizeMs();
     // A snapping animation clock (speed 0, or animations:enabled = 0) is the
     // no-flight path: minimized and focus handed off at once, as a landed
     // flight leaves it -- not a flight that finishes on the next frame.
@@ -778,7 +786,7 @@ void restore(PHLMONITOR monitor, PHLWINDOW window) {
         }
     }
 
-    const int DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
+    const int DURATION = minimizeMs();
     zdbg("restoreImpl dur=%d mon=%d min=%d\n", DURATION, (int)(bool)monitor, window ? (int)Minimize::isMinimized(window) : -9);
 
     if (!monitor || !window || DURATION <= 0 || !Hyprdrive::Motion::Clock::enabled() || !Minimize::isMinimized(window)) {
@@ -878,7 +886,7 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
         // nothing on its monitor rendered it home.
         if (!monitor || it->monitor != monitor->m_id) {
             const auto OWNER = State::monitorState()->query().id(it->monitor).run();
-            const int  DURATION = Config::getValue<int>(KEY_MINIMIZE_MS);
+            const int  DURATION = minimizeMs();
             // "Over" is the flight's end in real time (its animated duration at
             // the speed setting); the grace after it is a timeout.
             const float OVERAT = Hyprdrive::Motion::scaleDuration(sc<float>(std::max(0, DURATION)), Hyprdrive::Motion::Clock::scale());

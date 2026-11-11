@@ -19,6 +19,20 @@ namespace DockDetail {
 // Motion::ESite::DOCK_REVEAL (MotionSites.hpp); direction is not a parameter,
 // because the curve does not depend on it.
 
+// dock:autohide and dock:autohide_ms, hot reads (Config.hpp): every frame.
+bool autohideOn() {
+    if (!Config::g_pluginKeysRegistered)
+        return false;
+    static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY_AUTOHIDE);
+    return *VAL != 0;
+}
+int autohideMs() {
+    if (!Config::g_pluginKeysRegistered)
+        return 0;
+    static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY_AUTOHIDE_MS);
+    return sc<int>(*VAL);
+}
+
 // 0 = fully out, 1 = fully tucked below the bottom edge.
 float hiddenFraction(PHLMONITOR monitor) {
     if (!monitor)
@@ -27,11 +41,11 @@ float hiddenFraction(PHLMONITOR monitor) {
     // Overview owns the slide while it exists: the 3-finger swipe warps
     // openProgress every update, so the pill tracks the fingers the same way
     // the cards do. Super-tap uses the scale animation, same number.
-    if (const auto OV = scrollOverviewForMonitor(monitor); OV && Config::getValue<bool>(KEY_AUTOHIDE))
+    if (const auto OV = scrollOverviewForMonitor(monitor); OV && autohideOn())
         return 1.F - OV->openProgress();
 
     const auto& R  = g_reveal[monitor->m_id];
-    const int   MS = std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS));
+    const int   MS = std::max(1, autohideMs());
     const float E  = Motion::curve(Motion::ESite::DOCK_REVEAL, std::clamp(Motion::Clock::animMs(R.changedAt) / sc<float>(MS), 0.F, 1.F));
 
     // From wherever it WAS to wherever it is going, which is what makes a
@@ -73,12 +87,12 @@ bool autohideAnimating(PHLMONITOR monitor) {
     // for as long as it was open (user, 2026-09-14). The overview's own scale
     // animation asks for the frames openProgress actually needs while it moves;
     // a flight still asks for its own.
-    if (const auto OV = scrollOverviewForMonitor(monitor); OV && Config::getValue<bool>(KEY_AUTOHIDE))
+    if (const auto OV = scrollOverviewForMonitor(monitor); OV && autohideOn())
         return R.pending || Flight::anyOn(monitor);
 
     // X54. A flight counts as animating: the window is mid-air toward the icon
     // and nothing else on an idle desktop would ask for the frames it needs.
-    return R.pending || Flight::anyOn(monitor) || Motion::Clock::animMs(R.changedAt) < sc<float>(std::max(1, Config::getValue<int>(KEY_AUTOHIDE_MS)));
+    return R.pending || Flight::anyOn(monitor) || Motion::Clock::animMs(R.changedAt) < sc<float>(std::max(1, autohideMs()));
 }
 
 // The glide is Motion::ESite::DOCK_ARRANGE (ease-out cubic) and a new icon
@@ -316,7 +330,7 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
     // While the overview exists the visual is driven by openProgress, not this
     // timer. Keep `from` at the current fraction so a later handoff (overview
     // gone) continues from wherever the swipe or scale animation left the pill.
-    if (const auto OV = scrollOverviewForMonitor(monitor); OV && Config::getValue<bool>(KEY_AUTOHIDE)) {
+    if (const auto OV = scrollOverviewForMonitor(monitor); OV && autohideOn()) {
         R.from = 1.F - OV->openProgress();
         // Visual is driven by openProgress while the overview exists. Pinning
         // shown=true here made a gesture close hand off as "hidden, but going
@@ -328,7 +342,7 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
         return;
     }
 
-    if (!Config::getValue<bool>(KEY_AUTOHIDE)) {
+    if (!autohideOn()) {
         if (!R.shown) {
             R.from      = hiddenFraction(monitor);
             R.shown     = true;

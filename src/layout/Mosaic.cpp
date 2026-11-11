@@ -126,12 +126,18 @@ namespace Hyprdrive::Mosaic {
     double canvasPanMs() {
         if (!Hyprdrive::Motion::Clock::enabled())
             return 0.0;
-        const double MS = sc<double>(Hyprdrive::Config::getValue<Hyprlang::INT>("plugin:hyprdrive:animation:canvas_pan_ms"));
+        // Hot reads (Config.hpp): every canvas tick.
+        if (!Hyprdrive::Config::g_pluginKeysRegistered)
+            return 0.0;
+        static auto& VAL = Hyprdrive::Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:animation:canvas_pan_ms");
+        const double MS  = sc<double>(*VAL);
         return std::max(0.0, MS);
     }
     float canvasEase(double t) {
-        return Hyprdrive::Motion::easeNamed(Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:animation:canvas_curve"),
-                                                 Hyprdrive::Motion::ERole::DECEL, sc<float>(t));
+        if (!Hyprdrive::Config::g_pluginKeysRegistered)
+            return Hyprdrive::Motion::easeNamed(std::string{}, Hyprdrive::Motion::ERole::DECEL, sc<float>(t));
+        static auto& VAL = Hyprdrive::Config::valueRef<std::string>("plugin:hyprdrive:animation:canvas_curve");
+        return Hyprdrive::Motion::easeNamed(*VAL, Hyprdrive::Motion::ERole::DECEL, sc<float>(t));
     }
     // A swipe or a Super-pan is moving the view: focus landing on a window
     // under the pointer must not pull the view back to it mid-pan.

@@ -106,6 +106,19 @@ inline bool earlyPluginKey(const std::string_view name) {
     return true;
 }
 
+// A HOT READ: a plugin key read every frame (or every row of a frame) through
+// its handle, bound once, instead of getValue's string hash -- and, for a
+// string, without its copy. Never stale: the handle reads the value's live
+// storage, so a reload and a live `hyprctl eval hl.config(...)` (the settings
+// panel's preview, which fires no signal the plugin could cache on) both show
+// on the very next read, exactly as getValue did. Call sites keep the handle in
+// a function-local static, AFTER this check:
+//
+//     if (!Config::g_pluginKeysRegistered) return <getValue's empty value>;
+//     static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY);
+//
+// (the check first: binding a plugin: key before registration aborts Hyprland).
+
 template <typename T>
 T getValue(const std::string_view name) {
     using TValue = std::decay_t<T>;

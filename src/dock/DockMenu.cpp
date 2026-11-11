@@ -6,11 +6,18 @@ namespace Hyprdrive::Dock {
 using namespace DockDetail;
 namespace DockDetail {
 
+// Hot reads (Config.hpp): asked for every row of every menu frame.
 float menuAnimMs() {
-    return std::max(0.F, sc<float>(Config::getValue<int>("plugin:hyprdrive:dock:menu_anim_ms")));
+    if (!Config::g_pluginKeysRegistered)
+        return 0.F;
+    static auto& VAL = Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:dock:menu_anim_ms");
+    return std::max(0.F, sc<float>(sc<int>(*VAL)));
 }
 bool menuAnimOn() {
-    return Config::getValue<bool>("plugin:hyprdrive:dock:menu_animation") && menuAnimMs() > 0.F && Config::motionEnabled();
+    if (!Config::g_pluginKeysRegistered)
+        return false;
+    static auto& VAL = Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:dock:menu_animation");
+    return *VAL != 0 && menuAnimMs() > 0.F && Config::motionEnabled();
 }
 // How open the live menu is, 0..1, eased (no overshoot: user, 2026-11-04).
 // Its rows cascade in behind the plate (renderMenuOne).

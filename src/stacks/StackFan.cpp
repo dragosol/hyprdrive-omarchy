@@ -110,7 +110,12 @@ namespace StacksDetail {
         // Serpantinum's numbers x0.8 (user, 2026-09-24: "the curve is nice,
         // maybe 20% faster").
         static const SFanMotion SERP{224.F, 208.F, 32.F, 240.F, 120.F, 176.F, true};
-        return Hyprdrive::Config::getValue<std::string>("plugin:hyprdrive:dock:stack_motion") == "extension" ? EXT : SERP;
+        // A hot read (Config.hpp): every row of every frame, so the handle,
+        // compared in place -- no hash, no copy.
+        if (!Hyprdrive::Config::g_pluginKeysRegistered)
+            return SERP;
+        static auto& VAL = Hyprdrive::Config::valueRef<std::string>("plugin:hyprdrive:dock:stack_motion");
+        return *VAL == "extension" ? EXT : SERP;
     }
     std::string popupState() {
         if (!g_popup)
