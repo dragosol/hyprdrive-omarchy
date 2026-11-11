@@ -55,6 +55,12 @@ fi
 
 if [ -f "$ROOT/hyprdrive.so" ]; then
     install -Dm755 "$ROOT/hyprdrive.so" "$LIBDIR/hyprdrive.so"
+    # Same rule as the Makefile: the installed copy carries no debug information
+    # unless KEEP_DEBUG is set. This copy is the last one written, so it is the
+    # one that has to be stripped.
+    if [ -z "${KEEP_DEBUG:-}" ] && command -v strip >/dev/null 2>&1; then
+        strip --strip-debug "$LIBDIR/hyprdrive.so"
+    fi
     echo "plugin: $LIBDIR/hyprdrive.so"
 else
     echo "install-fragments: no hyprdrive.so -- run make all first, then re-run this" >&2
