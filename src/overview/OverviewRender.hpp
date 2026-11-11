@@ -87,6 +87,12 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
 // caller can dodge something before committing to a position.
 CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale);
 
+// A plate with a ring around it, faded as ONE surface (PlateColor.hpp): the
+// body in `fill` over the opaque `ring` colour -- what it settles at -- times
+// `alpha`, and the ring (`ringPx` physical px; 0 = none) only outside `plate`.
+// The label pill and the tile's close button.
+void ringedPlate(const CBox& plate, int round, float roundingPower, const CHyprColor& ring, double ringPx, const CHyprColor& fill, float alpha);
+
 // How far a label plate floats above the plate it labels, in logical px: the
 // dock tooltip above the pill, and the Scratchpad label above its strip plate
 // (user, 2026-09-14: "same padding distance as tooltips from dock icons").

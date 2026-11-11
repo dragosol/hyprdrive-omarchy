@@ -21,6 +21,7 @@
 #include "BuiltinIcons.hpp"
 #include "Config.hpp"
 #include "BorderFade.hpp"
+#include "PlateColor.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/ClearPassElement.hpp>
 #include "globals.hpp"
@@ -1077,6 +1078,44 @@ namespace {
     constexpr float PILL_BG_A  = 0.90F;
 }
 
+void ringedPlate(const CBox& plate, int round, float roundingPower, const CHyprColor& ring, double ringPx, const CHyprColor& fill, float alpha) {
+    if (plate.empty() || alpha <= 0.F)
+        return;
+
+    CRectPassElement::SRectData body;
+    body.box           = plate;
+    body.round         = round;
+    body.roundingPower = roundingPower;
+    if (ringPx <= 0.0) {
+        // No ring: the fill over whatever is behind, as it always was.
+        body.color = fill.modifyA(fill.a * alpha);
+        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(body));
+        return;
+    }
+
+    // PlateColor.hpp: the body in the colour it SETTLES at (the fill over the
+    // opaque ring), faded as one -- never the fill over a ring rect under it,
+    // which showed the accent through the body all through every fade.
+    const auto SETTLED = Hyprdrive::PlateColor::settledBody({.r = sc<float>(fill.r), .g = sc<float>(fill.g), .b = sc<float>(fill.b), .a = sc<float>(fill.a)},
+                                                 {.r = sc<float>(ring.r), .g = sc<float>(ring.g), .b = sc<float>(ring.b), .a = 1.F});
+    body.color = CHyprColor{SETTLED.r, SETTLED.g, SETTLED.b, alpha};
+    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(body));
+
+    // The ring only OUTSIDE the plate: the border shader draws `borderSize`
+    // monitor-scaled px around the box with the outer radius round + that --
+    // the geometry the ring rect had.
+    const auto   MON   = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    const double MS    = MON ? std::max(MON->m_scale, 0.01F) : 1.0;
+    CBorderPassElement::SBorderData border;
+    border.box           = plate;
+    border.grad1         = ::Config::CGradientValueData(ring.modifyA(1.F));
+    border.a             = alpha;
+    border.borderSize    = std::max(1, sc<int>(std::round(ringPx / MS)));
+    border.round         = round;
+    border.roundingPower = roundingPower;
+    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
+}
+
 CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale) {
     if (str.empty() || !monitor)
         return {};
@@ -1117,25 +1156,19 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
     // rather than a constant -- it stays a pill when the font or padding moves.
     const int ROUND = sc<int>(std::round(plate.height / 2.0));
 
-    const int BORDER = std::max(0, Hyprdrive::Config::getValue<int>("general:border_size"));
+    // The ring is Hyprland's (general:border_size, col.active_border); no
+    // border, no ring. ringedPlate fades ring and body as one surface.
+    const int  BORDER = std::max(0, Hyprdrive::Config::getValue<int>("general:border_size"));
+    CHyprColor ringColor{0.F, 0.F, 0.F, 0.F};
+    double     ringPx = 0.0;
     if (BORDER > 0) {
         if (auto* const ACTIVE = sc<::Config::CGradientValueData*>(Hyprdrive::Config::valueRef<::Config::IComplexConfigValue>("general:col.active_border").ptr());
             ACTIVE && !ACTIVE->m_colors.empty()) {
-            CRectPassElement::SRectData ring;
-            ring.box           = plate.copy().expand(sc<double>(BORDER) * SCALE);
-            ring.color         = ACTIVE->m_colors[0].modifyA(alpha);
-            ring.round         = ROUND + sc<int>(std::round(sc<float>(BORDER) * SCALE));
-            ring.roundingPower = 2.F;
-            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(ring));
+            ringColor = ACTIVE->m_colors[0];
+            ringPx    = sc<double>(BORDER) * SCALE;
         }
     }
-
-    CRectPassElement::SRectData bg;
-    bg.box           = plate;
-    bg.color         = CHyprColor{0.F, 0.F, 0.F, PILL_BG_A * alpha};
-    bg.round         = ROUND;
-    bg.roundingPower = 2.F;
-    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(bg));
+    ringedPlate(plate, ROUND, 2.F, ringColor, ringPx, CHyprColor{0.F, 0.F, 0.F, PILL_BG_A}, alpha);
 
     CTexPassElement::SRenderData label;
     label.tex = TEX;

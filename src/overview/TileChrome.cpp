@@ -534,26 +534,15 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
     // general:col.active_border -- the same source the tooltip and the drop
     // indicator read, so the button re-themes with everything else.
     const int BORDER = std::max(0, Hyprdrive::Config::getValue<int>("general:border_size"));
-    if (BORDER > 0) {
-        CRectPassElement::SRectData ring;
-        ring.box           = BUTTON.copy().expand(sc<double>(BORDER) * SCALE);
-        ring.color         = Hyprdrive::Config::highlightColor().modifyA(ALPHA);
-        ring.round         = ROUND + sc<int>(std::round(sc<float>(BORDER) * SCALE));
-        ring.roundingPower = 2.F;
-        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(ring));
-    }
 
     // The DISC stays light, and that is a legibility constraint rather than a
     // taste one: the symbolic glyph ships as near-black artwork and this render
     // path cannot recolour a texture, so the host's dark disc would hide the X
     // completely. The host gets away with rgba(63,63,70,.98) because CSS
     // recolours its StIcon to #fafafb. Revisit if the glyph ever gets a tint.
-    CRectPassElement::SRectData disc;
-    disc.box           = BUTTON;
-    disc.color         = CHyprColor{0.93F, 0.93F, 0.93F, 0.95F * ALPHA};
-    disc.round         = ROUND;
-    disc.roundingPower = 2.F;
-    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(disc));
+    // Ring and disc fade as one surface (OverviewRender::ringedPlate): the
+    // ring under the disc tinted it with the accent all through the fade.
+    OverviewRender::ringedPlate(BUTTON, ROUND, 2.F, Hyprdrive::Config::highlightColor(), sc<double>(BORDER) * SCALE, CHyprColor{0.93F, 0.93F, 0.93F, 0.95F}, ALPHA);
 
     if (const auto GLYPH = OverviewRender::appIcon(CLOSE_ICON)) {
         const float SIDE = sc<float>(BUTTON.w) * CLOSE_GLYPH;
