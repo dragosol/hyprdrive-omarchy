@@ -11,6 +11,7 @@
 #include "SearchProviders.hpp"
 #include "Scratchpad.hpp"
 #include "DockStacks.hpp"
+#include "OverviewGestureDecision.hpp"
 #include <format>
 
 #include <algorithm>
@@ -42,6 +43,22 @@
 
 COverviewGesture::COverviewGesture(eTrackpadGestureDirection direction) : m_direction(direction) {}
 
+// OverviewGestureDecision's directions are Hyprland's, value for value.
+namespace {
+    using GestureDir = Hyprdrive::OverviewGestureDecision::EDir;
+    static_assert(static_cast<uint8_t>(GestureDir::None) == TRACKPAD_GESTURE_DIR_NONE && static_cast<uint8_t>(GestureDir::Swipe) == TRACKPAD_GESTURE_DIR_SWIPE &&
+                  static_cast<uint8_t>(GestureDir::Left) == TRACKPAD_GESTURE_DIR_LEFT && static_cast<uint8_t>(GestureDir::Right) == TRACKPAD_GESTURE_DIR_RIGHT &&
+                  static_cast<uint8_t>(GestureDir::Up) == TRACKPAD_GESTURE_DIR_UP && static_cast<uint8_t>(GestureDir::Down) == TRACKPAD_GESTURE_DIR_DOWN &&
+                  static_cast<uint8_t>(GestureDir::Vertical) == TRACKPAD_GESTURE_DIR_VERTICAL && static_cast<uint8_t>(GestureDir::Horizontal) == TRACKPAD_GESTURE_DIR_HORIZONTAL &&
+                  static_cast<uint8_t>(GestureDir::Pinch) == TRACKPAD_GESTURE_DIR_PINCH && static_cast<uint8_t>(GestureDir::PinchOut) == TRACKPAD_GESTURE_DIR_PINCH_OUT &&
+                  static_cast<uint8_t>(GestureDir::PinchIn) == TRACKPAD_GESTURE_DIR_PINCH_IN,
+                  "eTrackpadGestureDirection changed: OverviewGestureDecision::EDir must follow it");
+
+    GestureDir gestureDir(eTrackpadGestureDirection direction) {
+        return static_cast<GestureDir>(static_cast<uint8_t>(direction));
+    }
+}
+
 // THE SWIPE OPENS AND CLOSES EVERY MONITOR, like tap-SUPER (user, 2026-09-14:
 // the gesture only opened the monitor under the pointer). Each monitor's
 // overview gets the same delta, so every `scale` holds the same value and each
@@ -60,9 +77,8 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
 
     // A "vertical" binding is both halves of an up/down pair: Hyprland hands
     // begin the direction the fingers actually took (UP or DOWN), so down is
-    // the close. Reading only the bound direction made a vertical binding open
-    // on either direction and never close.
-    const bool WANT_CLOSE = m_direction == TRACKPAD_GESTURE_DIR_DOWN || (m_direction == TRACKPAD_GESTURE_DIR_VERTICAL && e.direction == TRACKPAD_GESTURE_DIR_DOWN);
+    // the close (OverviewGestureDecision.hpp, host-tested).
+    const bool WANT_CLOSE = Hyprdrive::OverviewGestureDecision::wantsClose(gestureDir(m_direction), gestureDir(e.direction));
 
     // An overview still animating out cannot be swiped (onSwipeUpdate reads
     // `closing` and would run backwards). Drop them first, on every monitor --

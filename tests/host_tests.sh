@@ -46,6 +46,8 @@
 #                     the record, the chain to the previous handler, the cap.
 #   demangle_test     Demangle.hpp: `debug hooks` names and signatures read
 #                     as C++, not as mangled symbols.
+#   overview_gesture_decision_test  OverviewGestureDecision.hpp: open or
+#                     close, for every bound x taken swipe direction.
 #   motion_math_test  MotionMath.hpp: each shared motion function against
 #                     verbatim copies of the definitions it replaced, bit for bit.
 #
@@ -129,6 +131,7 @@ run finger_swipe_test tests/unit/finger_swipe_test.cpp
 run workers_test tests/unit/workers_test.cpp src/core/Workers.cpp -pthread
 run terminate_log_test tests/unit/terminate_log_test.cpp src/debug/TerminateLog.cpp
 run demangle_test tests/unit/demangle_test.cpp
+run overview_gesture_decision_test tests/unit/overview_gesture_decision_test.cpp
 run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
