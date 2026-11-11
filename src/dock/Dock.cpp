@@ -4,6 +4,7 @@
 #include "IdentityLive.hpp"
 #include "MotionSites.hpp"
 #include "FullscreenDesktop.hpp"
+#include "WindowPlacement.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -846,7 +847,7 @@ void onWindowOpen(const PHLWINDOW& window) {
         return;
     const auto ID      = AppSearch::idForClass(Hyprdrive::AppIdentity::groupKey(window));
     const bool SPECIAL = !window->m_workspace || window->m_workspace->m_isSpecialWorkspace;
-    const bool MAIN    = !window->m_isFloating && !window->parent() && !window->isModal() && !SPECIAL;
+    const bool MAIN    = Hyprdrive::WindowPlacement::mainWindow(window); // (as Placement placed it)
     const bool EMPTY   = MAIN && opensInEmptyDesktop(ID);
     const bool FULL    = MenuModel::shouldOpenFullscreen({.listed   = opensInFullscreen(ID),
                                                           .floating = window->m_isFloating,

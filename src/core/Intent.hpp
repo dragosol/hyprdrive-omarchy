@@ -39,6 +39,10 @@ namespace Hyprdrive::Intent {
     // launch is used up by the window that takes it -- and remembered until
     // it closes; asking again returns the same verdict.
     const char* judge(const PHLWINDOW& w);
+    // At window.openEarly, from Placement (the one opener, so the order is
+    // its): on a Mosaic desktop an unasked window maps without focus and the
+    // pointer rides the window it was on (mosaic:quiet_new_windows).
+    void opened(const PHLWINDOW& w);
     // `w` mapped unasked on a Mosaic desktop (and is still mapping).
     bool quiet(const PHLWINDOW& w);
     // Every frame of `monitor` (render.pre): the pointer rides its window.

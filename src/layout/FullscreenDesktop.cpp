@@ -110,7 +110,7 @@ namespace Hyprdrive::FullscreenDesktop {
             bool         home = false;
         } g_carrying;
         wl_event_source*   g_timer = nullptr;
-        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook, g_monAddHook, g_monGoneHook, g_monLayoutHook;
+        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_monAddHook, g_monGoneHook, g_monLayoutHook;
         const char*         g_healDue = nullptr; // why desktops sharing a number are pulled apart at the next pass
         // A DISPLAY CHANGE (compactIfDue): why, and when the last monitor event of the burst came.
         const char*                           g_compactDue = nullptr;
@@ -613,21 +613,30 @@ namespace Hyprdrive::FullscreenDesktop {
         // the user asked for is shown there; an unasked one (Intent) is not.
         // Floating windows, dialogs and fullscreen_desktop = stay keep
         // Hyprland's own behaviour.
-        void besideFullscreen(const PHLWINDOW& w) {
+        // The fullscreen app on `ws` that this book keeps (a trip's, or one
+        // settled alone on its desktop), if any.
+        PHLWINDOW appOn(const PHLWORKSPACE& ws) {
+            if (!ws || !DesktopOrder::ordinary(ws))
+                return nullptr;
+            const auto APP = Fullscreen::controller()->getFullscreenWindow(ws);
+            if (!APP || !fullscreen(APP))
+                return nullptr;
+            const bool OURS = tripOf(APP) || std::ranges::any_of(g_settled, [&](const PHLWINDOWREF& r) { return r.lock() == APP; });
+            return OURS ? APP : nullptr;
+        }
+
+        PHLWORKSPACE besideFullscreen(const PHLWINDOW& w, bool prompted) {
             if (!w || w->m_isFloating || w->m_pinned || w->parent() || w->isModal() || (w->m_isX11 && (w->isX11OverrideRedirect() || w->x11Parent())))
-                return;
+                return nullptr;
             const auto WS = w->m_workspace;
             if (!WS || !DesktopOrder::ordinary(WS) || mode() == "stay")
-                return;
-            const auto APP = Fullscreen::controller()->getFullscreenWindow(WS);
-            if (!APP || APP == w || !fullscreen(APP))
-                return;
-            const bool OURS = tripOf(APP) || std::ranges::any_of(g_settled, [&](const PHLWINDOWREF& r) { return r.lock() == APP; });
-            if (!OURS)
-                return;
+                return nullptr;
+            const auto APP = appOn(WS);
+            if (!APP || APP == w)
+                return nullptr;
             const auto MON = WS->m_monitor.lock();
             if (!MON)
-                return;
+                return nullptr;
             // ...and the room made for it is OWED BACK like a fullscreen
             // app's (it was never: each window opened over a fullscreen app
             // with a desktop after it left every desktop after it a place up
@@ -637,11 +646,11 @@ namespace Hyprdrive::FullscreenDesktop {
             const WORKSPACEID at   = PLAN.at;
             bool              owes = false;
             if (PLAN.settle || !Rows::of(MON).contains(at))
-                return;
+                return nullptr;
             if (PLAN.makeRoom) {
                 DesktopStrip::finishNow();
                 if (!DesktopOrder::shift(ROW, at, +1))
-                    return; // refused (logged): Hyprland's own behaviour
+                    return nullptr; // refused (logged): Hyprland's own behaviour
                 moved(ROW, at, +1);
                 owes = true;
             }
@@ -658,7 +667,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 if (owes)
                     g_debts.push_back({.at = at, .mon = MON, .beside = true});
                 arm(1);
-                return;
+                return nullptr;
             }
             if (owes)
                 g_debts.push_back({.space = space, .at = at, .mon = MON, .home = WS, .cls = w->m_class, .pid = w->getPID(), .beside = true});
@@ -667,11 +676,13 @@ namespace Hyprdrive::FullscreenDesktop {
                 g_given.push_back({.space = space, .at = at, .mon = MON, .home = WS, .cls = w->m_class, .pid = w->getPID(), .beside = true});
             }
             trace(std::format("{} opened over fullscreen {} on {}: to {}{}{}", w->m_class, APP->m_class, WS->m_id, at, owes ? " (owed back)" : "",
-                              w->m_noInitialFocus ? " (unasked: not shown)" : ""));
+                              prompted ? "" : " (unasked: not shown)"));
             w->m_workspace = space;
             w->m_monitor   = MON;
-            if (!w->m_noInitialFocus)
+            if (prompted)
                 show(MON, space);
+            else
+                w->m_noInitialFocus = true;
             // SHOWN ON ITS DESKTOP (user, 2026-11-09: "it opens it in the next
             // desktop but it's not visible until i switch away then switch
             // back, OR I go to overview"). The rest of Hyprland's map still
@@ -682,6 +693,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // is over (reconcile, on the event loop).
             g_besides.emplace_back(w);
             arm(1);
+            return space;
         }
 
         // The window besideFullscreen moved, once Hyprland's map is done with
@@ -1151,6 +1163,14 @@ namespace Hyprdrive::FullscreenDesktop {
         return w && g_carrying.home == home && g_carrying.win.lock() == w;
     }
 
+    PHLWINDOW fullscreenAppOn(const PHLWORKSPACE& ws) {
+        return appOn(ws);
+    }
+
+    PHLWORKSPACE beside(const PHLWINDOW& w, bool prompted) {
+        return besideFullscreen(w, prompted);
+    }
+
     bool isFullscreenDesktop(const PHLWORKSPACE& ws) {
         return ws && isTripSpace(ws);
     }
@@ -1280,7 +1300,6 @@ namespace Hyprdrive::FullscreenDesktop {
             if (!g_trips.empty() || !g_debts.empty() || !g_moved.empty() || !g_heldOut.empty())
                 arm(1);
         });
-        g_openHook  = Event::bus()->m_events.window.openEarly.listen([](PHLWINDOW w) { besideFullscreen(w); });
         g_closeHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
             if (!g_trips.empty() || !g_debts.empty() || !g_heldOut.empty() || !g_origins.empty())
                 arm(1);
@@ -1321,7 +1340,6 @@ namespace Hyprdrive::FullscreenDesktop {
         g_monGoneHook.reset();
         g_monLayoutHook.reset();
         g_fsHook.reset();
-        g_openHook.reset();
         g_closeHook.reset();
         g_moveHook.reset();
         if (g_timer) {

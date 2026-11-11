@@ -61,7 +61,7 @@ namespace Hyprdrive::Intent {
         };
         std::optional<SRide> g_ride;
 
-        CHyprSignalListener g_openEarly, g_key, g_button, g_move, g_close;
+        CHyprSignalListener g_key, g_button, g_move, g_close;
         CFunctionHook*      g_spawnHook = nullptr;
 
         double since(clock::time_point t) {
@@ -174,7 +174,7 @@ namespace Hyprdrive::Intent {
         };
         std::vector<SVerdict> g_verdicts;
 
-        void onOpenEarly(const PHLWINDOW& w) {
+        void quietMosaic(const PHLWINDOW& w) {
             std::erase_if(g_quiet, [](const PHLWINDOWREF& r) { return !r || !r->m_isMapped; });
             if (!w || !on() || !Mosaic::isMosaicWorkspace(w->m_workspace))
                 return;
@@ -206,6 +206,10 @@ namespace Hyprdrive::Intent {
         const char* WHY = askedWhy(w);
         g_verdicts.push_back({w, WHY});
         return WHY;
+    }
+
+    void opened(const PHLWINDOW& w) {
+        quietMosaic(w);
     }
 
     void granted(const char* why) {
@@ -246,7 +250,6 @@ namespace Hyprdrive::Intent {
 
     void init() {
         Launch::onLaunch = [] { granted("hyprdrive"); };
-        g_openEarly = Event::bus()->m_events.window.openEarly.listen([](PHLWINDOW w) { onOpenEarly(w); });
         g_close     = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
             std::erase_if(g_quiet, [&](const PHLWINDOWREF& r) { return !r || r.lock() == w; });
             std::erase_if(g_verdicts, [&](const SVerdict& v) { return !v.win || v.win.lock() == w; });
@@ -290,7 +293,6 @@ namespace Hyprdrive::Intent {
             g_spawnHook->unhook();
             g_spawnHook = nullptr;
         }
-        g_openEarly.reset();
         g_close.reset();
         g_key.reset();
         g_button.reset();

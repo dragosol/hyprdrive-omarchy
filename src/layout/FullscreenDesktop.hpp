@@ -60,4 +60,12 @@ namespace Hyprdrive::FullscreenDesktop {
     // window off `origin` to an empty desktop: closed there, fullscreen, the
     // view goes back to `origin` (FullscreenDesktop.cpp, SOrigin).
     void launchedFrom(const PHLWINDOW& w, const PHLWORKSPACE& origin);
+    // PLACEMENT'S BESIDE (Placement.cpp decides; this does it). The fullscreen
+    // app this book keeps on `ws` (a trip's or a settled one), or nullptr.
+    PHLWINDOW fullscreenAppOn(const PHLWORKSPACE& ws);
+    // At window.openEarly: `w`, opening over that app, goes to the next place
+    // in the monitor's row (made if it is taken, and owed back). `prompted`:
+    // the user asked for it -- the view goes there; else it goes quietly.
+    // The desktop it went to, or nullptr (it stays: Hyprland's behaviour).
+    PHLWORKSPACE beside(const PHLWINDOW& w, bool prompted);
 }

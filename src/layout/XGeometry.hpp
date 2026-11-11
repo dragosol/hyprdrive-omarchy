@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // A FULLSCREEN GAME WHOSE X SIDE DISAGREES WITH HYPRLAND (user, 2026-10-21:
@@ -93,4 +94,10 @@ namespace Hyprdrive::XGeometry {
     // `hyprdrive:debug xgeom`: what check() would see right now, without
     // acting -- which condition lets it through or stops it.
     std::string status();
+
+    // An X atom's id by name, from our own X connection (Hyprland's HYPRATOMS
+    // is an inline header map the plugin may hold an unfilled copy of);
+    // XCB_ATOM_NONE (0) without XWayland, or for a name the server never
+    // interned (only_if_exists: then no window can carry it either).
+    uint32_t atom(const char* name);
 }

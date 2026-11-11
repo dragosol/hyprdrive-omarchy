@@ -48,6 +48,12 @@ namespace Hyprdrive::OwnSizeTile {
     // `w` fixes its own size; `size` gets it in layout px.
     bool fixedSize(const PHLWINDOW& w, Vector2D& size);
 
+    // Placement's Tile for a fixed-size window (window.openEarly, before the
+    // layout files it; again at window.open, after Hyprland reset its pseudo
+    // size): set up to tile at its own size. False when it does not fix its
+    // size, or the toggle is not hooked (no own-size tile exists then).
+    bool tileAtOwnSize(const PHLWINDOW& w);
+
     // `w` sits in its tile at its own size, by this module.
     bool owned(const PHLWINDOW& w);
 }

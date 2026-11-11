@@ -215,6 +215,14 @@ namespace Hyprdrive::OwnSizeTile {
         return true;
     }
 
+    bool tileAtOwnSize(const PHLWINDOW& w) {
+        Vector2D size;
+        if (!g_hook || !w || !fixedSize(w, size))
+            return false;
+        own(w, size);
+        return true;
+    }
+
     bool owned(const PHLWINDOW& w) {
         return w && std::ranges::any_of(g_owned, [&](const PHLWINDOWREF& r) { return r && r.lock() == w; });
     }

@@ -381,26 +381,9 @@ namespace Hyprdrive::Mosaic {
         return {};
     }
 
-    // A WINDOW THAT OPENS FLOATING (user, 2026-10-14: "windows that already
-    // come up as floating do not get properly included into the mosaic group").
-    // A float -- by a window rule, or because the app asked -- belongs to
-    // Hyprland's floating layout, which the mosaic never sees, so it landed on
-    // top of the cluster instead of in it. On a mosaic desktop, where every
-    // window keeps its own size anyway, it joins the mosaic. Real dialogs stay
-    // afloat: anything with a parent window (a transient, an X11 child), a
-    // modal, an override-redirect popup, a pinned or fullscreen window. So
-    // does a float a window rule tags `hyprdrive-float` (user, 2026-10-15: a
-    // Sushi preview joined the mosaic and every window re-packed around it,
-    // then back when it closed): a preview or a picker is a passing overlay,
-    // not a member of the desktop. 25-rules.lua tags Sushi; a user tags any
-    // other app the same way.
-    //
-    // EVERY DESKTOP WITH general:open_tiled (user, 2026-11-10: "add an option
-    // to never load windows in floating mode to general"). The same windows,
-    // by the same rules, tile into the desktop's own layout (dwindle,
-    // scrolling) as they join a mosaic. Off by default, so a float rule still
-    // does what it says.
-    static CHyprSignalListener g_openLateHook;
+    // A WINDOW THAT OPENS FLOATING joins the mosaic (user, 2026-10-14):
+    // decided as it maps, before the layout files it (Placement.cpp; the
+    // enforcer is always on here).
     static CHyprSignalListener g_floatingHook; // g_windowSizes: a window floated
 
     static bool onMosaicWorkspace(const PHLWORKSPACE& ws) {
@@ -409,44 +392,6 @@ namespace Hyprdrive::Mosaic {
 
     bool isMosaicWorkspace(const PHLWORKSPACE& ws) {
         return onMosaicWorkspace(ws);
-    }
-
-    static bool openTiled() {
-        return Hyprdrive::Config::getValue<bool>("plugin:hyprdrive:general:open_tiled");
-    }
-
-    static void adoptFloating(const PHLWINDOW& w) {
-        if (!w || !w->m_isMapped || !w->m_isFloating || !w->m_workspace)
-            return;
-        const bool MOSAIC = onMosaicWorkspace(w->m_workspace);
-        if (!MOSAIC && !openTiled())
-            return;
-        if (w->parent() || w->isModal() || w->m_pinned || Fullscreen::controller()->isFullscreen(w) || (w->m_isX11 && (w->isX11OverrideRedirect() || w->x11Parent())))
-            return;
-        if (w->m_ruleApplicator && w->m_ruleApplicator->m_tagKeeper.isTagged("hyprdrive-float"))
-            return;
-        // A window that cannot change size is not a mosaic member, like a
-        // dialog: min == max (X11 WM_NORMAL_HINTS, or an xdg-toplevel's min and
-        // max). Tiled, it was stretched past its fixed size, and an X11 one
-        // answered every configure with its own size -- a ConfigureRequest
-        // ping-pong (~1200/s) that starved the seat (Battle.net's login window,
-        // 362x693, mapped at 1726x1470; 2026-11-06).
-        if (const auto MIN = w->minSize(), MAX = w->maxSize();
-            MIN && MAX && MIN->x >= 1 && MIN->y >= 1 && std::abs(MAX->x - MIN->x) < 1 && std::abs(MAX->y - MIN->y) < 1) {
-            trace(std::format("floating window {:x} is fixed-size ({}x{}): stays floating", (uintptr_t)w.get(), MIN->x, MIN->y));
-            return;
-        }
-        trace(std::format("adopt floating window {:x} into the {}", (uintptr_t)w.get(), MOSAIC ? "mosaic" : "desktop's layout (general:open_tiled)"));
-        (void)::Config::Actions::floatWindow(::Config::Actions::TOGGLE_ACTION_DISABLE, w);
-        // The open animation, again, from the tile. onMap started it from the
-        // FLOATING box before openLate, so the window grew out of the spot it
-        // would have floated in and slid across into its tile (rig, 2026-11-10:
-        // a rule-floated kitty came out of the screen's centre into the right
-        // half). Tiling sets the tile as the goal at once (setFloating ->
-        // moveTarget -> recalculate), and no frame has been drawn since onMap,
-        // so this is the same popin a window that opened tiled gets.
-        if (!MOSAIC && !w->m_isFloating)
-            w->m_animationController.apply(w->m_animationController.animateIn());
     }
 
     static CHyprSignalListener g_desktopShownHook; // a held Super's zoom follows the desktop
@@ -665,10 +610,6 @@ namespace Hyprdrive::Mosaic {
             restoreGap(*GAP);
         Hyprdrive::Config::registerDispatcher("focus", onFocusDispatcher);
         Hyprdrive::Config::registerDispatcher("swap", onSwapDispatcher);
-        // After the window's rules are in (openLate). Directly, never a
-        // doLater: a deferred call still queued when the plugin unloads jumps
-        // into unmapped code (the unload SEGVs, 2026-09).
-        g_openLateHook = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW w) { adoptFloating(w); });
         g_desktopShownHook = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE ws) { zoomFollowsDesktop(ws); });
         g_floatingHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW w) { onFloating(w); });
         // Every desktop, not just the canvas: the dock's veto marks a hover
@@ -681,7 +622,6 @@ namespace Hyprdrive::Mosaic {
     }
 
     void unregisterLayout(HANDLE handle) {
-        g_openLateHook.reset();
         g_desktopShownHook.reset();
         g_floatingHook.reset();
         g_focusReasonHook.reset();

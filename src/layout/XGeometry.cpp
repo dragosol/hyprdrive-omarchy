@@ -467,6 +467,25 @@ namespace Hyprdrive::XGeometry {
         g_fsTellHook = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW w) { tellMaximized(w); });
     }
 
+    uint32_t atom(const char* name) {
+        static std::unordered_map<std::string, uint32_t> s_atoms; // the server's ids: stable for its life
+        if (!name)
+            return XCB_ATOM_NONE;
+        if (const auto IT = s_atoms.find(name); IT != s_atoms.end())
+            return IT->second;
+        const auto CONN = connection();
+        if (!CONN)
+            return XCB_ATOM_NONE;
+        uint32_t out = XCB_ATOM_NONE;
+        if (auto* r = xcb_intern_atom_reply(CONN, xcb_intern_atom(CONN, 1, std::strlen(name), name), nullptr)) {
+            out = r->atom;
+            free(r);
+        }
+        if (out != XCB_ATOM_NONE)
+            s_atoms.emplace(name, out);
+        return out;
+    }
+
     std::string status() {
         std::string s = std::format("calls={} hold={} window={} anim={} xsurface={} clip: rate={} outside={} conn={} ptr={} agree={} tree={} none={} moved={} refocus={}/{} | ",
                                     g_n.calls, g_n.hold, g_n.window, g_n.anim, g_n.xsurface, g_n.clipRate, g_n.clipOutside, g_n.clipConn, g_n.clipPtr,
