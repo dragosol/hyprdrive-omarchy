@@ -650,6 +650,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     Hyprdrive::Mosaic::registerLayout(HYPRDRIVE_HANDLE);
     Hyprdrive::Intent::init();
     Hyprdrive::GameApps::init();
+    // Each monitor's row of desktops (Omarchy's workspace blocks): before
+    // anything renumbers.
+    Hyprdrive::Rows::init();
     Hyprdrive::FullscreenDesktop::init();
     // Super+scroll's dispatcher and its wheel filter, and the desktop-change
     // animation switches (DesktopSwitch.hpp). Reads keys: after registerConfig().
@@ -755,6 +758,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // destroys our algorithm objects -- while their code is still mapped.
     Hyprdrive::Intent::shutdown();
     Hyprdrive::FullscreenDesktop::shutdown();
+    Hyprdrive::Rows::shutdown(); // its inotify fd, timer and listeners
     Hyprdrive::GameApps::shutdown();
     Hyprdrive::Mosaic::shutdown();
     Hyprdrive::Mosaic::unregisterLayout(HYPRDRIVE_HANDLE);

@@ -1,4 +1,5 @@
 #include "ConfigParts.hpp"
+#include "Rows.hpp"
 using namespace ConfigDetail;
 
 namespace {
@@ -401,6 +402,10 @@ void registerLuaFunctions() {
 
     HyprlandAPI::addLuaFunction(HYPRDRIVE_HANDLE, Compat::NAME, "_dispatch", ::runDispatcherActionLua);
     HyprlandAPI::addLuaFunction(HYPRDRIVE_HANDLE, Compat::NAME, "configure", ::configureLua);
+    // hl.plugin.hyprdrive.workspace_blocks(slots): Omarchy's per-monitor
+    // workspace blocks are on (slots > 0) or off (0); 00-plugin.lua says it
+    // on every parse (Rows.hpp).
+    HyprlandAPI::addLuaFunction(HYPRDRIVE_HANDLE, Compat::NAME, "workspace_blocks", Rows::luaWorkspaceBlocks);
 
     // ONE RELEASE. `configure` under the old namespace still writes the NEW
     // table -- an alias that wrote the deprecated keys would keep re-arming the

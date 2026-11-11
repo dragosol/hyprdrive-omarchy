@@ -73,6 +73,7 @@ using namespace Hyprutils::String;
 #include "Intent.hpp"
 #include "GameApps.hpp"
 #include "FullscreenDesktop.hpp"
+#include "Rows.hpp"
 #include "ShowDesktop.hpp"
 #include "OwnSizeTile.hpp"
 #include "OverviewFullscreen.hpp"

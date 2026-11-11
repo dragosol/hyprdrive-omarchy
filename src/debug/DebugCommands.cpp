@@ -103,6 +103,10 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     // `dockmenu`: the dock's hover pane cells and its open menu's row boxes.
     if (TOPIC == "dockmenu")
         return {.success = false, .error = Hyprdrive::Dock::debugMenuReport(Desktop::focusState()->monitor())};
+    // `rows`: each monitor's row of desktops -- Omarchy's workspace blocks on
+    // or off, the block file as read, pinned guests, members and visitors.
+    if (TOPIC == "rows")
+        return {.success = false, .error = Hyprdrive::Rows::debugReport()};
     if (TOPIC == "glass") {
         const auto C = Hyprdrive::Config::dockBackgroundColor();
         return {.success = false, .error = std::format("hyprdrive glass: tint #{:02x}{:02x}{:02x} alpha {:.3f}", sc<int>(std::round(C.r * 255)), sc<int>(std::round(C.g * 255)),

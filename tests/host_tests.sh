@@ -37,6 +37,9 @@
 #                     it would put two desktops on one number or one below 1
 #                     (shift(0, -1)); heal pulls apart desktops sharing one;
 #                     compactMoves numbers the desktops with windows 1..N.
+#   row_test          Row.hpp / RowsFile.hpp: a monitor's row of desktops (the
+#                     implicit row, an Omarchy block and its overflow) and the
+#                     parse of Omarchy's monitor-workspaces(-merged) files.
 #   fullscreen_book_test  FullscreenBook.hpp: a fullscreen trip's places are
 #                     kept by number (never place -1), the payback decision,
 #                     and random fullscreen sequences that must give back the
@@ -144,6 +147,7 @@ run demangle_test tests/unit/demangle_test.cpp
 run overview_gesture_decision_test tests/unit/overview_gesture_decision_test.cpp
 run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
+run row_test tests/unit/row_test.cpp
 run desktop_plan_test tests/unit/desktop_plan_test.cpp
 run fullscreen_book_test tests/unit/fullscreen_book_test.cpp
 run fullscreen_carry_test tests/unit/fullscreen_carry_test.cpp

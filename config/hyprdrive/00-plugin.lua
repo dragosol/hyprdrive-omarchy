@@ -56,3 +56,22 @@ function hyprdrive_loaded()
     end
     return false
 end
+
+-- OMARCHY'S PER-MONITOR WORKSPACE BLOCKS (4.5+: monitor-workspaces.lua gives
+-- each monitor ten desktop numbers of its own). The plugin numbers each
+-- monitor's desktops inside its block when Omarchy's module is loaded, and on
+-- one global row otherwise. Said at parse and again on hyprland.start /
+-- config.reloaded, so it does not matter whether this fragment is sourced
+-- before or after omarchy.lua; the plugin forgets it before every parse.
+local function hd_blocks()
+    local mw = package.loaded["default.hypr.monitor-workspaces"]
+    local slots = type(mw) == "table" and (tonumber(mw.slots) or 10) or 0
+    pcall(function()
+        hl.plugin.hyprdrive.workspace_blocks(slots)
+    end)
+end
+hd_blocks()
+pcall(function()
+    hl.on("hyprland.start", hd_blocks)
+    hl.on("config.reloaded", hd_blocks)
+end)
