@@ -1445,6 +1445,7 @@ static void testB6() {
         {"outCubic", [](float t) { return M::outCubic(t); }},
         {"linear", [](float t) { return t; }},
         {"outExpo", [](float t) { return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t); }},
+        {"FLIGHT (site)", [](float t) { return M::houseCurve(M::ESite::FLIGHT, t); }},
     };
     std::mt19937                           rng(6);
     std::uniform_real_distribution<double> U01(0.02, 0.97), POS(-2000.0, 2000.0), MS(80.0, 2000.0);
@@ -1546,6 +1547,41 @@ static void testB6() {
                 turned, n, reversals, matched, plainJumped, worstCarry, worstTurnU);
 }
 
+// B6, F1: a minimize reversed mid-air into a restore and back, as
+// FlightController drives it: alpha 1 -> 0 (or 0 -> 1) over minimize_ms on
+// the FLIGHT curve, turned at u0, the new leg kicked with fadeCarry. The
+// alpha never leaves 0..1, and the leg lands on the plain flight's value.
+static void testB6Flight() {
+    namespace M = Hyprdrive::Motion;
+    const auto   CURVE = [](float t) { return M::houseCurve(M::ESite::FLIGHT, t); };
+    std::mt19937 rng(61);
+    std::uniform_real_distribution<double> U01(0.01, 0.99), MS(100.0, 1200.0);
+    long n = 0, kicked = 0, badRange = 0, badLand = 0, badCont = 0;
+    for (int i = 0; i < 20000; ++i) {
+        const bool   MINIMIZING = i % 2; // the old leg
+        const double A0 = MINIMIZING ? 1.0 : 0.0, A1 = 1.0 - A0, LEGMS = MS(rng), U0 = U01(rng);
+        const double CUR = A0 + (A1 - A0) * CURVE(static_cast<float>(U0));
+        const double VEL = (A1 - A0) * M::curveSlope(CURVE, U0); // per u; same duration both legs
+        const double D   = A0 - CUR;                              // back the other way
+        const M::SKick K = M::matchKick(CURVE, D, VEL, M::SKickLimits{.legMs = LEGMS, .maxCarry = M::fadeCarry(CUR, D), .arrive = 1.0 / 255.0});
+        ++n;
+        if (!K.on())
+            continue;
+        ++kicked;
+        badCont += std::abs(M::withKick(CUR, K, 0.0) - CUR) > 1e-12;
+        for (int j = 0; j <= 1000; ++j) {
+            const double U = j / 1000.0, V = M::withKick(CUR + D * CURVE(static_cast<float>(U)), K, U);
+            badRange += V < -1e-9 || V > 1.0 + 1e-9;
+        }
+        badLand += !(M::withKick(CUR + D * CURVE(1.F), K, 1.0) == CUR + D * CURVE(1.F));
+    }
+    report("B6 F1 a reversed flight's alpha stays inside 0..1", kicked * 1001, badRange);
+    report("B6 F1 a reversed flight's alpha is continuous at the turn and lands on the plain value", kicked * 2, badCont + badLand);
+    std::printf("B6 F1 %ld of %ld reversals kicked\n", kicked, n);
+    if (kicked == 0)
+        report("B6 F1 no reversal was kicked (the test proves nothing)", 1, 1);
+}
+
 int main() {
     testA1();
     testA2();
@@ -1559,6 +1595,7 @@ int main() {
     testB4();
     testB2();
     testB6();
+    testB6Flight();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

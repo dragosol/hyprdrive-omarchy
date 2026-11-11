@@ -39,7 +39,8 @@
 //    there, so the leg moves at the plain curve's own speed).
 // tests/unit/motion_math_test.cpp holds all of this, per site curve.
 //
-// USED BY the infinite-canvas pan (L1) and the border fade (B1). NOT by the
+// USED BY the infinite-canvas pan (L1), the border fade (B1) and the
+// minimize/restore flight reversed mid-air (F1). NOT by the
 // overview grid reflow (O1), which takes the plain retarget again: a query
 // typed and erased re-aims every tile inside the window, each leg then starts
 // behind the plain one, and the grid settled ~50 ms later at scale 2 (rig,
@@ -206,6 +207,12 @@ namespace Hyprdrive::Motion {
         if (!std::isfinite(k) || k == 0.0)
             return {};
         return {.kick = k * delta, .w = w};
+    }
+
+    // A fade (0..1) turned at `from` toward from + delta: how far it may carry
+    // on the old way and stay inside 0..1, at most `cap`.
+    inline double fadeCarry(double from, double delta, double cap = 0.1) {
+        return std::clamp(delta > 0.0 ? from : 1.0 - from, 0.0, cap);
     }
 
     // A leg's velocity (units per unit u) at u: the curve's part and the kick's.

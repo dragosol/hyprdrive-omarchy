@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <any>
 #include <cstdio>
@@ -29,6 +30,7 @@
 #include "FlightController.hpp"
 #include "Motion.hpp"
 #include "MotionMath.hpp"
+#include "MotionRetarget.hpp"
 #include "MotionSites.hpp"
 
 #include "AppSearch.hpp"
@@ -104,6 +106,11 @@ constexpr float FLIGHT_ORPHAN_GRACE_MS = 1500.F;
 struct SDrawn {
     CBox  box;
     float alpha = 0.F;
+    // ...and how fast it was moving there (x, y, w, h, alpha per animated ms),
+    // for a reversal to leave at that speed (B6). Not moving: a genie's
+    // standing window, a landed flight.
+    std::array<double, 5> vel{};
+    bool                  moving = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -262,6 +269,19 @@ struct SFlight {
     // drawn box was the window's own; blurring that jump smeared the whole
     // window down into the icon: user, 2026-09-30).
     std::optional<float> lastE;
+    std::optional<float> lastT; // ...and its progress, for the kick's part of that box
+
+    // B6 (MotionRetarget.hpp). A reversal leaves at the speed the old flight
+    // had: `seedVel` is that speed (SDrawn::vel), turned into a short
+    // correction per component (x, y, w, h, alpha) on the new flight's first
+    // frame, when both its ends are known. 150 ms of the flight's own time
+    // later it IS the plain flight, so it lands when and where that one does;
+    // a flight never reversed has no kick and is the old expression.
+    std::optional<std::array<double, 5>> seedVel;
+    std::array<Motion::SKick, 5>         kick{};
+    bool                                 kicked() const {
+        return std::ranges::any_of(kick, [](const Motion::SKick& k) { return k.on(); });
+    }
 
     EFlightPhase phase          = EFlightPhase::Armed;
     int          landHeldFrames = 0;
@@ -335,6 +355,60 @@ float flightProgress(const SFlight& flight) {
 
 // The window as it sits on screen, in the monitor-local RENDER px the flight
 // works in.
+// B6. The flight's curve, and how far a reversal may carry on the old way:
+// at most this many px of box, a tenth of the alpha, and never out of 0..1.
+float flightCurve(float t) {
+    return Motion::curve(Motion::ESite::FLIGHT, t);
+}
+constexpr double FLIGHT_CARRY_PX = 32.0;
+
+// A reversed flight's correction, on its first frame: START -> END and
+// ALPHA0 -> ALPHA1 are this flight's ends, as the frame draws them.
+void aimFlightKick(SFlight& flight, const CBox& start, const CBox& end, float alpha0, float alpha1) {
+    if (!flight.seedVel)
+        return;
+    const auto VEL = *flight.seedVel;
+    flight.seedVel.reset();
+    flight.kick     = {};
+    const double MS = minimizeMs();
+    if (!(MS > 0.0))
+        return;
+    const double D[5] = {end.x - start.x, end.y - start.y, end.width - start.width, end.height - start.height, static_cast<double>(alpha1 - alpha0)};
+    for (int i = 0; i < 5; ++i) {
+        const double CARRY = i < 2 ? FLIGHT_CARRY_PX :
+            i < 4              ? std::min(FLIGHT_CARRY_PX, 0.25 * std::max(0.0, (i == 2 ? start.width : start.height) - 2.0)) :
+                                 Motion::fadeCarry(alpha0, D[4]);
+        flight.kick[i]     = Motion::matchKick(flightCurve, D[i], VEL[i] * MS, Motion::SKickLimits{.legMs = MS, .maxCarry = CARRY, .arrive = i < 4 ? 0.5 : 1.0 / 255.0});
+    }
+}
+
+// The box and alpha of a flight START -> END at eased E and progress T, with
+// its kick; and how fast they move there (SDrawn::vel).
+CBox flightBox(const SFlight& flight, const CBox& start, const CBox& end, float e, float t) {
+    CBox box = Motion::lerp(start, end, e);
+    if (flight.kicked()) {
+        box = {Motion::withKick(box.x, flight.kick[0], t), Motion::withKick(box.y, flight.kick[1], t), Motion::withKick(box.width, flight.kick[2], t),
+               Motion::withKick(box.height, flight.kick[3], t)};
+        box.width  = std::max(2.0, box.width);
+        box.height = std::max(2.0, box.height);
+    }
+    return box;
+}
+float flightAlpha(const SFlight& flight, float plain, float t) {
+    return flight.kicked() ? std::clamp(static_cast<float>(Motion::withKick(plain, flight.kick[4], t)), 0.F, 1.F) : plain;
+}
+std::array<double, 5> flightVel(const SFlight& flight, const CBox& start, const CBox& end, float alpha0, float alpha1, float t) {
+    const double MS = minimizeMs();
+    if (!(MS > 0.0))
+        return {};
+    const double          S    = Motion::curveSlope(flightCurve, t);
+    const double          D[5] = {end.x - start.x, end.y - start.y, end.width - start.width, end.height - start.height, static_cast<double>(alpha1 - alpha0)};
+    std::array<double, 5> v{};
+    for (int i = 0; i < 5; ++i)
+        v[i] = Motion::legSlope(D[i], S, flight.kick[i], t) / MS;
+    return v;
+}
+
 CBox windowRenderBox(PHLMONITOR monitor, const PHLWINDOW& window) {
     if (!monitor || !window)
         return {};
@@ -665,6 +739,11 @@ EReverse reverse(PHLMONITOR monitor, const PHLWINDOW& window, bool restoring) {
     if (old.drawn) {
         next.start     = old.drawn->box;
         next.alphaFrom = old.drawn->alpha;
+        // ...and at its speed (B6) -- once per burst: a flight turned again
+        // while its own correction is still under way takes the plain restart.
+        const float U = old.lastT.value_or(1.F);
+        if (old.drawn->moving && std::ranges::none_of(old.kick, [&](const Motion::SKick& k) { return Motion::inWindow(k, U); }))
+            next.seedVel = old.drawn->vel;
     }
     next.hidden = std::move(old.hidden);
     zdbg("phase id=%llu kind=%s ->Armed reason=reversal-of-%llu seeded=%d\n", (unsigned long long)next.id, kindName(next.kind), (unsigned long long)old.id,
@@ -966,11 +1045,15 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
             // retile mid-flight retargets the flight for free.
             const float SCALE = std::max(monitor->m_scale, 0.01F);
             const CBox  START = it->start.value_or(ITEM->iconBox);
-            box               = Motion::lerp(START, it->from, E);
-            alpha             = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
+            const float A0    = it->alphaFrom.value_or(0.F);
+            aimFlightKick(*it, START, it->from, A0, 1.F);
+            box               = flightBox(*it, START, it->from, E, T);
+            alpha             = flightAlpha(*it, A0 * (1.F - E) + E, T);
             // The minimize blur setting (strength and fade, FlightBlur::shape), by the flight's own clock.
-            const CBox PREVBOX = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, Motion::lerp(START, it->from, it->lastE.value_or(E)), box, T);
+            const CBox PREVBOX = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, flightBox(*it, START, it->from, it->lastE.value_or(E), it->lastT.value_or(T)), box, T);
             it->lastE          = E;
+            it->lastT          = T;
+            auto VEL           = flightVel(*it, START, it->from, A0, 1.F, T);
 
             WINDOW->m_realPosition->m_Value = Vector2D{box.x / SCALE + monitor->m_position.x, box.y / SCALE + monitor->m_position.y};
             WINDOW->m_realSize->m_Value     = Vector2D{std::max(4.0, box.width / SCALE), std::max(4.0, box.height / SCALE)};
@@ -992,35 +1075,43 @@ void renderFlights(PHLMONITOR monitor, const SLayout& layout, const Time::steady
 
             if (it->phase == EFlightPhase::Armed)
                 transition(*it, EFlightPhase::Flying, "first-frame");
-            it->drawn = SDrawn{.box = box, .alpha = alpha};
-            zdbg("drive r=1 box=%f,%f %fx%f a=%f\n", box.x, box.y, box.width, box.height, alpha);
+            it->drawn = SDrawn{.box = box, .alpha = alpha, .vel = VEL, .moving = T < 1.F};
+            zdbg("drive r=1 id=%llu t=%f ms=%.3f box=%f,%f %fx%f a=%f\n", (unsigned long long)it->id, T, Motion::msBetween<double>(now, Time::steady_tp{}), box.x, box.y, box.width, box.height, alpha);
             ++it;
             continue;
         }
 
-        CBox PREVBOX;
+        CBox                  PREVBOX;
+        std::array<double, 5> VEL{};
         if (it->isRestore()) {
             // Overview path: proxy machinery (Y5 divergence: GNOME does NOT fade
             // a window back in; the user asked for "fade out/in").
-            const CBox START = it->start.value_or(ITEM->iconBox);
-            box              = Motion::lerp(START, it->from, E);
-            alpha            = it->alphaFrom.value_or(0.F) * (1.F - E) + E;
-            PREVBOX          = Motion::lerp(START, it->from, it->lastE.value_or(E));
+            const CBox  START = it->start.value_or(ITEM->iconBox);
+            const float A0    = it->alphaFrom.value_or(0.F);
+            aimFlightKick(*it, START, it->from, A0, 1.F);
+            box     = flightBox(*it, START, it->from, E, T);
+            alpha   = flightAlpha(*it, A0 * (1.F - E) + E, T);
+            PREVBOX = flightBox(*it, START, it->from, it->lastE.value_or(E), it->lastT.value_or(T));
+            VEL     = flightVel(*it, START, it->from, A0, 1.F, T);
         } else {
-            const CBox START = it->start.value_or(it->from);
-            box              = Motion::lerp(START, ITEM->iconBox, E);
-            alpha            = it->alphaFrom.value_or(1.F) * (1.F - E);
-            PREVBOX          = Motion::lerp(START, ITEM->iconBox, it->lastE.value_or(E));
+            const CBox  START = it->start.value_or(it->from);
+            const float A0    = it->alphaFrom.value_or(1.F);
+            aimFlightKick(*it, START, ITEM->iconBox, A0, 0.F);
+            box     = flightBox(*it, START, ITEM->iconBox, E, T);
+            alpha   = flightAlpha(*it, A0 * (1.F - E), T);
+            PREVBOX = flightBox(*it, START, ITEM->iconBox, it->lastE.value_or(E), it->lastT.value_or(T));
+            VEL     = flightVel(*it, START, ITEM->iconBox, A0, 0.F, T);
         }
         it->lastE = E;
+        it->lastT = T;
         PREVBOX   = FlightBlur::shape(FlightBlur::ESite::MINIMIZE, PREVBOX, box, T); // the flight's own clock
 
         if (it->phase == EFlightPhase::Armed)
             transition(*it, EFlightPhase::Flying, "first-frame");
-        it->drawn = SDrawn{.box = box, .alpha = alpha};
+        it->drawn = SDrawn{.box = box, .alpha = alpha, .vel = VEL, .moving = T < 1.F};
         {
             const auto& GC = WINDOW->m_realBorderColor.m_colors;
-            zdbg("draw r=%d box=%f,%f %fx%f a=%f bc=%02x%02x%02x\n", (int)it->isRestore(), box.x, box.y, box.width, box.height, alpha, GC.empty() ? 0 : sc<int>(GC[0].r * 255.F),
+            zdbg("draw r=%d id=%llu t=%f ms=%.3f box=%f,%f %fx%f a=%f bc=%02x%02x%02x\n", (int)it->isRestore(), (unsigned long long)it->id, T, Motion::msBetween<double>(now, Time::steady_tp{}), box.x, box.y, box.width, box.height, alpha, GC.empty() ? 0 : sc<int>(GC[0].r * 255.F),
                  GC.empty() ? 0 : sc<int>(GC[0].g * 255.F), GC.empty() ? 0 : sc<int>(GC[0].b * 255.F));
         }
         // Z16 (user): "shadows and the thin window outline do not stay on the
