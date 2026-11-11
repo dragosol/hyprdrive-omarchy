@@ -29,6 +29,11 @@
 #                     URIs, and Show in Files reaching a stand-in FileManager1.
 #   launcher_states_test  LauncherStates.hpp: badge and progress state is its
 #                     sender's, and goes when the sender leaves the bus.
+#   debug_paths_test  DebugPaths.hpp: debug logs under $XDG_RUNTIME_DIR, /tmp
+#                     only without one.
+#   desktop_plan_test  DesktopPlan.hpp: a renumber plan is refused whole when
+#                     it would put two desktops on one number or one below 1
+#                     (shift(0, -1)); heal pulls apart desktops sharing one.
 #   motion_math_test  MotionMath.hpp: each shared motion function against
 #                     verbatim copies of the definitions it replaced, bit for bit.
 #
@@ -87,6 +92,7 @@ run dock_drop_test tests/unit/dock_drop_test.cpp
 run finger_swipe_test tests/unit/finger_swipe_test.cpp
 run hot_corner_test tests/unit/hot_corner_test.cpp
 run desktop_step_test tests/unit/desktop_step_test.cpp
+run desktop_plan_test tests/unit/desktop_plan_test.cpp
 run desktop_row_test tests/unit/desktop_row_test.cpp
 run desktop_strip_test tests/unit/desktop_strip_test.cpp
 # shellcheck disable=SC2046

@@ -276,7 +276,12 @@ namespace Hyprdrive::FullscreenDesktop {
             else if (!freePlace(at, MON)) {
                 // No room after it: the desktops from there on move along a place.
                 DesktopStrip::finishNow(); // (the strip lands first: its row is numbers)
-                DesktopOrder::shift(at, +1);
+                if (!DesktopOrder::shift(at, +1)) {
+                    // Refused (DesktopOrder logged why): no room is made, so it
+                    // stays where it is, as Hyprland has it.
+                    g_settled.emplace_back(w);
+                    return;
+                }
                 moved(at, +1);
                 owes = true;
             }
@@ -382,7 +387,8 @@ namespace Hyprdrive::FullscreenDesktop {
                 trace(std::format("paying back place {}", AT));
                 if (top > AT) {
                     moves.emplace_back(E, top);
-                    DesktopOrder::renumber(moves);
+                    if (!DesktopOrder::renumber(moves))
+                        return true; // refused (logged): never half-paid
                 }
                 moved(AT + 1, -1);
                 return true;
@@ -390,7 +396,8 @@ namespace Hyprdrive::FullscreenDesktop {
             if (DesktopStrip::driving(MON))
                 return false;
             trace(std::format("paying back place {}", AT));
-            DesktopOrder::shift(AT + 1, -1);
+            if (!DesktopOrder::shift(AT + 1, -1))
+                return true; // refused (logged): never half-paid
             moved(AT + 1, -1);
             return true;
         }
@@ -425,7 +432,8 @@ namespace Hyprdrive::FullscreenDesktop {
             const WORKSPACEID at = WS->m_id + 1;
             if (!freePlace(at, MON)) {
                 DesktopStrip::finishNow();
-                DesktopOrder::shift(at, +1);
+                if (!DesktopOrder::shift(at, +1))
+                    return; // refused (logged): Hyprland's own behaviour
                 moved(at, +1);
             }
             auto space = byId(at);
