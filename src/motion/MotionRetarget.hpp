@@ -45,7 +45,14 @@
 // overview grid reflow (O1), which takes the plain retarget again: a query
 // typed and erased re-aims every tile inside the window, each leg then starts
 // behind the plain one, and the grid settled ~50 ms later at scale 2 (rig,
-// 2026-11-11) -- later than the plain retarget is not allowed.
+// 2026-11-11) -- later than the plain retarget is not allowed. A second try
+// matched only a real reversal (centre turned back >= 24 px) out of a leg
+// older than its turn window, once per reflow: the erase after a typed query
+// is such a reversal, and the next keystrokes re-aim the tile again while
+// its correction runs, from behind the plain leg -- settled up to 28 ms late
+// at scale 2 (baseline spread ~10 ms). Any velocity match of a reversal runs
+// behind the plain restart inside its window, so a follow-on re-aim can
+// always inherit that lag: the grid stays plain.
 //
 // Pure (<cmath>, <algorithm> only); every value is in the site's own units, u
 // is the leg's progress 0..1 (its eased-before progress, not the eased one).
