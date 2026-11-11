@@ -1,6 +1,6 @@
 #include "OverviewFullscreen.hpp"
 #include "FunctionHooks.hpp"
-#include "IOverview.hpp"
+#include "HoverTarget.hpp"
 #include "globals.hpp"
 
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
@@ -26,16 +26,13 @@ namespace Hyprdrive::OverviewFullscreen {
         CFunctionHook* g_modesHook = nullptr;
 
         // The window the action acts on (OverviewFullscreen.hpp): the one it
-        // was called with, unless the overview under the pointer (or the one
-        // the keyboard is in) shows another tile as selected.
+        // was called with, unless the user's keybinds mean another one right
+        // now (HoverTarget: the overview's selected tile).
         std::optional<PHLWINDOW> target(const std::optional<PHLWINDOW>& w) {
-            if (w.has_value() || scrollOverviews().empty())
+            if (w.has_value())
                 return w;
-            const auto OVERVIEW = activeScrollOverview();
-            const bool OPEN     = OVERVIEW && OVERVIEW->pMonitor && openScrollOverviewForMonitor(OVERVIEW->pMonitor.lock()) == OVERVIEW;
-            const auto TILE     = OPEN ? OVERVIEW->actionTile() : PHLWINDOW{};
-            const auto FOCUSED  = Desktop::focusState()->window();
-            if (!retarget(false, OPEN, TILE && TILE->m_isMapped, TILE == FOCUSED))
+            const auto TILE = HoverTarget::window();
+            if (!retarget(false, !!TILE, !!TILE, TILE == Desktop::focusState()->window()))
                 return w;
             return TILE;
         }
