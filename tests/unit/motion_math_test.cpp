@@ -1424,10 +1424,12 @@ static void testB2() {
 
 // ============================================================================
 // B6 -- the velocity-matched retarget (MotionRetarget.hpp). For each site's
-// curve: a leg with no kick is the site's old value to the bit; a turned leg
-// leaves at the old leg's velocity (unless the zero-bounce clamp binds, which
-// is counted), never passes its target, never backs past its start when it
-// was already heading there, and lands exactly on the target.
+// curve, over random turns: a leg with no kick is the site's old value to the
+// bit; a turned leg is continuous at the turn, lands exactly where the plain
+// leg lands, never passes its target; heading there already it never steps
+// back and never runs slower than FLOOR of the plain leg; a reversal carries
+// on the old way by at most its room, has turned by w/3, then only closes in;
+// and it is never slower to arrive than the plain retarget.
 // ============================================================================
 static void testB6() {
     namespace M = Hyprdrive::Motion;
@@ -1445,56 +1447,103 @@ static void testB6() {
         {"outExpo", [](float t) { return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t); }},
     };
     std::mt19937                           rng(6);
-    std::uniform_real_distribution<double> U01(0.02, 0.97), POS(-800.0, 800.0);
-    long badWorse = 0;
-    long n = 0, badPlain = 0, badVel = 0, clamped = 0, badBound = 0, badLand = 0, oldKicks = 0;
-    double worstOld = 0.0, worstNew = 0.0;
+    std::uniform_real_distribution<double> U01(0.02, 0.97), POS(-2000.0, 2000.0), MS(80.0, 2000.0);
+    const double                           CARRIES[] = {0.0, 0.1, 24.0, 32.0, 1e9};
+    long   n = 0, turned = 0, badPlain = 0, badCont = 0, badBound = 0, badLand = 0, badMono = 0, badFloor = 0, badCarry = 0, badTurn = 0, badAfter = 0, badLate = 0;
+    long   reversals = 0, matched = 0, plainJumped = 0, badWorse = 0;
+    double worstCarry = 0.0, worstTurnU = 0.0;
+    constexpr int STEPS = 2000;
     for (const auto& C : CURVES) {
-        const auto ROOM = M::kickRoom(C.f);
-        for (int i = 0; i < 4000; ++i) {
+        for (int i = 0; i < 6000; ++i) {
             // An old leg (itself possibly kicked), turned at u0 toward a new target.
             const double FROM = POS(rng), TO = POS(rng), WANT = POS(rng);
-            const double K0   = (i % 3 == 0) ? M::matchKick(TO - FROM, POS(rng) * 0.01 * std::abs(TO - FROM + 1), ROOM) : 0.0;
+            const double OLDMS = MS(rng), NEWMS = (i % 2) ? OLDMS : MS(rng);
+            const M::SKickLimits LIM{.legMs = NEWMS, .maxCarry = CARRIES[i % 5], .arrive = (i % 3 == 0) ? 1.0 / 255.0 : 1.0 + (i % 4)};
+            const M::SKick K0 = (i % 3 == 0) ? M::matchKick(C.f, TO - FROM, POS(rng) * 0.01 * std::abs(TO - FROM + 1), M::SKickLimits{.legMs = OLDMS, .maxCarry = 32.0}) : M::SKick{};
             const double U0   = U01(rng);
             const double CUR  = M::withKick(FROM + (TO - FROM) * C.f(static_cast<float>(U0)), K0, U0);
-            const double VEL  = M::legSlope(TO - FROM, M::curveSlope(C.f, U0), K0, U0);
+            const double VEL  = M::legSlope(TO - FROM, M::curveSlope(C.f, U0), K0, U0) * NEWMS / OLDMS;
             const double D    = WANT - CUR;
-            const double K    = M::matchKick(D, VEL, ROOM);
+            const M::SKick K  = M::matchKick(C.f, D, VEL, LIM);
             ++n;
-            // a leg with no kick is the plain expression, bit for bit
-            const double PLAIN = CUR + D * C.f(0.37F);
-            badPlain += !sameBits(M::withKick(PLAIN, 0.0, 0.37), PLAIN);
-            // value continuous at the turn
-            badVel += std::abs(M::withKick(CUR + D * C.f(0.F), K, 0.0) - CUR) > 1e-9 * (1 + std::abs(CUR));
-            // velocity continuous, unless the clamp bound
-            const double NEWV = M::legSlope(D, ROOM.slope0, K, 0.0);
-            const double ERR  = std::abs(NEWV - VEL);
-            const double OLDJ = std::abs(D * ROOM.slope0 - VEL); // the plain retarget's velocity jump
-            if (ERR > 1e-6 * (1 + std::abs(VEL)))
-                ++clamped;
-            else
-                worstNew = std::max(worstNew, ERR / (1 + std::abs(VEL)));
-            worstOld = std::max(worstOld, OLDJ / (1 + std::abs(VEL)));
-            oldKicks += OLDJ > 1e-3 * (1 + std::abs(VEL));
-            // bounds and exact landing
-            const bool TOWARD = D != 0 && VEL / D >= 0;
-            for (int j = 0; j <= 64; ++j) {
-                const double UU = j / 64.0;
-                const double S  = D == 0 ? 0 : (M::withKick(CUR + D * C.f(static_cast<float>(UU)), K, UU) - CUR) / D;
-                badBound += S > 1.0 + 1e-6 || (TOWARD && S < -1e-6) || S < -M::REVERSAL_ROOM - 1e-3; // the room is measured on 96 points: 1e-3 slack between them
-                badWorse += j == 0 && ERR > OLDJ + 1e-6 * (1 + std::abs(VEL));
+            const double PLAIN37 = CUR + D * C.f(0.37F);
+            badPlain += !sameBits(M::withKick(PLAIN37, M::SKick{}, 0.37), PLAIN37);
+            if (!K.on() || std::abs(D) < 1e-9)
+                continue;
+            ++turned;
+            const double AD  = std::abs(D);
+            const auto   VAL = [&](double u) { return M::withKick(CUR + D * C.f(static_cast<float>(u)), K, u); };
+            const auto   PLN = [&](double u) { return CUR + D * C.f(static_cast<float>(u)); };
+            badCont += std::abs(VAL(0.0) - CUR) > 1e-9 * (1 + std::abs(CUR));
+            badLand += !sameBits(VAL(1.0), PLN(1.0));
+            const bool   REV = VEL / D < 0;
+            reversals += REV;
+            // the start velocity: matched, or (clamped) never further from the old one than the plain retarget's
+            const double NEWV = M::legSlope(D, M::curveSlope(C.f, 0.0), K, 0.0), PLAINV = D * M::curveSlope(C.f, 0.0);
+            matched += std::abs(NEWV - VEL) <= 1e-6 * (1 + std::abs(VEL));
+            plainJumped += std::abs(PLAINV - VEL) > 1e-3 * (1 + std::abs(VEL));
+            badWorse += std::abs(NEWV - VEL) > std::abs(PLAINV - VEL) + 1e-6 * (1 + std::abs(VEL));
+            // walk the leg in its own direction: s = progress toward the target, in units
+            const double SG = D > 0 ? 1.0 : -1.0;
+            double       prev = 0.0, carry = 0.0;
+            bool         turnedBack = !REV;
+            double       turnU      = 0.0;
+            for (int j = 1; j <= STEPS; ++j) {
+                const double UU = static_cast<double>(j) / STEPS, UP = static_cast<double>(j - 1) / STEPS;
+                const double S  = (VAL(UU) - CUR) * SG;
+                const double PS = (PLN(UU) - CUR) * SG, PPS = (PLN(UP) - CUR) * SG;
+                badBound += S > std::max(AD, PS) + 1e-6 * (1 + AD);
+                const double STEP = S - prev, PSTEP = PS - PPS;
+                carry = std::max(carry, -S);
+                if (!turnedBack && STEP > 0.05 * PSTEP) { // moving the new way, not the grain of a stop
+                    turnedBack = true;
+                    turnU      = UP;
+                }
+                if (turnedBack) {
+                    badMono += STEP < -1e-5 * (1 + AD);
+                    // a reversal, past w/3: at least the plain leg's own speed
+                    if (REV && UP >= K.w / 3.0 + 1.0 / STEPS)
+                        badAfter += STEP < PSTEP - 1e-7 * (1 + AD);
+                    // heading there already: never slower than (nearly) FLOOR of the plain speed
+                    if (!REV && PSTEP > 1e-9 * AD)
+                        badFloor += STEP < (M::FLOOR - 0.1) * PSTEP;
+                }
+                prev = S;
             }
-            const double END = CUR + D * C.f(1.F);
-            badLand += !sameBits(M::withKick(END, K, 1.0), END);
+            if (REV) {
+                const double ROOM = std::min(M::REVERSAL_ROOM * AD, LIM.maxCarry);
+                badCarry += carry > ROOM + 2e-3 * AD + 1e-9; // the room is measured on 64 points: slack between them
+                worstCarry = std::max(worstCarry, carry / AD);
+                badTurn += !turnedBack || turnU > K.w / 3.0 + 2.0 / STEPS;
+                worstTurnU = std::max(worstTurnU, turnU / K.w);
+            }
+            // never slower to arrive than the plain retarget, at the site's precision and finer
+            for (const double TAU : {LIM.arrive, LIM.arrive * 0.5}) {
+                double arrK = 0.0, arrP = 0.0;
+                for (int j = 0; j <= STEPS; ++j) {
+                    const double UU = static_cast<double>(j) / STEPS;
+                    if (std::abs(WANT - VAL(UU)) > TAU)
+                        arrK = UU;
+                    if (std::abs(WANT - PLN(UU)) > TAU)
+                        arrP = UU;
+                }
+                badLate += arrK > arrP + 1e-12;
+            }
         }
     }
     report("B6 a leg with no kick is the site's plain value, bit for bit", n, badPlain);
-    report("B6 turned: value continuous at the turn", n, badVel);
-    report("B6 turned: never past the target, never back past the start when heading there, a reversal at most REVERSAL_ROOM back", n * 65, badBound);
-    report("B6 turned: lands exactly where the plain leg lands", n, badLand);
-    std::printf("B6 velocity at the turn: matched in %ld of %ld (worst rel err %.2e); the clamp bound in %ld; the plain retarget jumped in %ld (worst rel %.1f)\n",
-                n - clamped, n, worstNew, clamped, oldKicks, worstOld);
-    report("B6 turned: the start velocity is never further from the old one than the plain retarget's", n, badWorse);
+    report("B6 turned: value continuous at the turn", turned, badCont);
+    report("B6 turned: lands exactly where the plain leg lands", turned, badLand);
+    report("B6 turned: never past the target, nor past the plain overshoot", turned * STEPS, badBound);
+    report("B6 turned: after the turn it only closes in (monotonic, no step back)", turned * STEPS, badMono);
+    report("B6 turned toward: never slower than FLOOR of the plain leg (no stall)", turned * STEPS, badFloor);
+    report("B6 reversal: carries on the old way at most its room", reversals, badCarry);
+    report("B6 reversal: has turned by w/3", reversals, badTurn);
+    report("B6 reversal: past w/3 at least the plain leg's own speed", reversals * STEPS, badAfter);
+    report("B6 turned: never slower to arrive than the plain retarget", turned * 2, badLate);
+    report("B6 turned: the start velocity is never further from the old one than the plain retarget's", turned, badWorse);
+    std::printf("B6 %ld turns kicked of %ld (%ld reversals): start velocity matched in %ld, the plain retarget jumped in %ld; worst carry %.3f of the leg, latest turn %.2f of w\n",
+                turned, n, reversals, matched, plainJumped, worstCarry, worstTurnU);
 }
 
 int main() {

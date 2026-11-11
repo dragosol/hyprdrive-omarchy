@@ -25,8 +25,8 @@ namespace Hyprdrive::BorderFade {
             // starts mid-way).
             Hyprdrive::Motion::STween<Clock::time_point> fade;
             // A fade turned while it was still moving carries on at the speed
-            // it had (MotionRetarget.hpp); 0 for every other leg.
-            double            kick = 0.0;
+            // it had (MotionRetarget.hpp); off for every other leg.
+            Hyprdrive::Motion::SKick kick;
             Clock::time_point seen;
         };
 
@@ -40,7 +40,6 @@ namespace Hyprdrive::BorderFade {
         struct SCurve {
             float                                                ms = 0.F;
             Hyprutils::Memory::CSharedPointer<Hyprutils::Animation::CBezierCurve> bezier;
-            Hyprdrive::Motion::SKickRoom                          room; // of `bezier`, measured when it is read
         };
         float ease(const SCurve& c, float t);
 
@@ -69,7 +68,6 @@ namespace Hyprdrive::BorderFade {
             cached.ms = VALUES->internalSpeed * 100.F;
             if (const auto& MGR = Animation::mgr(); MGR && !VALUES->internalBezier.empty())
                 cached.bezier = MGR->getBezier(VALUES->internalBezier);
-            cached.room = Hyprdrive::Motion::kickRoom([&](float t) { return ease(cached, t); });
             return cached;
         }
 
@@ -99,7 +97,7 @@ namespace Hyprdrive::BorderFade {
             // leaf's time, and a snapping clock lands the ring on its colour.
             const float T = progressAt(f, c, now);
             const float PLAIN = f.fade.at(ease(c, T));
-            return f.kick == 0.0 ? PLAIN : static_cast<float>(Hyprdrive::Motion::withKick(PLAIN, f.kick, T));
+            return f.kick.on() ? static_cast<float>(Hyprdrive::Motion::withKick(PLAIN, f.kick, T)) : PLAIN;
         }
 
         // A new leg toward `target` from the value as drawn; if the old leg was
@@ -107,12 +105,18 @@ namespace Hyprdrive::BorderFade {
         // the velocity per unit progress carries over unscaled).
         void turn(SFade& f, const SCurve& c, float target, Clock::time_point now) {
             const float CURRENT = valueAt(f, c, now);
-            double      kick    = 0.0;
+            Hyprdrive::Motion::SKick kick;
             if (c.ms > 0.F) {
+                namespace M   = Hyprdrive::Motion;
                 const float T = progressAt(f, c, now);
-                if (T < 1.F) {
-                    const double VEL = Hyprdrive::Motion::legSlope(f.fade.to - f.fade.from, Hyprdrive::Motion::curveSlope([&](float t) { return ease(c, t); }, T), f.kick, T);
-                    kick             = Hyprdrive::Motion::matchKick(target - CURRENT, VEL, c.room);
+                if (T < 1.F && !M::inWindow(f.kick, T)) {
+                    const auto   CURVE = [&](float t) { return ease(c, t); };
+                    const double VEL   = M::legSlope(f.fade.to - f.fade.from, M::curveSlope(CURVE, T), f.kick, T);
+                    // A reversal carries on at most a tenth of the way, and
+                    // never out of 0..1: the colour clamps there, so a carry
+                    // past the end would hold the ring still.
+                    const double ROOM = std::clamp(VEL > 0.0 ? 1.0 - CURRENT : CURRENT, 0.0, 1.0);
+                    kick = M::matchKick(CURVE, target - CURRENT, VEL, M::SKickLimits{.legMs = c.ms, .maxCarry = std::min(0.1, ROOM), .arrive = 1.0 / 255.0});
                 }
             }
             f.fade.retarget(CURRENT, target, now);

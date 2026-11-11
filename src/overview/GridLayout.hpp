@@ -64,9 +64,6 @@ namespace OvInternal {
         Time::steady_tp start;
         uint64_t        lastFrame    = 0;
         bool            promotedLast = false;
-        // Re-aimed while still moving: the new leg leaves at the speed the
-        // tile had (MotionRetarget.hpp), per edge; all 0 for every other leg.
-        CBox            kick{};
     };
 
     // The grid's whole mutable state. See the header note for why there is one.

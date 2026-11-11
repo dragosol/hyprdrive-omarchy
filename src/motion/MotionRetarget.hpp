@@ -10,23 +10,40 @@
 // full speed the other.
 //
 // THE NEW LEG, ONLY WHEN THE OLD ONE WAS STILL MOVING, is the site's own curve
-// plus a correction that dies out before the end:
+// plus a short correction at its start:
 //
-//     value(u) = from + (to - from) * E(u) + kick * K(u),   K(u) = u (1 - u)^2
+//     value(u) = from + (to - from) * E(u) + kick * K(u),
+//     K(u)     = u (1 - u/w)^2  for u < w,  0 after.
 //
-// K(0) = 0 and K'(0) = 1, so the kick sets the start slope to the velocity the
-// old leg had at the turn; K(1) = K'(1) = 0, so the leg still lands exactly on
-// `to`, at the curve's own end slope, at the curve's own duration. An
-// uninterrupted leg has kick == 0 and is the site's old expression, to the bit:
-// a site evaluates `plain` its old way and adds the kick only when it is not 0.
+// K(0) = 0 and K'(0) = 1, so the kick sets the start slope toward the velocity
+// the old leg had at the turn; K(w) = K'(w) = 0, so from u = w on the leg IS
+// the plain retarget, to the bit: it arrives exactly when and where the plain
+// one does. An uninterrupted leg has kick == 0 and is the site's old
+// expression, to the bit: a site evaluates `plain` its old way and adds the
+// kick only when it is not 0.
 //
-// ZERO BOUNCE WINS OVER CONTINUITY (the house rule). The kick is clamped so the
-// leg never passes `to`, and -- when the old velocity already pointed at the
-// target -- never moves back past `from`. A reversal (the old velocity pointing
-// away) may carry on a little the old way before it comes back: that is the
-// speed it had, not a bounce -- by at most REVERSAL_ROOM of the new leg. A component whose target is where it already is
-// cannot move at all without passing it, so it stops there (kick 0).
+// THE WINDOW w is short: TURN_MS of the leg's own (unscaled) time, at most
+// MAX_WINDOW of it, and over before the plain leg is within `arrive` of its
+// target. A correction spread over the whole leg (the first version, u(1-u)^2)
+// lagged the leg all the way in: a slow old speed against the curve's steep
+// start drove the kick strongly negative, the leg flattened ~80% of the way,
+// stepped back and arrived late (rig, 2026-11-11: grid reflow 1336 ms vs 606).
+//
+// WHAT THE KICK MAY DO (clamped; k = 0, the plain retarget, always qualifies):
+//  - never pass the target, nor overshoot more than the plain curve does;
+//  - heading for the target already: never slower than FLOOR of the plain
+//    leg's speed at that moment -- no stall, no step back;
+//  - a reversal (the old velocity pointing away) may carry on the old way --
+//    the speed it had, not a bounce -- by at most REVERSAL_ROOM of the new leg
+//    and at most the site's `maxCarry` units, and has turned by w/3 (K' = 0
+//    there, so the leg moves at the plain curve's own speed).
 // tests/unit/motion_math_test.cpp holds all of this, per site curve.
+//
+// USED BY the infinite-canvas pan (L1) and the border fade (B1). NOT by the
+// overview grid reflow (O1), which takes the plain retarget again: a query
+// typed and erased re-aims every tile inside the window, each leg then starts
+// behind the plain one, and the grid settled ~50 ms later at scale 2 (rig,
+// 2026-11-11) -- later than the plain retarget is not allowed.
 //
 // Pure (<cmath>, <algorithm> only); every value is in the site's own units, u
 // is the leg's progress 0..1 (its eased-before progress, not the eased one).
@@ -36,81 +53,168 @@
 
 namespace Hyprdrive::Motion {
 
-    // The correction's shape and its slope.
-    inline double kickBasis(double u) {
-        const double V = 1.0 - u;
+    // One component's correction: its size (site units) and its window (of u).
+    struct SKick {
+        double kick = 0.0;
+        double w    = 1.0;
+        bool   on() const {
+            return kick != 0.0;
+        }
+    };
+
+    // The correction's shape and its slope, over the window w.
+    inline double kickBasis(double u, double w) {
+        if (!(u > 0.0) || !(u < w))
+            return 0.0;
+        const double V = 1.0 - u / w;
         return u * V * V;
     }
-    inline double kickBasisSlope(double u) {
-        const double V = 1.0 - u;
-        return V * V - 2.0 * u * V;
+    inline double kickBasisSlope(double u, double w) {
+        if (u < 0.0 || !(u < w))
+            return 0.0;
+        const double S = u / w, V = 1.0 - S;
+        return V * V - 2.0 * S * V;
     }
 
     // dE/du of a curve at u, by central difference (one-sided at the ends).
     template <typename FCurve>
     inline double curveSlope(FCurve curve, double u) {
-        constexpr double H  = 1e-3;
+        constexpr double H  = 2.5e-4;
         const double     LO = std::max(0.0, u - H), HI = std::min(1.0, u + H);
         if (HI <= LO)
             return 0.0;
         return (static_cast<double>(curve(static_cast<float>(HI))) - static_cast<double>(curve(static_cast<float>(LO)))) / (HI - LO);
     }
 
-    // What one curve allows, measured once per retarget: its start slope, and
-    // the range of the NORMALISED kick (kick / (to - from)) that keeps
-    // E(u) + k K(u) inside [0, 1] -- `hi` for "never past the target", `lo`
-    // for "never back past the start".
-    struct SKickRoom {
-        double slope0 = 0.0;
-        double lo     = -1e300;
-        double hi     = 1e300;
-        double back   = -1e300; // a reversal: never more than REVERSAL_ROOM back past the start
-    };
+    // How long the correction lives, in the leg's own (unscaled) ms: a
+    // reversal has turned by a third of it (50 ms at 1x).
+    inline constexpr double TURN_MS = 150.0;
+    // ...and never more than this much of the leg.
+    inline constexpr double MAX_WINDOW = 0.5;
+    // Heading for the target, a kicked leg never runs slower than this much
+    // of the plain leg's speed at the same moment.
+    inline constexpr double FLOOR = 0.4;
+    // A reversal, once turned, never runs slower than this much of the plain
+    // leg's speed again (up to w/3; past it, at least the plain speed).
+    inline constexpr double TURNED = 0.1;
     // How far (of the new leg's distance) a reversal may carry on the old way.
     // Full velocity continuity would cancel the curve's own start slope too (the
     // house DECEL leaves at 6.25x), which on a long leg ran the view most of the
     // way back to the OLD target before turning (rig, canvas pan): the turn
-    // looked ignored. Bounded here, the reversal still eases out of its speed
-    // instead of snapping to full speed the other way.
+    // looked ignored. The site's `maxCarry` bounds it in its units as well.
     inline constexpr double REVERSAL_ROOM = 0.10;
-    template <typename FCurve>
-    inline SKickRoom kickRoom(FCurve curve) {
-        SKickRoom room;
-        room.slope0 = curveSlope(curve, 0.0);
-        constexpr int N = 96;
-        for (int i = 1; i < N; ++i) {
-            const double U = static_cast<double>(i) / N;
-            const double K = kickBasis(U);
-            const double E = curve(static_cast<float>(U));
-            room.hi        = std::min(room.hi, (1.0 - E) / K);
-            room.lo        = std::max(room.lo, -E / K);
-            room.back      = std::max(room.back, -(E + REVERSAL_ROOM) / K);
-        }
-        return room;
+
+    // A NUDGE IS NOT A RE-AIM. A target that moved less than this (site
+    // units: px) since the old leg was aimed takes the plain retarget: a tile
+    // whose slot settles a pixel at a time was re-aimed every few frames, and
+    // matching the old speed each time compounded into a crawl (rig,
+    // 2026-11-11: a grid reflow 330 ms late at scale 2), where the plain
+    // restart reaches it on time.
+    inline constexpr double REAIM_MIN_PX = 8.0;
+    inline bool isReaim(double oldTo, double newTo, double minUnits = REAIM_MIN_PX) {
+        return std::abs(newTo - oldTo) >= minUnits;
     }
+
+    // ONE MATCH PER BURST. A turn while the old leg's own correction is still
+    // under way takes the plain retarget: each matched leg may run a little
+    // behind the plain one inside its window, and turns in quick succession
+    // (a search query typed and erased) stacked those lags into a late
+    // arrival. Turned once, a leg is plain from its window on.
+    inline bool inWindow(const SKick& k, double u) {
+        return k.on() && u < k.w;
+    }
+
+    // What a site allows its new leg, in its own units.
+    struct SKickLimits {
+        double legMs    = 0.0; // the new leg's unscaled duration; <= 0: MAX_WINDOW
+        double maxCarry = 0.0; // a reversal carries on the old way at most this far
+        double arrive   = 0.5; // the correction is over before the plain leg is this close
+    };
 
     // The kick for one component of a new leg: `delta` = to - from, `velPerU`
     // = the old leg's velocity at the turn, in the site's units per unit of the
     // NEW leg's u (velocity per ms x the new leg's ms).
-    inline double matchKick(double delta, double velPerU, const SKickRoom& room) {
+    template <typename FCurve>
+    inline SKick matchKick(FCurve curve, double delta, double velPerU, const SKickLimits& lim) {
         if (delta == 0.0 || !std::isfinite(delta) || !std::isfinite(velPerU))
-            return 0.0;
+            return {};
+        const auto   E      = [&](double u) { return static_cast<double>(curve(static_cast<float>(u))); };
+        const double D      = std::abs(delta);
         const double TOWARD = velPerU / delta; // > 0: already heading for the target
-        double       k      = TOWARD - room.slope0;
-        // "Never back past the start" only binds when the old velocity already
-        // pointed at the target, and gives way to "never past the target".
-        k = std::max(k, TOWARD >= 0.0 ? room.lo : room.back);
-        k = std::min(k, room.hi);
-        return std::isfinite(k) ? k * delta : 0.0;
+        double       w      = MAX_WINDOW;
+        if (lim.legMs > 0.0 && std::isfinite(lim.legMs))
+            w = std::min(w, TURN_MS / lim.legMs);
+        // Over before the plain leg arrives: from there on it is the plain leg.
+        constexpr int N = 96;
+        for (int i = 1; i <= N; ++i) {
+            const double U = w * i / N;
+            if (D * std::abs(1.0 - E(U)) <= lim.arrive) {
+                w = w * (i - 1) / N;
+                break;
+            }
+        }
+        if (!(w > 1e-3))
+            return {};
+        // Sampled densest at the start, where the house curves bend hardest.
+        double KS[N], R[N]; // K'(u), and E'(u) / K'(u) where K' > 0
+        double lo = -1e300, hi = 1e300;
+        const double CARRY = std::clamp(std::isfinite(lim.maxCarry) ? lim.maxCarry / D : 0.0, 0.0, REVERSAL_ROOM);
+        for (int i = 0; i < N; ++i) {
+            const double Q  = static_cast<double>(i) / N;
+            const double U  = w * Q * Q;
+            const double K  = kickBasis(U, w);
+            const double KD = kickBasisSlope(U, w);
+            const double EU = E(U);
+            const double ES = std::max(0.0, curveSlope(curve, U));
+            KS[i] = KD;
+            R[i]  = KD > 0.0 ? ES / KD : 1e300;
+            if (K > 0.0) {
+                hi = std::min(hi, std::max(0.0, 1.0 - EU) / K); // never past the target (nor past the plain overshoot)
+                lo = std::max(lo, -(std::max(EU, 0.0) + (TOWARD >= 0.0 ? 0.0 : CARRY)) / K);
+            }
+            if (TOWARD >= 0.0) { // no stall: at least FLOOR of the plain speed
+                if (KD > 0.0)
+                    lo = std::max(lo, -(1.0 - FLOOR) * ES / KD);
+                else if (KD < 0.0)
+                    hi = std::min(hi, (1.0 - FLOOR) * ES / -KD);
+            }
+        }
+        double k = std::clamp(TOWARD - curveSlope(curve, 0.0), std::min(lo, 0.0), std::max(hi, 0.0));
+        if (TOWARD < 0.0) // a reversal only ever slows the new way's start
+            k = std::min(k, 0.0);
+        // A reversal turns ONCE: the leg's speed E' + k K' changes sign at
+        // most once, from the old way to the new. Once it is back on the new
+        // way at TURNED of the plain speed, it stays there at every later point
+        // (k >= -(1 - TURNED) E'/K'; those can only need a smaller |k|, so this
+        // settles in a few rounds). The margin keeps the baked tables' grain
+        // from wobbling the leg back at the turn.
+        for (int round = 0; k < 0.0 && round < 8; ++round) {
+            int first = N;
+            for (int i = 0; i < N; ++i)
+                if (KS[i] <= 0.0 || k >= -(1.0 - TURNED) * R[i]) {
+                    first = i;
+                    break;
+                }
+            double need = k;
+            for (int i = first + 1; i < N; ++i)
+                if (KS[i] > 0.0)
+                    need = std::max(need, -(1.0 - TURNED) * R[i]);
+            if (need <= k)
+                break;
+            k = std::min(need, 0.0);
+        }
+        if (!std::isfinite(k) || k == 0.0)
+            return {};
+        return {.kick = k * delta, .w = w};
     }
 
     // A leg's velocity (units per unit u) at u: the curve's part and the kick's.
-    inline double legSlope(double delta, double curveSlopeAtU, double kick, double u) {
-        return delta * curveSlopeAtU + kick * kickBasisSlope(u);
+    inline double legSlope(double delta, double curveSlopeAtU, const SKick& kick, double u) {
+        return delta * curveSlopeAtU + kick.kick * kickBasisSlope(u, kick.w);
     }
 
     // The value with its kick: `plain` is the site's own from + delta * E(u).
-    inline double withKick(double plain, double kick, double u) {
-        return kick == 0.0 ? plain : plain + kick * kickBasis(u);
+    inline double withKick(double plain, const SKick& kick, double u) {
+        return kick.kick == 0.0 ? plain : plain + kick.kick * kickBasis(u, kick.w);
     }
 }

@@ -347,12 +347,13 @@ namespace Hyprdrive::Mosaic {
                 }
                 // ...and at the speed it had (B6): the curve's own start slope
                 // used to kick a re-aim and snap a reversal.
-                const auto NOW = std::chrono::steady_clock::now();
-                m_pan.kick     = SPan::matchedKick(m_pan, m_canvasOffset, want, MS, NOW);
-                m_pan.from     = m_canvasOffset;
-                m_pan.to       = want;
-                m_pan.start    = NOW;
-                m_pan.ms       = MS;
+                const auto NOW  = std::chrono::steady_clock::now();
+                const SPan OLD  = m_pan;
+                m_pan.from      = m_canvasOffset;
+                m_pan.to        = want;
+                m_pan.start     = NOW;
+                m_pan.ms        = MS;
+                SPan::matchKick(m_pan, OLD, m_canvasOffset, NOW);
                 m_pan.settle |= settle;
                 trace(std::format("pan re-aimed {}x{} -> {}x{}", m_canvasOffset.x, m_canvasOffset.y, want.x, want.y));
                 return;
@@ -1622,7 +1623,7 @@ namespace Hyprdrive::Mosaic {
                 } else {
                     const double E = canvasEase(T);
                     m_panE         = E;
-                    m_canvasOffset = m_pan.kick.x != 0.0 || m_pan.kick.y != 0.0 ? m_pan.at(T, canvasEase(T)) : m_pan.from + (m_pan.to - m_pan.from) * E;
+                    m_canvasOffset = m_pan.kicked() ? m_pan.at(T, E) : m_pan.from + (m_pan.to - m_pan.from) * E;
                     busy           = true;
                 }
                 const Vector2D WAS = m_lastLaid;
@@ -2594,29 +2595,33 @@ namespace Hyprdrive::Mosaic {
             std::chrono::steady_clock::time_point start;
             double                                ms = 0;
             // Re-aimed while moving: the new leg leaves at the speed the view
-            // had (MotionRetarget.hpp), per axis; 0 for every other leg.
-            Vector2D                              kick;
-            // The kick of a leg aimed at `to` from `from`, given the leg under
-            // way (MotionRetarget.hpp): continuous in value AND velocity.
-            static Vector2D matchedKick(const SPan& old, const Vector2D& cur, const Vector2D& to, double newMs, std::chrono::steady_clock::time_point now) {
+            // had (MotionRetarget.hpp), per axis; off for every other leg.
+            Hyprdrive::Motion::SKick              kickX, kickY;
+            bool                                  kicked() const {
+                return kickX.on() || kickY.on();
+            }
+            // The kick of a leg aimed at `to` from `cur`, given the leg under
+            // way (MotionRetarget.hpp): continuous in value, and in velocity as
+            // far as "no stall, a reversal carries on at most CARRY px" allows.
+            static constexpr double CARRY = 32.0;
+            static void matchKick(SPan& next, const SPan& old, const Vector2D& cur, std::chrono::steady_clock::time_point now) {
                 namespace M = Hyprdrive::Motion;
-                if (!old.on || old.ms <= 0 || newMs <= 0)
-                    return {};
+                next.kickX = next.kickY = {};
+                if (!old.on || old.ms <= 0 || next.ms <= 0 || !(M::isReaim(old.to.x, next.to.x) || M::isReaim(old.to.y, next.to.y)))
+                    return;
                 const double U = std::clamp(M::Clock::animMsBetween<double>(now, old.start) / old.ms, 0.0, 1.0);
-                if (U >= 1.0)
-                    return {};
+                if (U >= 1.0 || M::inWindow(old.kickX, U) || M::inWindow(old.kickY, U))
+                    return;
                 const auto   CURVE = [](float t) { return canvasEase(t); };
                 const double S     = M::curveSlope(CURVE, U);
-                const auto   ROOM  = M::kickRoom(CURVE);
-                const double PER   = newMs / old.ms; // old velocity per old u -> per new u
-                return {M::matchKick(to.x - cur.x, M::legSlope(old.to.x - old.from.x, S, old.kick.x, U) * PER, ROOM),
-                        M::matchKick(to.y - cur.y, M::legSlope(old.to.y - old.from.y, S, old.kick.y, U) * PER, ROOM)};
+                const double PER   = next.ms / old.ms; // old velocity per old u -> per new u
+                const M::SKickLimits LIM{.legMs = next.ms, .maxCarry = CARRY, .arrive = 2.0};
+                next.kickX = M::matchKick(CURVE, next.to.x - cur.x, M::legSlope(old.to.x - old.from.x, S, old.kickX, U) * PER, LIM);
+                next.kickY = M::matchKick(CURVE, next.to.y - cur.y, M::legSlope(old.to.y - old.from.y, S, old.kickY, U) * PER, LIM);
             }
             Vector2D at(double t, float e) const {
-                Vector2D v = from + (to - from) * e;
-                if (kick.x != 0.0 || kick.y != 0.0)
-                    v = {Hyprdrive::Motion::withKick(v.x, kick.x, t), Hyprdrive::Motion::withKick(v.y, kick.y, t)};
-                return v;
+                const Vector2D V = from + (to - from) * e;
+                return {Hyprdrive::Motion::withKick(V.x, kickX, t), Hyprdrive::Motion::withKick(V.y, kickY, t)};
             }
         } m_pan;
         struct SZoom {

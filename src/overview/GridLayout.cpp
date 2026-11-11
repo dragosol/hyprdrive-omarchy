@@ -1,4 +1,3 @@
-#include "MotionRetarget.hpp"
 #include "GridLayout.hpp"
 #include "OverviewGeometry.hpp"
 #include "OverviewInternal.hpp"
@@ -645,32 +644,12 @@ namespace OvInternal {
 
         const float ELAPSED = overviewAnimElapsedMs(entry.start);
         const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION), exiting);
-        const float U       = std::clamp(ELAPSED / sc<float>(DURATION), 0.F, 1.F);
-        CBox        CURRENT = Hyprdrive::Motion::lerp(entry.from, entry.to, T);
-        const bool  KICKED  = entry.kick.x != 0.0 || entry.kick.y != 0.0 || entry.kick.w != 0.0 || entry.kick.h != 0.0;
-        if (KICKED) {
-            namespace M = Hyprdrive::Motion;
-            CURRENT     = {M::withKick(CURRENT.x, entry.kick.x, U), M::withKick(CURRENT.y, entry.kick.y, U), M::withKick(CURRENT.w, entry.kick.w, U), M::withKick(CURRENT.h, entry.kick.h, U)};
-        }
+        const CBox  CURRENT = Hyprdrive::Motion::lerp(entry.from, entry.to, T);
 
         if (gridBoxesDiffer(slot, entry.to)) {
-            // Retarget from where the tile actually is -- and, if it was still
-            // moving, at the speed it had (B6): the curve's own start slope
-            // kicked it, a reversal snapped from full speed one way to the other.
-            CBox kick{};
-            if (U < 1.F) {
-                namespace M       = Hyprdrive::Motion;
-                const auto CURVE  = [exiting](float t) { return gridReflowEase(t, exiting); };
-                const double S    = M::curveSlope(CURVE, U);
-                const auto   ROOM = M::kickRoom(CURVE);
-                const auto   EDGE = [&](double from, double to, double k, double cur, double want) { return M::matchKick(want - cur, M::legSlope(to - from, S, k, U), ROOM); };
-                kick              = {EDGE(entry.from.x, entry.to.x, entry.kick.x, CURRENT.x, slot.x), EDGE(entry.from.y, entry.to.y, entry.kick.y, CURRENT.y, slot.y),
-                                     EDGE(entry.from.w, entry.to.w, entry.kick.w, CURRENT.w, slot.w), EDGE(entry.from.h, entry.to.h, entry.kick.h, CURRENT.h, slot.h)};
-            }
-            entry.from  = CURRENT;
+            entry.from  = CURRENT; // retarget from where the tile actually is
             entry.to    = slot;
             entry.start = NOW;
-            entry.kick  = kick;
             gridSetReflowActive(monitor);
             return CURRENT;
         }
