@@ -275,6 +275,8 @@ struct SFlight {
 // default click, and the old single-slot version would teleport two windows of
 // a three-window app on an ordinary gesture.
 std::vector<SFlight>  g_flights;
+// The window restoreForFlight is putting back (restoringForFlight).
+PHLWINDOWREF          g_restoringForFlight;
 std::vector<uint64_t> g_flightDoLaterSeqs;
 
 void transition(SFlight& flight, const EFlightPhase to, const char* reason) {
@@ -518,7 +520,9 @@ void completeAndErase(std::vector<SFlight>::iterator it, PHLMONITOR monitor, con
 // squatter; focusState re-asserted the OTHER window and the client went dark
 // again). The overview path then hides it for the flight, under a lease.
 CBox restoreForFlight(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& iconBox, CHiddenLease& lease) {
+    g_restoringForFlight = window;
     Minimize::restore(window);
+    g_restoringForFlight = {};
     warpRestoredWindowAnims(window);
     window->updateDecorationValues();
     if (window->m_borderFadeAnimationProgress)
@@ -682,6 +686,10 @@ bool any() {
 
 bool hasFlight(const PHLWINDOW& window) {
     return find(window) != g_flights.end();
+}
+
+bool restoringForFlight(const PHLWINDOW& window) {
+    return window && g_restoringForFlight.lock() == window;
 }
 
 bool isRestoreFlight(const PHLWINDOW& window) {

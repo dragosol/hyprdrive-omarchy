@@ -99,6 +99,10 @@ bool anyOn(PHLMONITOR monitor);
 // re-restores forever instead of toggling.
 bool hasFlight(const PHLWINDOW& window);
 bool isRestoreFlight(const PHLWINDOW& window);
+// ...or is it being put back for one right now: the restore re-lays its
+// desktop and focuses it (layouts react) BEFORE the flight exists -- the
+// flight then aims at wherever that layout put the window.
+bool restoringForFlight(const PHLWINDOW& window);
 
 // Advance every flight one frame AND DRAW IT, inside the dock's render pass.
 // `now` and `ownsPass` are the dock's render context, handed over for the

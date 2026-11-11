@@ -414,13 +414,26 @@ namespace Hyprdrive::Mosaic {
             // gap between where a window is drawn and its place at this
             // frame's offset shrinks on the pan's own curve (m_panCarry), so it
             // is still one move per window, from where it stands, and the view
-            // eases there rather than arriving at once.
+            // eases there rather than arriving at once. Position only: a
+            // window's size is never carried (a carried size resized every
+            // client mid-pan, 896x596 -> 893x593 and back).
             // Never for a window flying back from the dock: its flight aims at
-            // where the layout had it, so the view jumping under it landed it
-            // off screen and slid it in (user, 2026-10-29: "you replaced my
-            // maximize from dock animation"). It pans, as before -- and the
-            // carry never touches a window in flight.
-            if (animate && std::chrono::steady_clock::now() - m_rearrangedAt < std::chrono::milliseconds(600) && !Hyprdrive::Flight::hasFlight(w)) {
+            // where the layout has it once the restore returns, so the view
+            // panning under it slid it in from the screen edge at full size
+            // (user, 2026-10-29: "you replaced my maximize from dock
+            // animation"). The restore focuses it BEFORE its flight exists,
+            // so that is asked of the flight controller -- and it still jumps
+            // the view and lets the slides play, exactly as it did.
+            const bool JUST = animate && std::chrono::steady_clock::now() - m_rearrangedAt < std::chrono::milliseconds(600);
+            if (JUST && Hyprdrive::Flight::restoringForFlight(w)) {
+                trace(std::format("reveal after a re-arrangement: {}x{} -> {}x{} as window moves (restore flight)", m_canvasOffset.x, m_canvasOffset.y, WANT->x, WANT->y));
+                m_pan.on = false;
+                m_panCarry.clear();
+                m_canvasOffset = *WANT;
+                layoutCanvas(false);
+                return;
+            }
+            if (JUST && !Hyprdrive::Flight::hasFlight(w)) {
                 trace(std::format("reveal after a re-arrangement: {}x{} -> {}x{}, panned, windows carried from where they are", m_canvasOffset.x, m_canvasOffset.y, WANT->x,
                                   WANT->y));
                 captureCarry();
@@ -1493,6 +1506,18 @@ namespace Hyprdrive::Mosaic {
             }
             // The arrangement changed: the pan was aimed at the old one.
             m_rearrangedAt = std::chrono::steady_clock::now();
+            // A window coming back from the dock re-arranged it: its flight
+            // aims at where this pass lays it, so the pan is committed here
+            // as it always was (the 2026-10-29 restore, revealWindow).
+            const bool RESTORING = std::ranges::any_of(m_canvasWho, [](const auto& t) {
+                const auto T = t.lock();
+                return T && Hyprdrive::Flight::restoringForFlight(T->window());
+            });
+            if (m_pan.on && RESTORING) {
+                m_canvasOffset = m_pan.to;
+                m_pan.on       = false;
+                m_panCarry.clear();
+            }
             if (m_pan.on) {
                 // A PAN UNDER WAY NEVER TURNS INSTANT (owner, 2026-11-11). It
                 // used to be committed here -- the view at its end in one frame,
@@ -1538,12 +1563,13 @@ namespace Hyprdrive::Mosaic {
                 // just re-arranged): the rest of their gap, on the pan's curve.
                 // Not a window popping in (followPan's), nor one in flight.
                 const auto WIN = T->window();
-                if (warp && m_pan.on && i < m_panCarry.size() && m_panCarry[i].on && WIN && !WIN->m_animatingIn && !Hyprdrive::Flight::hasFlight(WIN)) {
+                if (warp && m_pan.on && i < m_panCarry.size() && m_panCarry[i].on && WIN && !WIN->m_animatingIn && !Hyprdrive::Flight::hasFlight(WIN) &&
+                    !Hyprdrive::Flight::restoringForFlight(WIN)) {
                     const double LEFT = 1.0 - std::clamp(m_panE, 0.0, 1.0);
                     const auto&  C    = m_panCarry[i];
-                    const CBox   CARRIED{std::round(BOX.x + C.pos.x * LEFT), std::round(BOX.y + C.pos.y * LEFT), std::max(2.0, BOX.w + C.size.x * LEFT), std::max(2.0, BOX.h + C.size.y * LEFT)};
-                    if (std::isfinite(CARRIED.x) && std::isfinite(CARRIED.y) && std::isfinite(CARRIED.w) && std::isfinite(CARRIED.h))
-                        BOX = CARRIED;
+                    const double X = std::round(BOX.x + C.pos.x * LEFT), Y = std::round(BOX.y + C.pos.y * LEFT);
+                    if (std::isfinite(X) && std::isfinite(Y)) // position only: the size is the layout's, always
+                        BOX.x = X, BOX.y = Y;
                 }
                 T->setPositionGlobal(Layout::STargetBox{.logicalBox = BOX, .visualBox = BOX});
                 // A pan snaps everyone to this frame's place -- but not a
@@ -1575,15 +1601,15 @@ namespace Hyprdrive::Mosaic {
             for (size_t i = 0; i < m_canvasWho.size(); ++i) {
                 const auto T = m_canvasWho[i].lock();
                 const auto W = T ? T->window() : PHLWINDOW{};
-                if (!W || !W->positionAnimation() || !W->sizeAnimation() || Hyprdrive::Flight::hasFlight(W))
+                if (!W || !W->positionAnimation() || Hyprdrive::Flight::hasFlight(W) || Hyprdrive::Flight::restoringForFlight(W))
                     continue;
                 const auto& R   = m_canvas.rects[i];
-                const auto  POS = W->positionAnimation()->value(), SIZE = W->sizeAnimation()->value();
+                const auto     POS = W->positionAnimation()->value();
                 const Vector2D PLACE{std::round(VIEW->originX + R.x - m_canvasOffset.x), std::round(VIEW->originY + R.y - m_canvasOffset.y)};
-                const Vector2D DP = POS - PLACE, DS = SIZE - Vector2D{R.w, R.h};
-                if (!std::isfinite(DP.x) || !std::isfinite(DP.y) || !std::isfinite(DS.x) || !std::isfinite(DS.y))
+                const Vector2D DP = POS - PLACE;
+                if (!std::isfinite(DP.x) || !std::isfinite(DP.y))
                     continue;
-                m_panCarry[i] = {.on = true, .pos = DP, .size = DS};
+                m_panCarry[i] = {.on = true, .pos = DP};
             }
             m_panE = 0.0;
         }
@@ -2636,7 +2662,7 @@ namespace Hyprdrive::Mosaic {
         // closed on the pan's curve (m_panE, this frame's eased progress).
         struct SCarry {
             bool     on = false;
-            Vector2D pos, size;
+            Vector2D pos; // where it is drawn minus its place; never a size
         };
         std::vector<SCarry> m_panCarry;
         double              m_panE = 1.0;
