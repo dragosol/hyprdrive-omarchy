@@ -7,18 +7,26 @@
 #include "Mosaic.hpp"
 #include "Config.hpp"
 #include "DebugPaths.hpp"
+#include "FunctionHooks.hpp"
+#include "Minimize.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/desktop/rule/windowRule/WindowRuleApplicator.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/layout/target/WindowTarget.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
+#include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/xwayland/XSurface.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <format>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,7 +34,79 @@ namespace Hyprdrive::WindowPlacement {
     namespace {
         using namespace PlacementModel;
 
-        CHyprSignalListener g_openEarly, g_open, g_close;
+        CHyprSignalListener g_openEarly, g_open, g_close, g_floating;
+
+        using clock = std::chrono::steady_clock;
+        int64_t nowMs() {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(clock::now().time_since_epoch()).count();
+        }
+
+        // THE USER'S INTENT per window: what he last floated or tiled it to.
+        // An X11 window keeps it across a Wine remap (an unmap and a map is a
+        // new CWindow for the same X window): kept by X window and process for
+        // REMAP_S after it closed, and taken by the window that maps as it.
+        constexpr int64_t REMAP_MS = 10000;
+        struct SIntentRec {
+            PHLWINDOWREF           win;
+            EIntent                intent = EIntent::None;
+            uint32_t               xid    = 0;
+            pid_t                  pid    = 0;
+            std::optional<int64_t> closedAt;
+        };
+        std::vector<SIntentRec> g_intents;
+
+        EIntent intentOf(const PHLWINDOW& w) {
+            for (const auto& I : g_intents)
+                if (!I.closedAt && I.win.lock() == w)
+                    return I.intent;
+            const auto XS = w->m_isX11 ? w->m_xwaylandSurface.lock() : nullptr;
+            if (!XS || !XS->m_xID)
+                return EIntent::None;
+            for (auto& I : g_intents)
+                if (I.closedAt && I.xid == XS->m_xID && I.pid == w->getPID() && nowMs() - *I.closedAt < REMAP_MS) {
+                    I.win = w; // remapped: the same window to him
+                    I.closedAt.reset();
+                    return I.intent;
+                }
+            return EIntent::None;
+        }
+        void stamp(const PHLWINDOW& w, EIntent intent) {
+            std::erase_if(g_intents, [&](const SIntentRec& i) { return !i.closedAt && i.win.lock() == w; });
+            const auto XS = w->m_isX11 ? w->m_xwaylandSurface.lock() : nullptr;
+            g_intents.push_back({.win = w, .intent = intent, .xid = XS ? XS->m_xID : 0, .pid = w->getPID()});
+        }
+
+        // THE FUNNEL. Every floating change after the map goes through
+        // CWindowTarget::setFloating -- the user's toggles (through
+        // changeFloatingMode, which then says window.floating), and what
+        // nobody announces: dwindle and master refusing a window too small
+        // for its tile, a group, a swap. A window that became floating here
+        // and was not announced as the user's is decided again once the event
+        // is over (reconcile), never inside the layout's own call.
+        using TSetFloating                  = void (*)(void*, bool);
+        constexpr const char* SET_FLOATING  = "_ZN6Layout13CWindowTarget11setFloatingEb";
+        CFunctionHook*        g_floatHook   = nullptr;
+        int                   g_ours        = 0; // our own re-tile: not the user, not a cause
+        std::vector<PHLWINDOWREF> g_due;          // floated, cause not known yet
+        wl_event_source*          g_timer = nullptr;
+        struct SBudgetRec {
+            PHLWINDOWREF win;
+            CBudget      budget;
+        };
+        std::vector<SBudgetRec> g_budgets;
+        void arm(int ms);
+
+        void hkSetFloating(void* self, bool x) {
+            auto* const     T   = sc<Layout::CWindowTarget*>(self);
+            const PHLWINDOW W   = T ? T->window() : nullptr;
+            const bool      WAS = W && W->m_isFloating;
+            rc<TSetFloating>(g_floatHook->m_original)(self, x);
+            if (!W || g_ours || WAS || !W->m_isFloating)
+                return;
+            if (std::ranges::none_of(g_due, [&](const PHLWINDOWREF& r) { return r.lock() == W; }))
+                g_due.emplace_back(W);
+            arm(1);
+        }
 
         // What was decided for each window as it mapped.
         struct SPlaced {
@@ -128,19 +208,20 @@ namespace Hyprdrive::WindowPlacement {
             const char*        WHY      = Intent::judge(w);
             const bool         PROMPTED = WHY != nullptr;
             Intent::opened(w);
-            const SWindowFacts FACTS = factsOf(w);
-            SOutcome           o     = decide(FACTS, EIntent::None, placeFacts(w, w->m_workspace), PROMPTED);
+            const SWindowFacts FACTS  = factsOf(w);
+            const EIntent      INTENT = intentOf(w);
+            SOutcome           o      = decide(FACTS, INTENT, placeFacts(w, w->m_workspace), PROMPTED);
             const auto         FROM  = w->m_workspace;
             if (o.kind == EOutcome::Beside) {
                 const auto TO = FullscreenDesktop::beside(w, PROMPTED);
                 // Decided again where it went (no fullscreen app there); if it
                 // could not go, as though there were none to go beside.
-                const SOutcome THERE = decide(FACTS, EIntent::None, {.enforce = enforcedOn(TO ? TO : FROM)}, PROMPTED);
+                const SOutcome THERE = decide(FACTS, INTENT, {.enforce = enforcedOn(TO ? TO : FROM)}, PROMPTED);
                 if (!TO) {
-                    // (A float or a dialog over a fullscreen app: its
-                    // Beside comes with the way back; until then, on top as
-                    // Hyprland has it.)
-                    o = FACTS.floating ? SOutcome{.kind = EOutcome::Leave, .why = EWhy::OverFullscreen} : THERE;
+                    // No place for it (refused, logged): OVERLAY -- on top of
+                    // the app as Hyprland has it, the only float nobody asked
+                    // for.
+                    o = SOutcome{.kind = EOutcome::Leave, .why = EWhy::OverFullscreen};
                 } else
                     o = {.kind = THERE.kind, .why = THERE.why, .ownSize = THERE.ownSize, .prompted = PROMPTED};
                 if (TO && THERE.kind == EOutcome::Tile && w->m_isFloating)
@@ -151,6 +232,9 @@ namespace Hyprdrive::WindowPlacement {
                 bool own = false;
                 if (o.kind == EOutcome::Tile && (w->m_isFloating || o.ownSize))
                     own = tile(w, o.ownSize);
+                // His float, remembered across a remap: it maps floating again.
+                if (o.kind == EOutcome::Float && o.why == EWhy::Intent && INTENT == EIntent::Float)
+                    w->m_isFloating = true;
                 remember(w, o, own);
             }
             trace(std::format("{} {:x} on {}: {} ({}){}{}", w->m_class, (uintptr_t)w.get(), FROM ? FROM->m_id : -1,
@@ -170,6 +254,58 @@ namespace Hyprdrive::WindowPlacement {
         }
     }
 
+    namespace {
+        // A window floated by nobody we know of: tiled back where the
+        // enforcer is on and nothing else holds it afloat -- within its
+        // budget; past that it is left floating for good, said once.
+        int reconcile(void*) {
+            if (!g_pCompositor || g_pCompositor->m_isShuttingDown)
+                return 0;
+            for (const auto& REF : std::exchange(g_due, {})) {
+                const auto W = REF.lock();
+                if (!W || !W->m_isMapped || !W->m_isFloating || !W->m_workspace || Fullscreen::controller()->isFullscreen(W) || Minimize::isMinimized(W))
+                    continue;
+                if (!retile(factsOf(W), intentOf(W), {.enforce = enforcedOn(W->m_workspace)}))
+                    continue;
+                auto IT = std::ranges::find_if(g_budgets, [&](const SBudgetRec& b) { return b.win.lock() == W; });
+                if (IT == g_budgets.end()) {
+                    g_budgets.push_back({W, {}});
+                    IT = std::prev(g_budgets.end());
+                }
+                if (IT->budget.spent())
+                    continue;
+                if (!IT->budget.spend(nowMs())) {
+                    trace(std::format("{} {:x} keeps floating itself: left floating (gave up after {} re-tiles in {} ms)", W->m_class, (uintptr_t)W.get(), CBudget::RETILES,
+                                      CBudget::SPAN));
+                    Log::logger->log(Log::WARN, "[hyprdrive] placement: {} keeps floating itself, left floating", W->m_class);
+                    continue;
+                }
+                trace(std::format("{} {:x} floated by its layout or the app: tiled again", W->m_class, (uintptr_t)W.get()));
+                ++g_ours;
+                (void)::Config::Actions::floatWindow(::Config::Actions::TOGGLE_ACTION_DISABLE, W);
+                --g_ours;
+            }
+            return 0;
+        }
+        void arm(int ms) {
+            if (!g_timer && g_pCompositor)
+                g_timer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, reconcile, nullptr);
+            if (g_timer)
+                wl_event_source_timer_update(g_timer, ms);
+        }
+
+        // window.floating: changeFloatingMode, after its change -- Super+T,
+        // hyprctl, Omarchy's menu, the window pill, the trackpad float, a
+        // Super+drag. The user's, unless it is ours or the minimize stash's.
+        void onFloating(const PHLWINDOW& w) {
+            if (!w || g_ours || !w->m_isMapped || (w->m_workspace && w->m_workspace->m_isSpecialWorkspace) || Minimize::isMinimized(w))
+                return;
+            std::erase_if(g_due, [&](const PHLWINDOWREF& r) { return !r || r.lock() == w; });
+            stamp(w, w->m_isFloating ? EIntent::Float : EIntent::Tile);
+            trace(std::format("{} {:x}: the user {} it", w->m_class, (uintptr_t)w.get(), w->m_isFloating ? "floated" : "tiled"));
+        }
+    }
+
     bool mainWindow(const PHLWINDOW& w) {
         return w && !w->m_isFloating && !w->parent() && !w->isModal() && !(w->m_workspace && w->m_workspace->m_isSpecialWorkspace);
     }
@@ -186,13 +322,46 @@ namespace Hyprdrive::WindowPlacement {
         g_open      = Event::bus()->m_events.window.open.listen([](PHLWINDOW w) { onOpen(w); });
         g_close     = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
             std::erase_if(g_placed, [&](const SPlaced& p) { return !p.win || p.win.lock() == w; });
+            std::erase_if(g_budgets, [&](const SBudgetRec& b) { return !b.win || b.win.lock() == w; });
+            const int64_t NOW = nowMs();
+            std::erase_if(g_intents, [&](SIntentRec& i) {
+                if (i.closedAt)
+                    return NOW - *i.closedAt >= REMAP_MS;
+                if (i.win.lock() != w)
+                    return !i.win;
+                if (!i.xid)
+                    return true;
+                i.closedAt = NOW; // an X11 window: kept for its remap
+                return false;
+            });
         });
+        g_floating = Event::bus()->m_events.window.floating.listen([](PHLWINDOW w) { onFloating(w); });
+        // Not fatal when missing: the decision at openEarly still stands, a
+        // later float by a layout is then left as Hyprland has it.
+        bool found  = false;
+        g_floatHook = FunctionHooks::firstMatch("WindowPlacement", SET_FLOATING, rc<void*>(hkSetFloating), {}, &found);
+        if (g_floatHook && !g_floatHook->hook())
+            g_floatHook = nullptr;
+        if (!g_floatHook) {
+            trace("CWindowTarget::setFloating not hooked: decided at the map only");
+            Log::logger->log(Log::WARN, "[hyprdrive] placement: CWindowTarget::setFloating not found ({}): a layout's later float is left alone", found ? "hook failed" : "missing");
+        }
     }
 
     void shutdown() {
         g_openEarly.reset();
         g_open.reset();
         g_close.reset();
+        g_floating.reset();
+        if (g_timer) {
+            wl_event_source_remove(g_timer);
+            g_timer = nullptr;
+        }
+        // (The hook goes with the plugin: HyprlandAPI removes it at unload.)
+        g_floatHook = nullptr;
         g_placed.clear();
+        g_due.clear();
+        g_budgets.clear();
+        g_intents.clear();
     }
 }
