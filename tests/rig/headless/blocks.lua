@@ -12,7 +12,9 @@
 -- omarchy/monitor-workspaces(-merged) there and the plugin watches it. A test
 -- may pre-seed monitor-workspaces to choose each output's block.
 -- Without HD_BLOCKS_LUA (or HD_OMARCHY_MW, below) it is the vanilla test config
--- plus the fragment (blocks off: the implicit row).
+-- plus the fragment (blocks off: the implicit row). HD_LAYOUT=mosaic puts the
+-- layout in the config FILE, as a user's config does (an `eval` does not
+-- survive the config reload every plugin unload/load makes).
 hl.monitor({ output = "HEADLESS-1", mode = "1920x1080@60", position = "0x0", scale = 1 })
 hl.monitor({ output = "HEADLESS-2", mode = "1920x1080@60", position = "1920x0", scale = 1 })
 hl.monitor({ output = "WL-1", mode = "1920x1080@60", position = "-1920x0", scale = 1 })
@@ -92,4 +94,8 @@ end
 local frag = os.getenv("HD_PLUGIN_LUA")
 if frag and frag ~= "" then
     dofile(frag)
+end
+local layout = os.getenv("HD_LAYOUT")
+if layout and layout ~= "" then
+    hl.config({ general = { layout = layout } })
 end

@@ -30,6 +30,9 @@
 --     left there drops that one (renumber()).
 --   * renumbering is hl.dsp.workspace.change_id: Hyprland emits
 --     changeworkspaceid>>old,new on socket2, which is what the gates count.
+--   (restore() is what the reload_blocks gate needs: the laptop's panel,
+--   enabled for a moment by a config reload, takes its desktops and gives
+--   them back when it goes.)
 -- Not emulated: own_views() (switching a monitor to its home), Super+N. The rig's own host window (WL-*)
 -- is not a monitor here.
 --

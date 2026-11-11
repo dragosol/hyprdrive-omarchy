@@ -209,6 +209,15 @@ modes into the new handler silently. The trace shows `unload: <app> kept
 fullscreen I/C` and `load: ...` for windows on desktops that stayed on their
 layout.
 
+Mosaic must be in the config FILE for the whole of this case (as on a real
+desktop): every `plugin unload` schedules a config reload, and with the layout
+set by `eval` that reload puts the desktops back on dwindle, which hides the
+second half of the bug -- while the plugin is out, each config refresh swaps
+every desktop configured "mosaic" (missing) to a NEW dwindle, and the old one's
+removeTarget sends a fullscreen exit. The load puts those windows back
+(`load: <app> on N back to I/C (lost while unloaded)`, FullscreenCarry's
+SHandover); gate `reload_blocks` drives it with Omarchy's blocks on.
+
 Smallest repro, which fails on 5338fd3: Mosaic, one kitty fullscreen, then
 `$R h plugin unload "$SO"`. `fullscreen` is 0 afterwards. With this build it is
 still 2.
