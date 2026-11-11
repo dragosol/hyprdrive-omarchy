@@ -23,11 +23,13 @@
 #include "MotionPresets.hpp"
 #include "MotionSites.hpp"
 #include "MotionTween.hpp"
+#include "MotionRetarget.hpp"
 #include "MotionTimings.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -1419,6 +1421,81 @@ static void testB2() {
     }
 }
 
+
+// ============================================================================
+// B6 -- the velocity-matched retarget (MotionRetarget.hpp). For each site's
+// curve: a leg with no kick is the site's old value to the bit; a turned leg
+// leaves at the old leg's velocity (unless the zero-bounce clamp binds, which
+// is counted), never passes its target, never backs past its start when it
+// was already heading there, and lands exactly on the target.
+// ============================================================================
+static void testB6() {
+    namespace M = Hyprdrive::Motion;
+    const auto& TABLE = M::Presets::bakedPresets();
+    struct SC {
+        const char*                  name;
+        std::function<float(float)> f;
+    };
+    const std::vector<SC> CURVES{
+        {"house DECEL", [&](float t) { return TABLE[0][0].getYForPoint(std::clamp(t, 0.F, 1.F)); }},
+        {"house ACCEL", [&](float t) { return TABLE[0][1].getYForPoint(std::clamp(t, 0.F, 1.F)); }},
+        {"outQuad (border-like)", [](float t) { return M::outQuad(t); }},
+        {"outCubic", [](float t) { return M::outCubic(t); }},
+        {"linear", [](float t) { return t; }},
+        {"outExpo", [](float t) { return t >= 1.F ? 1.F : 1.F - std::pow(2.F, -10.F * t); }},
+    };
+    std::mt19937                           rng(6);
+    std::uniform_real_distribution<double> U01(0.02, 0.97), POS(-800.0, 800.0);
+    long n = 0, badPlain = 0, badVel = 0, clamped = 0, badBound = 0, badLand = 0, oldKicks = 0;
+    double worstOld = 0.0, worstNew = 0.0;
+    for (const auto& C : CURVES) {
+        const auto ROOM = M::kickRoom(C.f);
+        for (int i = 0; i < 4000; ++i) {
+            // An old leg (itself possibly kicked), turned at u0 toward a new target.
+            const double FROM = POS(rng), TO = POS(rng), WANT = POS(rng);
+            const double K0   = (i % 3 == 0) ? M::matchKick(TO - FROM, POS(rng) * 0.01 * std::abs(TO - FROM + 1), ROOM) : 0.0;
+            const double U0   = U01(rng);
+            const double CUR  = M::withKick(FROM + (TO - FROM) * C.f(static_cast<float>(U0)), K0, U0);
+            const double VEL  = M::legSlope(TO - FROM, M::curveSlope(C.f, U0), K0, U0);
+            const double D    = WANT - CUR;
+            const double K    = M::matchKick(D, VEL, ROOM);
+            ++n;
+            // a leg with no kick is the plain expression, bit for bit
+            const double PLAIN = CUR + D * C.f(0.37F);
+            badPlain += !sameBits(M::withKick(PLAIN, 0.0, 0.37), PLAIN);
+            // value continuous at the turn
+            badVel += std::abs(M::withKick(CUR + D * C.f(0.F), K, 0.0) - CUR) > 1e-9 * (1 + std::abs(CUR));
+            // velocity continuous, unless the clamp bound
+            const double NEWV = M::legSlope(D, ROOM.slope0, K, 0.0);
+            const double ERR  = std::abs(NEWV - VEL);
+            const double OLDJ = std::abs(D * ROOM.slope0 - VEL); // the plain retarget's velocity jump
+            if (ERR > 1e-6 * (1 + std::abs(VEL)))
+                ++clamped;
+            else
+                worstNew = std::max(worstNew, ERR / (1 + std::abs(VEL)));
+            worstOld = std::max(worstOld, OLDJ / (1 + std::abs(VEL)));
+            oldKicks += OLDJ > 1e-3 * (1 + std::abs(VEL));
+            // bounds and exact landing
+            const bool TOWARD = D != 0 && VEL / D >= 0;
+            for (int j = 0; j <= 64; ++j) {
+                const double UU = j / 64.0;
+                const double S  = D == 0 ? 0 : (M::withKick(CUR + D * C.f(static_cast<float>(UU)), K, UU) - CUR) / D;
+                badBound += S > 1.0 + 1e-6 || (TOWARD && S < -1e-6);
+            }
+            const double END = CUR + D * C.f(1.F);
+            badLand += !sameBits(M::withKick(END, K, 1.0), END);
+        }
+    }
+    report("B6 a leg with no kick is the site's plain value, bit for bit", n, badPlain);
+    report("B6 turned: value continuous at the turn", n, badVel);
+    report("B6 turned: never past the target, never back past the start when heading there", n * 65, badBound);
+    report("B6 turned: lands exactly where the plain leg lands", n, badLand);
+    std::printf("B6 velocity at the turn: matched in %ld of %ld (worst rel err %.2e); the clamp bound in %ld; the plain retarget jumped in %ld (worst rel %.1f)\n",
+                n - clamped, n, worstNew, clamped, oldKicks, worstOld);
+    if (n - clamped < n / 2)
+        report("B6 velocity matched in under half the turns", 1, 1);
+}
+
 int main() {
     testA1();
     testA2();
@@ -1431,6 +1508,7 @@ int main() {
     testB3();
     testB4();
     testB2();
+    testB6();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

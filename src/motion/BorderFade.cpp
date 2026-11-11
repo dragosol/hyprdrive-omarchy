@@ -2,6 +2,7 @@
 #include "BorderFade.hpp"
 #include "MotionClock.hpp"
 #include "MotionTween.hpp"
+#include "MotionRetarget.hpp"
 #include "Config.hpp"
 
 #include <hyprland/src/animation/AnimationManager.hpp>
@@ -23,6 +24,9 @@ namespace Hyprdrive::BorderFade {
             // to = 1 lit, 0 resting; from = where the fade started (a reversal
             // starts mid-way).
             Hyprdrive::Motion::STween<Clock::time_point> fade;
+            // A fade turned while it was still moving carries on at the speed
+            // it had (MotionRetarget.hpp); 0 for every other leg.
+            double            kick = 0.0;
             Clock::time_point seen;
         };
 
@@ -36,7 +40,9 @@ namespace Hyprdrive::BorderFade {
         struct SCurve {
             float                                                ms = 0.F;
             Hyprutils::Memory::CSharedPointer<Hyprutils::Animation::CBezierCurve> bezier;
+            Hyprdrive::Motion::SKickRoom                          room; // of `bezier`, measured when it is read
         };
+        float ease(const SCurve& c, float t);
 
         // The `border` leaf. Read once and kept until the next config reload:
         // the reload listener bumps Config::themeGeneration() -- the same
@@ -63,6 +69,7 @@ namespace Hyprdrive::BorderFade {
             cached.ms = VALUES->internalSpeed * 100.F;
             if (const auto& MGR = Animation::mgr(); MGR && !VALUES->internalBezier.empty())
                 cached.bezier = MGR->getBezier(VALUES->internalBezier);
+            cached.room = Hyprdrive::Motion::kickRoom([&](float t) { return ease(cached, t); });
             return cached;
         }
 
@@ -79,13 +86,37 @@ namespace Hyprdrive::BorderFade {
             std::erase_if(g_fades, [&](const auto& kv) { return now - kv.second.seen > FORGET; });
         }
 
+        float progressAt(const SFade& f, const SCurve& c, Clock::time_point now) {
+            // The animation clock: the speed setting stretches the `border`
+            // leaf's time, and a snapping clock lands the ring on its colour.
+            return std::clamp(Hyprdrive::Motion::Clock::animMsBetween(now, f.fade.start) / c.ms, 0.F, 1.F);
+        }
+
         float valueAt(const SFade& f, const SCurve& c, Clock::time_point now) {
             if (c.ms <= 0.F)
                 return f.fade.to;
             // The animation clock: the speed setting stretches the `border`
             // leaf's time, and a snapping clock lands the ring on its colour.
-            const float T = std::clamp(Hyprdrive::Motion::Clock::animMsBetween(now, f.fade.start) / c.ms, 0.F, 1.F);
-            return f.fade.at(ease(c, T));
+            const float T = progressAt(f, c, now);
+            const float PLAIN = f.fade.at(ease(c, T));
+            return f.kick == 0.0 ? PLAIN : static_cast<float>(Hyprdrive::Motion::withKick(PLAIN, f.kick, T));
+        }
+
+        // A new leg toward `target` from the value as drawn; if the old leg was
+        // still moving, at the speed it had (same `border` time both legs, so
+        // the velocity per unit progress carries over unscaled).
+        void turn(SFade& f, const SCurve& c, float target, Clock::time_point now) {
+            const float CURRENT = valueAt(f, c, now);
+            double      kick    = 0.0;
+            if (c.ms > 0.F) {
+                const float T = progressAt(f, c, now);
+                if (T < 1.F) {
+                    const double VEL = Hyprdrive::Motion::legSlope(f.fade.to - f.fade.from, Hyprdrive::Motion::curveSlope([&](float t) { return ease(c, t); }, T), f.kick, T);
+                    kick             = Hyprdrive::Motion::matchKick(target - CURRENT, VEL, c.room);
+                }
+            }
+            f.fade.retarget(CURRENT, target, now);
+            f.kick = kick;
         }
     }
 
@@ -111,7 +142,7 @@ namespace Hyprdrive::BorderFade {
             // every grid hover snap to lit (user, 2026-10-16).
             f.fade = {.from = 0.F, .to = lit ? 1.F : 0.F, .start = NOW};
         } else if ((f.fade.to == 1.F) != lit) {
-            f.fade.retarget(valueAt(f, C, NOW), lit ? 1.F : 0.F, NOW);
+            turn(f, C, lit ? 1.F : 0.F, NOW);
         }
         f.seen    = NOW;
         f.monitor = monitor ? monitor->m_id : MONITOR_INVALID;
