@@ -1165,6 +1165,12 @@ struct SMenu {
     double       bottom = -1.0;
     // A window of a row closed: the rows are rebuilt at the next draw.
     bool stale = false;
+    // A row's close button was clicked: the row buttons are inert until the
+    // pointer moves off `guardAt` or the hold runs out (MenuModel::buttonsArmed;
+    // menuButtonsArmed clears it).
+    bool            guarded = false;
+    Time::steady_tp guardSince{};
+    Vector2D        guardAt;
 
     // THE ROW'S PREVIEW (user, 2026-11-11: "if I hover over a context menu row
     // for a particular window ... show me the window preview next to the
@@ -1204,6 +1210,9 @@ float peekEased(const Hyprdrive::Motion::STween<Time::steady_tp>& fade);
 inline bool menuPeekShowing(const SMenu& menu) {
     return std::ranges::any_of(menu.peeks, [&](const SMenu::SPeek& p) { return menu.peek.level(p.key, peekEased) > 0.001F; });
 }
+// Whether the menu's row buttons answer the pointer at `point` (its render
+// px); clears an expired guard.
+bool menuButtonsArmed(SMenu& menu, const Vector2D& point, float scale);
 extern std::optional<SMenu> g_menu;
 
 // THE MENU EXPANDS LIKE THE SEARCH RESULTS (user, 2026-11-03: "a consistent

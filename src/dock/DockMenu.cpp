@@ -798,6 +798,9 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     const auto MOUSE = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
 
     // What the pointer is on, by last frame's boxes (the ones it was drawn at).
+    // Just after a row's close, no button is: the one that slid under the
+    // resting pointer must not look armed (menuButtonsArmed).
+    const bool ARMED = menuButtonsArmed(M, MOUSE, SCALE);
     {
         int hr = -1, hi = -1;
         for (size_t i = 0; i < M.rows.size(); ++i) {
@@ -806,7 +809,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
                 continue;
             hr = sc<int>(i);
             for (size_t b = 0; b < R.inlines.size(); ++b)
-                if (R.inlines[b].kind != ERow::Separator && !R.inlines[b].box.empty() && R.inlines[b].box.containsPoint(MOUSE))
+                if (ARMED && R.inlines[b].kind != ERow::Separator && !R.inlines[b].box.empty() && R.inlines[b].box.containsPoint(MOUSE))
                     hi = sc<int>(b);
             break;
         }
@@ -1042,7 +1045,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
             B.box   = SPANS[b].w > 0 ? CBox{SPANS[b].x, std::round(y), SPANS[b].w, std::round(ROWH)} : CBox{};
             if (B.kind == ERow::Separator || B.box.empty())
                 continue;
-            if (B.box.containsPoint(MOUSE))
+            if (ARMED && B.box.containsPoint(MOUSE))
                 hoveredInline = &B;
         }
 

@@ -157,6 +157,18 @@ int main() {
         CHECK(peekPlacement(MENU, 500.0, 1.0, 150.0, 8.0, 12.0, 1920.0, 1080.0).box.w == 0);
     }
 
+    // The close button's guard: inert until moved 4 px or 400 ms.
+    {
+        CHECK(buttonsArmed(false, 0.0, 0.0, 0.0));
+        CHECK(!buttonsArmed(true, 0.0, 0.0, 0.0));
+        CHECK(!buttonsArmed(true, 399.0, 2.0, 2.0)); // a double-click: still, and quick
+        CHECK(buttonsArmed(true, 400.0, 0.0, 0.0));  // the hold runs out
+        CHECK(buttonsArmed(true, 50.0, 5.0, 0.0));   // moved 5 px
+        CHECK(buttonsArmed(true, 50.0, 3.0, 3.0));   // 4.24 px diagonally
+        CHECK(!buttonsArmed(true, 50.0, 0.0, 3.9));
+        CHECK(buttonsArmed(true, std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0));
+    }
+
     std::printf("dock_menu_model_test: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

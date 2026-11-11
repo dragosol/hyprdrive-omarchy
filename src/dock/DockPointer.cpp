@@ -828,6 +828,18 @@ bool menuOpen() {
     return g_menu.has_value();
 }
 
+namespace DockDetail {
+bool menuButtonsArmed(SMenu& menu, const Vector2D& point, float scale) {
+    if (!menu.guarded)
+        return true;
+    const double S = std::max(scale, 0.01F);
+    if (!MenuModel::buttonsArmed(true, Config::realElapsedMs(menu.guardSince), (point.x - menu.guardAt.x) / S, (point.y - menu.guardAt.y) / S))
+        return false;
+    menu.guarded = false;
+    return true;
+}
+}
+
 // `hyprdrive:debug dockmenu`: the hover pane's cells and the
 // open menu's rows, buttons and row previews, in global LOGICAL px -- where a
 // test puts the pointer.
@@ -849,7 +861,8 @@ std::string debugMenuReport(PHLMONITOR monitor) {
         out += " no pane";
     if (!g_menu || g_menu->monitor != monitor->m_id)
         return out + "\n no menu";
-    out += std::format("\n menu {} {}", g_menu->windowScope ? "window" : "app", BOX(g_menu->box));
+    out += std::format("\n menu {} {} hover {}/{}{}", g_menu->windowScope ? "window" : "app", BOX(g_menu->box), g_menu->hoverRow, g_menu->hoverInl,
+                       g_menu->guarded ? std::format(" guarded {:.0f}ms", Config::realElapsedMs(g_menu->guardSince)) : std::string{});
     for (size_t i = 0; i < g_menu->rows.size(); ++i) {
         const auto& R = g_menu->rows[i];
         if (R.kind == ERow::Separator)
@@ -964,9 +977,13 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
         return false; // the plate, between rows: swallowed by the caller, menu stays up
 
     // A window row's button: the move it names, for that row's window.
+    const auto MON     = monitor;
+    const bool ARMED   = menuButtonsArmed(*g_menu, point, MON ? MON->m_scale : 1.F);
     for (const auto& B : ROW->inlines) {
         if (B.box.empty() || !B.box.containsPoint(point))
             continue;
+        if (!ARMED)
+            return true; // just after a close: the row that slid under the pointer is not clicked
         if (B.kind == ERow::Separator)
             return true; // an empty slot: not a button, and not the row either
         const auto ITEM = g_menu->item;
@@ -993,6 +1010,9 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
                 return W && W != MINE && W->m_isMapped;
             });
             if (OTHERS) {
+                g_menu->guarded    = true;
+                g_menu->guardSince = Time::steadyNow();
+                g_menu->guardAt    = point;
                 activateRow(monitor, ITEM, PICK);
                 return true;
             }

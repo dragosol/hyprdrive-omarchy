@@ -567,6 +567,10 @@ const char* needsFramesReason(PHLMONITOR monitor, const SLayout& layout, const S
         return "menu-hover";
     if (g_menu && g_menu->monitor == monitor->m_id && menuOpening(*g_menu))
         return "menu-expand";
+    // The close guard runs out on time alone: the frame that re-arms the
+    // button under a resting pointer has to be asked for.
+    if (g_menu && g_menu->monitor == monitor->m_id && g_menu->guarded)
+        return "menu-guard";
     if (g_menuGhost && g_menuGhost->menu.monitor == monitor->m_id)
         return "menu-collapse";
     // A row's preview fades, and while it shows it is live.

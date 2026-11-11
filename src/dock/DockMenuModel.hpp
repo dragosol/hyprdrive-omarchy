@@ -186,4 +186,19 @@ namespace Hyprdrive::Dock::MenuModel {
         out.box   = {std::round(x), std::round(y), std::round(w), std::round(h)};
         return out;
     }
+
+    // THE CLOSE BUTTON'S GUARD. A row's close removes the row, and the plate,
+    // anchored at its bottom, brings the row above down under the resting
+    // pointer -- its close button where the one just clicked was, so a quick
+    // double-click closed a second window. After such a click the menu's row
+    // buttons stay inert (no click, no hover lift or name) until the pointer
+    // has MOVED `movePx` from where it clicked or `holdMs` have passed,
+    // whichever comes first. True: the buttons answer again.
+    inline bool buttonsArmed(bool guarded, double elapsedMs, double dx, double dy, double movePx = 4.0, double holdMs = 400.0) {
+        if (!guarded)
+            return true;
+        if (!std::isfinite(elapsedMs) || !std::isfinite(dx) || !std::isfinite(dy))
+            return true; // never strand the menu's buttons on a bad number
+        return elapsedMs >= holdMs || std::hypot(dx, dy) >= movePx;
+    }
 }
