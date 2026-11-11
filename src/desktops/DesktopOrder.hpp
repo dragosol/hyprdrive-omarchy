@@ -2,6 +2,8 @@
 
 #include "globals.hpp"
 
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -32,6 +34,13 @@ namespace Hyprdrive::DesktopOrder {
     // it, each other one gets the next free number above the highest. Logged.
     // Returns whether anything moved.
     bool heal(const char* when);
+    // NO EMPTY DESKTOPS (a display change, FullscreenDesktop.cpp): the
+    // desktops holding windows become 1..N in their order, then each shown
+    // empty one, then any other empty one (DesktopPlan::compactMoves). Logged
+    // with `why`, before -> after. Returns the row -- (old number, new number)
+    // of every desktop holding windows -- when it renumbered; nothing when
+    // already compact or refused (logged).
+    std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why);
     // Told after every applied renumber (FullscreenDesktop keeps the places it
     // owes by number). nullptr: nobody.
     void onRenumbered(void (*hook)());

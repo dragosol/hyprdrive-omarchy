@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Hyprdrive::FullscreenBook {
@@ -119,6 +120,31 @@ namespace Hyprdrive::FullscreenBook {
             return EPay::Pay;
         }
         return f.driving ? EPay::WaitScreen : EPay::Pay;
+    }
+
+    // AFTER A COMPACTION (DesktopPlan::compactMoves, at a display change). `row`
+    // is (old number -> new number) of every desktop that holds windows -- the
+    // ones numbered 1..N. A place, by its number before the compaction:
+    //   - held a desktop of the row -> it is that desktop's new number, and what
+    //     is owed there stays owed (it is still a place in the row: a payback
+    //     closes it once it empties);
+    //   - held nothing, or an empty desktop (sent after the row) -> NO_PLACE: the
+    //     compaction closed it. A debt there is SETTLED by the compaction and
+    //     dropped -- paid later, it would move every desktop after it down a
+    //     second time. A trip whose own desktop has gone owes nothing more; a
+    //     trip's home that has gone has no place to come back to (the app
+    //     stays where it is when it leaves fullscreen).
+    // And every trip whose desktop is in the row owes its place from then on
+    // (FullscreenDesktop.cpp): there is no free place below the top any more,
+    // so the place it holds was counted into the row, and when it is done the
+    // desktops after it must come back. The same for a window opened over a
+    // fullscreen app on a place that was free.
+    inline Id compactedPlace(Id at, const std::vector<std::pair<Id, Id>>& row) {
+        if (at >= 1)
+            for (const auto& [FROM, TO] : row)
+                if (FROM == at)
+                    return TO;
+        return NO_PLACE;
     }
 
     // ACROSS A PLUGIN RELOAD (hyprctl plugin unload/load, an update). The trips,

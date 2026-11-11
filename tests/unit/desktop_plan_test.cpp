@@ -112,6 +112,82 @@ int main() {
         CHECK(unique(applied(T, MT)));
         CHECK(healMoves(numbered({1, 2, 3})).empty());
     }
+    // ---- compactMoves: no empty desktops after a display change
+    {
+        const auto ROOMS = [](std::initializer_list<Room> r) { return std::vector<Room>(r); };
+        const auto AFTER = [](std::vector<Room> r, const std::vector<Move>& m) {
+            for (const auto& M : m)
+                for (auto& R : r)
+                    if (R.key == M.key)
+                        R.id = M.to;
+            return r;
+        };
+        const auto DESKS = [](const std::vector<Room>& r) {
+            std::vector<Desk> d;
+            for (const auto& R : r)
+                d.push_back({R.key, R.id, 0});
+            return d;
+        };
+        // the report: 21, 22, 28, 29, 30 (21 shown) -> 1..5 in order
+        {
+            const auto R = ROOMS({{1, 28, true}, {2, 21, true, true}, {3, 30, true}, {4, 22, true}, {5, 29, true}});
+            const auto M = compactMoves(R);
+            CHECK(check(DESKS(R), M) == Verdict::Ok);
+            const auto A = AFTER(R, M);
+            CHECK(A[1].id == 1 && A[3].id == 2 && A[0].id == 3 && A[4].id == 4 && A[2].id == 5);
+        }
+        // holes below, between and above
+        {
+            const auto R = ROOMS({{1, 3, true, true}, {2, 5, true}, {3, 9, true}});
+            const auto A = AFTER(R, compactMoves(R));
+            CHECK(A[0].id == 1 && A[1].id == 2 && A[2].id == 3);
+        }
+        // a shown empty one stays (shown), after the ones with windows; another empty one after it
+        {
+            const auto R = ROOMS({{1, 1, true}, {2, 2, false, true}, {3, 4, true}, {4, 3, false, false}, {5, 7, false, true}});
+            const auto M = compactMoves(R);
+            CHECK(check(DESKS(R), M) == Verdict::Ok);
+            const auto A = AFTER(R, M);
+            CHECK(A[0].id == 1 && A[2].id == 2 && A[1].id == 3 && A[4].id == 4 && A[3].id == 5);
+        }
+        // already compact: nothing moves (a shown empty one on top is fine)
+        CHECK(compactMoves(ROOMS({{1, 1, true}, {2, 2, true}, {3, 3, false, true}})).empty());
+        CHECK(compactMoves({}).empty());
+        // property: populated ones become 1..N in their order, shown empties next,
+        // every number unique, check() accepts the plan, and a second pass moves nothing
+        std::mt19937 rng(1111);
+        for (int round = 0; round < 20000; ++round) {
+            std::vector<Room> R;
+            std::set<Id>      used;
+            const int         N = rng() % 9;
+            for (int i = 0; i < N; ++i) {
+                Id id;
+                do
+                    id = 1 + rng() % 40;
+                while (!used.insert(id).second);
+                R.push_back({Key(50 + i), id, rng() % 3 != 0, rng() % 4 == 0});
+            }
+            const auto M = compactMoves(R);
+            CHECK(check(DESKS(R), M) == Verdict::Ok);
+            const auto A = AFTER(R, M);
+            CHECK(unique(DESKS(A)));
+            CHECK(compactMoves(A).empty());
+            size_t pop = 0;
+            for (const auto& X : R)
+                pop += X.populated;
+            bool ok = true;
+            for (size_t i = 0; i < R.size(); ++i) {
+                if (R[i].populated && (A[i].id < 1 || A[i].id > Id(pop)))
+                    ok = false;
+                if (!R[i].populated && A[i].id <= Id(pop))
+                    ok = false;
+                for (size_t j = 0; j < R.size(); ++j)
+                    if (R[i].populated == R[j].populated && R[i].shown == R[j].shown && R[i].id < R[j].id && A[i].id > A[j].id)
+                        ok = false; // order kept
+            }
+            CHECK(ok);
+        }
+    }
     // ---- property: any plan check() accepts leaves every moved desk on a unique number >= 1
     {
         std::mt19937 rng(7);

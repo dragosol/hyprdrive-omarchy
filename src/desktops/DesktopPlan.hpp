@@ -105,6 +105,39 @@ namespace Hyprdrive::DesktopPlan {
         return out;
     }
 
+    // NO EMPTY DESKTOPS AFTER A DISPLAY CHANGE (user, 2026-11-11: "just make it
+    // remove all empty desktops when changing monitor config"). The desktops
+    // holding windows are numbered 1..N in the order they are in; then each
+    // monitor's shown desktop that is empty (still shown -- the screen does not
+    // change -- but after the others: left behind between two, it would be the
+    // next hole the moment the monitor shows something else); then any other
+    // empty one still alive (Hyprland drops it once nothing holds it). Order is
+    // kept within each group (by number, then by the list's order on a tie), so
+    // every number is new and unique. Already compact: no moves.
+    struct Room {
+        Key  key       = 0;
+        Id   id        = 0;
+        bool populated = false; // mapped windows on it
+        bool shown     = false; // a monitor shows it
+    };
+    inline std::vector<Move> compactMoves(const std::vector<Room>& desks) {
+        std::vector<size_t> order(desks.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = i;
+        const auto GROUP = [&](size_t i) { return desks[i].populated ? 0 : desks[i].shown ? 1 : 2; };
+        std::ranges::stable_sort(order, [&](size_t a, size_t b) {
+            if (GROUP(a) != GROUP(b))
+                return GROUP(a) < GROUP(b);
+            return desks[a].id < desks[b].id;
+        });
+        std::vector<Move> out;
+        Id                next = 0;
+        for (const size_t I : order)
+            if (++next != desks[I].id)
+                out.push_back({desks[I].key, next});
+        return out;
+    }
+
     // Two desktops on one number (a plan the old code half-applied, or anything
     // else): the one with more windows keeps it -- the earlier-created on a tie
     // (`desks` is in creation order) -- and each other one gets the next free

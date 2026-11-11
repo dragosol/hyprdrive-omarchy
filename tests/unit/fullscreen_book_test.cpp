@@ -88,7 +88,10 @@ static void decisions() {
 // through the same FullscreenBook / DesktopPlan decisions. A sequence that
 // ends with no fullscreen windows, nothing sliding and nothing owed on screen
 // must give back exactly the desktop numbers it started with, and no two
-// desktops may share a number at any step.
+// desktops may share a number at any step. With display changes in the mix
+// (the monitor config changed, a monitor came or went: compact()), the
+// desktops with windows are 1..N right after each compaction and still 1..N
+// once everything is over -- no hole comes back from a stale debt.
 namespace sim {
     using Hyprdrive::DesktopPlan::Key;
     namespace Plan = Hyprdrive::DesktopPlan;
@@ -134,7 +137,12 @@ namespace sim {
         Key                nextKey   = 1;
         std::vector<STrip> trips;
         std::vector<SDebt> debts;
+        std::vector<SDebt> given; // beside places given while free (FullscreenDesktop's g_given)
         std::vector<int>   settled;
+        bool               compactDue = false; // a display change, waiting for the strip
+        int                compactions = 0;
+        bool               homeLost    = false; // a trip's home had gone and the compaction closed its place
+        bool               displayCompacts = false; // a monitor coming or going compacts too (the plugin's hooks)
         std::string        mode = "next";
         bool               broke = false; // an invariant failed (reported once)
         std::vector<std::string> log;     // what happened, for a failing round
@@ -399,8 +407,96 @@ namespace sim {
             const Key space = byId(at) ? byId(at)->key : create(at, MON);
             if (owes)
                 debts.push_back({space, at, ref(MON), WS, w.cls, true});
+            else {
+                std::erase_if(given, [&](const SDebt& g) { return g.space == space; }); // the latest window there
+                given.push_back({space, at, ref(MON), WS, w.cls, true});
+            }
             w.desk = space;
             show(ref(MON), space);
+        }
+        // FullscreenDesktop's compactIfDue, step for step.
+        void compact() {
+            if (!compactDue || driving)
+                return;
+            compactDue = false;
+            renumber(Plan::healMoves(plan()));
+            std::erase_if(given, [&](const SDebt& g) { return !desk(g.space); });
+            syncPlaces();
+            std::vector<Id> debtWas, tripWas, homeWas, givenWas;
+            for (const auto& D : debts)
+                debtWas.push_back(placeOf(D));
+            for (const auto& T : trips) {
+                tripWas.push_back(placeOf(T));
+                const auto* H = desk(T.home);
+                homeWas.push_back(Hyprdrive::FullscreenBook::placeOf(!!H, H ? H->id : NO_PLACE, T.homeAt));
+            }
+            for (const auto& G : given)
+                givenWas.push_back(placeOf(G));
+            std::vector<Plan::Room> rooms;
+            for (const auto& D : desks)
+                rooms.push_back({D.key, D.id, othersOn(D.key, -1) > 0, onScreen(D.key)});
+            const auto MOVES = Plan::compactMoves(rooms);
+            if (MOVES.empty())
+                return;
+            std::vector<std::pair<Id, Id>> row;
+            for (const auto& R : rooms)
+                if (R.populated) {
+                    Id to = R.id;
+                    for (const auto& M : MOVES)
+                        if (M.key == R.key)
+                            to = M.to;
+                    row.emplace_back(R.id, to);
+                }
+            if (!renumber(MOVES)) {
+                if (!broke)
+                    std::printf("  a compaction was refused\n");
+                broke = true;
+                return;
+            }
+            ++compactions;
+            note("  (compacted)");
+            std::vector<SDebt> kept;
+            for (size_t i = 0; i < debts.size(); ++i)
+                if (const Id NOW = compactedPlace(debtWas[i], row); NOW != NO_PLACE) {
+                    kept.push_back(debts[i]);
+                    kept.back().at = NOW;
+                }
+            debts = std::move(kept);
+            for (size_t i = 0; i < trips.size(); ++i) {
+                const Id NOW  = compactedPlace(tripWas[i], row);
+                trips[i].owes = NOW != NO_PLACE;
+                trips[i].at   = NOW;
+                if (!desk(trips[i].home)) {
+                    trips[i].homeAt = compactedPlace(homeWas[i], row);
+                    homeLost |= trips[i].homeAt == NO_PLACE;
+                }
+            }
+            for (size_t i = 0; i < given.size(); ++i)
+                if (const Id NOW = compactedPlace(givenWas[i], row); NOW != NO_PLACE && std::ranges::none_of(debts, [&](const SDebt& d) { return d.at == NOW; })) {
+                    debts.push_back(given[i]);
+                    debts.back().at = NOW;
+                }
+            given.clear();
+            syncPlaces();
+            // Right after: the desktops with windows are exactly 1..N, the
+            // shown empty ones above them.
+            std::set<Id> pop, want;
+            Id           n = 0;
+            for (const auto& D : desks)
+                if (othersOn(D.key, -1) > 0)
+                    pop.insert(D.id), want.insert(++n);
+            for (const auto& D : desks)
+                if (othersOn(D.key, -1) == 0 && D.id <= n) {
+                    if (!broke)
+                        std::printf("  an empty desktop at %lld below the top after a compaction\n", D.id);
+                    broke = true;
+                }
+            if (pop != want) {
+                if (!broke)
+                    std::printf("  the desktops with windows are not 1..N after a compaction\n");
+                broke = true;
+            }
+            checkUnique("compact");
         }
         void reconcile() {
             std::erase_if(settled, [&](int id) { const auto* W = win(id); return !W || !W->fs; });
@@ -439,6 +535,7 @@ namespace sim {
                 if (W.alive && W.fs && desk(W.desk) && !tripOf(W.id) && !isSettled(W.id))
                     startTrip(W);
             }
+            compact();
             syncPlaces();
             for (auto it = debts.begin(); it != debts.end();)
                 it = pay(*it) == EPaid::Done ? debts.erase(it) : std::next(it);
@@ -513,6 +610,7 @@ namespace sim {
                     D.mon = other;
             up[m]     = false;
             active[m] = 0;
+            compactDue |= displayCompacts;
             gc();
             reconcile();
             note("unplug");
@@ -526,8 +624,15 @@ namespace sim {
             while (byId(id))
                 ++id;
             active[m] = create(id, m); // findAvailableDefaultWS
+            compactDue |= displayCompacts;
             reconcile();
             note("plug");
+        }
+        // A monitor's mode / scale / layout changed (nothing else moves).
+        void display() {
+            compactDue = true;
+            reconcile();
+            note("display");
         }
         void drive(bool on) {
             driving = on;
@@ -662,8 +767,8 @@ static void monitorGoneMidTrip() {
     (void)NINE;
 }
 
-static void randomSequences() {
-    std::mt19937 rng(20261111);
+static void randomSequences(bool display) {
+    std::mt19937 rng(display ? 20261112 : 20261111);
     int          bad = 0;
     for (int round = 0; round < 10000; ++round) {
         std::vector<Id> others;
@@ -672,6 +777,7 @@ static void randomSequences() {
                 others.push_back(i);
         auto       w     = sim::make(2 + rng() % 2, others, rng() % 2);
         w.mode           = (rng() % 5 == 0) ? "free" : "next";
+        w.displayCompacts = display;
         const auto START = w.populated();
         const int  STEPS = 5 + rng() % 60;
         for (int s = 0; s < STEPS; ++s) {
@@ -691,7 +797,9 @@ static void randomSequences() {
                         extras.push_back(W.id);
                 }
             const auto pick = [&](const std::vector<int>& v) { return v[rng() % v.size()]; };
-            switch (rng() % 12) {
+            switch (rng() % (display ? 14 : 12)) {
+                case 12:
+                case 13: w.display(); break;
                 case 0:
                 case 1:
                 case 2: w.on(pick(alive)); break;
@@ -750,7 +858,21 @@ static void randomSequences() {
         if (w.up[1] && w.up[0])
             w.unplug(1);
         w.settle();
-        const bool OK = !w.broke && w.populated() == START && w.trips.empty() && w.debts.empty();
+        // A display change: the desktops with windows end as 1..N (no hole came
+        // back below the highest because of a stale debt); else exactly where
+        // they started.
+        // (A trip whose home had gone -- every other window there closed --
+        // and whose home's place the compaction closed stays on its own
+        // desktop when it leaves fullscreen: that desktop is its own now, and
+        // closing its last window leaves the hole any closed desktop leaves.
+        // Only the step invariants hold there.)
+        std::set<Id> want = START;
+        if (w.compactions > 0) {
+            want.clear();
+            for (Id i = 1; i <= Id(START.size()); ++i)
+                want.insert(i);
+        }
+        const bool OK = !w.broke && (w.homeLost || w.populated() == want) && w.trips.empty() && w.debts.empty();
         if (!OK && ++bad <= 3) {
             std::printf("  round %d (%s): started", round, w.mode.c_str());
             for (const Id I : START)
@@ -764,6 +886,67 @@ static void randomSequences() {
                     std::printf("    %s\n", L.c_str());
         }
         CHECK(OK);
+    }
+}
+
+static void displayMidTrip() {
+    // compactedPlace: a place in the row follows its desktop; a closed one is no place.
+    CHECK(compactedPlace(28, {{21, 1}, {28, 3}}) == 3);
+    CHECK(compactedPlace(23, {{21, 1}, {28, 3}}) == NO_PLACE);
+    CHECK(compactedPlace(NO_PLACE, {{21, 1}}) == NO_PLACE);
+    CHECK(compactedPlace(2, {}) == NO_PLACE);
+    // The report: desktops at 21, 22, 28, 29, 30 -- then the display changes.
+    {
+        auto       w     = sim::make(1, {22, 28, 29, 30}, false);
+        w.desk(w.byId(1)->key)->id = 21;
+        w.display();
+        CHECK(!w.broke && w.populated() == (std::set<Id>{1, 2, 3, 4, 5}));
+        CHECK(w.onScreen(w.byId(1)->key));
+    }
+    // A trip in flight (owed): 1 has two windows, 2 and 7; the app on 2, 2 and 7 -> 3 and 8.
+    // The display changes: 1, 2 (trip), 3, 4. Off: 2 is paid back -> 1, 2, 3.
+    {
+        auto      w   = sim::make(2, {2, 7}, false);
+        const int APP = w.wins[0].id;
+        w.on(APP);
+        CHECK(w.trips.size() == 1 && w.byId(8));
+        w.display();
+        CHECK(!w.broke && w.populated() == (std::set<Id>{1, 2, 3, 4}) && w.trips.size() == 1 && w.trips[0].owes);
+        w.off(APP);
+        w.settle();
+        CHECK(!w.broke && w.populated() == (std::set<Id>{1, 2, 3}) && w.debts.empty());
+    }
+    // A trip on a place that was free (nothing owed): 1 (two windows), 5. The app on 2.
+    // The display changes: 1, 2 (trip), 3 -- the trip owes its place now, so
+    // when it is done 5's desktop comes back to 2, not left at 3 with a hole.
+    {
+        auto      w   = sim::make(2, {5}, false);
+        const int APP = w.wins[0].id;
+        w.on(APP);
+        CHECK(w.trips.size() == 1 && !w.trips[0].owes);
+        w.display();
+        CHECK(w.trips.size() == 1 && w.trips[0].owes);
+        w.off(APP);
+        w.settle();
+        CHECK(!w.broke && w.populated() == (std::set<Id>{1, 2}) && w.debts.empty());
+    }
+    // A debt whose place is a hole the compaction closes is settled: closed while away.
+    // 1 (three windows), 2, 3; the app on 2 (2, 3 -> 3, 4); look away, close it:
+    // its desktop goes, place 2 is owed while the strip slides. The display
+    // changes: 1, 2, 3 -- the debt is settled there, never paid again.
+    {
+        auto      w   = sim::make(3, {2, 3}, false);
+        const int APP = w.open(w.wins[0].desk, 555);
+        w.on(APP);
+        w.drive(true);
+        w.view(w.byId(1)->key);
+        w.close(APP);
+        CHECK(w.debts.size() == 1 && !w.byId(2));
+        w.compactDue = true; // the display changed while the strip was sliding
+        w.drive(false);      // it lands: the compaction first, then the debts
+        CHECK(w.debts.empty() && w.compactions == 1);
+        w.settle();
+        CHECK(!w.broke && w.populated() == (std::set<Id>{1, 2, 3}));
     }
 }
 
@@ -798,7 +981,9 @@ int main() {
     closedWhileAway();
     besideThenClosed();
     monitorGoneMidTrip();
-    randomSequences();
+    randomSequences(false);
+    randomSequences(true);
+    displayMidTrip();
     savedAcrossReload();
     std::printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

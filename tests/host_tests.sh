@@ -33,11 +33,13 @@
 #                     only without one.
 #   desktop_plan_test  DesktopPlan.hpp: a renumber plan is refused whole when
 #                     it would put two desktops on one number or one below 1
-#                     (shift(0, -1)); heal pulls apart desktops sharing one.
+#                     (shift(0, -1)); heal pulls apart desktops sharing one;
+#                     compactMoves numbers the desktops with windows 1..N.
 #   fullscreen_book_test  FullscreenBook.hpp: a fullscreen trip's places are
 #                     kept by number (never place -1), the payback decision,
 #                     and random fullscreen sequences that must give back the
-#                     desktop numbers they started with.
+#                     desktop numbers they started with (1..N when a display
+#                     change compacted them; no stale debt reopens a hole).
 #   motion_math_test  MotionMath.hpp: each shared motion function against
 #                     verbatim copies of the definitions it replaced, bit for bit.
 #

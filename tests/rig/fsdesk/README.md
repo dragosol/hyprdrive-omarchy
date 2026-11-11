@@ -144,3 +144,53 @@ and no window changes desktop object.
 For each case, report `START`, the final `pop`, the count of `uniq_ok` failures
 (must be 0), the relevant trace lines, and the contents of `REFUSED`. Then run
 `$R stop` and check that no core dump was reported.
+
+## 6. A display change removes the empty desktops
+
+The owner's report: after an output change his desktops sat at 21, 22, 28, 29, 30
+with nothing below. Build that, then change the output's mode or scale.
+
+```sh
+# one kitty each on 21, 22, 28, 29, 30, nothing else (move the starting windows there)
+for n in 21 22 28 29 30; do go $n; $R win kitty; done
+for a in $($R h -j clients | jq -r '.[] | select(.workspace.id < 21) | .address'); do
+  $R eval "hl.dispatch(hl.dsp.window.move({ window = [[address:$a]], workspace = \"30\" }))" >/dev/null; done
+go 22; sleep 1; pop                                   # [21,22,28,29,30]
+B=$($R h -j clients | jq -c '[.[] | {address, ws: .workspace.id}] | sort_by(.address)')
+MON=$($R h -j monitors | jq -r '.[0].name')
+scale() { $R eval "hl.monitor({ output = \"$MON\", mode = \"preferred\", position = \"auto\", scale = $1 })" >/dev/null; }
+scale 1.25; sleep 1.5; pop; ids
+$R h -j monitors | jq '.[0].activeWorkspace.id'
+tail -3 $REFUSED; grep 'empty desktops removed\|closed by the compaction\|owed back from now on' $TRACE | tail
+```
+
+Pass:
+- Within ~1.5 s `pop` is `[1,2,3,4,5]`. 21 -> 1, 22 -> 2, 28 -> 3, 29 -> 4, 30 -> 5:
+  each window's new desktop number is its old one's rank (compare with `B`). No
+  window changes desktop object, and the desktop that was shown (22) is still
+  shown, now as 2.
+- `REFUSED` has exactly one line for it: `the monitor layout changed: no empty
+  desktops between: 21 22 28 29 30 -> 1 2 3 4 5`. A burst of changes (`scale 1.5; sleep 0.3;
+  scale 1.25`) still gives one line, ~700 ms after the last one.
+- `uniq_ok` holds at every sample.
+- `scale 1`: nothing moves (already compact) and no new `REFUSED` line.
+
+Variants:
+- **Shown empty desktop.** Go to an empty 25 first (`go 25`), then change the
+  scale. The windows' desktops become 1..5, and 25 is still shown, as 6.
+- **A fullscreen trip in flight.** Start from 21, 22, 28, 29, 30 with two kittys
+  on 21. Fullscreen one of them: it gets 22 and the others move to 23, 29, 30, 31
+  (trace `to 22 (owed back)`). Change the scale. Now `pop` is `[1,2,3,4,5,6]`, the
+  app is alone on 2, and the trace has no `closed by the compaction` for its
+  place. Unfullscreen it: it goes home to 1, place 2 is paid back, and `pop` is
+  `[1,2,3,4,5]`.
+- **A debt whose place is a hole.** As in case 5, close the trip app while its
+  desktop is not on screen, then change the scale within the same second. If the
+  debt was still waiting, the trace says `debt at place N: closed by the
+  compaction, settled`, and no `paying back place N` follows. `pop` is 1..N with
+  no hole.
+- **Overview open.** Open the overview, change the scale, wait 2 s: nothing is
+  renumbered. Close it: within ~0.1 s the desktops are compacted.
+- Disable and re-enable the output, or unplug a headless output
+  (`hyprctl output remove`): the same compaction, logged `a monitor went` / `a
+  monitor came`.

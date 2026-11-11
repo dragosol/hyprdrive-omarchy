@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <format>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -148,6 +149,52 @@ namespace Hyprdrive::DesktopOrder {
             if (WS->m_id >= from)
                 moves.emplace_back(WS, WS->m_id + delta);
         return renumber(moves);
+    }
+
+    std::optional<std::vector<std::pair<WORKSPACEID, WORKSPACEID>>> compact(const std::string& why) {
+        const auto                    ALL = desktops();
+        std::vector<DesktopPlan::Room> rooms;
+        rooms.reserve(ALL.size());
+        for (const auto& WS : ALL) {
+            bool shown = false;
+            for (const auto& MON : State::monitorState()->monitors())
+                shown |= MON && MON->m_activeWorkspace == WS;
+            rooms.push_back({keyOf(WS), WS->m_id, windowsOn(WS) > 0, shown});
+        }
+        const auto PLAN = DesktopPlan::compactMoves(rooms);
+        if (PLAN.empty())
+            return std::nullopt;
+        std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>> moves;
+        std::vector<std::pair<WORKSPACEID, WORKSPACEID>>  row;
+        std::string                                       before, after;
+        for (size_t i = 0; i < ALL.size(); ++i) {
+            WORKSPACEID to = ALL[i]->m_id;
+            for (const auto& M : PLAN)
+                if (M.key == rooms[i].key)
+                    to = M.to;
+            if (to != ALL[i]->m_id)
+                moves.emplace_back(ALL[i], to);
+            if (rooms[i].populated)
+                row.emplace_back(ALL[i]->m_id, to);
+        }
+        // (Listed in the old order, so before and after read side by side.)
+        std::vector<size_t> byOld(ALL.size());
+        for (size_t i = 0; i < byOld.size(); ++i)
+            byOld[i] = i;
+        std::ranges::sort(byOld, [&](size_t a, size_t b) { return ALL[a]->m_id < ALL[b]->m_id; });
+        for (const size_t I : byOld) {
+            WORKSPACEID to = ALL[I]->m_id;
+            for (const auto& [WS, TO] : moves)
+                if (WS == ALL[I])
+                    to = TO;
+            const char* tag = rooms[I].populated ? "" : rooms[I].shown ? "(shown, empty)" : "(empty)";
+            before += std::format("{}{}{}", before.empty() ? "" : " ", ALL[I]->m_id, tag);
+            after += std::format("{}{}{}", after.empty() ? "" : " ", to, tag);
+        }
+        note(std::format("{}: no empty desktops between: {} -> {}", why, before, after));
+        if (!renumber(moves))
+            return std::nullopt;
+        return row;
     }
 
     bool heal(const char* when) {

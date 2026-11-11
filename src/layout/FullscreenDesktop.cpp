@@ -18,6 +18,7 @@
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/Compositor.hpp>
 
 #include <algorithm>
@@ -72,6 +73,10 @@ namespace Hyprdrive::FullscreenDesktop {
         };
         std::vector<STrip>   g_trips;
         std::vector<SDebt>   g_debts;
+        // Places given to a window opened over a fullscreen app while they were
+        // free (nothing owed): a compaction counts them into the row, and then
+        // they are owed like any other (compactIfDue).
+        std::vector<SDebt>   g_given;
         std::vector<PHLWINDOWREF> g_settled; // fullscreen, deliberately left where it is
         std::vector<PHLWINDOWREF> g_besides; // opened over a fullscreen app and moved on: shown once mapped
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
@@ -80,8 +85,12 @@ namespace Hyprdrive::FullscreenDesktop {
         std::chrono::steady_clock::time_point g_enteredAt;
         int                g_busy  = 0; // our own moves: their fullscreen changes are not the user's
         wl_event_source*   g_timer = nullptr;
-        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook, g_monAddHook, g_monGoneHook;
+        CHyprSignalListener g_fsHook, g_closeHook, g_moveHook, g_openHook, g_monAddHook, g_monGoneHook, g_monLayoutHook;
         const char*         g_healDue = nullptr; // why desktops sharing a number are pulled apart at the next pass
+        // A DISPLAY CHANGE (compactIfDue): why, and when the last monitor event of the burst came.
+        const char*                           g_compactDue = nullptr;
+        std::chrono::steady_clock::time_point g_compactAt;
+        constexpr std::chrono::milliseconds   COMPACT_SETTLE{700};
         void                arm(int ms); // the reconcile timer, below
 
         void trace(const std::string& s) {
@@ -549,6 +558,10 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             if (owes)
                 g_debts.push_back({.space = space, .at = at, .mon = MON, .home = WS, .cls = w->m_class, .pid = w->getPID(), .beside = true});
+            else {
+                std::erase_if(g_given, [&](const SDebt& g) { return g.space.lock() == space; }); // the latest window there
+                g_given.push_back({.space = space, .at = at, .mon = MON, .home = WS, .cls = w->m_class, .pid = w->getPID(), .beside = true});
+            }
             trace(std::format("{} opened over fullscreen {} on {}: to {}{}{}", w->m_class, APP->m_class, WS->m_id, at, owes ? " (owed back)" : "",
                               w->m_noInitialFocus ? " (unasked: not shown)" : ""));
             w->m_workspace = space;
@@ -583,11 +596,103 @@ namespace Hyprdrive::FullscreenDesktop {
             g_besides.clear();
         }
 
+        // NO EMPTY DESKTOPS AFTER A DISPLAY CHANGE (user, 2026-11-11: "every
+        // time the screen display changes it gives me a bunch of empty
+        // desktops" ... "just make it remove all empty desktops when changing
+        // monitor config"). A monitor came, went, or changed its mode, scale,
+        // position or transform: once the burst has settled (COMPACT_SETTLE
+        // after its last event), the desktops holding windows become 1..N in
+        // their order, the shown empty ones after them (DesktopOrder::compact).
+        // Never while a strip slides, a swipe is under way, or an overview is
+        // up (its cards fill the holes with desktops of its own while it is,
+        // and a drag on its strip moves numbers): looked at again shortly.
+        // Only here: at no other time.
+        //
+        // The book follows (FullscreenBook::compactedPlace): a debt whose place
+        // the compaction closed is settled by it and dropped; one whose place
+        // holds a desktop of the row stays owed there; every trip whose desktop
+        // is in the row owes its place from now on, and so does a window opened
+        // over a fullscreen app on a place that was free.
+        bool compactBlocked() {
+            if (anyDriving() || DesktopStrip::switching())
+                return true;
+            if (g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress())
+                return true;
+            return !scrollOverviews().empty(); // open or still closing
+        }
+        // Returns ms until it wants another look, or 0: nothing due.
+        int compactIfDue() {
+            if (!g_compactDue)
+                return 0;
+            const auto LEFT = COMPACT_SETTLE - std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_compactAt);
+            if (LEFT.count() > 0)
+                return std::max<int>(1, LEFT.count());
+            if (compactBlocked())
+                return 60;
+            const std::string WHY = std::exchange(g_compactDue, nullptr);
+            (void)DesktopOrder::heal("before removing empty desktops");
+            std::erase_if(g_given, [](const SDebt& g) { return !DesktopOrder::ordinary(g.space.lock()); });
+            // Every place by its number before.
+            syncPlaces();
+            std::vector<WORKSPACEID> debtWas, tripWas, homeWas, givenWas;
+            for (const auto& D : g_debts)
+                debtWas.push_back(placeOf(D));
+            for (const auto& T : g_trips) {
+                tripWas.push_back(placeOf(T));
+                homeWas.push_back(placeOf(T.home, T.homeAt));
+            }
+            for (const auto& G : g_given)
+                givenWas.push_back(placeOf(G));
+            const auto RENUMBERED = DesktopOrder::compact(WHY);
+            if (!RENUMBERED) {
+                trace(std::format("{}: no empty desktop between (or refused, see the desktops log)", WHY));
+                return 0;
+            }
+            std::vector<std::pair<FullscreenBook::Id, FullscreenBook::Id>> ROW;
+            for (const auto& [FROM, TO] : *RENUMBERED)
+                ROW.emplace_back(FROM, TO);
+            trace(std::format("{}: empty desktops removed", WHY));
+            std::vector<SDebt> kept;
+            for (size_t i = 0; i < g_debts.size() && i < debtWas.size(); ++i) {
+                const WORKSPACEID NOW = FullscreenBook::compactedPlace(debtWas[i], ROW);
+                if (NOW == FullscreenBook::NO_PLACE) {
+                    trace(std::format("debt at place {}: closed by the compaction, settled", debtWas[i]));
+                    continue;
+                }
+                kept.push_back(g_debts[i]);
+                kept.back().at = NOW;
+            }
+            g_debts = std::move(kept);
+            for (size_t i = 0; i < g_trips.size() && i < tripWas.size(); ++i) {
+                auto&             T   = g_trips[i];
+                const WORKSPACEID NOW = FullscreenBook::compactedPlace(tripWas[i], ROW);
+                if (NOW != FullscreenBook::NO_PLACE && !T.owes)
+                    trace(std::format("trip at place {} (now {}): owed back from now on", tripWas[i], NOW));
+                T.owes = NOW != FullscreenBook::NO_PLACE;
+                T.at   = NOW;
+                if (!T.home.lock())
+                    T.homeAt = FullscreenBook::compactedPlace(homeWas[i], ROW);
+            }
+            for (size_t i = 0; i < g_given.size() && i < givenWas.size(); ++i) {
+                const WORKSPACEID NOW = FullscreenBook::compactedPlace(givenWas[i], ROW);
+                if (NOW == FullscreenBook::NO_PLACE || std::ranges::any_of(g_debts, [&](const SDebt& d) { return d.at == NOW; }))
+                    continue;
+                g_debts.push_back(g_given[i]);
+                g_debts.back().at = NOW;
+                trace(std::format("beside place {} (now {}): owed back from now on", givenWas[i], NOW));
+            }
+            g_given.clear();
+            syncPlaces();
+            return 0;
+        }
+
         // THE ONE PASS. Run on the event loop after every fullscreen change,
         // move and close -- never inside one: Hyprland takes a window out of
         // fullscreen to move it and puts it back after, so only the state once
         // the event is done means anything.
         int reconcile(void*) {
+            if (!g_pCompositor || g_pCompositor->m_isShuttingDown)
+                return 0;
             // TWO DESKTOPS ON ONE NUMBER (left by the old half-applied
             // renumber, or by anything else): pulled apart at load and when a
             // monitor comes or goes -- the fuller keeps the number, the other
@@ -637,6 +742,9 @@ namespace Hyprdrive::FullscreenDesktop {
                 if (W && W->m_isMapped && fullscreen(W) && DesktopOrder::ordinary(W->m_workspace) && W->m_workspace->m_monitor.lock() && !tripOf(W) &&
                     std::ranges::none_of(g_settled, [&](const PHLWINDOWREF& r) { return r.lock() == W; }))
                     startTrip(W);
+            // A display change: no empty desktops between (before the debts:
+            // the ones it settles are not paid again).
+            const int COMPACT_MS = compactIfDue();
             // Debts.
             syncPlaces();
             bool watch = false; // a debt waits on the screen or a strip: no event says when that ends
@@ -647,8 +755,11 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             // (A beside debt waiting for its windows to go is looked at again
             // when one closes or moves: the hooks below.)
-            if (g_timer && (watch || !g_trips.empty()))
-                wl_event_source_timer_update(g_timer, watch ? 60 : 250);
+            int next = watch ? 60 : !g_trips.empty() ? 250 : 0;
+            if (COMPACT_MS > 0 && (next == 0 || COMPACT_MS < next))
+                next = COMPACT_MS;
+            if (g_timer && next > 0)
+                wl_event_source_timer_update(g_timer, next);
             return 0;
         }
         void arm(int ms) {
@@ -805,14 +916,24 @@ namespace Hyprdrive::FullscreenDesktop {
         restore();
         g_healDue = "load";
         arm(1);
-        g_monAddHook  = Event::bus()->m_events.monitor.added.listen([](PHLMONITOR) {
-            g_healDue = "a monitor came";
+        // A display change: desktops sharing a number pulled apart at once,
+        // the empty ones removed once the burst settles (compactIfDue).
+        const auto DISPLAY = [](const char* why, bool heal) {
+            if (!g_pCompositor || g_pCompositor->m_isShuttingDown)
+                return;
+            if (heal)
+                g_healDue = why;
+            if (!g_compactDue)
+                g_compactDue = why; // the burst is named by its first event
+            g_compactAt = std::chrono::steady_clock::now();
             arm(1);
-        });
-        g_monGoneHook = Event::bus()->m_events.monitor.removed.listen([](PHLMONITOR) {
-            g_healDue = "a monitor went";
-            arm(1);
-        });
+        };
+        g_monAddHook    = Event::bus()->m_events.monitor.added.listen([DISPLAY](PHLMONITOR) { DISPLAY("a monitor came", true); });
+        g_monGoneHook   = Event::bus()->m_events.monitor.removed.listen([DISPLAY](PHLMONITOR) { DISPLAY("a monitor went", true); });
+        // Mode, scale, position, transform, mirror (CMonitorRuleManager::
+        // ensureMonitorStatus -- config, hyprctl, wlr-output-management --,
+        // CMonitor::setMirror, CMonitorLayoutController::arrange).
+        g_monLayoutHook = Event::bus()->m_events.monitor.layoutChanged.listen([DISPLAY]() { DISPLAY("the monitor layout changed", false); });
         // Every change is looked at once it has fully happened.
         g_fsHook    = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW w) {
             if (!g_busy)
@@ -835,6 +956,7 @@ namespace Hyprdrive::FullscreenDesktop {
         DesktopOrder::onRenumbered(nullptr);
         g_monAddHook.reset();
         g_monGoneHook.reset();
+        g_monLayoutHook.reset();
         g_fsHook.reset();
         g_openHook.reset();
         g_closeHook.reset();
@@ -845,7 +967,9 @@ namespace Hyprdrive::FullscreenDesktop {
         }
         g_trips.clear();
         g_debts.clear();
+        g_given.clear();
         g_settled.clear();
+        g_compactDue = nullptr;
         g_besides.clear();
         g_travels.clear();
     }
