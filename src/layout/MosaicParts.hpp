@@ -405,20 +405,27 @@ namespace Hyprdrive::Mosaic {
             // JUST RE-ARRANGED (user, 2026-10-29: the window spawn animation
             // "is buggy looking"): a window arrived or left, so everyone is
             // already sliding to a new place -- and the new window's focus,
-            // a frame later, asked for a pan. A pan lays the windows out at
-            // each frame's offset outright, so they leapt into the new
-            // arrangement and only then panned. Instead the view goes to its
-            // end at once and the slides that are under way are re-aimed there:
-            // one move per window, from where it stands.
+            // a frame later, asked for a pan. A plain pan lays the windows out
+            // at each frame's offset outright, so they leapt into the new
+            // arrangement and only then panned.
+            // It used to jump the view to its end instead. It PANS (owner,
+            // 2026-11-11), and carries every window from where it stands: the
+            // gap between where a window is drawn and its place at this
+            // frame's offset shrinks on the pan's own curve (m_panCarry), so it
+            // is still one move per window, from where it stands, and the view
+            // eases there rather than arriving at once.
             // Never for a window flying back from the dock: its flight aims at
             // where the layout had it, so the view jumping under it landed it
             // off screen and slid it in (user, 2026-10-29: "you replaced my
-            // maximize from dock animation"). It pans, as before.
+            // maximize from dock animation"). It pans, as before -- and the
+            // carry never touches a window in flight.
             if (animate && std::chrono::steady_clock::now() - m_rearrangedAt < std::chrono::milliseconds(600) && !Hyprdrive::Flight::hasFlight(w)) {
-                trace(std::format("reveal after a re-arrangement: {}x{} -> {}x{} as window moves", m_canvasOffset.x, m_canvasOffset.y, WANT->x, WANT->y));
-                m_pan.on       = false;
-                m_canvasOffset = *WANT;
-                layoutCanvas(false);
+                trace(std::format("reveal after a re-arrangement: {}x{} -> {}x{}, panned, windows carried from where they are", m_canvasOffset.x, m_canvasOffset.y, WANT->x,
+                                  WANT->y));
+                captureCarry();
+                panTo(*WANT);
+                if (!m_pan.on)
+                    m_panCarry.clear(); // it snapped (speed 0): nothing to carry
                 return;
             }
             if (animate)
@@ -1510,7 +1517,18 @@ namespace Hyprdrive::Mosaic {
                 if (!T || indexOf(T) < 0)
                     continue;
                 const auto& R = m_canvas.rects[i];
-                const CBox  BOX{std::round(VIEW->originX + R.x - m_canvasOffset.x), std::round(VIEW->originY + R.y - m_canvasOffset.y), R.w, R.h};
+                CBox        BOX{std::round(VIEW->originX + R.x - m_canvasOffset.x), std::round(VIEW->originY + R.y - m_canvasOffset.y), R.w, R.h};
+                // A pan carrying windows from where they stood (revealWindow,
+                // just re-arranged): the rest of their gap, on the pan's curve.
+                // Not a window popping in (followPan's), nor one in flight.
+                const auto WIN = T->window();
+                if (warp && m_pan.on && i < m_panCarry.size() && m_panCarry[i].on && WIN && !WIN->m_animatingIn && !Hyprdrive::Flight::hasFlight(WIN)) {
+                    const double LEFT = 1.0 - std::clamp(m_panE, 0.0, 1.0);
+                    const auto&  C    = m_panCarry[i];
+                    const CBox   CARRIED{std::round(BOX.x + C.pos.x * LEFT), std::round(BOX.y + C.pos.y * LEFT), std::max(2.0, BOX.w + C.size.x * LEFT), std::max(2.0, BOX.h + C.size.y * LEFT)};
+                    if (std::isfinite(CARRIED.x) && std::isfinite(CARRIED.y) && std::isfinite(CARRIED.w) && std::isfinite(CARRIED.h))
+                        BOX = CARRIED;
+                }
                 T->setPositionGlobal(Layout::STargetBox{.logicalBox = BOX, .visualBox = BOX});
                 // A pan snaps everyone to this frame's place -- but not a
                 // window still popping in (user, 2026-10-29: "it spawns the app
@@ -1527,6 +1545,31 @@ namespace Hyprdrive::Mosaic {
                 if (warp && (m_zoomed || !MosaicDrive::followPan(T->window())))
                     T->warpPositionSize();
             }
+            if (!m_pan.on)
+                m_panCarry.clear();
+        }
+
+        // Where every window is drawn now, against its place at the current
+        // offset: what a carried pan (revealWindow) closes on its curve.
+        void captureCarry() {
+            m_panCarry.assign(m_canvasWho.size(), {});
+            const auto VIEW = canvasViewNow();
+            if (!VIEW || m_canvas.rects.size() != m_canvasWho.size())
+                return;
+            for (size_t i = 0; i < m_canvasWho.size(); ++i) {
+                const auto T = m_canvasWho[i].lock();
+                const auto W = T ? T->window() : PHLWINDOW{};
+                if (!W || !W->positionAnimation() || !W->sizeAnimation() || Hyprdrive::Flight::hasFlight(W))
+                    continue;
+                const auto& R   = m_canvas.rects[i];
+                const auto  POS = W->positionAnimation()->value(), SIZE = W->sizeAnimation()->value();
+                const Vector2D PLACE{std::round(VIEW->originX + R.x - m_canvasOffset.x), std::round(VIEW->originY + R.y - m_canvasOffset.y)};
+                const Vector2D DP = POS - PLACE, DS = SIZE - Vector2D{R.w, R.h};
+                if (!std::isfinite(DP.x) || !std::isfinite(DP.y) || !std::isfinite(DS.x) || !std::isfinite(DS.y))
+                    continue;
+                m_panCarry[i] = {.on = true, .pos = DP, .size = DS};
+            }
+            m_panE = 0.0;
         }
 
         // ---- the pan's and the zoom's frames (canvasTick)
@@ -1560,8 +1603,10 @@ namespace Hyprdrive::Mosaic {
                 if (T >= 1.0) {
                     m_pan.on       = false;
                     m_canvasOffset = m_pan.to;
+                    m_panE         = 1.0;
                 } else {
                     const double E = canvasEase(T);
+                    m_panE         = E;
                     m_canvasOffset = m_pan.kick.x != 0.0 || m_pan.kick.y != 0.0 ? m_pan.at(T, canvasEase(T)) : m_pan.from + (m_pan.to - m_pan.from) * E;
                     busy           = true;
                 }
@@ -2566,6 +2611,15 @@ namespace Hyprdrive::Mosaic {
             double                                ms = 0;
         } m_zoom;
         Vector2D                  m_lastLaid;       // the offset the windows were last laid out at
+        // A pan after a re-arrangement carries each window from where it was
+        // drawn (revealWindow): its gap to its place, per m_canvasWho index,
+        // closed on the pan's curve (m_panE, this frame's eased progress).
+        struct SCarry {
+            bool     on = false;
+            Vector2D pos, size;
+        };
+        std::vector<SCarry> m_panCarry;
+        double              m_panE = 1.0;
         PHLWINDOWREF              m_lastFocus;      // this desktop's last focused window (smart pan's "from")
         PHLWINDOWREF              m_prevFocus;      // the one before it
         double                    m_zoomZ  = 0.0;   // 0 = the layout, 1 = the whole canvas on screen
