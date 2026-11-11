@@ -851,6 +851,11 @@ std::string debugMenuReport(PHLMONITOR monitor) {
         return std::format("{},{} {}x{}", sc<int>(std::round(b.x / S + monitor->m_position.x)), sc<int>(std::round(b.y / S + monitor->m_position.y)), sc<int>(std::round(b.width / S)),
                            sc<int>(std::round(b.height / S)));
     };
+    // Last, the icons of the apps with a class: where a test hovers to open a pane.
+    std::string icons;
+    for (const auto& I : layout(monitor).items)
+        if (!I.wmClass.empty())
+            icons += std::format("\n icon {} {}", I.wmClass, BOX(I.iconBox));
     std::string out = "dockmenu:";
     if (panelOn(monitor)) {
         out += std::format(" pane {}{}", BOX(g_hover.drawn), g_hover.panel->out ? " (out)" : "");
@@ -860,7 +865,7 @@ std::string debugMenuReport(PHLMONITOR monitor) {
     } else
         out += " no pane";
     if (!g_menu || g_menu->monitor != monitor->m_id)
-        return out + "\n no menu";
+        return out + "\n no menu" + icons;
     out += std::format("\n menu {} {} hover {}/{}{}", g_menu->windowScope ? "window" : "app", BOX(g_menu->box), g_menu->hoverRow, g_menu->hoverInl,
                        g_menu->guarded ? std::format(" guarded {:.0f}ms", Config::realElapsedMs(g_menu->guardSince)) : std::string{});
     for (size_t i = 0; i < g_menu->rows.size(); ++i) {
@@ -875,7 +880,7 @@ std::string debugMenuReport(PHLMONITOR monitor) {
     for (const auto& P : g_menu->peeks)
         if (const auto W = P.window.lock())
             out += std::format("\n peek \"{}\" {:.2f}{}", W->m_title, g_menu->peek.level(P.key, peekEased), P.key == g_menu->peek.lit ? " lit" : "");
-    return out;
+    return out + icons;
 }
 
 void closeMenu() {
