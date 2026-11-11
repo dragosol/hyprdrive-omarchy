@@ -41,7 +41,7 @@
 //
 // USED BY the infinite-canvas pan (L1), the border fade (B1), the
 // minimize/restore flight reversed mid-air (F1), the dock's arrangement glide
-// (D2). NOT by the
+// (D2) and its hover preview panel (D9). NOT by the
 // overview grid reflow (O1), which takes the plain retarget again: a query
 // typed and erased re-aims every tile inside the window, each leg then starts
 // behind the plain one, and the grid settled ~50 ms later at scale 2 (rig,

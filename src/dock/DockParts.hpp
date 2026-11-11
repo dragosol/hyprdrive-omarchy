@@ -1395,6 +1395,9 @@ struct SPanel {
     Time::steady_tp moveSince = Time::steadyNow();
     float           moveMs    = PANEL_IN_MS;
     bool            decel     = true;                // entrances decelerate, exits do not
+    // B6: moved on while still moving, the plate leaves at the speed it had
+    // (MotionRetarget.hpp); none for a move that started from rest.
+    Hyprdrive::Motion::SBoxKick kick{};
     bool            out       = false;
     bool            leaving   = false;               // inside the grace period
     Time::steady_tp leftAt    = Time::steadyNow();

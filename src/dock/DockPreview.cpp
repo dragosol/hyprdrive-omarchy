@@ -188,6 +188,29 @@ static float panelAlpha(const SPanel& panel) {
     return panel.fade.at(E);
 }
 
+// Where the plate is drawn at progress T of its move: the move's curve, plus
+// its kick when it was turned while moving.
+static CBox panelBoxAt(const SPanel& panel, float t) {
+    return Motion::withBoxKick(Motion::lerp(panel.from, panel.target, houseEase(panel.decel, t)), panel.kick, t);
+}
+
+// A new move for the plate, from where it is drawn, at the speed it had (B6).
+constexpr double PANEL_CARRY_PX = 16.0;
+static void panelMove(SPanel& panel, const CBox& target, float ms, bool decel, const Time::steady_tp& now) {
+    const float T     = std::clamp(elapsedMs(panel.moveSince) / std::max(1.F, panel.moveMs), 0.F, 1.F);
+    const CBox  CUR   = panelBoxAt(panel, T);
+    const bool  OLDD  = panel.decel;
+    const auto  OLDC  = [OLDD](float t) { return houseEase(OLDD, t); };
+    const auto  NEWC  = [decel](float t) { return houseEase(decel, t); };
+    panel.kick        = Motion::matchBoxKick2(OLDC, NEWC, panel.from, panel.target, panel.kick, T, static_cast<double>(std::max(1.F, ms)) / std::max(1.F, panel.moveMs), CUR,
+                                              target, Motion::SKickLimits{.legMs = std::max(1.F, ms), .maxCarry = PANEL_CARRY_PX, .arrive = 2.0});
+    panel.from        = CUR;
+    panel.target      = target;
+    panel.moveSince   = now;
+    panel.moveMs      = ms;
+    panel.decel       = decel;
+}
+
 static void panelFade(SPanel& panel, float to, float ms, const Time::steady_tp& now) {
     panel.fade.retarget(panelAlpha(panel), to, now);
     panel.fadeMs = ms;
@@ -495,16 +518,11 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
             // move restarts from WHERE IT IS, which is what makes it read as one
             // panel following the pointer rather than two panels swapping.
             if (g_hover.panel->out || !sameBox(g_hover.panel->target, TARGET)) {
-                const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
                 if (g_hover.panel->out)
                     panelFade(*g_hover.panel, 1.F, PANEL_IN_MS, now);
 
-                g_hover.panel->from      = Motion::lerp(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
-                g_hover.panel->target    = TARGET;
-                g_hover.panel->moveSince = now;
-                g_hover.panel->moveMs    = g_hover.panel->out ? PANEL_IN_MS : PANEL_SLIDE_MS;
-                g_hover.panel->decel     = true;
-                g_hover.panel->out       = false;
+                panelMove(*g_hover.panel, TARGET, g_hover.panel->out ? PANEL_IN_MS : PANEL_SLIDE_MS, true, now);
+                g_hover.panel->out = false;
             }
         }
     } else if (g_hover.panel) {
@@ -518,14 +536,8 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         // finished, so leaving an icon for the 8px gap above the pill dismissed
         // the panel in the same frame and the dock hid under the previews.
         if (g_hover.panel->leaving && Hyprdrive::Config::realElapsedMs(g_hover.panel->leftAt) >= PANEL_GRACE_MS) {
-            const float T = std::clamp(elapsedMs(g_hover.panel->moveSince) / std::max(1.F, g_hover.panel->moveMs), 0.F, 1.F);
-
-            g_hover.panel->from      = Motion::lerp(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
-            g_hover.panel->target    = panelRiseOrigin(layout, g_hover.panel->anchor);
-            g_hover.panel->moveSince = now;
-            g_hover.panel->moveMs    = PANEL_OUT_MS;
+            panelMove(*g_hover.panel, panelRiseOrigin(layout, g_hover.panel->anchor), PANEL_OUT_MS, false, now);
             panelFade(*g_hover.panel, 0.F, PANEL_OUT_MS, now);
-            g_hover.panel->decel     = false;
             g_hover.panel->out       = true;
             g_hover.panel->leaving   = false;
         }
@@ -550,7 +562,7 @@ void renderHoverPreview(PHLMONITOR monitor, const SLayout& layout, const CBox& a
         return;
     }
 
-    CBox        DRAWN = Motion::lerp(g_hover.panel->from, g_hover.panel->target, houseEase(g_hover.panel->decel, T));
+    CBox        DRAWN = panelBoxAt(*g_hover.panel, T);
     const float SCALE = std::max(monitor->m_scale, 0.01F);
     // Never let the growing plate (or its live window thumbnails) eat the pill.
     // The rise origin sits on the dock's top edge; this is the belt.
