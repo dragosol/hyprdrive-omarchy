@@ -106,11 +106,52 @@ static void reloadRoundTrip() {
         CHECK(wins[i].mode == before[i].mode);
 }
 
+// The gap between unload and load: the handover survives the text round trip,
+// is matched by window AND desktop object (not id), and puts back only what
+// lost every mode.
+static void gapHandover() {
+    constexpr SMode FS{.internal = FULLSCREEN, .client = FULLSCREEN};
+    constexpr SMode MAX{.internal = MAXIMIZED, .client = MAXIMIZED};
+    const SHandover H{.savedMs = 123456789, .wins = {{.win = 0x1000, .ws = 0xa000, .mode = FS}, {.win = 0x2000, .ws = 0xb000, .mode = MAX}}};
+    const auto      BACK = load(save(H));
+    CHECK(BACK && BACK->savedMs == H.savedMs && BACK->wins == H.wins);
+    const auto EMPTY = load(save(SHandover{.savedMs = 5}));
+    CHECK(EMPTY && EMPTY->wins.empty() && EMPTY->savedMs == 5);
+    // malformed or another format: nothing
+    CHECK(!load(""));
+    CHECK(!load("hdcarry0 5"));
+    CHECK(!load("hdcarry1"));
+    CHECK(!load("hdcarry1 5 W 1 2 3"));
+    CHECK(!load("hdcarry1 5 X 1 2 2 2"));
+    CHECK(!load("hdfs1 T 1 2 3 4 5 6 0"));
+    // the same window on the same desktop object, whatever its id became
+    const auto* A = findHanded(H, 0x1000, 0xa000);
+    CHECK(A && A->mode == FS);
+    // the window moved to another desktop meanwhile: not put back there
+    CHECK(!findHanded(H, 0x1000, 0xb000));
+    CHECK(!findHanded(H, 0x3000, 0xa000));
+    CHECK(!findHanded(H, 0, 0xa000) && !findHanded(H, 0x1000, 0));
+    // lost every mode: put back; fullscreen or maximized again: left alone
+    static_assert(lostInGap(FS, {}));
+    static_assert(lostInGap(MAX, {}));
+    static_assert(!lostInGap(FS, FS));
+    static_assert(!lostInGap(FS, MAX));
+    static_assert(!lostInGap(FS, {.internal = NONE, .client = FULLSCREEN}));
+    static_assert(!lostInGap({}, {}));
+    static_assert(!lostInGap({.internal = 4, .client = 4}, {}));
+    // only right after the unload
+    static_assert(fresh(1000, 1000) && fresh(1000, 1000 + HANDOVER_MS));
+    static_assert(!fresh(1000, 1001 + HANDOVER_MS));
+    static_assert(!fresh(1000, 999));
+    CHECK(true);
+}
+
 int main() {
     worthKeeping();
     matching();
     seeding();
     reloadRoundTrip();
+    gapHandover();
     std::printf("fullscreen_carry_test: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

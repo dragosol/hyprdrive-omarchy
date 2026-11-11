@@ -39,7 +39,10 @@
 #include <hyprland/src/layout/supplementary/DragController.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 
+#include <chrono>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
@@ -558,6 +561,54 @@ namespace Hyprdrive::Mosaic {
         }
     }
 
+    // THE GAP BETWEEN UNLOAD AND LOAD (FullscreenCarry.hpp, SHandover).
+    constexpr const char* HANDOVER_ENV = "HYPRDRIVE_FS_CARRY";
+
+    static long long steadyMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    static void handOver(const std::vector<FullscreenCarry::SCarried>& carried) {
+        FullscreenCarry::SHandover h{.savedMs = steadyMs()};
+        for (const auto& C : carried)
+            if (const auto W = carriedWindow(C))
+                h.wins.push_back({.win = C.win, .ws = reinterpret_cast<std::uintptr_t>(W->m_workspace.get()), .mode = C.mode});
+        if (h.wins.empty())
+            ::unsetenv(HANDOVER_ENV);
+        else
+            ::setenv(HANDOVER_ENV, FullscreenCarry::save(h).c_str(), 1);
+    }
+
+    static std::optional<FullscreenCarry::SHandover> takeHandover() {
+        const char* RAW = std::getenv(HANDOVER_ENV);
+        if (!RAW)
+            return std::nullopt;
+        auto h = FullscreenCarry::load(RAW);
+        ::unsetenv(HANDOVER_ENV);
+        if (!h || !FullscreenCarry::fresh(h->savedMs, steadyMs()))
+            return std::nullopt;
+        return h;
+    }
+
+    // Once Mosaic is in: what the gap took out of fullscreen goes back in --
+    // for real (the client was told it left), on the desktop it is on now.
+    static void restoreGap(const FullscreenCarry::SHandover& h) {
+        if (!Desktop::windowState())
+            return;
+        for (const auto& W : Desktop::windowState()->windows()) {
+            if (!W || !W->m_isMapped || W->m_isFloating || !W->m_target || !W->m_workspace)
+                continue;
+            const auto* R = FullscreenCarry::findHanded(h, carryAddr(W), reinterpret_cast<std::uintptr_t>(W->m_workspace.get()));
+            if (!R || !FullscreenCarry::lostInGap(R->mode, modesNow(W)))
+                continue;
+            // One fullscreen window a desktop: another one there now keeps it.
+            if (Fullscreen::controller()->hasFullscreen(W->m_workspace))
+                continue;
+            Fullscreen::controller()->setFullscreenMode(W, Fullscreen::eFullscreenMode(R->mode.internal), Fullscreen::eFullscreenMode(R->mode.client));
+            trace(std::format("load: {} on {} back to {}/{} (lost while unloaded)", appOf(W), W->m_workspace->m_id, R->mode.internal, R->mode.client));
+        }
+    }
+
     namespace MosaicDetail {
         void carryFullscreenInto(const SP<Layout::ITarget>& target, Layout::IModeAlgorithm* self) {
             if (g_carry.empty() || !target || !self)
@@ -595,6 +646,7 @@ namespace Hyprdrive::Mosaic {
         // takes them as the window arrives (carryFullscreenInto); a desktop
         // that stays on its layout gets them straight back below.
         const bool CARRY = g_pCompositor && !g_pCompositor->m_isShuttingDown;
+        const auto GAP   = CARRY ? takeHandover() : std::nullopt;
         if (CARRY) {
             g_carry = recordFullscreen();
             for (const auto& C : g_carry)
@@ -609,6 +661,8 @@ namespace Hyprdrive::Mosaic {
             g_carry.clear();
             reseatFullscreen(CARRIED, "load");
         }
+        if (GAP)
+            restoreGap(*GAP);
         Hyprdrive::Config::registerDispatcher("focus", onFocusDispatcher);
         Hyprdrive::Config::registerDispatcher("swap", onSwapDispatcher);
         // After the window's rules are in (openLate). Directly, never a
@@ -639,6 +693,9 @@ namespace Hyprdrive::Mosaic {
         // Hyprland's exit: nothing is left to keep.
         const bool CARRY   = g_pCompositor && !g_pCompositor->m_isShuttingDown;
         const auto CARRIED = CARRY ? recordFullscreen() : std::vector<FullscreenCarry::SCarried>{};
+        // ...and the load is told, for what happens before it (handOver).
+        if (CARRY)
+            handOver(CARRIED);
         HyprlandAPI::removeAlgo(handle, "mosaic");
         if (CARRY)
             reseatFullscreen(CARRIED, "unload");
