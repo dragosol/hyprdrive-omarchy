@@ -1,0 +1,82 @@
+# tests/gates/blocks.lib -- helpers of the gates on Omarchy's per-monitor
+# workspace blocks (blocks.sh, guests.sh); sourced after lib.sh and
+# gate_begin, never run.
+RIG=$ROOT/tests/rig/headless
+seed() { # seed TEXT -- Omarchy's monitor-workspaces before the start
+    SU bash -c "mkdir -p '$ST/state/omarchy' && chmod 755 '$ST' '$ST/state' '$ST/state/omarchy' && rm -f '$ST/state/omarchy/'* '$ST/state/lua-errors.log' '$ST/state/omarchy-real.loaded' && printf '$1' > '$ST/state/omarchy/monitor-workspaces'"
+}
+# GATE_OMARCHY_MW=/abs/monitor-workspaces.lua: run Omarchy's REAL script (a
+# copy from an Omarchy 4.5 machine; never committed) instead of the emulation.
+# Its callbacks' errors go to $ST/state/lua-errors.log (blocks.lua).
+blocks_start() {
+    local mw=(--env "HD_BLOCKS_LUA=$RIG/omarchy-blocks.lua")
+    [ -n "${GATE_OMARCHY_MW:-}" ] && mw=(--env "HD_OMARCHY_MW=$GATE_OMARCHY_MW" --env "HD_LUA_ERRLOG=$ST/state/lua-errors.log")
+    rig_start --config "$RIG/blocks.lua" "${mw[@]}" --env "HD_PLUGIN_LUA=$ROOT/config/hyprdrive/00-plugin.lua" \
+        --env "HYPRDRIVE_SO=$SO" --env "XDG_STATE_HOME=$ST/state"
+    trace_on
+}
+# lua_ok CASE -- no error in Omarchy's callbacks (the real script) so far
+lua_ok() {
+    [ -n "${GATE_OMARCHY_MW:-}" ] || return 0
+    local e; e=$(SU cat "$ST/state/lua-errors.log" 2>/dev/null | head -3 | tr '\n' ' ')
+    check "$1: Omarchy's real script is the one loaded" "$(SU grep -c ' o.workspaces$' "$ST/state/omarchy-real.loaded" 2>/dev/null || echo 0)" "$(SU cat "$ST/state/omarchy-real.loaded" 2>&1)"
+    check "$1: no error in Omarchy's Lua callbacks" "$(is "$e" '')" "$e"
+}
+events_start() { : > "$GOUT/events.log"; SU socat -u "UNIX-CONNECT:$RT/hypr/$SIG/.socket2.sock" - > "$GOUT/events.log" 2>/dev/null & _bg_pids="${_bg_pids:-} $!"; sleep 0.3; }
+ncw() { grep -c '^changeworkspaceid>>' "$GOUT/events.log"; }              # changeworkspaceid so far
+cwlist() { grep '^changeworkspaceid>>' "$GOUT/events.log" | sed 's/changeworkspaceid>>//' | tr '\n' ' '; }
+ncompact() { refused | grep -c 'no empty desktops between'; }               # Hyprdrive's compactions so far
+on() { J workspaces | jq -r "[.[] | select(.monitor == \"$1\" and .id > 0) | .id] | sort | map(tostring) | join(\" \")"; }
+popon() { J workspaces | jq -r "[.[] | select(.monitor == \"$1\" and .id > 0 and .windows > 0) | .id] | sort | map(tostring) | join(\" \")"; }
+outside() { # outside MON FIRST LAST -- populated desktops on MON outside FIRST..LAST (overflow ids allowed: >= 1000000)
+    J workspaces | jq -r "[.[] | select(.monitor == \"$1\" and .id > 0 and .windows > 0 and (.id < $2 or (.id > $3 and .id < 1000000))) | .id] | map(tostring) | join(\" \")"; }
+empties() { # empty desktops no monitor shows
+    local shownids; shownids=$(J monitors | jq -c '[.[] | .activeWorkspace.id]')
+    J workspaces | jq -r --argjson s "$shownids" '[.[] | select(.id > 0 and .windows == 0 and ((.id as $i | $s | index($i)) | not)) | .id] | map(tostring) | join(" ")'; }
+scale() { ev "hl.monitor({ output = \"HEADLESS-1\", mode = \"1920x1080@60\", position = \"0x0\", scale = $1 })"; }
+reload() { hq reload >/dev/null; }
+focus_mon() { ev "hl.dispatch(hl.dsp.focus({ monitor = \"$1\" }))"; sleep 0.2; }
+wheel() { hq dispatch "hl.plugin.hyprdrive.desktop(\"$1\")" >/dev/null 2>&1; sleep 0.45; }
+rowsline() { dbg rows | awk -v m="$1:" '$1 == m { getline; print; exit }' | sed 's/^ *members: *//'; }
+settled() { sleep 0.3; settle 4 'ids'; }
+# one "config switch" round: a display change, then a reload; prints the
+# changeworkspaceid count it caused
+round() {
+    local c0; c0=$(ncw)
+    scale "$1"; sleep 1.2; settled
+    reload; sleep 1.2; settled
+    echo $(( $(ncw) - c0 ))
+}
+# Omarchy's merged records, "id:orig:classes-on-id" each
+recs() {
+    local f="$ST/state/omarchy/monitor-workspaces-merged" out="" id orig _
+    while IFS=$'\t' read -r id orig _; do
+        [ -n "$id" ] || continue
+        out="$out $id:$orig:$(J clients | jq -r "[.[] | select(.workspace.id == $id) | .class] | sort | join(\",\")")"
+    done < <(SU cat "$f" 2>/dev/null)
+    echo "${out# }"
+}
+# recs_ok PREFIX [exact] -- every record (Omarchy's in-memory table is saved
+# to the file on every change) describes the desktop under its id: a window
+# PREFIX<orig> (or its companion PREFIX<orig>b, the one left home while
+# PREFIX<orig> is on a fullscreen trip) is there (exact), or any PREFIX* window (the desktop came from
+# the panel). A stale record (no desktop under its id) is harmless: the next
+# desktop created or renumbered there drops it.
+recs_ok() {
+    local r id orig cls ok=1
+    for r in $(recs); do
+        id=${r%%:*}; orig=${r#*:}; orig=${orig%%:*}; cls=${r##*:}
+        [ -z "$cls" ] && continue
+        if [ "${2:-}" = exact ]; then case ",$cls," in *",$1$orig,"* | *",$1${orig}b,"*) ;; *) ok=0 ;; esac
+        else case ",$cls" in *",$1"*) ;; *) ok=0 ;; esac; fi
+    done
+    echo $ok
+}
+# contig MON FIRST -- MON's populated desktops are FIRST, FIRST+1, ...
+contig() {
+    local p n want=""; p=$(popon "$1"); n=$(echo $p | wc -w)
+    [ "$n" -gt 0 ] && want=$(seq -s' ' "$2" $(( $2 + n - 1 )))
+    is "$p" "$want"
+}
+has_mon() { J monitors | jq -e ".[] | select(.name == \"$1\")" >/dev/null; }
+

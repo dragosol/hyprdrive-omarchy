@@ -21,10 +21,16 @@
 --                one, else it stays), and a record in
 --                monitor-workspaces-merged (id \t original \t origin identity).
 --     It never closes gaps, never touches empty workspaces, never shifts.
+--       restore() (first): a record whose origin monitor is connected again
+--                is dropped and its workspace goes back to that monitor,
+--                under its original id when that is in the origin's block and
+--                free, else adopted into that block.
+--   * a workspace CREATED under a record's id drops the record (Omarchy's
+--     hl.on("workspace.created")), and a renumber onto an id with a record
+--     left there drops that one (renumber()).
 --   * renumbering is hl.dsp.workspace.change_id: Hyprland emits
 --     changeworkspaceid>>old,new on socket2, which is what the gates count.
--- Not emulated: restore() (a guest's origin monitor coming back), own_views()
--- (switching a monitor to its home), Super+N. The rig's own host window (WL-*)
+-- Not emulated: own_views() (switching a monitor to its home), Super+N. The rig's own host window (WL-*)
 -- is not a monitor here.
 --
 -- It registers itself as package.loaded["default.hypr.monitor-workspaces"],
@@ -178,7 +184,7 @@ end
 
 local function renumber(old, new)
     hl.dispatch(hl.dsp.workspace.change_id({ workspace = tostring(old), id = new }))
-    if merged[old] then
+    if merged[old] or merged[new] then
         merged[new] = merged[old]
         merged[old] = nil
     end
@@ -194,6 +200,43 @@ function M.reconcile()
         renumber(old, new)
         ids[old] = nil
         ids[new] = true
+    end
+    -- restore()
+    local recs = {}
+    for id in pairs(merged) do
+        recs[#recs + 1] = id
+    end
+    table.sort(recs)
+    for _, id in ipairs(recs) do
+        local rec = merged[id]
+        local ident = rec[2]
+        if connected[ident] and blocks[ident] then
+            merged[id] = nil
+            local ws = hl.get_workspace(id)
+            if ws and ws.id and ws.id > 0 then
+                if not ws.monitor or ws.monitor.name ~= ident then
+                    hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(id), monitor = ident }))
+                end
+                local b = blocks[ident]
+                if block_of_id(rec[1]) == b and free(rec[1]) then
+                    take(id, rec[1])
+                elseif block_of_id(id) ~= b then
+                    local want = b * SLOTS + (id - 1) % SLOTS + 1
+                    if not free(want) then
+                        want = nil
+                        for sl = 1, SLOTS do
+                            if free(b * SLOTS + sl) then
+                                want = b * SLOTS + sl
+                                break
+                            end
+                        end
+                    end
+                    if want then
+                        take(id, want)
+                    end
+                end
+            end
+        end
     end
     for _, ws in ipairs(hl.get_workspaces() or {}) do
         local id = ws.id
@@ -247,7 +290,7 @@ function M.reconcile()
                     end
                     local rec = merged[id]
                     take(id, want)
-                    if not rec then
+                    if not rec and origin ~= "" then -- (identity_of_block: nil for a block no monitor ever had)
                         merged[want] = { id, origin }
                     end
                 end
@@ -262,6 +305,12 @@ for _, e in ipairs({ "hyprland.start", "config.reloaded", "monitor.added" }) do
         pcall(M.reconcile)
     end)
 end
+hl.on("workspace.created", function(ws)
+    if ws and merged[ws.id] then
+        merged[ws.id] = nil
+        save_merged()
+    end
+end)
 hl.on("monitor.removed", function()
     hl.timer(function()
         pcall(M.reconcile)
