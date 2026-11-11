@@ -93,10 +93,6 @@ namespace DockDetail {
     wl_event_source* g_infoPoll = nullptr;
 }
 
-std::unordered_map<MONITORID, SPumpRequest> g_pumpPending;
-std::unordered_map<MONITORID, uint64_t>     g_pumpSeqs;
-
-SPumpReaper g_pumpReaper;
 namespace DockDetail {
 std::vector<std::pair<PHLWINDOWREF, Time::steady_tp>>      g_previewed;
 

@@ -987,7 +987,7 @@ void releasePointerFocus() {
     // over a monitor with an overview on it -- so moving the mouse on one
     // output silently dropped the OTHER output's pump and froze its dock
     // mid-animation (user, 2026-09-14). The pump marks are self-clearing (see
-    // pumpFrame) and forgetMonitor takes them out when an output goes; nothing
+    // FramePump::request) and forgetMonitor takes them out when an output goes; nothing
     // about the seat needs them cancelled.
     if (g_pEventLoopManager && g_dockSeatDoLaterSeq) {
         g_pEventLoopManager->removeDoLater(g_dockSeatDoLaterSeq);

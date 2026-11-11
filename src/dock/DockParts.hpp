@@ -37,6 +37,7 @@
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/gl/GLTexture.hpp>
 #include "Dock.hpp"
+#include "FramePump.hpp"
 #include "Mosaic.hpp"
 #include "DesktopSwitch.hpp"
 #include "Motion.hpp"
@@ -1287,50 +1288,11 @@ bool panelNeedsFramesOn(const PHLMONITOR& monitor);
 std::optional<CBox> dockDamageRegion(PHLMONITOR monitor, const SLayout& layout);
 }
 
-// ONE OUTSTANDING FRAME REQUEST PER MONITOR, and what it has to damage.
-//
-// The region is accumulated rather than taken from the first caller: within one
-// event-loop iteration the dock's own animation and a live preview on another
-// output can both ask, and a request that kept only the first box would leave
-// the second one's pixels stale. `full` wins over any box, which is what a
-// caller that cannot describe its damage asks for.
-struct SPumpRequest {
-    bool full    = false;
-    bool haveBox = false;
-    CBox box; // monitor-local RENDER px, the union of every region asked for
-};
-extern std::unordered_map<MONITORID, SPumpRequest> g_pumpPending;
-extern std::unordered_map<MONITORID, uint64_t> g_pumpSeqs;
-
-// A PUMP THAT OUTLIVES THE PLUGIN IS A CALL INTO UNMAPPED MEMORY.
-//
-// The doLater a pump queues runs on the NEXT event-loop iteration, and
-// PLUGIN_EXIT is followed straight away by the dlclose. releasePointerFocus()
-// used to take every outstanding request out, which is part of why main.cpp
-// calls it first at unload -- but it is also called from the pointer hook and
-// from an overview opening, where dropping another monitor's pump froze its
-// dock mid-animation (user, 2026-09-14). So the guarantee moves here, where no
-// input event can trigger it: a static whose destructor runs when this object is
-// unloaded. Declared AFTER the two maps, so it is destroyed BEFORE them.
-//
-// Sound whichever way the host unloads: with a dlclose this runs and the
-// requests are cancelled; without one the code stays mapped and a late callback
-// is merely a damaged monitor.
-struct SPumpReaper {
-    ~SPumpReaper() {
-        if (!g_pEventLoopManager)
-            return;
-
-        for (auto [id, seq] : g_pumpSeqs) {
-            if (seq)
-                g_pEventLoopManager->removeDoLater(seq);
-        }
-        g_pumpSeqs.clear();
-        g_pumpPending.clear();
-    }
-};
-extern SPumpReaper g_pumpReaper;
-extern void pumpFrame(PHLMONITOR monitor, std::optional<CBox> regionRenderPx);
+// The dock's name for the frame pump, which lives in core/FramePump.cpp now
+// with its state and the notes on why it coalesces and why its mark is erased.
+inline void pumpFrame(PHLMONITOR monitor, std::optional<CBox> regionRenderPx = std::nullopt) {
+    FramePump::request(std::move(monitor), regionRenderPx);
+}
 namespace DockDetail {
 
 
