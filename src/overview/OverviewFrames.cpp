@@ -220,7 +220,7 @@ bool COverview::shouldAllowRealtimePreviewSchedule() {
         return true;
 
     if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() ||
-        resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || gridNudge->isBeingAnimated() || stripTipAnimating())
+        resultsWidth->isBeingAnimated() || searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || gridNudge->isBeingAnimated() || stripTipAnimating() || stripCleanupAnimating())
         return true;
 
     // Beside them for the same reason they are here: typing is the one moment
@@ -503,7 +503,7 @@ bool COverview::needsIdleRepaint() const {
         return true;
 
     if (scale->isBeingAnimated() || viewOffset->isBeingAnimated() || reflowPacer->isBeingAnimated() || resultsBand->isBeingAnimated() || resultsWidth->isBeingAnimated() ||
-        searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || gridNudge->isBeingAnimated() || stripTipAnimating() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
+        searchDock->isBeingAnimated() || pillNudge->isBeingAnimated() || gridNudge->isBeingAnimated() || stripTipAnimating() || stripCleanupAnimating() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated())
         return true;
 
     if (scratchpadReveal->isBeingAnimated() || altStripsReveal->isBeingAnimated())

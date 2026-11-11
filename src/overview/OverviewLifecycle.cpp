@@ -623,7 +623,7 @@ void COverview::onPreRender() {
     // shrinking (or still waiting on its unmap), the strip's drag glide (as
     // last drawn; consumed here so it cannot outlive the frame that set it),
     // and the hot corner's ripple. They join the pacer like the rest.
-    if (!closingTiles.empty() || std::exchange(deskGlideMoving, false) || Hyprdrive::Ripple::activeOn(pMonitor.lock()))
+    if (!closingTiles.empty() || std::exchange(deskGlideMoving, false) || std::exchange(stripClean.moving, false) || Hyprdrive::Ripple::activeOn(pMonitor.lock()))
         gridSetReflowActive(pMonitor.lock());
 
     if (gridTakeReflowActive(pMonitor.lock())) {

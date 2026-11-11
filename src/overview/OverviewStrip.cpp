@@ -920,8 +920,18 @@ void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SS
                 sc<float>(LASTLOGICAL.x) + sc<float>(LASTLOGICAL.width) - sc<float>(FIRSTLOGICAL.x) + 2.F * PANELPAD,
                 sc<float>(FIRSTLOGICAL.height) + 2.F * PANELPAD,
             };
+            // After a Clean Up the plate closes in with its cells, from the
+            // width it had (OverviewStripCleanup.cpp).
+            // (The radius below is the resting plate's.)
+            CBox DRAWNLOGICAL = PANELLOGICAL;
+            if (const float RT = stripCleanupReflowT(); RT < 1.F && stripClean.plateFrom.width > 1) {
+                const CBox& F = stripClean.plateFrom;
+                DRAWNLOGICAL  = {F.x + (PANELLOGICAL.x - F.x) * RT, F.y + (PANELLOGICAL.y - F.y) * RT, F.width + (PANELLOGICAL.width - F.width) * RT,
+                                 F.height + (PANELLOGICAL.height - F.height) * RT};
+            }
 
-            const auto PANEL = getOverviewGlobalBox(PANELLOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+            const auto PANEL = getOverviewGlobalBox(DRAWNLOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
+            const auto REST  = getOverviewGlobalBox(PANELLOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
 
             if (PANEL.width > 1 && overviewBoxIntersectsMonitor(PANEL, monitor)) {
                 // Radius in RENDER space = the cells' radius plus the padding as
@@ -934,7 +944,7 @@ void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SS
                 // Concentric with the cells only when the theme actually rounds.
                 // Omarchy's squared default (decoration:rounding 0) must stay
                 // squared; inflating by the padding used to force a curve.
-                const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(PANEL.x))));
+                const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(FIRSTCELL.x) - sc<float>(REST.x))));
                 const int PANELROUND = ROUND <= 0 ? 0 : ROUND + PADPX;
 
                 // Same plate as the dock (Omarchy terminal fill, accent border,
@@ -1358,6 +1368,10 @@ void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::s
             }
         }
 
+    // The cells a Clean Up click took away, under everything the strip draws
+    // next: the cells closing over them pass over them.
+    renderStripCleanupGhosts(monitor, renderScale, style);
+
     // SUPER OVER A DESKTOP: the one to move (see SDeskDrag).
     size_t superIdx = images.size();
     if (!DRAGGED && !deskDrag.pressed && isOverviewPointerOnMonitor(monitor) && g_pInputManager && (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META)) {
@@ -1432,6 +1446,13 @@ void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::s
         // on Hyprland's border curve, so they swell and settle like the ring.
         const float LIFT = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-lift", CK), workspaceIdx == superIdx || MINE);
         const float HELD = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-held", CK), MINE);
+        // An empty cell crossing the others after a Clean Up dips smaller
+        // as it passes under them, back to size where it lands.
+        if (const float RT = stripCleanupReflowT(); RT < 1.F && stripCleanupCellEmpty(workspaceIdx)) {
+            const float  K = 1.F - 0.18F * std::sin(sc<float>(M_PI) * RT);
+            const double W = cell.width * K, H = cell.height * K;
+            cell           = {cell.x + (cell.width - W) / 2.0, cell.y + (cell.height - H) / 2.0, W, H};
+        }
         if (const float G = 1.F + 0.04F * LIFT + 0.03F * HELD; G > 1.0005F) {
             const double W = cell.width * G, H = cell.height * G;
             cell           = {cell.x + (cell.width - W) / 2.0, cell.y + (cell.height - H) / 2.0, W, H};
@@ -1443,11 +1464,14 @@ void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::s
             return;
         placed.push_back({workspaceIdx, cell, edges, workspaceIdx == hoveredIdx || workspaceIdx == superIdx || MINE});
     };
-    // The lifted cell over its neighbours: drawn last.
+    // The lifted cell over its neighbours: drawn last. After a Clean Up the
+    // empty cells go first: the cells with windows close over them.
     const size_t TOP = LIVE ? deskDrag.from : superIdx;
-    for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx)
-        if (workspaceIdx != TOP)
-            drawCell(workspaceIdx);
+    const bool   EMPTIESUNDER = stripCleanupReflowT() < 1.F;
+    for (int pass = EMPTIESUNDER ? 0 : 1; pass < 2; ++pass)
+        for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx)
+            if (workspaceIdx != TOP && (!EMPTIESUNDER || stripCleanupCellEmpty(workspaceIdx) == (pass == 0)))
+                drawCell(workspaceIdx);
     if (TOP < images.size())
         drawCell(TOP);
     // Not a frame request from inside the pass: onPreRender reads this and
@@ -1467,8 +1491,11 @@ void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::s
     // would sit in the way of reading it.
     pillNudgeWant                  = 0.F; // the label below re-asks every frame; no label, no lift
     searchLayoutHere().gridNudgeL  = 0.F; // ...and no push on the grid
+    // The Clean Up button first: under the strip it takes the label's place.
+    stripClean.wantNow = !DRAGGED && stripCleanupWanted(monitor, stripPlateBox(monitor, renderScale));
     if (!DRAGGED && !deskDrag.pressed)
         renderStripCellLabel(monitor, renderScale, FADE);
+    renderStripCleanup(monitor, renderScale, FADE);
 }
 
 // THE DESKTOP'S NAME AND WHAT IS ON IT, over a hovered strip cell (user,
@@ -1542,7 +1569,10 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
     if (WANT.width > 1 && PUB.containerBox.width > 1 && !WANT.intersection(PUB.containerBox).empty()) {
         // The results panel owns that gap and cannot move -- it hangs off the
         // pill's row -- so the label goes under the plate instead, into the gap
-        // to the windows, at the same gap.
+        // to the windows, at the same gap. Unless the Clean Up button is up:
+        // that place is the button's then (OverviewStripCleanup.cpp).
+        if (stripClean.wantNow)
+            return false;
         bottom = sc<float>(PLATE.y + PLATE.height) + GAP + sc<float>(WANT.height);
 
         // ...and the windows make room for it: label to windows gets the same

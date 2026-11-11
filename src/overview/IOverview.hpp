@@ -226,6 +226,9 @@ void overviewCenterCursorOnHandoff();
 // Desktops were renumbered in place (DesktopOrder.hpp): every open overview
 // rebuilds its cards and strip.
 void overviewDesktopsRenumbered();
+// `hyprdrive:debug stripclean`: the strip's Clean Up button on `monitor`'s
+// overview (nullptr: every one) -- wanted, alpha, box, removable, bump.
+std::string overviewStripCleanupReport(PHLMONITOR monitor);
 // Super went down or up: the strip's "move this desktop" lift follows it.
 void overviewSuperChanged();
 // Super+Shift+Left/Right in an open overview: the desktop shown moves a place.

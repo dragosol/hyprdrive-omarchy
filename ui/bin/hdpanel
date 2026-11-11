@@ -128,6 +128,7 @@ KEY_META = [
     _k(PLUGIN + "tap_super", "bool", "overview", True),
     _k(PLUGIN + "mission_control", "bool", "overview", True),
     _k(PLUGIN + "strip", "bool", "overview", True),
+    _k(PLUGIN + "strip_cleanup_button", "bool", "overview", True),
     _k(PLUGIN + "scale", "float", "overview", 0.82, min=0.4, max=0.9),
     _k(PLUGIN + "mission_control_gap", "int", "overview", 40, min=0, max=160),
     _k(PLUGIN + "backdrop", "enum", "overview", "snapshot", options=BACKDROPS),

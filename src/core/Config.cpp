@@ -538,6 +538,8 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CIntValue>(KEY("strip_max_screen_pct"), "ceiling on the strip band as a percent of screen height, so a strip cell never dwarfs a window preview", 30,
                                  SIntValueOptions{.min = 1, .max = 100}));
     addKey(makeShared<CIntValue>(KEY("strip_gap"), "gap between strip cells", 5, SIntValueOptions{.min = 0}));
+    addKey(makeShared<CBoolValue>(KEY("strip_cleanup_button"),
+                                  "hold Super over the overview's desktop strip: a Clean Up Empty Desktops button under it removes that monitor's empty desktops between the others", true));
     addKey(makeShared<CBoolValue>(KEY("tap_super"), "tapping SUPER alone toggles the overview", true));
     addKey(makeShared<CIntValue>(KEY("tap_super_timeout_ms"), "longest press-to-release still counted as a SUPER tap (0 = no limit)",
                                  250, SIntValueOptions{.min = 0}));

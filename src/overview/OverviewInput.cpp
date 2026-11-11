@@ -374,6 +374,10 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
         if (event.button == MAIN_BUTTON) {
             lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
 
+            // The strip's Clean Up button (Super held), ahead of the strip.
+            if (!drag.activeWindow && stripCleanupButton(event.state == WL_POINTER_BUTTON_STATE_PRESSED))
+                return;
+
             // Super + a desktop on the strip: picked up to move (SDeskDrag),
             // ahead of the submap's Super-click.
             if (!drag.activeWindow && deskDragButton(event.state == WL_POINTER_BUTTON_STATE_PRESSED))

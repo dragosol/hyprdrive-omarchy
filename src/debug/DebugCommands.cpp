@@ -101,6 +101,9 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     // the three curves at t = 0.25 / 0.5 -- a preset that reads as the house
     // one here is not reaching the animations.
     // `dockmenu`: the dock's hover pane cells and its open menu's row boxes.
+    // `stripclean`: the overview strip's Clean Up button (box, state, bump).
+    if (TOPIC == "stripclean")
+        return {.success = false, .error = overviewStripCleanupReport(nullptr)};
     if (TOPIC == "dockmenu")
         return {.success = false, .error = Hyprdrive::Dock::debugMenuReport(Desktop::focusState()->monitor())};
     // `rows`: each monitor's row of desktops -- Omarchy's workspace blocks on

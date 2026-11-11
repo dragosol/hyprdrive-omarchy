@@ -60,6 +60,8 @@ var sections = [
           desc: "Lay the current desktop out as a grid. Off shows scrolling columns." },
         { type: "toggle", key: P + "strip", label: "Desktop strip",
           desc: "Live thumbnails of every desktop along the top." },
+        { type: "toggle", key: P + "strip_cleanup_button", label: "Clean Up button", when: "stripOn",
+          desc: "Hold Super over the desktop strip and a Clean Up Empty Desktops button appears under it: the desktops with windows close ranks, the empty ones between them go." },
         { type: "toggle", key: P + "hot_corner:enabled", label: "Hot corner",
           desc: "Rest the pointer in a screen corner to open the overview, and again to close it, without touching the keyboard." },
         { type: "choice", key: P + "hot_corner:corner", label: "Corner", when: "hotCornerOn",

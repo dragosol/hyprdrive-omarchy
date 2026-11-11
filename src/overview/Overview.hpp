@@ -760,6 +760,49 @@ class COverview : public IOverview {
         float progress() const;
         float alpha() const;
     } stripTip;
+
+    // THE CLEAN UP BUTTON under the strip (OverviewStripCleanup.cpp; the pure
+    // rules are StripCleanupModel.hpp): Super held over the strip, with empty
+    // desktops between the others on this monitor's row.
+    struct SStripClean {
+        Hyprdrive::Motion::STween<Time::steady_tp> fade{.from = 0.F, .to = 0.F, .start = {}};
+        float                                      x = 0.F; // the plate's left edge as drawn, eased toward the pointer (rendered px)
+        bool                                       placed = false;
+        bool                                       moving = false; // still easing when last drawn: onPreRender joins the pacer
+        bool                                       pressed = false; // the main button went down on it
+        bool                                       wantNow = false; // this frame's answer (the label gives way under the strip)
+        CBox                                       box;             // as last drawn, monitor-local rendered px (hit-test)
+        CBox                                       plate;           // the strip's plate it was placed under, the same px
+        float                                      bumpL = 0.F;     // the grid bump it asked for, logical px
+        Time::steady_tp                            onAt{};          // the pointer was last on the strip or the button
+        Time::steady_tp                            animAt{};
+        Hyprdrive::Motion::SLitSet<Time::steady_tp> lit; // hover: key 1 = on it
+        // The cells the last click removed, where they were (logical): each
+        // goes smaller and fades under the cells closing over it.
+        std::vector<CBox>                          ghosts;
+        CBox                                       plateFrom; // the strip's plate before the click (logical)
+        bool                                       reflow = false; // the click's transition is running
+        bool                                       out() const {
+            return fade.to < 0.5F;
+        }
+        float alpha() const;
+    } stripClean;
+    bool                             stripCleanupWanted(PHLMONITOR monitor, const CBox& plate);
+    void                             renderStripCleanup(PHLMONITOR monitor, float renderScale, float fade);
+    void                             renderStripCleanupGhosts(PHLMONITOR monitor, float renderScale, const SStripStyle& style);
+    bool                             stripCleanupAnimating() const;
+    // The main button: true when the press or release was the button's.
+    bool                             stripCleanupButton(bool pressed);
+    bool                             stripCleanupClick();
+    size_t                           stripRemovableEmpties() const;
+    // The Clean Up click's reflow: its progress (1 when none is running), and
+    // whether a cell is an empty desktop (drawn under the others meanwhile).
+    float                            stripCleanupReflowT() const;
+    bool                             stripCleanupCellEmpty(size_t idx) const;
+    CBox                             stripPlateBox(PHLMONITOR monitor, float renderScale) const;
+  public:
+    std::string                      stripCleanupReport() const;
+  private:
     void                             renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now);
 
     Vector2D                         lastMousePosLocal = Vector2D{}; // monitor-local pixel space

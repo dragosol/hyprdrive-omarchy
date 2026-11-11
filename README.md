@@ -27,6 +27,11 @@ your Omarchy theme instead of shipping one of its own.
 
   ![Drag a window to a new desktop](https://hyprdrive.shastasia.com/readme/new-desktop.gif)
 
+  Hold Super over the strip and, when there are empty desktops between the
+  others, a **Clean Up Empty Desktops** button appears under it, by the
+  pointer. Click it and the desktops with windows close ranks on that monitor
+  (`strip_cleanup_button`, on by default).
+
 - Scroll-wheel workspace stepping, trackpad follow, keyboard navigation.
 - Several monitors act as one: the overview opens and closes on all of them,
   and Tab walks search -> each monitor's grid (or strip -> grid on each
