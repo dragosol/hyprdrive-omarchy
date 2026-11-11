@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DockDropModel.hpp"
+#include "MotionTimings.hpp"
 
 #include "globals.hpp"
 
@@ -419,7 +420,7 @@ void armBounce(const std::string& wmClass);
 // different things; the DURATION and the CURVE live here so the two cannot drift
 // into being two different hops. `t` runs 0..1 across HOP_MS, and the result is
 // how far the icon is lifted out of the pill, in `iconHeight`'s own units.
-inline constexpr float HOP_MS = 420.F;
+inline constexpr float HOP_MS = Hyprdrive::Motion::HOP_MS; // MotionTimings.hpp
 // A stack's bounce seen from a HIDDEN dock: its pile peeks up from the edge --
 // longer than the hop, or it is gone before anyone sees it.
 inline constexpr float STACK_PEEK_MS = 900.F;

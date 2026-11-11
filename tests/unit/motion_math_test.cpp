@@ -23,6 +23,7 @@
 #include "MotionPresets.hpp"
 #include "MotionSites.hpp"
 #include "MotionTween.hpp"
+#include "MotionTimings.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1026,6 +1027,26 @@ static void testA7() {
     report("A7 BorderFade on STween == old, replayed (bezier, linear, disabled, short)", nB, badB);
 }
 
+// ============================================================================
+// A8 -- the shared timings. The copies they replaced, verbatim: the sites now
+// alias these, so equal bits here are equal bits there.
+// ============================================================================
+static void testA8() {
+    namespace M = Hyprdrive::Motion;
+    // dock/DockParts.hpp:886-887, overview/Overview.hpp:741, layout/MosaicGestures.cpp:175-176
+    const float OLD_IN[]  = {150.F, 150.F, 150.F};
+    const float OLD_OUT[] = {110.F, 110.F, 110.F};
+    long        bad       = 0, n = 0;
+    for (float v : OLD_IN)
+        bad += !sameBits(v, M::LABEL_FADE_IN_MS), ++n;
+    for (float v : OLD_OUT)
+        bad += !sameBits(v, M::LABEL_FADE_OUT_MS), ++n;
+    // dock/Dock.hpp:430, dock/DockParts.hpp:490-491
+    bad += !sameBits(420.F, M::HOP_MS) + !sameBits(0.34F, M::HOP_HEIGHT) + !sameBits(0.42F, M::HOP_UP_SHARE);
+    n += 3;
+    report("A8 shared timings == the copies they replaced", n, bad);
+}
+
 int main() {
     testA1();
     testA2();
@@ -1034,6 +1055,7 @@ int main() {
     testA5();
     testA6();
     testA7();
+    testA8();
 
     std::printf("motion_math_test: %d checks, %ld bitwise comparisons, %ld differ\n", g_checks, g_compared, g_failed);
     return g_checkFailed ? 1 : 0;

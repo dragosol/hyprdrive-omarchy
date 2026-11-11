@@ -5,6 +5,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "StripLayout.hpp"
+#include "MotionTimings.hpp"
 #include "globals.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/AnimatedVariable.hpp>
@@ -740,8 +741,8 @@ class COverview : public IOverview {
     // needs; false when the pointer is not on a non-empty cell.
     bool                             stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::string& keyOut, std::string& labelOut, float& cxOut, float& bottomOut);
     bool                             stripTipAnimating() const;
-    // The dock tooltip's timings (Dock.cpp TOOLTIP_FADE_MS / _OUT_MS).
-    static constexpr float           STRIPTIP_FADE_MS = 150.F, STRIPTIP_FADE_OUT_MS = 110.F;
+    // The dock tooltip's timings: the shared label fade (MotionTimings.hpp).
+    static constexpr float           STRIPTIP_FADE_MS = Hyprdrive::Motion::LABEL_FADE_IN_MS, STRIPTIP_FADE_OUT_MS = Hyprdrive::Motion::LABEL_FADE_OUT_MS;
     struct SStripTip {
         std::string     key, text; // key = the workspace id the plate belongs to
         Time::steady_tp since = {};

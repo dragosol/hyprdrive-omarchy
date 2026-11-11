@@ -43,6 +43,7 @@
 #include "Motion.hpp"
 #include "MotionMath.hpp"
 #include "MotionTween.hpp"
+#include "MotionTimings.hpp"
 #include "ConfigureHold.hpp"
 
 #include "Compat.hpp"
@@ -480,8 +481,8 @@ constexpr float DRAG_GLOW_ALPHA = 0.55F;
 // is both the house rule and what falling actually does. The DURATION is
 // Dock::HOP_MS in the header, because V4's stack cells hop too and there is only
 // one hop; the shape below is what HOP_MS is the length of.
-constexpr float BOUNCE_HEIGHT   = 0.34F; // of one icon height
-constexpr float BOUNCE_UP_SHARE = 0.42F; // the hop is quicker up than down
+constexpr float BOUNCE_HEIGHT   = Hyprdrive::Motion::HOP_HEIGHT;   // of one icon height (MotionTimings.hpp)
+constexpr float BOUNCE_UP_SHARE = Hyprdrive::Motion::HOP_UP_SHARE; // the hop is quicker up than down
 
 struct SMetrics {
     float icon   = 0.F;
@@ -873,8 +874,9 @@ std::vector<PHLWINDOW> itemWindows(const SItem& item);
 // GNOME's dash label does not appear, it FADES: `_showLabel` eases opacity over
 // DASH_ITEM_LABEL_SHOW_TIME. Ours arrived at full alpha, which is what the user
 // reported missing. House entrance curve, because this is an entrance.
-constexpr float TOOLTIP_FADE_MS     = 150.F;
-constexpr float TOOLTIP_FADE_OUT_MS = 110.F; // exits are ~25% quicker, house rule
+// The numbers are the shared label fade (MotionTimings.hpp).
+constexpr float TOOLTIP_FADE_MS     = Hyprdrive::Motion::LABEL_FADE_IN_MS;
+constexpr float TOOLTIP_FADE_OUT_MS = Hyprdrive::Motion::LABEL_FADE_OUT_MS; // exits are ~25% quicker, house rule
 
 // The plate outlives the hover so it can fade AWAY; the caller passes an empty
 // name when nothing is hovered and this keeps drawing the last one until it has

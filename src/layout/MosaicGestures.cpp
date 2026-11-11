@@ -2,6 +2,7 @@
 // and the hover veto -- the gestures that span desktops. Split out of Mosaic.cpp; the state
 // is still there (MosaicParts.hpp).
 #include "MosaicParts.hpp"
+#include "MotionTimings.hpp"
 #include "MotionClock.hpp"
 
 
@@ -159,8 +160,8 @@ namespace Hyprdrive::Mosaic {
         // hyprdrive"): the dock tooltip's clock and curves (Dock.cpp
         // TOOLTIP_FADE_MS / _OUT_MS, houseEase), one per window. A title wanted
         // again mid-exit turns around from the alpha it had, no dip to zero.
-        constexpr float LABEL_FADE_MS     = 150.F;
-        constexpr float LABEL_FADE_OUT_MS = 110.F; // exits ~25% quicker, house rule
+        constexpr float LABEL_FADE_MS     = Hyprdrive::Motion::LABEL_FADE_IN_MS;  // MotionTimings.hpp
+        constexpr float LABEL_FADE_OUT_MS = Hyprdrive::Motion::LABEL_FADE_OUT_MS; // exits ~25% quicker, house rule
 
         float labelFadeProgress(const SLabelFade& f) {
             const float MS = Hyprdrive::Config::realElapsedMs(f.since);
