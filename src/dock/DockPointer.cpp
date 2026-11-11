@@ -703,7 +703,7 @@ bool dragMove(PHLMONITOR monitor, const Vector2D& point) {
                 overviewAdmitWindow(WINDOW);
                 OVERVIEW->beginWindowDragFrom(WINDOW, HOME); // grows out of the cell
                 // IMMEDIATELY, not on the next frame. The overview syncs this
-                // flag once per frame (scrollOverview.cpp, end of render), and a
+                // flag once per frame (Overview.cpp, end of render), and a
                 // release that lands before that frame would be claimed by the
                 // dock's own ladder instead of ending the drag -- leaving
                 // drag.activeWindow set forever. A window held in that state is

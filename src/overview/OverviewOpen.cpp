@@ -35,7 +35,7 @@ static std::vector<PHLMONITOR> overviewTargetMonitors(const std::string& target)
 static bool openOverviewOne(PHLMONITOR monitor);
 
 // ONE STATE ACROSS MONITORS (user, 2026-09-27), the opening half of the rule
-// CScrollOverview::close() keeps: the monitor asked for opens first, then every
+// COverview::close() keeps: the monitor asked for opens first, then every
 // other one, so no path -- the dock's Show Overview, a query open -- leaves a
 // monitor on the desktop while another shows the overview.
 static bool openOverview(PHLMONITOR monitor) {
@@ -88,7 +88,7 @@ static bool openOverviewOne(PHLMONITOR monitor) {
 
     const bool PREVRENDERINGOVERVIEW = renderingOverview;
     renderingOverview                = true;
-    auto overview                    = makeShared<CScrollOverview>(monitor->m_activeWorkspace, false, monitor);
+    auto overview                    = makeShared<COverview>(monitor->m_activeWorkspace, false, monitor);
     registerScrollOverview(overview);
     renderingOverview = PREVRENDERINGOVERVIEW;
     return true;
@@ -195,7 +195,7 @@ SDispatchResult onOverviewDispatcher(std::string arg) {
     // Tab is a step INSIDE the session: it must not reset it (it runs first).
     if (splitOverviewArg(arg).first == "tab") {
         if (const auto ACTIVE = activeScrollOverview())
-            if (auto* S = dynamic_cast<CScrollOverview*>(ACTIVE.get()))
+            if (auto* S = dynamic_cast<COverview*>(ACTIVE.get()))
                 S->tabAcrossMonitors();
         return {};
     }
@@ -215,7 +215,7 @@ SDispatchResult onOverviewDispatcher(std::string arg) {
     // The overview's Tab step, for a keybind -- and for tests that must not
     // type into the user's session (2026-09-27).
     if (ACTION == "tab") {
-        if (auto* S = ACTIVE ? dynamic_cast<CScrollOverview*>(ACTIVE.get()) : nullptr)
+        if (auto* S = ACTIVE ? dynamic_cast<COverview*>(ACTIVE.get()) : nullptr)
             S->tabAcrossMonitors();
         return {};
     }

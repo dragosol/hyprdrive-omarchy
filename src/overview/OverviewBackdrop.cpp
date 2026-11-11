@@ -1,5 +1,5 @@
-// CScrollOverview: wallpaper stash, wallpaper rate and listeners, card wallpaper and backdrop frost caches.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: wallpaper stash, wallpaper rate and listeners, card wallpaper and backdrop frost caches.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -146,7 +146,7 @@ namespace Hyprdrive {
     }
 }
 
-void CScrollOverview::adoptWallpaperStash() {
+void COverview::adoptWallpaperStash() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return;
@@ -164,7 +164,7 @@ void CScrollOverview::adoptWallpaperStash() {
     g_wallpaperStash.erase(IT);
 }
 
-void CScrollOverview::stashWallpaperCaches() {
+void COverview::stashWallpaperCaches() {
     const auto MONITOR = pMonitor.lock();
     if (MONITOR)
         g_openListen.erase(MONITOR->m_id); // closed: the stash's own listeners take over
@@ -183,14 +183,14 @@ void CScrollOverview::stashWallpaperCaches() {
     listenToWallpaper(MONITOR, st);
 }
 
-void CScrollOverview::renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha) {
+void COverview::renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha) {
     if (!monitor)
         return;
 
     renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, workspaceBox, renderScale, now, alpha);
 }
 
-void CScrollOverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now, bool includeBottom) {
+void COverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now, bool includeBottom) {
     if (!monitor)
         return;
 
@@ -312,7 +312,7 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
 // it with shader rounding (real clip + AA) instead of a painted mask.
 // Y17: no longer re-rendered every frame -- see wallpaperCacheSignature above
 // for the two halves of the invalidation.
-void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp& now) {
+void COverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp& now) {
     if (!monitor || !g_pHyprRenderer->m_renderData.currentFB)
         return;
 
@@ -378,7 +378,7 @@ void CScrollOverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::stea
     frost.cardWallpaperDirty = false;
 }
 
-void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now) {
+void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now) {
     if (!monitor || wallpaperMode == 1 || !g_pHyprRenderer->m_renderData.currentFB)
         return;
 
@@ -519,7 +519,7 @@ void CScrollOverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperM
     frost.backdropDirty = false;
 }
 
-bool CScrollOverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
+bool COverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
     if (!monitor || alpha <= 0.F || !frost.backdropFB || !frost.backdropFB->isAllocated() || !frost.backdropFB->getTexture())
         return false;
 

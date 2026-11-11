@@ -12,7 +12,7 @@ bool shouldUsePrecomputedBlur(const PHLWINDOW& window, PHLMONITOR monitor = null
 bool shouldUseBlurFramebuffer(const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr);
 // Drops the U2 texture-prefilter cache. A no-op while any overview is still
 // up: the cache is shared by every overview (both monitors sample the same
-// client textures), and ~CScrollOverview used to clear it for ALL of them
+// client textures), and ~COverview used to clear it for ALL of them
 // whenever one closed. Must be called with the EGL context current.
 void releaseTexturePrefilterCache();
 // hyprdrive.debug("mem"): entries in the prefilter cache and their bytes

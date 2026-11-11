@@ -1,5 +1,5 @@
-// CScrollOverview: keyboard navigation.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: keyboard navigation.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -27,7 +27,7 @@ struct SOverviewNavTarget {
 
 // Everything on screen an arrow can land on, in one list of boxes. Reads
 // state; changes none.
-void CScrollOverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOverviewNavTarget>& targets) const {
+void COverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOverviewNavTarget>& targets) const {
     for (size_t i = 0; i < images.size(); ++i) {
         if (!images[i] || !images[i]->pWorkspace)
             continue;
@@ -73,7 +73,7 @@ void CScrollOverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOvervie
 // The tile keyboard selection starts on: top row first, then leftmost -- the
 // order a filtered grid reads in. Rows are centred, so "same row" is a shared
 // vertical band rather than an equal y.
-PHLWINDOW CScrollOverview::firstNavTile() const {
+PHLWINDOW COverview::firstNavTile() const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return nullptr;
@@ -99,7 +99,7 @@ PHLWINDOW CScrollOverview::firstNavTile() const {
 
 // firstNavTile's ordering, generalised to the whole desktop. Rows are centred,
 // so "same row" is a shared vertical band rather than an equal y.
-std::vector<PHLWINDOW> CScrollOverview::navTilesOf(const PHLWORKSPACE& workspace) const {
+std::vector<PHLWINDOW> COverview::navTilesOf(const PHLWORKSPACE& workspace) const {
     std::vector<PHLWINDOW> out;
     const auto             MONITOR = pMonitor.lock();
     if (!workspace || !MONITOR)
@@ -136,7 +136,7 @@ std::vector<PHLWINDOW> CScrollOverview::navTilesOf(const PHLWORKSPACE& workspace
 // Off the end of one desktop's grid and onto the next (user, 2026-09-23). Only
 // reached with no query: a filtered grid already holds the matches from every
 // desktop, so "the next desktop" is not a place its walk can go.
-bool CScrollOverview::stepTileDesktop(int delta) {
+bool COverview::stepTileDesktop(int delta) {
     if (delta == 0 || images.empty())
         return false;
 
@@ -186,10 +186,10 @@ bool CScrollOverview::stepTileDesktop(int delta) {
 // false leaves the single-monitor cycle (results -> windows -> desktops) alone.
 // Monitors run left to right (then top to bottom); a monitor with no tiles is
 // passed over, and the search is the first monitor's.
-bool CScrollOverview::tabAcrossMonitors() {
-    std::vector<std::pair<CScrollOverview*, SP<IOverview>>> order;
+bool COverview::tabAcrossMonitors() {
+    std::vector<std::pair<COverview*, SP<IOverview>>> order;
     for (const auto& OV : scrollOverviews()) {
-        auto* S = dynamic_cast<CScrollOverview*>(OV.get());
+        auto* S = dynamic_cast<COverview*>(OV.get());
         if (S && !S->closing && S->pMonitor.lock())
             order.emplace_back(S, OV);
     }
@@ -204,7 +204,7 @@ bool CScrollOverview::tabAcrossMonitors() {
         if (order[i].first == this)
             self = i;
 
-    const auto HANDOVER = [](const std::pair<CScrollOverview*, SP<IOverview>>& ov) {
+    const auto HANDOVER = [](const std::pair<COverview*, SP<IOverview>>& ov) {
         // Focus first: a monitor focus change can move the cursor, and the
         // owner remembers the pointer AFTER it, or that move reads as the user
         // reaching away and hands the keyboard straight back.
@@ -212,7 +212,7 @@ bool CScrollOverview::tabAcrossMonitors() {
             Desktop::focusState()->rawMonitorFocus(MON);
         setKeyboardOverview(ov.second);
     };
-    const auto ENTERTILES = [&](const std::pair<CScrollOverview*, SP<IOverview>>& ov) {
+    const auto ENTERTILES = [&](const std::pair<COverview*, SP<IOverview>>& ov) {
         auto*      OV    = ov.first;
         const auto FIRST = OV->isNavTile(OV->closeOnWindow.lock()) ? OV->closeOnWindow.lock() : OV->firstNavTile();
         Hyprdrive::Stacks::traceEvent(std::format("tab: try monitor {} closeOn={} navTile={} first={}", OV->pMonitor->m_name, (uintptr_t)OV->closeOnWindow.lock().get(),
@@ -288,7 +288,7 @@ bool CScrollOverview::tabAcrossMonitors() {
     return true;
 }
 
-bool CScrollOverview::isNavTile(const PHLWINDOW& window) const {
+bool COverview::isNavTile(const PHLWINDOW& window) const {
     const auto MONITOR = pMonitor.lock();
     if (!window || !MONITOR)
         return false;
@@ -300,7 +300,7 @@ bool CScrollOverview::isNavTile(const PHLWINDOW& window) const {
 
 // Where the selection is NOW. Empty when the zone has nothing selected in it,
 // which is what the caller's "land somewhere" fallback keys off.
-CBox CScrollOverview::currentNavBox(const std::vector<SOverviewNavTarget>& targets, PHLMONITOR MONITOR) const {
+CBox COverview::currentNavBox(const std::vector<SOverviewNavTarget>& targets, PHLMONITOR MONITOR) const {
     CBox current;
     switch (g_search.nav.zone) {
         case EOverviewNavZone::Search:
@@ -395,7 +395,7 @@ static const SOverviewNavTarget* pickNavTarget(const std::vector<SOverviewNavTar
     return near ? near : best;
 }
 
-bool CScrollOverview::moveSelection(const std::string& direction) {
+bool COverview::moveSelection(const std::string& direction) {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return false;

@@ -1,5 +1,5 @@
-// CScrollOverview: render(), forced visibility and animation overrides, config overrides and state transfer.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: render(), forced visibility and animation overrides, config overrides and state transfer.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -265,7 +265,7 @@ void CForcedVisibility::restoreAll() {
     restoreLayers();
 }
 
-void CScrollOverview::applyWorkspaceAnimationOverrides() {
+void COverview::applyWorkspaceAnimationOverrides() {
     if (!sharedStateOwner || workspaceAnimationsOverridden)
         return;
 
@@ -287,7 +287,7 @@ void CScrollOverview::applyWorkspaceAnimationOverrides() {
     workspaceAnimationsOverridden = true;
 }
 
-void CScrollOverview::restoreWorkspaceAnimationOverrides() {
+void COverview::restoreWorkspaceAnimationOverrides() {
     if (!workspaceAnimationsOverridden)
         return;
 
@@ -317,7 +317,7 @@ void CScrollOverview::restoreWorkspaceAnimationOverrides() {
     workspaceAnimationsOverridden = false;
 }
 
-void CScrollOverview::reapplyConfigOverridesAfterReload() {
+void COverview::reapplyConfigOverridesAfterReload() {
     if (!sharedStateOwner || closing)
         return;
 
@@ -337,7 +337,7 @@ void CScrollOverview::reapplyConfigOverridesAfterReload() {
     }
 }
 
-void CScrollOverview::forceWorkspaceAlphaVisible(const PHLWORKSPACE& workspace) {
+void COverview::forceWorkspaceAlphaVisible(const PHLWORKSPACE& workspace) {
     if (!workspace || !workspace->m_alpha)
         return;
 
@@ -348,12 +348,12 @@ void CScrollOverview::forceWorkspaceAlphaVisible(const PHLWORKSPACE& workspace) 
     *workspace->m_alpha = 1.F;
 }
 
-void CScrollOverview::forceWorkspaceAlphaVisible() {
+void COverview::forceWorkspaceAlphaVisible() {
     for (const auto& workspace : State::workspaceState()->workspaces())
         forceWorkspaceAlphaVisible(workspace.lock());
 }
 
-void CScrollOverview::forceWorkspaceWindowsDecoRecalc(const PHLWORKSPACE& workspace) {
+void COverview::forceWorkspaceWindowsDecoRecalc(const PHLWORKSPACE& workspace) {
     if (!workspace)
         return;
 
@@ -365,7 +365,7 @@ void CScrollOverview::forceWorkspaceWindowsDecoRecalc(const PHLWORKSPACE& worksp
         OverviewWindow::forceDecoRecalc(windowRef.lock());
 }
 
-void CScrollOverview::applyInputConfigOverrides() {
+void COverview::applyInputConfigOverrides() {
     if (!sharedStateOwner || inputConfigOverridden)
         return;
 
@@ -383,7 +383,7 @@ void CScrollOverview::applyInputConfigOverrides() {
     Hyprdrive::Config::setValue("input:follow_mouse", 0);
 }
 
-void CScrollOverview::restoreInputConfigOverrides() {
+void COverview::restoreInputConfigOverrides() {
     if (!inputConfigOverridden)
         return;
 
@@ -396,13 +396,13 @@ void CScrollOverview::restoreInputConfigOverrides() {
     inputConfigOverridden = false;
 }
 
-void CScrollOverview::transferSharedStateOwnership() {
+void COverview::transferSharedStateOwnership() {
     if (!sharedStateOwner)
         return;
 
-    CScrollOverview* successor = nullptr;
+    COverview* successor = nullptr;
     for (const auto& overview : scrollOverviews()) {
-        auto* candidate = overview ? dynamic_cast<CScrollOverview*>(overview.get()) : nullptr;
+        auto* candidate = overview ? dynamic_cast<COverview*>(overview.get()) : nullptr;
         if (candidate && candidate != this && !candidate->closing) {
             successor = candidate;
             break;
@@ -437,7 +437,7 @@ void CScrollOverview::transferSharedStateOwnership() {
     sharedStateOwner   = false;
 }
 
-void CScrollOverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscreen) {
+void COverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscreen) {
     if (emittingFullscreenVisibilityState)
         return;
 
@@ -470,7 +470,7 @@ void CScrollOverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideF
     Fullscreen::controller()->setFullscreenMode(window, SAVEDMODES.internal, SAVEDMODES.client);
 }
 
-void CScrollOverview::render() {
+void COverview::render() {
     Prof::Timer PROF{Prof::frameNs, Prof::frameCalls};
     const auto  OPENPROF_T0 = std::chrono::steady_clock::now();
     auto        openProfGuard = Hyprutils::Utils::CScopeGuard([OPENPROF_T0] {

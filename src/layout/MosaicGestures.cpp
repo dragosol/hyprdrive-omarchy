@@ -391,7 +391,7 @@ namespace Hyprdrive::Mosaic {
     }
 
     // One frame past the end too, so the last one drawn is the settled alpha
-    // (CScrollOverview::stripTipAnimating).
+    // (COverview::stripTipAnimating).
     bool labelsAnimating() {
         const auto NOW = std::chrono::steady_clock::now();
         return std::ranges::any_of(g_labelFades, [&](const SLabelFade& f) {

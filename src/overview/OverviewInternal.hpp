@@ -1,6 +1,6 @@
 #pragma once
 
-// Internal helpers shared by the scrollOverview translation units. Not installed,
+// Internal helpers shared by the Overview translation units. Not installed,
 // not an API -- this is the ~1900 lines of file-static helpers that used to sit on
 // top of scrollOverview.cpp and pinned every method to that one file.
 //
@@ -12,7 +12,7 @@
 // when compile time starts to hurt.
 
 #include "FramePacing.hpp"
-#include "scrollOverview.hpp"
+#include "Overview.hpp"
 
 #include <cctype>
 #include <cstdio>
@@ -109,7 +109,7 @@ namespace WindowPill = Hyprdrive::WindowPill;
 // through here, so the whole plugin is driven by the same two curve objects the
 // open and close animations use. Global scope on purpose: TileChrome.cpp links
 // to this exact symbol (_Z9houseEasebf) via its own extern declaration, so it
-// must NOT move into OvInternal. Defined in scrollOverview.cpp.
+// must NOT move into OvInternal. Defined in Overview.cpp.
 float houseEase(bool decel, float t);
 
 // Card chrome helpers (shadow + rounding) live in their own header so the dock
@@ -258,9 +258,9 @@ inline const char* boundOverviewSubmap() {
         return OVERVIEW_SUBMAP;
     return OVERVIEW_SUBMAP_LEGACY;
 }
-inline CScrollOverview*      g_pointerGrabOverview = nullptr;
+inline COverview*      g_pointerGrabOverview = nullptr;
 
-inline void removeOverview(CScrollOverview* overview) {
+inline void removeOverview(COverview* overview) {
     const auto PMONITOR = overview ? overview->pMonitor.lock() : PHLMONITOR{};
     unregisterScrollOverview(overview);
     if (scrollOverviews().empty()) {
@@ -322,7 +322,7 @@ inline bool isOverviewSubmapActive() {
 // The overview is not a Wayland client. Clear seat keyboard focus so keys
 // cannot reach the window (or a layer-shell bar) underneath; the raw-key
 // hook builds the search query from the same stream.
-// scrollOverview.cpp. A pointer lock (a game, Moonlight) belongs to the window
+// Overview.cpp. A pointer lock (a game, Moonlight) belongs to the window
 // that took it, and the overview is not that window: released while the
 // overview is up, handed back only if the overview closes onto its owner.
 void releasePointerLocks();
@@ -412,7 +412,7 @@ inline constexpr const char* OVERVIEW_OPEN_BEZIER  = HOUSE_DECEL_BEZIER;
 inline constexpr const char* OVERVIEW_CLOSE_BEZIER = HOUSE_ACCEL_BEZIER;
 
 // houseEase lives at GLOBAL scope, declared above the namespace and defined in
-// scrollOverview.cpp. It is the one helper other translation units link to by
+// Overview.cpp. It is the one helper other translation units link to by
 // symbol: TileChrome.cpp extern-declares `float houseEase(bool, float)` and the
 // original split swept the definition into OvInternal:: with everything else,
 // which renamed the exported symbol and left _Z9houseEasebf undefined. A shared
@@ -1497,7 +1497,7 @@ inline float overviewTopChromeBottomL(PHLMONITOR monitor) {
 // X21: the results panel is part of the LAYOUT STACK, not an overlay. Its band
 // sits between the search row and the strip, so a growing list pushes the strip
 // down and shrinks the grid instead of covering them. The EASED value (X23) is
-// mirrored out of CScrollOverview::resultsBand into the published layout -- the
+// mirrored out of COverview::resultsBand into the published layout -- the
 // free layout helpers below and the hit-test paths all read it, and none of them
 // can reach a member.
 inline constexpr float OVERVIEW_RESULT_ROWHL = 34.F, OVERVIEW_RESULT_ROWGAPL = 6.F, OVERVIEW_RESULT_PANELPADL = 8.F, OVERVIEW_RESULT_PANELGAPL = 10.F;
@@ -1554,7 +1554,7 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
 // "better wrapping on definitions - we're leaving space on the table"). The
 // rows were a fixed OVERVIEW_TOOL_ROWHL, so a long definition was cut at two
 // lines and a short one sat in a gap. Measured at LOGICAL scale with the same
-// fonts and columns the drawing uses (scrollOverview.cpp's tool pane), so the
+// fonts and columns the drawing uses (Overview.cpp's tool pane), so the
 // layout and the pixels agree; OVERVIEW_TOOL_ROWHL stays the floor.
 inline constexpr float OVERVIEW_TOOL_ROWPADL = 10.F, OVERVIEW_TOOL_TEXTPX = 14.F, OVERVIEW_TOOL_EXPX = 11.F, OVERVIEW_TOOL_VPADL = 5.F;
 inline constexpr float OVERVIEW_TOOL_MAXLINES = 6.F;
@@ -2160,7 +2160,7 @@ inline constexpr std::chrono::milliseconds OVERVIEW_PREVIEW_QUIET_TIMEOUT = std:
 // cases, one rule: a window that just arrived on a desktop has to redraw at its
 // new size, and a window this overview is seeing for the FIRST time is one the
 // user has just opened the overview to look at -- a two-second wait would show
-// them the old buffer inside the new frame. CScrollOverview is constructed fresh
+// them the old buffer inside the new frame. COverview is constructed fresh
 // per open (main.cpp), so previewPulses starts empty and first sight is every
 // window, every time the overview comes up. Longer than the dock's RETILED_MS,
 // which covers only the retile itself and not a client that reflows a beat later.

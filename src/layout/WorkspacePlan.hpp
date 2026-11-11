@@ -3,7 +3,7 @@
 // WHICH DESKTOP IDS EACH MONITOR'S STRIP MAY MATERIALISE -- as a pure function.
 //
 // The overview keeps two GNOME invariants by creating REAL workspaces (E2 and
-// X3 in scrollOverview.cpp): the highest occupied desktop is followed by one
+// X3 in Overview.cpp): the highest occupied desktop is followed by one
 // empty one, and the holes below it are filled so desktop N is the Nth cell.
 // Both were written for one monitor and did id arithmetic on that monitor
 // alone: `highest occupied + 1`, `every missing id below it`.
@@ -68,7 +68,7 @@ struct SRow {
 // nullopt when unbound. Hyprland: workspaceRuleMgr()->getBoundMonitorForWS.
 using BoundMonitor = std::function<std::optional<ID>(ID)>;
 
-// ponytail: X3's ceiling (v1.1 item 0), see ensureNoWorkspaceGaps in scrollOverview.cpp.
+// ponytail: X3's ceiling (v1.1 item 0), see ensureNoWorkspaceGaps in Overview.cpp.
 inline constexpr ID GAP_CEILING = 32;
 
 inline std::map<ID, SRow> plan(std::vector<ID> monitors, const std::vector<SWorkspace>& workspaces, const BoundMonitor& bound = {}) {

@@ -6,7 +6,7 @@
 
 #include "Config.hpp"
 #include "IOverview.hpp"
-#include "scrollOverview.hpp"
+#include "Overview.hpp"
 #include "OmarchySearch.hpp"
 #include "SearchProviders.hpp"
 #include "Scratchpad.hpp"
@@ -90,7 +90,7 @@ void COverviewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
             if (!MONITOR || !MONITOR->m_enabled || !MONITOR->m_activeWorkspace || scrollOverviewForMonitor(MONITOR))
                 continue;
 
-            const auto OVERVIEW = makeShared<CScrollOverview>(MONITOR->m_activeWorkspace, true, MONITOR);
+            const auto OVERVIEW = makeShared<COverview>(MONITOR->m_activeWorkspace, true, MONITOR);
             registerScrollOverview(OVERVIEW);
             OVERVIEW->m_swipeClosing = false;
             OVERVIEW->m_isSwiping    = true;
@@ -397,7 +397,7 @@ void COverviewScrollGesture::begin(const ITrackpadGesture::STrackpadGestureBegin
 void COverviewScrollGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
     if (m_inOverview) {
         const auto OVERVIEW = m_overview.lock();
-        if (auto* const SCROLL = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr)
+        if (auto* const SCROLL = OVERVIEW ? dynamic_cast<COverview*>(OVERVIEW.get()) : nullptr)
             // Negated like the workspace swipe: the columns stick to the fingers.
             SCROLL->onTapeSwipeUpdate(-distance(e));
         return;
@@ -409,7 +409,7 @@ void COverviewScrollGesture::update(const ITrackpadGesture::STrackpadGestureUpda
 void COverviewScrollGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
     if (m_inOverview) {
         if (const auto OVERVIEW = m_overview.lock()) {
-            if (auto* SCROLL = dynamic_cast<CScrollOverview*>(OVERVIEW.get()))
+            if (auto* SCROLL = dynamic_cast<COverview*>(OVERVIEW.get()))
                 SCROLL->onTapeSwipeEnd();
         }
         m_overview.reset();

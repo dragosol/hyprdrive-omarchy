@@ -1,5 +1,5 @@
-// CScrollOverview: every namespace-scope variable of the original scrollOverview.cpp, in its original order.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: every namespace-scope variable of the original scrollOverview.cpp, in its original order.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -22,7 +22,7 @@ namespace OverviewDetail {
 // are registered here rather than read off the instances: the registry holds
 // IOverview, and a plan that could not see another monitor's phantoms would
 // hand its id out as a spare.
-std::unordered_map<const CScrollOverview*, std::vector<PHLWORKSPACEREF>> g_phantomsByOverview;
+std::unordered_map<const COverview*, std::vector<PHLWORKSPACEREF>> g_phantomsByOverview;
 
 // seen = forceWindow ran for this window; cleared = it was suspended and we
 // cleared it. seen == 0 means the window never reaches forceWindow at all,

@@ -30,7 +30,7 @@ class CMonitor;
 struct wl_event_source;
 
 // The live half of a released drag -- the window, the destination overview, the
-// anchor under the cursor. Defined in scrollOverview.cpp beside the only code
+// anchor under the cursor. Defined in Overview.cpp beside the only code
 // that fills it in; declared here because the gather/commit steps are private
 // members. The DECISION taken from it is the pure half, in DropDecision.hpp.
 struct SOverviewDropSite;
@@ -47,7 +47,7 @@ struct SOverviewNavTarget;
 // -- a shape that only stays correct while nobody adds a fourth thing or an
 // early return.
 //
-// The destructor is the guarantee, not the mechanism: ~CScrollOverview still
+// The destructor is the guarantee, not the mechanism: ~COverview still
 // calls restoreAll() at exactly the point the three restores used to run,
 // because their position in that litany is load-bearing (they run before
 // images.clear() drops the textures and before the cursor override comes off).
@@ -112,7 +112,7 @@ class CForcedVisibility {
 // object's question instead of eight loose members of the god object.
 //
 // releaseGL() is explicit and NOT the destructor: dropping a framebuffer needs
-// the EGL context current, which only ~CScrollOverview knows it has made. The
+// the EGL context current, which only ~COverview knows it has made. The
 // destructor drops the shared pointers and nothing else, which is exactly what
 // the old code did to cardWallpaperFB.
 struct COverviewFrostCache {
@@ -183,7 +183,7 @@ namespace Hyprdrive::DesktopTape {
     void setOffset(const PHLWORKSPACE& workspace, double offset);
 }
 
-class CScrollOverview : public IOverview {
+class COverview : public IOverview {
   public:
     // Desktops were renumbered in place (DesktopOrder.hpp): rebuild.
     void desktopsRenumbered() {
@@ -223,7 +223,7 @@ class CScrollOverview : public IOverview {
     bool                                  stripSettle    = false; // ...even with the order unchanged (dropped home)
     int                                   stripCellEdges = -1;    // renderStripCell: -1 from its index, else bit0 left, bit1 right
     // The recorded frame cadence for an output, kept across closes, for
-    // `hyprdrive:debug frames`. See the note in scrollOverview.cpp.
+    // `hyprdrive:debug frames`. See the note in Overview.cpp.
     static std::string frameCadence(MONITORID monitor);
 
     // This monitor's slot in the per-monitor search session state (SearchSession.hpp).
@@ -239,8 +239,8 @@ class CScrollOverview : public IOverview {
     // state owner or never overrode anything (user, 2026-09-14).
     void reapplyConfigOverridesAfterReload();
 
-    CScrollOverview(PHLWORKSPACE startedOn_, bool swipe = false, PHLMONITOR monitor = {});
-    ~CScrollOverview() override;
+    COverview(PHLWORKSPACE startedOn_, bool swipe = false, PHLMONITOR monitor = {});
+    ~COverview() override;
 
     void         render() override;
     void         damage() override;
@@ -428,7 +428,7 @@ class CScrollOverview : public IOverview {
     SHoverSignature lastHoverSignature;
     bool            lastHoverSignatureValid = false;
     CDropIndicator::SDropAnchor dropAnchorAtOverviewCursorOnWorkspace(size_t workspaceIdx, const PHLWINDOW& ignoredWindow = nullptr,
-                                                                      CScrollOverview* dragContext = nullptr);
+                                                                      COverview* dragContext = nullptr);
     PHLWORKSPACE workspaceAtOverviewPoint(const Vector2D& point, size_t* workspaceIdx = nullptr) const;
     PHLWORKSPACE workspaceAtOverviewDropPoint(const Vector2D& point, size_t* workspaceIdx = nullptr, const PHLWINDOW& draggedWindow = nullptr) const;
     PHLWORKSPACE workspaceAtOverviewCursor(size_t* workspaceIdx = nullptr) const;
@@ -553,11 +553,11 @@ class CScrollOverview : public IOverview {
     // and never at all when this is the only monitor. Like the scratchpad cell
     // they are not `images`, so a swipe can never walk onto another monitor.
     struct SAltStrip {
-        CScrollOverview* overview = nullptr; // that monitor's overview; alive for the frame it was read in
+        COverview* overview = nullptr; // that monitor's overview; alive for the frame it was read in
         PHLMONITOR       monitor;
     };
     struct SAltHit {
-        CScrollOverview* overview = nullptr;
+        COverview* overview = nullptr;
         PHLMONITOR       monitor;
         size_t           workspaceIdx = 0; // into overview->images
         PHLWORKSPACE     workspace;
@@ -943,7 +943,7 @@ class CScrollOverview : public IOverview {
     // unrepresentable.
     bool                             closing = false;
 
-    // event handlers -- moved out of the constructor, defined at the bottom of scrollOverview.cpp
+    // event handlers -- moved out of the constructor, defined at the bottom of Overview.cpp
     void onMouseMove(Vector2D, Event::SCallbackInfo& info);
     void onTouchMove(ITouch::SMotionEvent, Event::SCallbackInfo& info);
     void onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo& info);
@@ -1041,14 +1041,14 @@ bool overviewHandleShiftTap();
 bool overviewHandleCtrlTap();
 
 namespace Hyprdrive {
-    // The wallpaper caches kept between opens (scrollOverview.cpp).
+    // The wallpaper caches kept between opens (Overview.cpp).
     // EGL context current. std::nullopt = every monitor (unload).
     void releaseWallpaperStash(std::optional<MONITORID> monitor);
     std::string wallpaperStashReport();
 }
 
-// Leave the overview's submap if no overview holds it (scrollOverview.cpp).
+// Leave the overview's submap if no overview holds it (Overview.cpp).
 void healStuckOverviewSubmap();
 
-// The search pill pressed / let go (scrollOverview.cpp, THE PILL PLAYS).
+// The search pill pressed / let go (Overview.cpp, THE PILL PLAYS).
 void searchPillPress(bool down);

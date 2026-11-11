@@ -116,7 +116,7 @@
 // V6: the ONE answer to "which desktop does this window live on". A stashed
 // window's own m_workspace is the minimize stash, so only this knows it belongs
 // to the desktop it will come back to (GridLayout.hpp, 46bccac). Same include
-// rules as OverviewChrome above; scrollOverview.hpp is already in this TU.
+// rules as OverviewChrome above; Overview.hpp is already in this TU.
 #include "GridLayout.hpp"
 
 // The dock's FLIGHT subsystem -- the whole Z4-Z20 saga -- is its own module now:
@@ -1491,7 +1491,7 @@ extern uint64_t g_dockSeatDoLaterSeq;
 // the first time a mouse button is pressed -- a plugin's unresolved symbol is
 // not a load-time error, it is a lazy-binding abort at the first call, so it
 // took the compositor down mid-session rather than failing the build.
-// Y11. Asked by CScrollOverview::shouldAllowSurfaceFrame. See the comment there
+// Y11. Asked by COverview::shouldAllowSurfaceFrame. See the comment there
 // for why a preview cannot keep itself alive without it.
 // Longer than PREVIEWING_MS: that one covers a preview being actively redrawn
 // every frame, so it is refreshed constantly. This fires ONCE at the drop and

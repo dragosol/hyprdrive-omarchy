@@ -79,7 +79,7 @@ std::unordered_set<uint32_t> g_heldGuardKeys;
 // tail of every pop loses better than one frame in three. That is why it got
 // worse the more letters were on screen (more tail), why it was periodic rather
 // than constant, and why a held backspace stayed smooth until the end -- the
-// same coupling scrollOverview.cpp's frame-policy comment records from the
+// same coupling Overview.cpp's frame-policy comment records from the
 // earlier incarnation, where letters froze outright once the animvars settled.
 //
 // Ticking from the event loop instead: half a 60Hz frame, so a request is
@@ -389,7 +389,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // workspace switch inside the overview plays Hyprland's slide again.
         // Only the shared-state owner acts; the method self-guards.
         for (const auto& OVERVIEW : scrollOverviews()) {
-            if (const auto SCROLL = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr)
+            if (const auto SCROLL = OVERVIEW ? dynamic_cast<COverview*>(OVERVIEW.get()) : nullptr)
                 SCROLL->reapplyConfigOverridesAfterReload();
         }
     });

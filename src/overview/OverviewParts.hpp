@@ -1,6 +1,6 @@
 #pragma once
-// CScrollOverview parts: the include block of the original scrollOverview.cpp, verbatim,
-// plus what the parts share. Included only by the src/overview/scrollOverview.cpp parts.
+// COverview parts: the include block of the original scrollOverview.cpp, verbatim,
+// plus what the parts share. Included only by the src/overview/Overview.cpp parts.
 
 #include <numeric>
 #include <hyprland/src/desktop/state/FadingOutState.hpp>
@@ -175,7 +175,7 @@ namespace OverviewDetail {
     extern std::unordered_map<MONITORID, SWallpaperRate> g_wallpaperRate;
     extern std::unordered_map<MONITORID, uint64_t> g_wallpaperSeq;
     extern std::unordered_map<MONITORID, SOpenListen> g_openListen;
-    extern std::unordered_map<const CScrollOverview*, std::vector<PHLWORKSPACEREF>> g_phantomsByOverview;
+    extern std::unordered_map<const COverview*, std::vector<PHLWORKSPACEREF>> g_phantomsByOverview;
     extern std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> g_unsuspendCount;
     extern std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> g_frameSent;
     extern std::unordered_map<MONITORID, SFrameCadence> g_frameCadence;
@@ -196,7 +196,7 @@ namespace OverviewDetail {
     CBox depthScaled(const CBox& box, const Vector2D& centre, float k);
     WORKSPACEID workspaceKey(const PHLWORKSPACE& ws);
 // WorkspacePlan facts: which empty desktops each overview holds as phantoms.
-    void forgetPhantomsOf(const CScrollOverview* overview);
+    void forgetPhantomsOf(const COverview* overview);
     Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor);
     void noteFrame(MONITORID id);
     bool pillPlaying();

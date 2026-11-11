@@ -1,5 +1,5 @@
 #include "IOverview.hpp"
-#include "scrollOverview.hpp"
+#include "Overview.hpp"
 #include "globals.hpp"
 
 #include <algorithm>
@@ -114,7 +114,7 @@ void registerScrollOverview(const SP<IOverview>& overview) {
 
 // Overviews die from inside their own close animation: the last thing close() does
 // is scale->setCallbackOnEnd([this]{ removeOverview(this); }). This vector holds the
-// only strong reference, so erasing it there ran ~CScrollOverview *while the animation
+// only strong reference, so erasing it there ran ~COverview *while the animation
 // manager was standing in that variable's callback* -- destroying `scale` out from
 // under its own caller. The manager then walked freed memory on the next event, which
 // is why the crash landed on a later mouse move and not on the keystroke that closed
@@ -155,7 +155,7 @@ void unregisterScrollOverview(IOverview* overview) {
 // P0. See the declaration in IOverview.hpp for the defect. The teardown goes
 // through unregisterScrollOverview -- the park above -- and NOT through a direct
 // erase, because this runs inside the monitor.removed emit: dropping the last
-// reference here would run ~CScrollOverview, destroying animated variables and
+// reference here would run ~COverview, destroying animated variables and
 // event listeners, from inside a signal callback. That is the same shape as the
 // close-animation crash the park was added for, so it gets the same answer, and
 // an overview whose monitor died mid-open needs it most: `scale` is still live.

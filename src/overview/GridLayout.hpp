@@ -28,7 +28,7 @@
 // open-progress ramp, the half-pixel comparison -- is in OverviewGeometry.hpp
 // now and unit-tested there.
 
-#include "scrollOverview.hpp"
+#include "Overview.hpp"
 
 #include <unordered_map>
 #include <unordered_set>

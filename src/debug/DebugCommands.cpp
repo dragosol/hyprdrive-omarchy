@@ -159,7 +159,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         if (!monitor)
             continue;
 
-        report += "\n  " + monitor->m_name + std::format(" @{:.2f}Hz: ", monitor->m_refreshRate) + CScrollOverview::frameCadence(monitor->m_id);
+        report += "\n  " + monitor->m_name + std::format(" @{:.2f}Hz: ", monitor->m_refreshRate) + COverview::frameCadence(monitor->m_id);
 
         if (const auto OVERVIEW = scrollOverviewForMonitor(monitor)) {
             report += "\n  " + OVERVIEW->frameDebugLine();

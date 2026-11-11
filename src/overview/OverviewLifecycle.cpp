@@ -1,5 +1,5 @@
-// CScrollOverview: constructor/destructor, close, onPreRender, onWorkspaceChange, submap and passthrough binds, pointer handoff, desktop moves, DesktopTape.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: constructor/destructor, close, onPreRender, onWorkspaceChange, submap and passthrough binds, pointer handoff, desktop moves, DesktopTape.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -9,7 +9,7 @@ using namespace OverviewDetail;
 // a second); windowsMove is ~400 ms and feels stuck. Times anim_scale.
 constexpr float SEARCH_ANIM_SPEED = 1.8F;
 
-CScrollOverview::~CScrollOverview() {
+COverview::~COverview() {
     TileChrome::forget();
     // X51: the cache used to be dropped here, which meant every open re-rendered
     // the same strings -- measured 14 cold pango renders per open, forever,
@@ -71,7 +71,7 @@ static bool currentBindIsWheel() {
     return KEY == "mouse_up" || KEY == "mouse_down" || KEY == "mouse_left" || KEY == "mouse_right";
 }
 
-CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
+COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
     // A shown desktop's windows back first: the overview shows the real ones.
     Hyprdrive::ShowDesktop::restoreNow();
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
@@ -275,12 +275,12 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     OpenProf::mark("ctor end");
 }
 
-void CScrollOverview::stepDesktopCard(bool next) {
+void COverview::stepDesktopCard(bool next) {
     (currentBindIsWheel() ? wheelPanAt : keyPanAt) = Time::steadyNow();
     moveViewportWorkspace(next);
 }
 
-void CScrollOverview::close() {
+void COverview::close() {
     // Set at the top, before the dock teardown below, so it doubles as the
     // guard against a second close() -- setClosing(true) further down re-affirms
     // it (idempotent) alongside the state teardown it also owns.
@@ -538,7 +538,7 @@ void CScrollOverview::close() {
     restoreOverviewKeyboard(FINALWINDOW, "close");
 }
 
-void CScrollOverview::onPreRender() {
+void COverview::onPreRender() {
     if (pMonitor)
         pMonitor->m_solitaryClient.reset();
 
@@ -667,7 +667,7 @@ void CScrollOverview::onPreRender() {
     renderListShadow();
 }
 
-void CScrollOverview::onWorkspaceChange() {
+void COverview::onWorkspaceChange() {
     if (!pMonitor || !pMonitor->m_activeWorkspace)
         return;
 
@@ -878,7 +878,7 @@ void normalizeAllScrollingCameras() {
     }
 }
 
-void CScrollOverview::setClosing(bool closing_) {
+void COverview::setClosing(bool closing_) {
     closing = closing_;
     if (closing) {
         if (OmarchySearch::isSushiActive())
@@ -898,7 +898,7 @@ void CScrollOverview::setClosing(bool closing_) {
 // on `closing`, so an inert overview costs nothing by keeping them -- and they
 // are constructor-bound lambdas, so dropping them would make reopen() a rebuild
 // of six closures instead of the clearing of one bool.
-void CScrollOverview::suspendInputListeners() {
+void COverview::suspendInputListeners() {
     if (pan.pointerDown)
         endScrollingPan();
     clearDragPending();
@@ -906,7 +906,7 @@ void CScrollOverview::suspendInputListeners() {
     submapMouseClickButton  = 0;
 }
 
-EOverviewPhase CScrollOverview::phase() const {
+EOverviewPhase COverview::phase() const {
     return closing ? EOverviewPhase::Closing : EOverviewPhase::Open;
 }
 
@@ -914,7 +914,7 @@ EOverviewPhase CScrollOverview::phase() const {
 // swap has to happen BEFORE the new target is assigned: the animation reads its
 // config when it is re-aimed, so setting it afterwards would shape the next
 // transition rather than this one.
-void CScrollOverview::syncPluginAnimEnabled() {
+void COverview::syncPluginAnimEnabled() {
     // Overview open/close is a Hyprland animated variable with a COPIED
     // internalEnabled, so plugin:hyprdrive:anim_scale 0 would otherwise still
     // ease the overview while dock flights snap. Refresh every frame so a live
@@ -946,7 +946,7 @@ void CScrollOverview::syncPluginAnimEnabled() {
         searchAnimConfig->internalSpeed = SEARCH_ANIM_SPEED * S;
 }
 
-void CScrollOverview::useAnimDirection(bool opening) {
+void COverview::useAnimDirection(bool opening) {
     syncPluginAnimEnabled();
     // X75 (user, 2026-08-06): spamming Super "seems to have a decel+reverse
     // thing going on, I want it to immediately reverse at the same inverse
@@ -986,7 +986,7 @@ void CScrollOverview::useAnimDirection(bool opening) {
     viewOffset->setConfig(CONFIG);
 }
 
-void CScrollOverview::reopen() {
+void COverview::reopen() {
     if (!closing)
         return;
 
@@ -1056,7 +1056,7 @@ static void returnGlobalPassthroughBinds() {
     g_passthroughBinds.clear();
 }
 
-void CScrollOverview::activateSubmapIfConfigured() {
+void COverview::activateSubmapIfConfigured() {
     if (!sharedStateOwner || !usesSubmapKeybinds || !g_pKeybindManager)
         return;
 
@@ -1094,7 +1094,7 @@ void healStuckOverviewSubmap() {
         (void)Config::Actions::setSubmap("reset");
 }
 
-void CScrollOverview::restoreSubmapIfActive() {
+void COverview::restoreSubmapIfActive() {
     if (!submapActive || !g_pKeybindManager)
         return;
 
@@ -1107,7 +1107,7 @@ void CScrollOverview::restoreSubmapIfActive() {
     submapActive = false;
 }
 
-bool CScrollOverview::dispatchSubmapMouseClick(uint32_t button) {
+bool COverview::dispatchSubmapMouseClick(uint32_t button) {
     if (!usesSubmapKeybinds || !isOverviewSubmapActive() || !g_pKeybindManager || !g_pInputManager)
         return false;
 
@@ -1141,12 +1141,12 @@ bool CScrollOverview::dispatchSubmapMouseClick(uint32_t button) {
     return true;
 }
 
-void CScrollOverview::resetSwipe() {
+void COverview::resetSwipe() {
     m_isSwiping    = false;
     m_swipeClosing = false;
 }
 
-float CScrollOverview::openProgress() const {
+float COverview::openProgress() const {
     if (!scale)
         return 0.F;
 
@@ -1175,27 +1175,27 @@ void overviewCenterCursorOnHandoff() {
 
 void overviewDesktopsRenumbered() {
     for (const auto& OV : scrollOverviews())
-        if (auto* S = dynamic_cast<CScrollOverview*>(OV.get()))
+        if (auto* S = dynamic_cast<COverview*>(OV.get()))
             S->desktopsRenumbered();
 }
 
 void overviewSuperChanged() {
     for (const auto& OV : scrollOverviews())
-        if (auto* S = dynamic_cast<CScrollOverview*>(OV.get()))
+        if (auto* S = dynamic_cast<COverview*>(OV.get()))
             S->superChanged();
 }
 
 bool overviewMoveShownDesktop(int dir) {
     const auto MON = Desktop::focusState()->monitor();
     for (const auto& OV : scrollOverviews())
-        if (auto* S = dynamic_cast<CScrollOverview*>(OV.get()); S && S->pMonitor.lock() == MON) {
+        if (auto* S = dynamic_cast<COverview*>(OV.get()); S && S->pMonitor.lock() == MON) {
             S->moveShownDesktop(dir);
             return true;
         }
     return false;
 }
 
-void CScrollOverview::superChanged() {
+void COverview::superChanged() {
     if (closing)
         return;
     damage();
@@ -1203,7 +1203,7 @@ void CScrollOverview::superChanged() {
 }
 
 // A desktop with windows on it, numbered (not special, not named).
-bool CScrollOverview::deskMovable(size_t idx) const {
+bool COverview::deskMovable(size_t idx) const {
     if (idx >= images.size() || !images[idx] || !Hyprdrive::DesktopOrder::ordinary(images[idx]->pWorkspace))
         return false;
     return std::ranges::any_of(images[idx]->windows, [](const PHLWINDOWREF& r) {
@@ -1212,7 +1212,7 @@ bool CScrollOverview::deskMovable(size_t idx) const {
     });
 }
 
-bool CScrollOverview::moveDesktop(size_t from, size_t to) {
+bool COverview::moveDesktop(size_t from, size_t to) {
     if (from >= images.size() || to >= images.size())
         return false;
     if (from == to) {
@@ -1241,7 +1241,7 @@ bool CScrollOverview::moveDesktop(size_t from, size_t to) {
     return true;
 }
 
-bool CScrollOverview::moveShownDesktop(int dir) {
+bool COverview::moveShownDesktop(int dir) {
     const auto MON = pMonitor.lock();
     if (!MON || closing || images.empty() || deskDrag.pressed)
         return false;
@@ -1260,7 +1260,7 @@ bool CScrollOverview::moveShownDesktop(int dir) {
 // right click to drag desktops in the desktop strip ... another way to drag a
 // workspace around"). Only the button that picked it up puts it down; a right
 // click that never moved puts it back without picking that desktop.
-bool CScrollOverview::deskDragButton(bool pressed, bool right) {
+bool COverview::deskDragButton(bool pressed, bool right) {
     if (pressed) {
         if (deskDrag.pressed)
             return true; // the other button, mid-drag: the drag keeps it
@@ -1303,7 +1303,7 @@ bool CScrollOverview::deskDragButton(bool pressed, bool right) {
     return true;
 }
 
-bool CScrollOverview::deskDragMove() {
+bool COverview::deskDragMove() {
     if (!deskDrag.pressed) {
         // Super over the strip: the lift follows the pointer from cell to cell.
         if (g_pInputManager && (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_META) && stripUiContains(lastMousePosLocal)) {

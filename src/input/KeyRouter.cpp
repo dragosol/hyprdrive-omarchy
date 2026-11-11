@@ -190,7 +190,7 @@ void                registerRawKeyHooks() {
 
                 // Overview owns the keyboard: a key that is not search input
                 // still must not reach the window or a layer-shell bar.
-                // Arrows/Tab/Return are left for CScrollOverview::onKeyboardKey.
+                // Arrows/Tab/Return are left for COverview::onKeyboardKey.
                 // PRINT and the XF86 keys are the exception: they are desktop
                 // keys, not query keys, and Omarchy's binds must still see them.
                 // So is a CHORD (Super/Ctrl/Alt held) the overview did not take

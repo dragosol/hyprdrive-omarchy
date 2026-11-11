@@ -31,7 +31,7 @@ bool isGuardModifierKeycode(uint32_t keycode) {
 // SYSRQ, which is what ALT+PRINT resolves to) and the XF86 family -- volume,
 // brightness, media, mic mute, keyboard light. The overview-owns-the-keyboard
 // catch-all lets these past so Omarchy's own binds still fire; the overview
-// borrows those binds into its submap while it holds it (scrollOverview.cpp,
+// borrows those binds into its submap while it holds it (Overview.cpp,
 // borrowGlobalPassthroughBinds).
 bool isGlobalPassthroughKeycode(uint32_t keycode) {
     const auto STATE = activeXkbState();

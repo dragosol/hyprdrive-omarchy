@@ -1,11 +1,11 @@
-// CScrollOverview: workspace model: offsets, phantoms, plans, trailing/gap workspaces, images.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: workspace model: offsets, phantoms, plans, trailing/gap workspaces, images.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
 
 
-size_t CScrollOverview::activeWorkspaceIndex() const {
+size_t COverview::activeWorkspaceIndex() const {
     for (size_t i = 0; i < images.size(); ++i) {
         if (images[i]->pWorkspace && images[i]->pWorkspace == startedOn)
             return i;
@@ -14,7 +14,7 @@ size_t CScrollOverview::activeWorkspaceIndex() const {
     return 0;
 }
 
-bool CScrollOverview::isSelectedWorkspace(const PHLWORKSPACE& workspace) const {
+bool COverview::isSelectedWorkspace(const PHLWORKSPACE& workspace) const {
     return workspace && viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace] &&
         images[viewportCurrentWorkspace]->pWorkspace == workspace;
 }
@@ -35,7 +35,7 @@ WORKSPACEID workspaceKey(const PHLWORKSPACE& ws) {
 }
 }
 
-float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
+float COverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
     const auto MONITOR             = pMonitor.lock();
     const auto MONITORSCALE        = MONITOR ? std::max(MONITOR->m_scale, 0.01F) : 1.F;
     const auto MONITORSIZE         = MONITOR ? axisSize(MONITOR->m_size, layout) : 0.F;
@@ -65,7 +65,7 @@ float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activ
     return NEWOFFSET;
 }
 
-float CScrollOverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
+float COverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
     const auto EXTRAINTERVAL = [this](size_t workspaceIdx_) -> float {
         if (workspaceIdx_ + 1 >= images.size() || !images[workspaceIdx_] || !images[workspaceIdx_ + 1])
             return 0.F;
@@ -89,7 +89,7 @@ float CScrollOverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_
     return offset;
 }
 
-float CScrollOverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
+float COverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
     if (!workspaceInsertTransition.active || workspaceIdx >= images.size() || !images[workspaceIdx] || !images[workspaceIdx]->pWorkspace)
         return 1.F;
 
@@ -111,7 +111,7 @@ float CScrollOverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
 
 namespace OverviewDetail {
 
-void forgetPhantomsOf(const CScrollOverview* overview) {
+void forgetPhantomsOf(const COverview* overview) {
     g_phantomsByOverview.erase(overview);
 }
 }
@@ -193,7 +193,7 @@ static PHLWORKSPACE workspaceWithID(WORKSPACEID id) {
 // than one monitor it is the first one no other monitor owns (user,
 // 2026-09-14), and an empty desktop already sitting above the occupied ones is
 // reused rather than joined by another.
-void CScrollOverview::ensureTrailingWorkspace() {
+void COverview::ensureTrailingWorkspace() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing)
         return;
@@ -234,7 +234,7 @@ void CScrollOverview::ensureTrailingWorkspace() {
 // was up (zrig/v6/item0). And with more than one monitor a hole is only filled
 // when this monitor owns the desktops on both sides of it (WorkspacePlan rule
 // 5) -- the id between the laptop's 3 and the external's 4 is nobody's.
-void CScrollOverview::ensureNoWorkspaceGaps() {
+void COverview::ensureNoWorkspaceGaps() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing) {
         gapWorkspaces.clear();
@@ -265,7 +265,7 @@ void CScrollOverview::ensureNoWorkspaceGaps() {
         refs.emplace_back(W);
 }
 
-void CScrollOverview::rebuildWorkspaceImages() {
+void COverview::rebuildWorkspaceImages() {
     ensureTrailingWorkspace();
     ensureNoWorkspaceGaps();
     // Workspaces created after we opened (the trailing one, or any made while the
@@ -318,7 +318,7 @@ void CScrollOverview::rebuildWorkspaceImages() {
     closeOnWindow = selectedWindow;
 }
 
-void CScrollOverview::seedRememberedSelections() {
+void COverview::seedRememberedSelections() {
     for (const auto& img : images) {
         if (!img->pWorkspace)
             continue;
@@ -339,7 +339,7 @@ void CScrollOverview::seedRememberedSelections() {
     }
 }
 
-void CScrollOverview::rememberSelection(PHLWINDOW window) {
+void COverview::rememberSelection(PHLWINDOW window) {
     window = getOverviewWindowToShow(window);
 
     if (!window || !window->m_workspace)
@@ -348,7 +348,7 @@ void CScrollOverview::rememberSelection(PHLWINDOW window) {
     rememberedSelection[window->m_workspace->m_id] = window;
 }
 
-void CScrollOverview::updateWorkspaceOverflow() {
+void COverview::updateWorkspaceOverflow() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return;
@@ -393,7 +393,7 @@ void CScrollOverview::updateWorkspaceOverflow() {
     }
 }
 
-CBox CScrollOverview::workspaceOverviewVisibleBox(size_t workspaceIdx, const CBox& workspaceBox, float renderScale, PHLMONITOR monitor) const {
+CBox COverview::workspaceOverviewVisibleBox(size_t workspaceIdx, const CBox& workspaceBox, float renderScale, PHLMONITOR monitor) const {
     if (workspaceIdx >= images.size() || !images[workspaceIdx] || !monitor)
         return workspaceBox;
 

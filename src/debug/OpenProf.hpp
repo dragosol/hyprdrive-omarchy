@@ -19,7 +19,7 @@ namespace OpenProf {
     void begin(const char* what);
     // A step of the open finished; logged with the time since begin().
     void mark(const char* what);
-    // CScrollOverview::render()'s own time, added to the current frame.
+    // COverview::render()'s own time, added to the current frame.
     void addOverviewRender(uint64_t ns);
     bool active();
     // Queue a GPU timestamp at this point of the render pass: the log then

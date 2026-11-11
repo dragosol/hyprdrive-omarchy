@@ -6,7 +6,7 @@
 // the tile), plus the user's 2026-08-02 amendment: a close button on the
 // TOP RIGHT of the hovered tile.
 //
-// State lives here rather than on CScrollOverview because there is exactly one
+// State lives here rather than on COverview because there is exactly one
 // cursor: hover is a property of the session, not of a monitor's overview.
 namespace Hyprdrive::TileChrome {
 

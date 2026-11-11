@@ -7,7 +7,7 @@
 #include "IOverview.hpp"
 #include "Mosaic.hpp"
 #include "globals.hpp"
-#include "scrollOverview.hpp"
+#include "Overview.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
@@ -152,7 +152,7 @@ namespace Hyprdrive::DesktopSwitch {
             // The overview owns the desktops while it is up: move its focused
             // card, exactly as its own wheel and arrow keys do.
             if (const auto OVERVIEW = openScrollOverviewForMonitor(monitor)) {
-                if (auto* S = dynamic_cast<CScrollOverview*>(OVERVIEW.get()))
+                if (auto* S = dynamic_cast<COverview*>(OVERVIEW.get()))
                     S->stepDesktopCard(dir > 0);
                 return {};
             }

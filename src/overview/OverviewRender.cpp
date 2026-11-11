@@ -83,7 +83,7 @@ void clearFrameChromeBlur() {
 //
 // None of that can be proven safe by reading alone, and the rule for this work
 // is that the pixels do not move. So the capture stays full-monitor and is
-// instead SKIPPED ENTIRELY when nothing samples it (scrollOverview.cpp, the
+// instead SKIPPED ENTIRELY when nothing samples it (Overview.cpp, the
 // overviewGridProgress gate at its call site), which is a whole-frame saving
 // rather than a fractional one and cannot change a pixel.
 void captureFrameChromeBlur(PHLMONITOR monitor) {

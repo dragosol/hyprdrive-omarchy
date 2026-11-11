@@ -8,7 +8,7 @@
 // BEFORE it opens its own OvInternal block (this header opens the namespace
 // itself, so including it inside another OvInternal block would double-nest it).
 
-#include "scrollOverview.hpp"       // Config, PHLMONITOR/PHLLS, CBox, sc<>
+#include "Overview.hpp"       // Config, PHLMONITOR/PHLLS, CBox, sc<>
 #include "OverviewPassElement.hpp"  // COverviewShadowPassElement
 
 #include <hyprland/src/output/Monitor.hpp>                     // CMonitor, m_layerSurfaceLayers

@@ -1,5 +1,5 @@
-// CScrollOverview: search UI: layout, draw, render, pill/letter animation, menu key handlers.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: search UI: layout, draw, render, pill/letter animation, menu key handlers.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -8,7 +8,7 @@ using namespace OverviewDetail;
 // How many open windows the query reaches. Counted across every workspace, not
 // just the focused one: the strip shows matching minis from elsewhere, so "no
 // matches" has to agree with that.
-size_t CScrollOverview::matchingWindowCount() const {
+size_t COverview::matchingWindowCount() const {
     if (g_search.query.text.empty())
         return 0;
 
@@ -1264,16 +1264,16 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
 // The reference's two trailing icon buttons (Google Lens, SongRec) are not
 // drawn -- neither action exists in this overview, so they would be decoration
 // for nothing.
-MONITORID CScrollOverview::searchMonitorId() const {
+MONITORID COverview::searchMonitorId() const {
     const auto MONITOR = pMonitor.lock();
     return MONITOR ? MONITOR->m_id : MONITOR_INVALID;
 }
 
-SSearchLayout& CScrollOverview::searchLayoutHere() const {
+SSearchLayout& COverview::searchLayoutHere() const {
     return g_search.layoutOn(searchMonitorId());
 }
 
-void CScrollOverview::renderSearch(PHLMONITOR monitor, float renderScale) {
+void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     Prof::Timer PROF{Prof::srchNs, Prof::srchCalls};
     if (!monitor)
         return;

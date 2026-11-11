@@ -19,7 +19,7 @@ inline HANDLE HYPRDRIVE_HANDLE = nullptr;
 // STANDING UX RULE (RICE_PROGRESS.md): the rice has exactly TWO motion curves,
 // mirrored in hyprland/general.lua as `appleDecel`/`appleAccel` and in the
 // quickshell Appearance.qml. Registered once with Hyprland's animation manager
-// in CScrollOverview's constructor, so anything hand-rolled can evaluate the
+// in COverview's constructor, so anything hand-rolled can evaluate the
 // SAME curve object instead of approximating it with a polynomial.
 inline constexpr const char* HOUSE_DECEL_BEZIER = "hyprdriveOpen";
 inline constexpr const char* HOUSE_ACCEL_BEZIER = "hyprdriveClose";
@@ -169,7 +169,7 @@ bool ensureScrollOverviewHooks();
 void disableScrollOverviewHooks();
 
 // THE overview membership gate, reachable from a TU that cannot include the
-// internals header. Defined in scrollOverview.cpp as a one-line forwarder to
+// internals header. Defined in Overview.cpp as a one-line forwarder to
 // `shouldShowOverviewWindow` in OverviewInternal.hpp, which is the single
 // authority ~40 call sites already consult.
 //
@@ -179,5 +179,5 @@ void disableScrollOverviewHooks();
 // blur takes the precomputed path. Two functions of the same name answering
 // differently about the same window is the exact shape of the Z20/Y9 bug class,
 // and it was one `#include` away from being unfixable: OverviewInternal.hpp
-// pulls in scrollOverview.hpp AND Dock.hpp, so Window.cpp cannot have it.
+// pulls in Overview.hpp AND Dock.hpp, so Window.cpp cannot have it.
 bool overviewShowsWindow(const PHLWINDOW& window);

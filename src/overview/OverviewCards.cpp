@@ -1,11 +1,11 @@
-// CScrollOverview: workspace card rendering, window draw, redrawAll.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: workspace card rendering, window draw, redrawAll.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
 
 
-void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode,
+void COverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode,
                                                 const Time::steady_tp& now) {
     const auto& workspaceImage = images[workspaceIdx];
     if (!workspaceImage || !workspaceImage->pWorkspace)
@@ -34,7 +34,7 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
                    trackpadDetentActive && workspaceIdx == trackpadDetentWorkspace ? std::clamp(trackpadDetentFocus, 0.F, 1.F) : 0.F);
 }
 
-void CScrollOverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float renderScale, int wallpaperMode, float alpha, const Time::steady_tp& now, float focus) {
+void COverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float renderScale, int wallpaperMode, float alpha, const Time::steady_tp& now, float focus) {
     // ONE CARD AT A TIME while cards overlap (a transition: one sliding out
     // from under another, one passing behind the desktop in view). The fill
     // below is drawn at once but the shadow and outline are QUEUED, so every
@@ -117,7 +117,7 @@ void CScrollOverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float 
     }
 }
 
-void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now) {
+void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now) {
     const auto& workspaceImage = images[workspaceIdx];
     if (!workspaceImage || !workspaceImage->pWorkspace)
         return;
@@ -418,7 +418,7 @@ static float closingTileDurationMs() {
 // Called once per workspace CARD per frame -- the current desktop and the
 // neighbours peeking in at the edges. The ghost is drawn only on the card whose
 // pass drew the tile; drawn on every card it stacked its alpha and faded late.
-void CScrollOverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now) {
+void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now) {
     if (closingTiles.empty() || !monitor)
         return;
 
@@ -507,7 +507,7 @@ void CScrollOverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, con
         damage();
 }
 
-float CScrollOverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
+float COverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
     if (!workspace || !monitor || monitor->m_size.x <= 0.F || monitor->m_size.y <= 0.F)
         return 1.0F;
 
@@ -529,7 +529,7 @@ float CScrollOverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace
     return VALUE;
 }
 
-float CScrollOverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
+float COverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, PHLMONITOR monitor) const {
     if (!isWorkspaceScrolling(workspace))
         return 1.0F;
 
@@ -604,7 +604,7 @@ float CScrollOverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& works
     return TOTAL_VIRTUAL_WIDTH / sc<float>(monitor->m_size.x);
 }
 
-void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now) {
+void COverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now) {
     auto*      dragOwner = g_pointerGrabOverview && g_pointerGrabOverview->drag.activeWindow ? g_pointerGrabOverview : this;
     const auto WINDOW    = getOverviewWindowToShow(dragOwner->drag.activeWindow.lock());
     if (!shouldShowOverviewWindow(WINDOW) || !WINDOW->m_workspace)
@@ -647,7 +647,7 @@ void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, 
     renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true);
 }
 
-bool CScrollOverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const {
+bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const {
     if (!monitor)
         return false;
 
@@ -699,7 +699,7 @@ bool CScrollOverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t
     return false;
 }
 
-void CScrollOverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewScale, const Time::steady_tp& now) {
+void COverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewScale, const Time::steady_tp& now) {
     if (!monitor)
         return;
 
@@ -726,7 +726,7 @@ void CScrollOverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float over
     }
 }
 
-void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox,
+void COverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox,
                                        bool dragged, float alphaMul, bool ownsPass) {
     if (!window)
         return;
@@ -830,14 +830,14 @@ void CScrollOverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, con
     });
 }
 
-void CScrollOverview::refreshWindows() {
+void COverview::refreshWindows() {
     redrawAll();
 }
 
 // P6i2 INSTRUMENT. See Membership::renderShadowEnabled. Runs at the end of
 // onPreRender -- after the rebuild decision, so it grades the list the frame
 // about to be drawn will actually walk, not the one before it.
-void CScrollOverview::renderListShadow() {
+void COverview::renderListShadow() {
     if (!Membership::renderShadowEnabled())
         return;
 
@@ -885,7 +885,7 @@ void CScrollOverview::renderListShadow() {
     Membership::renderPass();
 }
 
-void CScrollOverview::redrawAll(bool forcelowres) {
+void COverview::redrawAll(bool forcelowres) {
     lastBuiltQuery = g_search.query.text;
     rebuildWorkspaceImages();
     seedRememberedSelections();

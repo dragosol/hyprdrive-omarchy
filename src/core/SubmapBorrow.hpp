@@ -1,7 +1,7 @@
 #pragma once
 
 // Which of the user's binds stay live while the overview holds its submap
-// (scrollOverview.cpp, borrowGlobalPassthroughBinds). Pure, so the rule is
+// (Overview.cpp, borrowGlobalPassthroughBinds). Pure, so the rule is
 // host-tested: tests/unit/submap_borrow_test.cpp.
 //
 // The submap exists for its click binds only -- inside it the global
@@ -31,7 +31,7 @@
 namespace Hyprdrive::SubmapBorrow {
 
 // Hyprland's HL_MODIFIER_* bits (IKeyboard.hpp, xkb's modifier order);
-// scrollOverview.cpp static_asserts they still agree.
+// Overview.cpp static_asserts they still agree.
 inline constexpr uint32_t MOD_SHIFT = 1u << 0;
 inline constexpr uint32_t MOD_CTRL  = 1u << 2;
 inline constexpr uint32_t MOD_ALT   = 1u << 3;

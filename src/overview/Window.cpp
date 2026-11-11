@@ -237,7 +237,7 @@ static float getOverviewWindowTargetOpacity(const PHLWINDOW& window) {
 //   * nothing ever expired, and a client cycling a dmabuf swapchain retires
 //     texture names that never come back, so the map (and its full-size
 //     framebuffers) grew without bound;
-//   * every ~CScrollOverview released it for ALL overviews, so closing one
+//   * every ~COverview released it for ALL overviews, so closing one
 //     monitor's overview threw away the other's mipmaps mid-animation.
 //
 // The cache is now keyed by SURFACE: one entry per surface, shared by all four
@@ -245,7 +245,7 @@ static float getOverviewWindowTargetOpacity(const PHLWINDOW& window) {
 // format or the target image description changed, or if the surface COMMITTED
 // since the copy -- notifySurfaceCommit() below, driven from main.cpp's
 // damageSurface hook. That is the same signal the overview already trusts to
-// know a live tile must be repainted (CScrollOverview::shouldHandleSurfaceDamage),
+// know a live tile must be repainted (COverview::shouldHandleSurfaceDamage),
 // so the mipmap can never be staler than the tile it is drawn into. Entries
 // whose surface died, and entries nothing has drawn for a while, are dropped.
 struct SU2PrefilterEntry {

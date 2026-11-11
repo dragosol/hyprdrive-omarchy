@@ -17,7 +17,7 @@ namespace OvInternal {
 // ponytail: their own TU now -- the helpers they need live in OverviewInternal.hpp.
 // ---------------------------------------------------------------------------
 
-void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
+void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         const auto INPUTOVERVIEW = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
         if (INPUTOVERVIEW) {
             const auto INPUTMONITOR = INPUTOVERVIEW->pMonitor.lock();
@@ -225,7 +225,7 @@ void CScrollOverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
 
 }
 
-void CScrollOverview::onTouchMove(ITouch::SMotionEvent, Event::SCallbackInfo& info) {
+void COverview::onTouchMove(ITouch::SMotionEvent, Event::SCallbackInfo& info) {
         if (closing || scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()).get() != this)
             return;
 
@@ -234,7 +234,7 @@ void CScrollOverview::onTouchMove(ITouch::SMotionEvent, Event::SCallbackInfo& in
         requestInputFrame();
 }
 
-void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
+void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
         const auto INPUTOVERVIEW = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
         if (closing || (g_pointerGrabOverview && g_pointerGrabOverview != this) || (!g_pointerGrabOverview && INPUTOVERVIEW.get() != this))
             return;
@@ -465,7 +465,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
                     g_search.nav.zone = EOverviewNavZone::Search;
                     g_search.nav.selection = -1;
                     g_search.pointer.uiPress = true;
-                    searchPillPress(true); // the playful swell (scrollOverview.cpp, THE PILL PLAYS)
+                    searchPillPress(true); // the playful swell (Overview.cpp, THE PILL PLAYS)
                     damage();
                     requestInputFrame();
                     return;
@@ -655,7 +655,7 @@ void CScrollOverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallba
         finishWindowDragOrClick(event.button, true);
 }
 
-void CScrollOverview::onCursorSelect(ITouch::SDownEvent, Event::SCallbackInfo& info) {
+void COverview::onCursorSelect(ITouch::SDownEvent, Event::SCallbackInfo& info) {
         if (closing || scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()).get() != this)
             return;
 
@@ -669,7 +669,7 @@ void CScrollOverview::onCursorSelect(ITouch::SDownEvent, Event::SCallbackInfo& i
         close();
 }
 
-void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& info) {
+void COverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& info) {
         if (closing || scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()).get() != this)
             return;
 
@@ -725,7 +725,7 @@ void CScrollOverview::onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& 
             trackpadSwipeLayout(images[viewportCurrentWorkspace]->pWorkspace, e.delta);
 }
 
-void CScrollOverview::onWindowOpen(PHLWINDOW window) {
+void COverview::onWindowOpen(PHLWINDOW window) {
         if (closing)
             return;
 
@@ -738,7 +738,7 @@ void CScrollOverview::onWindowOpen(PHLWINDOW window) {
         damage();
 }
 
-void CScrollOverview::onWindowClose(PHLWINDOW window) {
+void COverview::onWindowClose(PHLWINDOW window) {
         if (closing)
             return;
 
@@ -764,7 +764,7 @@ void CScrollOverview::onWindowClose(PHLWINDOW window) {
         damage();
 }
 
-void CScrollOverview::onWindowMove(PHLWINDOW, PHLWORKSPACE) {
+void COverview::onWindowMove(PHLWINDOW, PHLWORKSPACE) {
         if (closing)
             return;
 
@@ -772,7 +772,7 @@ void CScrollOverview::onWindowMove(PHLWINDOW, PHLWORKSPACE) {
         damage();
 }
 
-void CScrollOverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
+void COverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
         if (closing)
             return;
 
@@ -808,7 +808,7 @@ void CScrollOverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
         stealOverviewKeyboard();
 }
 
-void CScrollOverview::onWindowFullscreen(PHLWINDOW window) {
+void COverview::onWindowFullscreen(PHLWINDOW window) {
         if (closing || emittingFullscreenVisibilityState)
             return;
 
@@ -824,7 +824,7 @@ void CScrollOverview::onWindowFullscreen(PHLWINDOW window) {
         emitFullscreenVisibilityState(window, true);
 }
 
-void CScrollOverview::onWorkspaceLifecycle(PHLWORKSPACEREF) {
+void COverview::onWorkspaceLifecycle(PHLWORKSPACEREF) {
         if (closing)
             return;
 
@@ -832,7 +832,7 @@ void CScrollOverview::onWorkspaceLifecycle(PHLWORKSPACEREF) {
         damage();
 }
 
-void CScrollOverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
+void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
         if (closing || event.state != WL_KEYBOARD_KEY_STATE_PRESSED || activeScrollOverview().get() != this)
             return;
 

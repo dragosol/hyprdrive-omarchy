@@ -1,5 +1,5 @@
-// CScrollOverview: top strip, scratchpad cell, alt strips, detent badge.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: top strip, scratchpad cell, alt strips, detent badge.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -21,7 +21,7 @@ static constexpr float OVERVIEW_SCRATCHPAD_DETACH_GAPS = 2.F;
 // region for the pointer.
 static constexpr float OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS = 1.F;
 
-float CScrollOverview::scratchpadRevealValue() const {
+float COverview::scratchpadRevealValue() const {
     return scratchpadReveal ? std::clamp(scratchpadReveal->value(), 0.F, 1.F) : 0.F;
 }
 
@@ -32,7 +32,7 @@ float CScrollOverview::scratchpadRevealValue() const {
 //
 // With REVEAL 0 every added term vanishes and this is exactly the strip-only
 // layout it replaced -- which is what the geometry host tests assert.
-CBox CScrollOverview::stripSlotLogicalBox(size_t workspaceIdx, bool scratchSlot, float revealOverride) const {
+CBox COverview::stripSlotLogicalBox(size_t workspaceIdx, bool scratchSlot, float revealOverride) const {
     const auto& ROW = stripRow(revealOverride, -1.F);
     if (!ROW.valid)
         return {};
@@ -44,7 +44,7 @@ CBox CScrollOverview::stripSlotLogicalBox(size_t workspaceIdx, bool scratchSlot,
 // The whole row: this monitor's cells, the scratchpad cell, and every other
 // monitor's strip -- StripLayout.hpp, the pure function with the host test. This
 // only gathers what it needs to know.
-const Hyprdrive::StripLayout::SOutput& CScrollOverview::stripRow(float scratchRevealOverride, float altRevealOverride) const {
+const Hyprdrive::StripLayout::SOutput& COverview::stripRow(float scratchRevealOverride, float altRevealOverride) const {
     // A row with no cells in it, for the outputs that have nothing to lay out.
     // Returned by reference like every other answer here: the SOutput carries
     // three vectors, and stripSlotLogicalBox asks for one cell at a time.
@@ -148,15 +148,15 @@ const Hyprdrive::StripLayout::SOutput& CScrollOverview::stripRow(float scratchRe
     return stripRowMemo.out;
 }
 
-CBox CScrollOverview::stripCellLogicalBox(size_t workspaceIdx) const {
+CBox COverview::stripCellLogicalBox(size_t workspaceIdx) const {
     return stripSlotLogicalBox(workspaceIdx, false, -1.F);
 }
 
-CBox CScrollOverview::scratchpadCellLogicalBox(float revealOverride) const {
+CBox COverview::scratchpadCellLogicalBox(float revealOverride) const {
     return stripSlotLogicalBox(0, true, revealOverride);
 }
 
-CBox CScrollOverview::scratchpadCellBox(PHLMONITOR monitor, float renderScale, float revealOverride) const {
+CBox COverview::scratchpadCellBox(PHLMONITOR monitor, float renderScale, float revealOverride) const {
     const auto LOGICAL = scratchpadCellLogicalBox(revealOverride);
     if (!monitor || LOGICAL.width <= 0)
         return {};
@@ -166,7 +166,7 @@ CBox CScrollOverview::scratchpadCellBox(PHLMONITOR monitor, float renderScale, f
 
 // Half out does not take a click: a cell the user can barely see must not be
 // the thing that swallows a press meant for the tile behind it.
-bool CScrollOverview::scratchpadCellContains(const Vector2D& point) const {
+bool COverview::scratchpadCellContains(const Vector2D& point) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || scratchpadRevealValue() <= 0.5F)
         return false;
@@ -175,7 +175,7 @@ bool CScrollOverview::scratchpadCellContains(const Vector2D& point) const {
     return BOX.width > 1 && BOX.containsPoint(point);
 }
 
-PHLWORKSPACE CScrollOverview::scratchpadCellWorkspace() const {
+PHLWORKSPACE COverview::scratchpadCellWorkspace() const {
     // The one already up wins, so the cell keeps naming what the user can see.
     if (const auto SHOWN = Hyprdrive::Scratchpad::shownOn(pMonitor.lock()))
         return SHOWN;
@@ -198,7 +198,7 @@ PHLWORKSPACE CScrollOverview::scratchpadCellWorkspace() const {
 // (user, 2026-09-12). The padding keeps it off that cell at every reveal, and
 // running out to the monitor edge puts the revealed cell inside its own zone,
 // so a pointer resting on the cell is what holds it out.
-CBox CScrollOverview::scratchpadZoneLogicalBox() const {
+CBox COverview::scratchpadZoneLogicalBox() const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || images.empty())
         return {};
@@ -215,7 +215,7 @@ CBox CScrollOverview::scratchpadZoneLogicalBox() const {
     return W <= 1.F ? CBox{} : CBox{X, sc<float>(LAST.y), W, sc<float>(LAST.height)};
 }
 
-void CScrollOverview::updateScratchpadReveal() {
+void COverview::updateScratchpadReveal() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || !scratchpadReveal)
         return;
@@ -254,7 +254,7 @@ void CScrollOverview::updateScratchpadReveal() {
 // right the way the monitors themselves are arranged. Closing overviews stay in:
 // all of them close together, and a strip that vanished the instant its
 // overview started to leave would jerk this row a whole strip sideways mid-fade.
-const std::vector<CScrollOverview::SAltStrip>& CScrollOverview::altStrips() const {
+const std::vector<COverview::SAltStrip>& COverview::altStrips() const {
     // MEMOISED, because this is asked for on every POINTER MOTION and motion
     // arrives far faster than frames do: the reveal zone's box and the alt-cell
     // hit test both start here, and each call allocated a vector and sorted it.
@@ -280,7 +280,7 @@ const std::vector<CScrollOverview::SAltStrip>& CScrollOverview::altStrips() cons
     out.clear();
 
     for (const auto& OV : scrollOverviews()) {
-        const auto OTHER = OV ? dynamic_cast<CScrollOverview*>(OV.get()) : nullptr;
+        const auto OTHER = OV ? dynamic_cast<COverview*>(OV.get()) : nullptr;
         if (!OTHER || OTHER == this)
             continue;
         const auto OTHERMON = OTHER->pMonitor.lock();
@@ -299,7 +299,7 @@ const std::vector<CScrollOverview::SAltStrip>& CScrollOverview::altStrips() cons
     return out;
 }
 
-float CScrollOverview::altStripsRevealValue() const {
+float COverview::altStripsRevealValue() const {
     return altStripsReveal ? std::clamp(altStripsReveal->value(), 0.F, 1.F) : 0.F;
 }
 
@@ -307,7 +307,7 @@ float CScrollOverview::altStripsRevealValue() const {
 // plate, out to the monitor's edge -- the scratchpad zone, mirrored, and for the
 // same reasons (see scratchpadZoneLogicalBox). Nothing at all with no other
 // monitor: hovering there on a one-monitor setup must do nothing.
-CBox CScrollOverview::altZoneLogicalBox() const {
+CBox COverview::altZoneLogicalBox() const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || images.empty() || altStrips().empty())
         return {};
@@ -325,7 +325,7 @@ CBox CScrollOverview::altZoneLogicalBox() const {
 }
 
 // Half out does not take a click, same as the scratchpad cell.
-std::optional<CScrollOverview::SAltHit> CScrollOverview::altCellAt(const Vector2D& point) const {
+std::optional<COverview::SAltHit> COverview::altCellAt(const Vector2D& point) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || altStripsRevealValue() <= 0.5F)
         return std::nullopt;
@@ -350,7 +350,7 @@ std::optional<CScrollOverview::SAltHit> CScrollOverview::altCellAt(const Vector2
     return std::nullopt;
 }
 
-void CScrollOverview::updateAltStripsReveal() {
+void COverview::updateAltStripsReveal() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || !altStripsReveal)
         return;
@@ -396,7 +396,7 @@ static std::string overviewMonitorLabel(const PHLMONITOR& monitor) {
     return NAME;
 }
 
-void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& STYLE) {
+void COverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& STYLE) {
     const float REVEAL = altStripsRevealValue();
     if (!monitor || REVEAL <= 0.01F)
         return;
@@ -512,7 +512,7 @@ void CScrollOverview::renderAltStrips(PHLMONITOR monitor, float renderScale, con
     }
 }
 
-void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& STYLE) {
+void COverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, const SStripStyle& STYLE) {
     const float REVEAL = scratchpadRevealValue();
     if (!monitor || REVEAL <= 0.01F)
         return;
@@ -618,14 +618,14 @@ void CScrollOverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale
 // for both: a fullscreen app's new desktop starts beneath the one it came out
 // of and grows as that one slides off it; a desktop moved along the strip
 // shrinks as it crosses behind the desktop in view and grows back past it.
-size_t CScrollOverview::depthAnchor() const {
+size_t COverview::depthAnchor() const {
     if (!workspaceInsertTransition.active || !workspaceInsertTransition.reorder || workspaceInsertProgress->value() >= 1.F)
         return SIZE_MAX;
     const size_t A = activeWorkspaceIndex();
     return A < images.size() ? A : SIZE_MAX;
 }
 
-float CScrollOverview::cardDepth(size_t workspaceIdx) const {
+float COverview::cardDepth(size_t workspaceIdx) const {
     if (!workspaceInsertTransition.active || workspaceInsertProgress->value() >= 1.F || workspaceIdx >= images.size() || !images[workspaceIdx] ||
         !images[workspaceIdx]->pWorkspace)
         return 1.F;
@@ -654,7 +654,7 @@ float CScrollOverview::cardDepth(size_t workspaceIdx) const {
     return 1.F;
 }
 
-std::vector<size_t> CScrollOverview::cardOrder() const {
+std::vector<size_t> COverview::cardOrder() const {
     std::vector<size_t> order(images.size());
     std::iota(order.begin(), order.end(), size_t{0});
     if (!workspaceInsertTransition.active || workspaceInsertTransition.bornUnder == WORKSPACE_INVALID || workspaceInsertProgress->value() >= 1.F)
@@ -676,7 +676,7 @@ std::vector<size_t> CScrollOverview::cardOrder() const {
     return order;
 }
 
-CBox CScrollOverview::stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, float renderScale) const {
+CBox COverview::stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, float renderScale) const {
     auto LOGICAL = stripCellLogicalBox(workspaceIdx);
     // A desktop insert/remove: the cells slide from where they were.
     if (workspaceInsertTransition.active && LOGICAL.width > 0 && workspaceIdx < images.size() && images[workspaceIdx] && images[workspaceIdx]->pWorkspace)
@@ -698,14 +698,14 @@ CBox CScrollOverview::stripCellBox(size_t workspaceIdx, PHLMONITOR monitor, floa
 // Is the pointer on this chrome box (monitor-local, as lastMousePosLocal)?
 // lastMousePosLocal keeps its last value when the pointer leaves for another
 // monitor, so the pointer has to be on this one first.
-bool CScrollOverview::pointerOnChrome(const CBox& box) const {
+bool COverview::pointerOnChrome(const CBox& box) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || !g_pInputManager || box.width <= 1 || !MONITOR->logicalBox().containsPoint(g_pInputManager->getMouseCoordsInternal()))
         return false;
     return box.containsPoint(lastMousePosLocal);
 }
 
-bool CScrollOverview::stripUiContains(const Vector2D& point) const {
+bool COverview::stripUiContains(const Vector2D& point) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F || images.empty())
         return false;
@@ -723,7 +723,7 @@ bool CScrollOverview::stripUiContains(const Vector2D& point) const {
     return scratchpadCellContains(point) || altCellAt(point).has_value();
 }
 
-PHLWORKSPACE CScrollOverview::workspaceAtStripPoint(const Vector2D& point, size_t* hoveredWorkspaceIdx) const {
+PHLWORKSPACE COverview::workspaceAtStripPoint(const Vector2D& point, size_t* hoveredWorkspaceIdx) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F)
         return nullptr;
@@ -745,14 +745,14 @@ PHLWORKSPACE CScrollOverview::workspaceAtStripPoint(const Vector2D& point, size_
     return nullptr;
 }
 
-PHLWORKSPACE CScrollOverview::stripWorkspaceAt(const Vector2D& point) const {
+PHLWORKSPACE COverview::stripWorkspaceAt(const Vector2D& point) const {
     return workspaceAtStripPoint(point);
 }
 
 // Minis map the window's REAL desktop rect into the cell, not its grid slot: a
 // thumbnail of the desktop, not a second copy of the grid. Shared by the render
 // and the D6 hit-test so the two can never disagree about where a mini is.
-CBox CScrollOverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITOR monitor) const {
+CBox COverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITOR monitor) const {
     if (!window || !monitor || cell.width <= 0 || cell.height <= 0)
         return {};
 
@@ -803,7 +803,7 @@ CBox CScrollOverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITO
 }
 
 // D6: which window mini is under the cursor, topmost first.
-PHLWINDOW CScrollOverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) const {
+PHLWINDOW COverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F)
         return nullptr;
@@ -897,7 +897,7 @@ PHLWINDOW CScrollOverview::windowAtStripPoint(const Vector2D& point, CBox* miniB
 // (ii/modules/ii/overview/OverviewWidget.qml:126-135) -- padding 10, radius
 // largeWorkspaceRadius + padding, a translucent surface colour. Drawn once,
 // before the cells, so the cells read as sitting on it.
-void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SStripStyle& STYLE) {
+void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SStripStyle& STYLE) {
     const float FADE  = STYLE.fade;
     const int   ROUND = STYLE.round;
 
@@ -956,7 +956,7 @@ void CScrollOverview::renderStripPanel(PHLMONITOR monitor, float renderScale, co
 // rects of the SAME box clipped to opposite halves. The clips do not
 // overlap, which is the point: a translucent backdrop drawn twice over the
 // same pixel would blend to the wrong alpha.
-void CScrollOverview::renderStripCellRect(const CBox& cell, const CHyprColor& color, bool largeLeft, bool largeRight, const SStripStyle& STYLE) const {
+void COverview::renderStripCellRect(const CBox& cell, const CHyprColor& color, bool largeLeft, bool largeRight, const SStripStyle& STYLE) const {
     if (largeLeft == largeRight) {
         CRectPassElement::SRectData r;
         r.box           = cell;
@@ -1002,7 +1002,7 @@ void CScrollOverview::renderStripCellRect(const CBox& cell, const CHyprColor& co
     // here deliberately; do not restore it as a regression fix.
 // `mix` is the cell's BorderFade: a cell at rest has no outline, so its fade is
 // the outline's alpha.
-void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool largeLeft, bool largeRight, const SStripStyle& STYLE, float mix) const {
+void COverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool largeLeft, bool largeRight, const SStripStyle& STYLE, float mix) const {
     if (mix <= 0.F)
         return;
     const auto OUTLINE = Hyprdrive::Config::highlightColor();
@@ -1027,7 +1027,7 @@ void CScrollOverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell
 // One strip cell: backdrop, workspace number, the minis of every window on it,
 // and the hover/active outlines. Drawn in this order for a reason -- the
 // outlines have to land on top of a cell full of previews.
-void CScrollOverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, const CBox& CELL, const PHLWINDOW& DRAGGED, bool hovered, float renderScale,
+void COverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, const CBox& CELL, const PHLWINDOW& DRAGGED, bool hovered, float renderScale,
                                       const Time::steady_tp& now, const SStripStyle& STYLE) {
     const auto& wimg = images[workspaceIdx];
     const float FADE = STYLE.fade;
@@ -1145,7 +1145,7 @@ namespace {
 // How long a keyboard-popped number stays up after the last step.
 static constexpr float KEY_BADGE_MS = 900.F;
 
-void CScrollOverview::popKeyboardBadge(size_t workspaceIdx) {
+void COverview::popKeyboardBadge(size_t workspaceIdx) {
     if (keyBadgeLive && keyBadgeWorkspace == workspaceIdx)
         return;
     keyBadgeWorkspace = workspaceIdx;
@@ -1155,21 +1155,21 @@ void CScrollOverview::popKeyboardBadge(size_t workspaceIdx) {
     requestInputFrame();
 }
 
-size_t CScrollOverview::badgeWorkspace() const {
+size_t COverview::badgeWorkspace() const {
     return trackpadDetentActive ? trackpadDetentWorkspace : keyBadgeWorkspace;
 }
 
-Time::steady_tp CScrollOverview::badgeBornAt() const {
+Time::steady_tp COverview::badgeBornAt() const {
     return trackpadDetentActive ? trackpadDetentBornAt : keyBadgeBornAt;
 }
 
-bool CScrollOverview::detentBadgeVisible() const {
+bool COverview::detentBadgeVisible() const {
     const bool   KEYS = keyBadgeLive && SearchLetters::msSince(Time::steadyNow(), keyBadgeBornAt) < KEY_BADGE_MS;
     const size_t IDX  = badgeWorkspace();
     return (trackpadDetentActive || KEYS) && Hyprdrive::Config::getGestureDetentLabel() && IDX < images.size() && images[IDX] && images[IDX]->pWorkspace;
 }
 
-void CScrollOverview::updateRestingFade() {
+void COverview::updateRestingFade() {
     const size_t NONE   = std::numeric_limits<size_t>::max();
     const size_t TARGET = detentBadgeVisible() ? badgeWorkspace() : NONE;
     // A keyboard badge times out without any input to ask for the frame that
@@ -1198,7 +1198,7 @@ void CScrollOverview::updateRestingFade() {
     }
 }
 
-float CScrollOverview::restingNumberFade(size_t workspaceIdx) const {
+float COverview::restingNumberFade(size_t workspaceIdx) const {
     if (workspaceIdx != restingFadeCell && workspaceIdx != restingFadePrevCell)
         return 1.F;
 
@@ -1209,7 +1209,7 @@ float CScrollOverview::restingNumberFade(size_t workspaceIdx) const {
     return workspaceIdx == restingFadeCell ? 1.F - E : E;
 }
 
-void CScrollOverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
+void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
     if (!monitor || !detentBadgeVisible())
         return;
 
@@ -1291,7 +1291,7 @@ void CScrollOverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
 
 // The strip: one container panel, then one pass per cell. The style the two
 // share is resolved once here; nothing else about the order moved.
-void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now) {
+void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now) {
     if (!monitor || overviewStripLogicalHeight(monitor) <= 0.F)
         return;
 
@@ -1479,7 +1479,7 @@ void CScrollOverview::renderStrip(PHLMONITOR monitor, float renderScale, const T
 //
 // Empty desktops get nothing, as asked: the empty cell already shows its number
 // in the middle of itself, and a plate over nothing is clutter.
-bool CScrollOverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::string& keyOut, std::string& labelOut, float& cxOut, float& bottomOut) {
+bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::string& keyOut, std::string& labelOut, float& cxOut, float& bottomOut) {
     if (!monitor || !isOverviewPointerOnMonitor(monitor))
         return false;
 
@@ -1586,7 +1586,7 @@ bool CScrollOverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, 
 // changed label on the same target keeps its alpha; leaving fades the plate
 // where it was, 110ms against the entrance's 150 -- exits ~25% quicker, the
 // house rule -- on the same houseEase curves.
-void CScrollOverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, float fade) {
+void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, float fade) {
     if (!monitor || fade < 0.01F)
         return;
 
@@ -1627,7 +1627,7 @@ void CScrollOverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale
 
 // Whether the strip label is mid-fade, which needs frames nothing else would
 // ask for (a pointer resting on a cell emits no motion).
-bool CScrollOverview::stripTipAnimating() const {
+bool COverview::stripTipAnimating() const {
     if (stripTip.text.empty())
         return false;
     const float MS = std::chrono::duration<float, std::milli>(Time::steadyNow() - stripTip.since).count();

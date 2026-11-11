@@ -327,7 +327,7 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CIntValue>(KEY("drag:spring_delay_ms"), "how long a drag is held over a dock app or a screen edge before it springs", 1500,
                                  SIntValueOptions{.min = 200, .max = 10000}));
     // Hold to swap and the hot corner (user, 2026-10-13, asked for on r/omarchy).
-    // scrollOverview.cpp (updateSwapHold), HotCorner.cpp.
+    // Overview.cpp (updateSwapHold), HotCorner.cpp.
     addKey(makeShared<CBoolValue>(KEY("drag:hold_to_swap"),
                                   "in the overview, a window dragged and held over another window (in the grid or the desktop strip) for hold_to_swap_ms swaps "
                                   "places with it when let go there",

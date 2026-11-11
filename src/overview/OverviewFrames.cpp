@@ -1,5 +1,5 @@
-// CScrollOverview: frame diagnostics, frame pacing, live-preview scheduling, surface frame/damage policy.
-// Cut from scrollOverview.cpp by pure code motion.
+// COverview: frame diagnostics, frame pacing, live-preview scheduling, surface frame/damage policy.
+// Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
 
 using namespace OverviewDetail;
@@ -43,7 +43,7 @@ std::string cadenceReport(MONITORID id) {
 }
 }
 
-std::string CScrollOverview::frameCadence(MONITORID monitor) {
+std::string COverview::frameCadence(MONITORID monitor) {
     return cadenceReport(monitor);
 }
 
@@ -64,7 +64,7 @@ static inline void noteDamageGate(const PHLWINDOW& window, const char* reason) {
     g_damageGateReason[window->m_class] = reason;
 }
 
-std::string CScrollOverview::frameDebugLine() const {
+std::string COverview::frameDebugLine() const {
     const auto MONITOR = pMonitor.lock();
     std::string out    = MONITOR ? MONITOR->m_name : std::string("?");
 
@@ -171,13 +171,13 @@ std::string CScrollOverview::frameDebugLine() const {
     return out;
 }
 
-void CScrollOverview::damage() {
+void COverview::damage() {
     blockDamageReporting = true;
     g_pHyprRenderer->damageMonitor(pMonitor.lock());
     blockDamageReporting = false;
 }
 
-void CScrollOverview::requestInputFrame() {
+void COverview::requestInputFrame() {
     if (closing)
         return;
 
@@ -189,22 +189,22 @@ void CScrollOverview::requestInputFrame() {
     MONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 }
 
-void CScrollOverview::markBlurDirty() {
+void COverview::markBlurDirty() {
     frost.overviewDirty = true;
 }
 
-void CScrollOverview::markBackdropBlurDirty() {
+void COverview::markBackdropBlurDirty() {
     frost.backdropDirty = true;
 }
 
-bool CScrollOverview::shouldAllowRealtimePreviewFrame() const {
+bool COverview::shouldAllowRealtimePreviewFrame() const {
     if (lastRealtimePreviewFrame.time_since_epoch().count() == 0)
         return true;
 
     return Time::steadyNow() - lastRealtimePreviewFrame >= OVERVIEW_WINDOW_FRAME_INTERVAL;
 }
 
-bool CScrollOverview::shouldAllowRealtimePreviewSchedule() {
+bool COverview::shouldAllowRealtimePreviewSchedule() {
     if (inputFramePending) {
         inputFramePending = false;
         return true;
@@ -245,7 +245,7 @@ bool CScrollOverview::shouldAllowRealtimePreviewSchedule() {
     return false;
 }
 
-void CScrollOverview::schedulePreviewFrameAfter(std::chrono::milliseconds delay) {
+void COverview::schedulePreviewFrameAfter(std::chrono::milliseconds delay) {
     if (!realtimePreviewTimer)
         return;
 
@@ -264,7 +264,7 @@ void CScrollOverview::schedulePreviewFrameAfter(std::chrono::milliseconds delay)
 // THE ADAPTIVE PREVIEW PULSE. See OVERVIEW_PREVIEW_POLL_INTERVAL for why the
 // change detector is the client's own damage and not a comparison of frames.
 
-bool CScrollOverview::previewWantsFrame(const PHLWINDOW& window, const Time::steady_tp& now) {
+bool COverview::previewWantsFrame(const PHLWINDOW& window, const Time::steady_tp& now) {
     if (!window)
         return true;
 
@@ -308,7 +308,7 @@ bool CScrollOverview::previewWantsFrame(const PHLWINDOW& window, const Time::ste
     return true;
 }
 
-void CScrollOverview::notePreviewDamage(const PHLWINDOW& window, const Time::steady_tp& now) {
+void COverview::notePreviewDamage(const PHLWINDOW& window, const Time::steady_tp& now) {
     if (!window)
         return;
 
@@ -318,7 +318,7 @@ void CScrollOverview::notePreviewDamage(const PHLWINDOW& window, const Time::ste
     STATE.streaming  = true;
 }
 
-bool CScrollOverview::previewIsStreaming(const PHLWINDOW& window, const Time::steady_tp& now) const {
+bool COverview::previewIsStreaming(const PHLWINDOW& window, const Time::steady_tp& now) const {
     if (!window)
         return false;
 
@@ -333,7 +333,7 @@ bool CScrollOverview::previewIsStreaming(const PHLWINDOW& window, const Time::st
     return STATE.streaming && now - STATE.lastChange <= OVERVIEW_PREVIEW_QUIET_TIMEOUT;
 }
 
-bool CScrollOverview::anyPreviewStreaming(const Time::steady_tp& now) const {
+bool COverview::anyPreviewStreaming(const Time::steady_tp& now) const {
     return std::ranges::any_of(previewPulses, [&](const auto& entry) {
         const auto& STATE = entry.second;
         if (now < STATE.graceUntil)
@@ -342,7 +342,7 @@ bool CScrollOverview::anyPreviewStreaming(const Time::steady_tp& now) const {
     });
 }
 
-std::chrono::milliseconds CScrollOverview::previewPulseInterval(const Time::steady_tp& now) const {
+std::chrono::milliseconds COverview::previewPulseInterval(const Time::steady_tp& now) const {
     // Anything moving on screen: the pulse is the delivery mechanism for its
     // frames, so it keeps up with the MONITOR, not with misc:render_unfocused_fps.
     // That setting is a sensible floor for a desktop nobody is looking at; the
@@ -378,7 +378,7 @@ std::chrono::milliseconds CScrollOverview::previewPulseInterval(const Time::stea
 // while that runs, exactly as Mutter's overview does, so nothing looks stale --
 // and then spread OVERVIEW_WAKES_PER_FRAME at a time so a desktop full of
 // windows ramps over a few frames instead of stalling one.
-void CScrollOverview::wakeDrawnWindows(const Time::steady_tp& now) {
+void COverview::wakeDrawnWindows(const Time::steady_tp& now) {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing)
         return;
@@ -411,22 +411,22 @@ void CScrollOverview::wakeDrawnWindows(const Time::steady_tp& now) {
 
 // Is there anything still to wake? Keeps the pulse at a frame interval through
 // the ramp instead of letting it stretch to the idle floor mid-way.
-bool CScrollOverview::wantsWakes() const {
+bool COverview::wantsWakes() const {
     return std::ranges::any_of(drawnWindows, [&](const auto& ref) {
         const auto WINDOW = ref.lock();
         return WINDOW && !previewPulses.contains(WINDOW.get());
     });
 }
 
-void CScrollOverview::prunePreviewPulses() {
+void COverview::prunePreviewPulses() {
     std::erase_if(previewPulses, [](const auto& entry) { return !entry.second.ref.lock(); });
 }
 
-void CScrollOverview::scheduleMinimumPreviewFrame() {
+void COverview::scheduleMinimumPreviewFrame() {
     schedulePreviewFrameAfter(previewPulseInterval(Time::steadyNow()));
 }
 
-void CScrollOverview::scheduleRealtimePreviewFrame() {
+void COverview::scheduleRealtimePreviewFrame() {
     // EVERY caller of this is a repaint that was refused. hkScheduleFrame sends
     // the dock's own pumpFrame down here, and so does a client commit on a tile
     // -- so this flag is how the idle pulse below knows that the frame it is
@@ -455,8 +455,8 @@ void CScrollOverview::scheduleRealtimePreviewFrame() {
 // sendOverviewFrameCallbacks touches the render pass; it reads the overview's
 // own geometry and calls presentFeedback, both of which are as valid here as
 // they are at the end of render().
-int CScrollOverview::realtimePreviewTimerCallback(void* data) {
-    const auto OVERVIEW = sc<CScrollOverview*>(data);
+int COverview::realtimePreviewTimerCallback(void* data) {
+    const auto OVERVIEW = sc<COverview*>(data);
     if (!OVERVIEW)
         return 0;
 
@@ -494,7 +494,7 @@ int CScrollOverview::realtimePreviewTimerCallback(void* data) {
 // (the grid reflow, which onPreRender re-arms through reflowPacer, and the tile
 // chrome). If none of them is running, the pixels this frame would produce are
 // the pixels already on the screen.
-bool CScrollOverview::needsIdleRepaint() const {
+bool COverview::needsIdleRepaint() const {
     if (closing || drag.activeWindow || resize.activeWindow || pan.pointerDown)
         return true;
 
@@ -543,11 +543,11 @@ bool CScrollOverview::needsIdleRepaint() const {
     return false;
 }
 
-bool CScrollOverview::hasRunningWorkspaceAnimation() const {
+bool COverview::hasRunningWorkspaceAnimation() const {
     return viewOffset->isBeingAnimated() || workspaceInsertProgress->isBeingAnimated() || workspaceInsertFadeProgress->isBeingAnimated();
 }
 
-bool CScrollOverview::shouldSuppressRenderDamage() const {
+bool COverview::shouldSuppressRenderDamage() const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || closing)
         return false;
@@ -679,7 +679,7 @@ PHLWINDOW overviewSushiWindowOn(const PHLMONITOR& monitor) {
 }
 }
 
-void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
+void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
     // The repaint this stood in for (or the one that just happened) is done
     // with. Anything that wants another one will set the flag again below, or
     // through hkScheduleFrame.
@@ -882,7 +882,7 @@ std::optional<SSurfaceOwner> resolveSurfaceOwner(const PHLMONITOR& monitor, bool
 }
 }
 
-bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Time::steady_tp& now) {
+bool COverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Time::steady_tp& now) {
     const auto MONITOR = pMonitor.lock();
     const auto OWNER   = resolveSurfaceOwner(MONITOR, closing, surface);
     if (!OWNER)
@@ -1059,7 +1059,7 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
     return false;
 }
 
-bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) {
+bool COverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) {
     const auto MONITOR = pMonitor.lock();
     const auto OWNER   = resolveSurfaceOwner(MONITOR, closing, surface);
     if (!OWNER)
