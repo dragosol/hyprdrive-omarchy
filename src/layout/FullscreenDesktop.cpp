@@ -319,7 +319,10 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto MON  = HOME->m_monitor.lock();
             const auto MODE = mode();
             const auto PLAN = FullscreenBook::start(MODE, HOME->m_id, othersOn(HOME, w), [&](WORKSPACEID id) { return freePlace(id, MON); });
-            if (PLAN.settle || !MON) {
+            // (A place outside the monitor's row -- past a block's last
+            // desktop, until the book counts in rows -- is never taken: it
+            // stays where it is.)
+            if (PLAN.settle || !MON || !Rows::of(MON).contains(PLAN.at)) {
                 g_settled.emplace_back(w); // alone on its desktop: that is its own already
                 return;
             }
@@ -616,7 +619,7 @@ namespace Hyprdrive::FullscreenDesktop {
             const auto        PLAN = FullscreenBook::beside(WS->m_id, [&](WORKSPACEID id) { return freePlace(id, MON); });
             const WORKSPACEID at   = PLAN.at;
             bool              owes = false;
-            if (PLAN.settle)
+            if (PLAN.settle || !Rows::of(MON).contains(at))
                 return;
             if (PLAN.makeRoom) {
                 DesktopStrip::finishNow();

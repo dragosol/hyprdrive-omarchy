@@ -20,6 +20,8 @@
 #      on 19 -> the app takes 20 and the old 20 goes to block 1's overflow
 #      (1001001), never to 21; a reload: zero events (a full block + overflow
 #      is a fixed point); out of fullscreen -> 20 comes back, no overflow left.
+#      Fullscreen on 20 itself (the block's last, with company) stays on 20:
+#      the book's home+1 is block 2's 21, never taken (part B: overflow).
 #   C. the owner's laptop: one output owning block 2 (block 0's panel
 #      unplugged); windows on 21..24: scale change + reload twice -> nothing
 #      moves, zero events, no desktop created below 21 by the overview,
@@ -131,6 +133,13 @@ check "B: ... and the overflow stays" "$(is "$(win b20 .workspace.id)" 1001001)"
 fs "$A19" unset; sleep 2; settled
 check "B: out of fullscreen: 19 home, 20 back from overflow" "$(is "$(win b19 .workspace.id) $(win b20 .workspace.id) $(popon HEADLESS-2)" '19 20 11 12 13 14 15 16 17 18 19 20')" "b19 $(win b19 .workspace.id) b20 $(win b20 .workspace.id); $(popon HEADLESS-2)"
 check "B: no changeworkspaceid all along" "$(is "$(ncw)" 0)" "$(cwlist)"
+# part A's known gap: fullscreen on the block's LAST desktop with company. The
+# fullscreen book still counts home+1 = 21 (block 2's first id): that place is
+# never taken -- the app goes fullscreen where it is (part B: the overflow).
+go 20; kw b20b 500 400; settled
+A20=$(addr_of b20); focus "$A20"; fs "$A20" set; sleep 1.5; settled
+check "B: fullscreen on the block's last desktop: stays on 20, fullscreen, no 21" "$(is "$(win b20 .workspace.id) $(win b20 .fullscreen) $(J workspaces | jq '[.[] | select(.id == 21)] | length')" '20 2 0')" "b20 on $(win b20 .workspace.id) fs $(win b20 .fullscreen); $(ids)"
+fs "$A20" unset; sleep 1; settled
 rig_stop
 fi
 
