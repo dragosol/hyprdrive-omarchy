@@ -141,6 +141,46 @@ int main() {
         CHECK(!(F1[0] == F2[0]));
     }
 
+    // 4. #10: THE STRIP'S MINI. The strip draws the desktop's window as a mini
+    //    and, for the length of that draw, the window's size is the mini's
+    //    (161x86 logical here: the 242x130 device px tile 1.9.57 drew on the
+    //    rig at scale 1.5, one window). A query for that window from inside
+    //    its mini draw solved a one-window grid from the mini: the solver never
+    //    scales up (its scale is capped at 1), so the slot came out mini-sized.
+    //    During a driven swipe the strip is drawn BEFORE the tiles, so with
+    //    motion off the reflow's one-call lag drew exactly that slot next.
+    {
+        const std::vector<Vector2D> ONE  = {{1256.0, 670.0}};
+        const std::vector<Vector2D> MINI = {{161.0, 86.0}};
+        std::vector<CBox>           rest, plain;
+        solve(ONE, USABLE, GAP, rest);
+        solve(MINI, USABLE, GAP, plain);
+        CHECK(rest.size() == 1 && plain.size() == 1);
+        // The control: the plain re-solve is the mini itself, a fraction of the tile.
+        CHECK(std::abs(plain[0].w - 161.0) < 0.01 && std::abs(plain[0].h - 86.0) < 0.01);
+        CHECK(rest[0].w > 4.0 * plain[0].w);
+        std::printf("control #10: tile %.1fx%.1f, re-solved from the mini %.1fx%.1f logical px\n", rest[0].w, rest[0].h, plain[0].w, plain[0].h);
+        for (uint64_t frame = 1; frame <= 60; ++frame) {
+            std::vector<SMemo> memos;
+            const auto         A   = query(memos, ONE, USABLE, GAP, true, frame);
+            const auto&        MID = query(memos, MINI, USABLE, GAP, true, frame);
+            CHECK(MID[0] == A[0]);
+            CHECK(memos.size() == 1);
+        }
+        // Three windows, the middle one drawn as its mini.
+        const std::vector<Vector2D> THREE  = {{621.0, 670.0}, {621.0, 670.0}, {621.0, 670.0}};
+        const std::vector<Vector2D> THREEM = {{621.0, 670.0}, {80.0, 86.0}, {621.0, 670.0}};
+        std::vector<CBox>           r3, p3;
+        solve(THREE, USABLE, GAP, r3);
+        solve(THREEM, USABLE, GAP, p3);
+        CHECK(r3.size() == 3 && p3.size() == 3 && p3[1].w < r3[1].w / 2.0);
+        std::vector<SMemo> memos;
+        const auto         A3 = query(memos, THREE, USABLE, GAP, true, 9);
+        const auto&        M3 = query(memos, THREEM, USABLE, GAP, true, 9);
+        for (size_t i = 0; i < 3; ++i)
+            CHECK(M3[i] == A3[i]);
+    }
+
     std::printf("grid_solve_test: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
