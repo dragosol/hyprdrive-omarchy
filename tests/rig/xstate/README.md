@@ -82,3 +82,11 @@ Storm guard, `flap` mode (asks for the opposite of the FULLSCREEN it reads, ever
 Must not regress (D): an X11 window sending `_NET_WM_STATE ADD DEMANDS_ATTENTION` while unfocused
 still becomes urgent (`hyprctl -j clients` / the `urgent` event); a fullscreen game swapped away from
 and back to stays fullscreen.
+
+## size_flicker.c: a client whose size flickers
+
+`size_flicker.c` maps an 800x600 X11 window (class `size_flicker`) and, every
+100-600 ms, resizes itself 15 px smaller and back a few ms later -- the trigger
+the `overview_rest` gate forces for the "tiles shake at rest" reports. Float it
+(Hyprland only honours an X11 client's own configure on a floating window);
+its arguments are in the file's header.
