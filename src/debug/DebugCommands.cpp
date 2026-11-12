@@ -158,8 +158,6 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         report += Hyprdrive::wallpaperStashReport();
         return {.success = false, .error = report};
     }
-    // `lockstate`: the lock and the overview search, for the lock gate
-    // (tests/rig/headless/lock_gate.sh). The query's LENGTH, never its text.
     // `exclusive`: the layer surfaces holding the keyboard EXCLUSIVELY. While
     // any is mapped Hyprland refuses every window focus (rawWindowFocus) --
     // clicks and typing on windows go nowhere, the overview and dock still work
@@ -180,22 +178,12 @@ SDispatchResult onDebugDispatcher(std::string arg) {
             }
         return {.success = false, .error = report};
     }
+    // `lockstate`: the lock and the overview search, for the lock gate
+    // (tests/rig/headless/lock_gate.sh). The query's LENGTH, never its text.
     if (TOPIC == "lockstate")
         return {.success = false,
                 .error   = std::format("hyprdrive lockstate: locked={} overviews={} accepting={} qlen={}", hyprdriveSessionLocked() ? 1 : 0, scrollOverviews().size(),
                                        overviewAcceptsSearch() ? 1 : 0, g_search.query.text.size())};
-    // `gesture state`: how many overviews are open, in the native tree's
-    // words (its gesture topic also plays synthetic gestures; this tree has
-    // only the report), so the anim_off and overview gates can ask it.
-    if (TOPIC == "gesture") {
-        if (data.size() < 2 || data[1] != "state")
-            return {.success = false, .error = "hyprdrive:debug gesture: only `gesture state` in this build"};
-        size_t open = 0;
-        for (const auto& O : scrollOverviews())
-            if (O && !O->isClosing())
-                ++open;
-        return {.success = false, .error = std::format("hyprdrive gesture: {} overview(s) open", open)};
-    }
     if (TOPIC == "type") {
         const std::string Q = data.size() > 1 ? std::string{data[1]} : std::string{};
         g_search.query.text   = Q;
