@@ -1,6 +1,7 @@
 #pragma once
 
 #include "globals.hpp"
+#include <functional>
 #include <hyprland/src/helpers/time/Time.hpp>
 
 class CWLSurfaceResource;
@@ -67,5 +68,13 @@ struct SRenderParams {
 };
 
 void renderOverviewWindow(const SRenderParams& params);
+
+// TEST INSTRUMENT (`hyprdrive:debug probe_draw on`), unset in normal use.
+// Called while a tile's window carries the geometry it is being DRAWN with --
+// renderOverviewWindow moves the window's position and size onto the tile for
+// the duration of its draw -- standing in for any box query that arrives in
+// that window (a frame or damage hook, a pass element asking where a tile
+// is). The reporter of #9/#7 drew with such a query; the rig does not.
+inline std::function<void(const PHLWINDOW& drawn)> g_midDrawProbe;
 
 }

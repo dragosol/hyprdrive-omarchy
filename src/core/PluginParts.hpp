@@ -110,6 +110,7 @@ using namespace Hyprutils::String;
 #include "OverviewRender.hpp"
 #include "SearchProviders.hpp"
 #include "Window.hpp"
+#include "TileChrome.hpp"
 #include "WindowPill.hpp"
 #include "Placement.hpp"
 #include "FingerSwipe.hpp"

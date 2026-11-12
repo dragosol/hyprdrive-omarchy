@@ -134,6 +134,8 @@ struct SDeferredWindowGeometry {
             prevOffset                = WS->m_renderOffset->value();
             WS->m_renderOffset->value() = {};
         }
+        if (g_midDrawProbe)
+            g_midDrawProbe(WINDOW);
     }
 
     void restore() {
@@ -1410,6 +1412,8 @@ void renderOverviewWindow(const SRenderParams& params) {
     params.window->positionAnimation()->value() = params.monitor->m_position + params.windowBox.pos() / params.monitor->m_scale - params.window->m_floatingOffset;
     params.window->sizeAnimation()->value()     = params.windowBox.size() / params.monitor->m_scale;
     params.window->m_animatingIn                 = true;
+    if (g_midDrawProbe)
+        g_midDrawProbe(params.window);
     if (OVERRIDEWORKSPACEOFFSET)
         WORKSPACE->m_renderOffset->value() = {};
 

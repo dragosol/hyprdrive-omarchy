@@ -62,6 +62,11 @@ class IOverviewGeometry {
     // started from it has to shrink from the tile the user is looking at, not
     // from the window's real geometry underneath it.
     virtual CBox tileBox(const PHLWINDOW& window) const = 0;
+    // Where the last tile pass DREW the window (monitor-local render px), or an
+    // empty box. tileBox answers the question again; this is what is on screen
+    // -- the two differ exactly when a frame drew a tile somewhere its own
+    // layout would not put it (`hyprdrive:debug drawn`).
+    virtual CBox drawnTileBox(const PHLWINDOW& window) const = 0;
     // Z8. A GLOBAL LOGICAL box transformed into the overview's rendering of a
     // given desktop's card. The restore flight aims a MINIMIZED window here:
     // it has no tile (Y9 reveals minimized windows only under a filter), and

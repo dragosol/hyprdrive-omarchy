@@ -70,6 +70,45 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         }
         return {.success = false, .error = std::format("hyprdrive:debug tile: no tile for class {}", CLASS)};
     }
+    // `drawn <class>`: where the last tile pass DREW that app's window (the
+    // same px as `tile`). `tile` asks the layout again; this is what is on the
+    // screen, so a jump the layout would not make shows here and not there.
+    if (TOPIC == "drawn") {
+        const std::string CLASS   = data.size() > 1 ? std::string{data[1]} : std::string{};
+        const auto        MONITOR = Desktop::focusState()->monitor();
+        const auto        OV      = MONITOR ? openScrollOverviewForMonitor(MONITOR) : nullptr;
+        if (!OV)
+            return {.success = false, .error = "hyprdrive:debug drawn: no open overview"};
+        for (const auto& W : Desktop::windowState()->windows()) {
+            if (!W || !W->m_isMapped || W->m_class != CLASS)
+                continue;
+            const auto B = OV->drawnTileBox(W);
+            if (B.width < 1 || B.height < 1)
+                continue;
+            return {.success = false, .error = std::format("drawn {} {} {} {} {}", CLASS, sc<int>(B.x), sc<int>(B.y), sc<int>(B.width), sc<int>(B.height))};
+        }
+        return {.success = false, .error = std::format("hyprdrive:debug drawn: no drawn tile for class {}", CLASS)};
+    }
+    // `probe_draw on|off`: while on, every time a tile's window is drawn the
+    // HOVERED tile's box is asked for, from inside that draw (Window.hpp
+    // g_midDrawProbe) -- the box query a real session makes mid-draw and the
+    // rig does not (#9, #7). A test instrument; off by default.
+    if (TOPIC == "probe_draw") {
+        const bool ON = data.size() > 1 && std::string{data[1]} == "on";
+        if (!ON) {
+            OverviewWindow::g_midDrawProbe = nullptr;
+            return {.success = false, .error = "probe_draw off"};
+        }
+        OverviewWindow::g_midDrawProbe = [](const PHLWINDOW& drawn) {
+            const auto HOVERED = Hyprdrive::TileChrome::hovered();
+            if (!HOVERED || HOVERED == drawn)
+                return;
+            const auto MONITOR = HOVERED->m_monitor.lock();
+            if (const auto OV = MONITOR ? openScrollOverviewForMonitor(MONITOR) : nullptr)
+                (void)OV->tileBox(HOVERED);
+        };
+        return {.success = false, .error = "probe_draw on"};
+    }
     // `hooks`: every Hyprland function the plugin hooked, in creation order
     // (FunctionHooks.hpp) -- owner, name, address, demangled signature.
     if (TOPIC == "hooks") {
@@ -220,7 +259,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         return {};
     }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|mem|identity|activate <class>|movehere <class>|scratchpad|type [text]|press <keycode>"};
+        return {.success = false, .error = "hyprdrive:debug frames|mem|identity|activate <class>|movehere <class>|drawn <class>|probe_draw on|off|scratchpad|type [text]|press <keycode>"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

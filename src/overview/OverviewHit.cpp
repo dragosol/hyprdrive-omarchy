@@ -94,6 +94,13 @@ CBox COverview::tileBox(const PHLWINDOW& window) const {
     return TileChrome::scaledBox(window, getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout));
 }
 
+CBox COverview::drawnTileBox(const PHLWINDOW& window) const {
+    if (!window)
+        return {};
+    const auto IT = lastTileBoxes.find(window.get());
+    return IT == lastTileBoxes.end() ? CBox{} : IT->second.box;
+}
+
 CBox COverview::overviewBoxForGlobal(WORKSPACEID workspaceId, const CBox& globalBox) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
