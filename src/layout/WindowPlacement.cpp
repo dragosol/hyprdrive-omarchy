@@ -230,7 +230,7 @@ namespace Hyprdrive::WindowPlacement {
                 else
                     remember(w, o, false);
             } else {
-                FullscreenDesktop::openedOn(w);
+                FullscreenDesktop::openedOn(w, PROMPTED);
                 bool own = false;
                 if (o.kind == EOutcome::Tile && (w->m_isFloating || o.ownSize))
                     own = tile(w, o.ownSize);

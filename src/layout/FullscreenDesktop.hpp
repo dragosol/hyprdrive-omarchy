@@ -71,5 +71,8 @@ namespace Hyprdrive::FullscreenDesktop {
     // At window.openEarly, any other window: one that OPENS on a beside
     // desktop (a dialog's own dialog, the next one right after) is that
     // link's and keeps it alive; one MOVED there makes it a desktop of its own.
-    void openedOn(const PHLWINDOW& w);
+    // One opening on a beside desktop whose link has just ended (still owed:
+    // launched from there a moment before the way back) takes the link up
+    // again; `prompted`, the view goes back to it.
+    void openedOn(const PHLWINDOW& w, bool prompted);
 }

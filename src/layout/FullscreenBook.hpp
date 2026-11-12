@@ -147,6 +147,23 @@ namespace Hyprdrive::FullscreenBook {
         return f.wanted && f.viewOn ? ELink::ReturnToApp : ELink::Drop;
     }
 
+    // A WINDOW OPENING ON A BESIDE DESKTOP AFTER ITS LINK ENDED (the 30-cycle
+    // race, 2026-11-11): the way back ended the link and handed its place
+    // over as a debt; a window launched from that desktop a moment before
+    // then maps on it (during the glide back or after). Counted as someone
+    // else's, it made the place "a desktop of its own" -- nothing owed -- and
+    // once it closed, the room made for the link was never given back. It is
+    // the link's: while the app is still fullscreen on its desktop, the debt
+    // becomes the link again, owing what it owed.
+    struct SRelinkFacts {
+        bool besideDebt    = false; // the window's desktop is a beside debt's
+        bool appFullscreen = false; // ...whose app is mapped, fullscreen on its own desktop
+        bool sameMonitor   = false; // ...on the debt's monitor
+    };
+    constexpr bool relink(const SRelinkFacts& f) {
+        return f.besideDebt && f.appFullscreen && f.sameMonitor;
+    }
+
     // PAYING A DEBT BACK. Two kinds:
     //   Trip    a fullscreen app's place: once nothing of anyone else is in it
     //           (its own leftovers go home first). A window of another app put

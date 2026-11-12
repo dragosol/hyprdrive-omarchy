@@ -77,6 +77,13 @@ namespace Hyprdrive::FullscreenDesktop {
             std::string     cls;
             pid_t           pid    = 0;
             bool            beside = false; // a window opened over a fullscreen app was given this place: paid once it is empty
+            // A beside debt is what an ended link owes, and the link's
+            // windows -- ALL of them, the ones that joined it too -- are its
+            // own (a remap's, a late one's), not a desktop of their own:
+            std::vector<PHLWINDOWREF> wins;
+            std::vector<pid_t>        pids;
+            std::vector<std::string>  classes;
+            PHLWINDOWREF              app; // ...and while that app is fullscreen, a window opened there takes the link up again (openedOn)
         };
         std::vector<STrip>   g_trips;
         std::vector<SDebt>   g_debts;
@@ -576,7 +583,12 @@ namespace Hyprdrive::FullscreenDesktop {
             FullscreenBook::SFacts facts{.at = AT, .exists = !!E, .driving = anyDriving()};
             bool own = false;
             if (E) {
-                const auto OWN = [&](const PHLWINDOW& W) { return (d.pid > 0 && W->getPID() == d.pid) || (!d.cls.empty() && W->m_class == d.cls); };
+                const auto OWN = [&](const PHLWINDOW& W) {
+                    return (d.pid > 0 && W->getPID() == d.pid) || (!d.cls.empty() && W->m_class == d.cls) ||
+                        std::ranges::any_of(d.wins, [&](const PHLWINDOWREF& r) { return r.lock() == W; }) ||
+                        (W->getPID() > 0 && std::ranges::find(d.pids, W->getPID()) != d.pids.end()) ||
+                        (!W->m_class.empty() && std::ranges::find(d.classes, W->m_class) != d.classes.end());
+                };
                 for (const auto& W : Desktop::windowState()->windows())
                     if (W && W->m_isMapped && W->m_workspace == E) {
                         facts.any = true;
@@ -1063,7 +1075,7 @@ namespace Hyprdrive::FullscreenDesktop {
         // the row by a compaction like any other (g_given).
         void endLink(const SLink& l) {
             SDebt d{.space = l.space, .at = placeOf(l), .mon = l.mon, .home = l.appSpace, .pid = l.pids.empty() ? 0 : l.pids.front(),
-                    .beside = true};
+                    .beside = true, .wins = l.wins, .pids = l.pids, .classes = l.classes, .app = l.app};
             if (!l.classes.empty())
                 d.cls = l.classes.front();
             if (l.owes)
@@ -1325,7 +1337,7 @@ namespace Hyprdrive::FullscreenDesktop {
         return besideFullscreen(w, prompted);
     }
 
-    void openedOn(const PHLWINDOW& w) {
+    void openedOn(const PHLWINDOW& w, bool prompted) {
         if (!w || !w->m_workspace)
             return;
         for (auto& L : g_links)
@@ -1334,6 +1346,41 @@ namespace Hyprdrive::FullscreenDesktop {
                 trace(std::format("{} opened on beside {}: joins it", w->m_class, w->m_workspace->m_id));
                 return;
             }
+        // OPENED ON A DESKTOP STILL OWED FOR A FULLSCREEN APP (the race the
+        // 30-cycle gate found): the way back ended the link, and a window
+        // launched from that desktop a moment before maps on it now -- during
+        // the glide back, or after it. It is the link's: the debt becomes the
+        // link again (what it owes kept), so the window is not "a desktop of
+        // its own" that the room made for the link is never given back for.
+        // Asked for, the view goes back to it (the glide reverses); not, it
+        // stays there quietly, marked. Only while that app is still
+        // fullscreen on its desktop; else it is an ordinary window there.
+        const auto WS = w->m_workspace;
+        for (auto it = g_debts.begin(); it != g_debts.end(); ++it) {
+            if (!it->beside || it->space.lock() != WS)
+                continue;
+            const auto APP  = it->app.lock();
+            const auto HOME = it->home.lock();
+            const auto MON  = it->mon.lock();
+            if (!FullscreenBook::relink({.besideDebt    = true,
+                                         .appFullscreen = APP && APP->m_isMapped && fullscreen(APP) && HOME && APP->m_workspace == HOME,
+                                         .sameMonitor   = MON && WS->m_monitor.lock() == MON}))
+                return;
+            SLink l{.app = APP, .appSpace = HOME, .space = WS, .mon = MON, .at = WS->m_id, .owes = true, .wanted = prompted,
+                    .wins = it->wins, .pids = it->pids, .classes = it->classes};
+            g_debts.erase(it);
+            join(l, w);
+            g_links.push_back(std::move(l));
+            trace(std::format("{} opened on owed beside {}: the link again{}", w->m_class, WS->m_id, prompted ? "" : " (unasked: not shown)"));
+            if (prompted)
+                show(MON, WS);
+            else {
+                w->m_noInitialFocus = true;
+                g_unasked.emplace_back(w);
+            }
+            arm(1);
+            return;
+        }
     }
 
     bool isFullscreenDesktop(const PHLWORKSPACE& ws) {

@@ -1049,10 +1049,460 @@ static void savedBesides() {
     CHECK(!load("fsdesk2 B 1 2 3").has_value());
 }
 
+// THE WAY BACK, INTERLEAVED (the 30-cycle race, 2026-11-11: the beside gate
+// ended `1:1 2:1 4:1` -- the Beside desktop gone, the room made for it never
+// given back). FullscreenDesktop's links, step for step, with time: the 250 ms
+// settle, the glide, and LAUNCHES -- a window is launched with the view on one
+// desktop and maps a moment later on that desktop (Hyprland's exec rule), so
+// it can open on the Beside desktop during the settle, during the glide back,
+// or after the link ended. Random opens (asked and unasked), closes, launches,
+// maps, ticks, the user's own switches, the app leaving fullscreen with the
+// link's windows still open. Invariant: everything closed and the app out of
+// fullscreen, the populated desktops are the ones it started on, no debt and no
+// link left, two desktops never on one number. On the number line and on a
+// block row (the app on the block's 9th and 10th desktop: Beside goes to the
+// overflow). With the fix off (`relink`: a window opening on a desktop still
+// owed is the link's again; `members`: an ended link's debt knows every window
+// that joined it) the generator must find the old failure.
+namespace linksim {
+    using Hyprdrive::Row;
+    namespace Plan = Hyprdrive::DesktopPlan;
+    using Key = Plan::Key;
+    struct SDesk {
+        Key key;
+        Id  id;
+    };
+    struct SWin {
+        int  id;
+        Key  desk;
+        bool alive = true;
+    };
+    struct SLink {
+        Key              appSpace, space;
+        Id               at;
+        bool             owes = false, wanted = false;
+        std::vector<int> wins;
+        int              emptySince = -1;
+    };
+    struct SDebt {
+        Key              space;
+        Id               at;
+        Key              home;
+        bool             beside;
+        std::vector<int> wins; // own windows (Trip: the app)
+    };
+    struct SLaunch {
+        Key  desk; // the view when it was launched
+        bool prompted;
+    };
+    constexpr int SETTLE_TICKS = 3; // 250 ms in 100 ms ticks
+
+    struct World {
+        Row                  row;
+        bool                 relinkOn = true, membersOn = true;
+        std::vector<SDesk>   desks;
+        std::vector<SWin>    wins;
+        std::vector<SLink>   links;
+        std::vector<SDebt>   debts;
+        std::vector<SLaunch> pending;
+        Key                  active = 0, nextKey = 1;
+        int                  driving = 0, now = 0, nextWin = 10;
+        int                  app = 1; // window 1, fullscreen while appFs
+        bool                 appFs = true;
+        Key                  appHome = 0, appSpace = 0;
+        bool                 broke = false;
+        std::vector<std::string> log;
+
+        SDesk* desk(Key k) {
+            for (auto& D : desks)
+                if (D.key == k)
+                    return &D;
+            return nullptr;
+        }
+        SDesk* byId(Id id) {
+            for (auto& D : desks)
+                if (D.id == id)
+                    return &D;
+            return nullptr;
+        }
+        SWin* win(int id) {
+            for (auto& W : wins)
+                if (W.id == id && W.alive)
+                    return &W;
+            return nullptr;
+        }
+        int on(Key d) {
+            int n = 0;
+            for (const auto& W : wins)
+                n += W.alive && W.desk == d;
+            return n;
+        }
+        Key create(Id id) {
+            desks.push_back({nextKey, id});
+            return nextKey++;
+        }
+        void gc() {
+            std::erase_if(desks, [&](const SDesk& D) { return on(D.key) == 0 && D.key != active && !(driving && D.key == target); });
+        }
+        std::vector<Plan::Desk> plan() const {
+            std::vector<Plan::Desk> out;
+            for (const auto& D : desks)
+                out.push_back({D.key, D.id, 0, row});
+            return out;
+        }
+        template <class T>
+        Id placeOf(const T& t) {
+            const auto* S = desk(t.space);
+            return Hyprdrive::FullscreenBook::placeOf(!!S, S ? S->id : NO_PLACE, t.at);
+        }
+        void syncPlaces() {
+            for (auto& L : links)
+                L.at = placeOf(L);
+            for (auto& D : debts)
+                D.at = placeOf(D);
+        }
+        bool renumber(const std::vector<Plan::Move>& moves) {
+            if (Plan::check(plan(), moves) != Plan::Verdict::Ok)
+                return false;
+            for (const auto& M : moves)
+                desk(M.key)->id = M.to;
+            syncPlaces();
+            return true;
+        }
+        void moved(Id from, int delta) {
+            for (auto& L : links)
+                if (!desk(L.space))
+                    L.at = movedPlace(row, L.at, from, delta);
+            for (auto& D : debts)
+                if (!desk(D.space))
+                    D.at = movedPlace(row, D.at, from, delta);
+        }
+        // The strip's glide: the monitor shows the new desktop once it has
+        // landed (glideTo); a second show re-aims it.
+        Key  target = 0;
+        void show(Key d) {
+            if (!desk(d) || (driving ? target : active) == d)
+                return;
+            target  = d;
+            driving = 2;
+        }
+        bool member(const SLink& l, int w) {
+            return std::ranges::find(l.wins, w) != l.wins.end();
+        }
+        bool appOk() {
+            const auto* A = win(app);
+            return A && appFs && A->desk == appSpace;
+        }
+        bool freePlace(Id id) {
+            if (const auto* H = desk(appHome); H && H->id == id)
+                return false;
+            for (auto& L : links)
+                if (placeOf(L) == id)
+                    return false;
+            const auto* E = byId(id);
+            return !E || (on(E->key) == 0 && E->key != appSpace);
+        }
+
+        // Placement at openEarly: over the app -> beside; else openedOn.
+        void map(Key where, bool prompted) {
+            if (!desk(where))
+                where = active;
+            wins.push_back({nextWin++, where});
+            SWin& w = wins.back();
+            if (where == appSpace && appOk()) {
+                SLink* link = nullptr;
+                for (auto& L : links)
+                    if (L.appSpace == appSpace && desk(L.space))
+                        link = &L;
+                if (!link) {
+                    const auto PLAN = beside(row, desk(appSpace)->id, [&](Id id) { return freePlace(id); });
+                    if (PLAN.settle)
+                        return;
+                    bool owes = false;
+                    if (PLAN.makeRoom) {
+                        if (!renumber(Plan::shiftMoves(plan(), row, PLAN.at, +1)))
+                            return;
+                        moved(PLAN.at, +1);
+                        owes = true;
+                    }
+                    if (const auto IT = std::ranges::find_if(debts, [&](const SDebt& d) { return placeOf(d) == PLAN.at; }); IT != debts.end()) {
+                        owes = true;
+                        debts.erase(IT);
+                    }
+                    const Key SPACE = byId(PLAN.at) ? byId(PLAN.at)->key : create(PLAN.at);
+                    links.push_back({appSpace, SPACE, PLAN.at, owes});
+                    link = &links.back();
+                }
+                link->wins.push_back(w.id);
+                link->wanted |= prompted;
+                w.desk = link->space;
+                if (prompted)
+                    show(link->space);
+                return;
+            }
+            for (auto& L : links)
+                if (L.space == where) {
+                    L.wins.push_back(w.id);
+                    return;
+                }
+            if (!relinkOn)
+                return;
+            for (auto it = debts.begin(); it != debts.end(); ++it)
+                if (it->beside && it->space == where) {
+                    if (!relink({.besideDebt = true, .appFullscreen = appOk(), .sameMonitor = true}))
+                        return;
+                    SLink l{appSpace, where, desk(where)->id, true, prompted, it->wins};
+                    l.wins.push_back(w.id);
+                    debts.erase(it);
+                    links.push_back(l);
+                    if (prompted)
+                        show(where);
+                    return;
+                }
+        }
+
+        void linksPass() {
+            for (auto it = links.begin(); it != links.end();) {
+                auto&      L = *it;
+                SLinkFacts f{.appAlive = !!win(app), .appFullscreen = appOk(), .spaceAlive = !!desk(L.space), .driving = driving > 0};
+                for (const auto& W : wins)
+                    if (W.alive && W.desk == L.space)
+                        (member(L, W.id) ? f.any : f.foreign) = true;
+                f.viewOn = active == L.space;
+                if (f.viewOn && !f.driving)
+                    L.wanted = true;
+                f.wanted = L.wanted;
+                if (f.any)
+                    L.emptySince = -1;
+                else if (L.emptySince < 0)
+                    L.emptySince = now;
+                f.settling = L.emptySince >= 0 && now - L.emptySince < SETTLE_TICKS;
+                const ELink V = link(f);
+                if (V == ELink::Hold) {
+                    ++it;
+                    continue;
+                }
+                if (V == ELink::ReturnToApp)
+                    show(appSpace);
+                if (L.owes)
+                    debts.push_back({L.space, placeOf(L), appSpace, true, membersOn ? L.wins : std::vector<int>(L.wins.begin(), L.wins.begin() + (L.wins.empty() ? 0 : 1))});
+                it = links.erase(it);
+            }
+        }
+        enum class EPaid { Done, Wait };
+        EPaid pay(const SDebt& d) {
+            const Id AT = placeOf(d);
+            auto*    E  = AT >= 1 ? byId(AT) : nullptr;
+            SFacts   f{.at = AT, .exists = !!E, .driving = driving > 0};
+            if (E) {
+                for (const auto& W : wins)
+                    if (W.alive && W.desk == E->key) {
+                        f.any = true;
+                        if (std::ranges::find(d.wins, W.id) == d.wins.end())
+                            f.foreign = true;
+                    }
+                f.trip     = appFs && E->key == appSpace;
+                f.onScreen = active == E->key;
+                f.homeGone = !desk(d.home);
+            }
+            switch (decide(d.beside ? EKind::Beside : EKind::Trip, f)) {
+                case EPay::Refuse:
+                case EPay::NothingOwed:
+                case EPay::ToTrip: return EPaid::Done;
+                case EPay::WaitScreen:
+                case EPay::WaitWindows: return EPaid::Wait;
+                case EPay::Pay: break;
+            }
+            const Id NEXT = nextPlace(row, AT);
+            if (E) {
+                if (!renumber(Plan::payMoves(plan(), row, AT, E->key)))
+                    return EPaid::Done;
+            } else if (NEXT == NO_PLACE || !renumber(Plan::shiftMoves(plan(), row, NEXT, -1)))
+                return EPaid::Done;
+            if (NEXT != NO_PLACE)
+                moved(NEXT, -1);
+            return EPaid::Done;
+        }
+        void reconcile() {
+            linksPass();
+            syncPlaces();
+            for (auto it = debts.begin(); it != debts.end();)
+                it = pay(*it) == EPaid::Done ? debts.erase(it) : std::next(it);
+            gc();
+            std::set<Id> seen;
+            for (const auto& D : desks)
+                if (D.id < 1 || !seen.insert(D.id).second)
+                    broke = true;
+        }
+        std::string state() {
+            std::string o;
+            for (const auto& D : desks) {
+                o += " " + std::to_string(D.id) + (D.key == active ? "*" : "") + ":" + std::to_string(on(D.key));
+            }
+            o += " links:" + std::to_string(links.size()) + " debts:";
+            for (const auto& D : debts)
+                o += " " + std::to_string(placeOf(D)) + (D.beside ? "b" : "t");
+            return o;
+        }
+        void step(const std::string& what) {
+            gc();
+            reconcile();
+            log.push_back(what + " ->" + state());
+        }
+        void tick() {
+            ++now;
+            if (driving > 0 && --driving == 0 && desk(target))
+                active = target;
+            step("tick");
+        }
+        void appOff() {
+            // Out of fullscreen on its desktop: home, the trip's place owed back.
+            appFs = false;
+            if (auto* A = win(app))
+                A->desk = appHome;
+            if (active == appSpace)
+                show(appHome);
+            debts.push_back({appSpace, desk(appSpace)->id, appHome, false, {app}});
+            step("app off");
+        }
+        std::set<Id> populated() {
+            std::set<Id> out;
+            for (const auto& D : desks)
+                if (on(D.key) > 0)
+                    out.insert(D.id);
+            return out;
+        }
+    };
+
+    // Slot h: {app, b}, slot h+1: {c}; the app went fullscreen -- a trip to
+    // h+1, c moved along to h+2, owed back.
+    World make(const Row& row, Id h) {
+        World w;
+        w.row     = row;
+        w.appHome = w.create(row.idOf(h));
+        w.appSpace = w.create(row.idOf(h + 1));
+        const Key C = w.create(row.idOf(h + 2));
+        w.wins    = {{1, w.appSpace}, {2, w.appHome}, {3, C}};
+        w.active  = w.appSpace;
+        return w;
+    }
+
+    // Returns the number of failing rounds.
+    int run(bool relinkOn, bool membersOn, int rounds, unsigned seed, bool print) {
+        std::mt19937 rng(seed);
+        int          bad = 0;
+        const Row    ROWS[] = {Row{}, Row::block(1, 10)};
+        for (int round = 0; round < rounds; ++round) {
+            const Row ROW = ROWS[round % 2];
+            const Id  H   = ROW.bounded() ? 8 + Id(rng() % 2) : 1 + Id(rng() % 3); // block: the app on slot 9 or 10
+            World     w   = make(ROW, H);
+            w.relinkOn = relinkOn;
+            w.membersOn = membersOn;
+            const std::set<Id> START{ROW.idOf(H), ROW.idOf(H + 1)}; // before the fullscreen trip
+            const int          STEPS = 10 + rng() % 70;
+            for (int s = 0; s < STEPS; ++s) {
+                std::vector<int> extras;
+                for (const auto& W : w.wins)
+                    if (W.alive && W.id >= 10)
+                        extras.push_back(W.id);
+                switch (rng() % 9) {
+                    case 0:
+                    case 1:
+                        if (w.appFs && w.pending.size() < 3) {
+                            w.pending.push_back({w.active, rng() % 4 != 0});
+                            w.log.push_back("launch from " + std::to_string(w.desk(w.active) ? w.desk(w.active)->id : -1));
+                        }
+                        break;
+                    case 2:
+                    case 3:
+                        if (!w.pending.empty()) {
+                            const size_t I = rng() % w.pending.size();
+                            const auto   L = w.pending[I];
+                            w.pending.erase(w.pending.begin() + I);
+                            w.map(L.desk, L.prompted);
+                            w.step(L.prompted ? "map (asked)" : "map (unasked)");
+                        }
+                        break;
+                    case 4:
+                    case 5:
+                        if (!extras.empty()) {
+                            w.win(extras[rng() % extras.size()])->alive = false;
+                            w.step("close");
+                        }
+                        break;
+                    case 6:
+                    case 7: w.tick(); break;
+                    case 8:
+                        if (rng() % 3 == 0 && w.appFs && w.pending.empty() && rng() % 2)
+                            w.appOff();
+                        else if (!w.links.empty() && w.desk(w.links[0].space)) {
+                            w.active  = rng() % 2 ? w.links[0].space : w.appSpace;
+                            w.driving = 0;
+                            w.step("user switch");
+                        }
+                        break;
+                }
+            }
+            // Done: every launch mapped, every window it made closed, the app out of fullscreen.
+            while (!w.pending.empty()) {
+                const auto L = w.pending.back();
+                w.pending.pop_back();
+                w.map(L.desk, L.prompted);
+                w.step("map (late)");
+            }
+            for (int i = 0; i < 4; ++i)
+                w.tick();
+            for (auto& W : w.wins)
+                if (W.alive && W.id >= 10) {
+                    W.alive = false;
+                    w.step("close (end)");
+                }
+            for (int i = 0; i < 10; ++i)
+                w.tick();
+            if (w.appFs)
+                w.appOff();
+            for (int i = 0; i < 10; ++i)
+                w.tick();
+            if (w.active != w.appHome && w.desk(w.appHome)) {
+                w.active  = w.appHome;
+                w.driving = 0;
+                w.step("view home");
+            }
+            for (int i = 0; i < 4; ++i)
+                w.tick();
+            const bool OK = !w.broke && w.populated() == START && w.debts.empty() && w.links.empty();
+            if (!OK) {
+                if (print && bad == 0) {
+                    std::printf("  linksim round %d failed (row %s, app home %lld):\n", round, ROW.bounded() ? "block" : "line", ROW.idOf(H));
+                    for (const auto& L : w.log)
+                        std::printf("    %s\n", L.c_str());
+                }
+                ++bad;
+            }
+        }
+        return bad;
+    }
+}
+
+static void wayBackInterleaved() {
+    CHECK(linksim::run(true, true, 20000, 20261111, true) == 0);
+    // The generator finds the old race: without relink, a window launched from
+    // the Beside desktop that maps after the link ended is "a desktop of its
+    // own" and the room is never given back...
+    CHECK(linksim::run(false, true, 20000, 20261111, false) > 0);
+    // ...and without the members, one that joined the link is someone else's
+    // once the app leaves fullscreen with it still open.
+    CHECK(linksim::run(true, false, 20000, 20261111, false) > 0);
+    // relink is that rule, and nothing else.
+    for (int m = 0; m < 8; ++m)
+        CHECK(relink({.besideDebt = !!(m & 1), .appFullscreen = !!(m & 2), .sameMonitor = !!(m & 4)}) == (m == 7));
+}
+
 int main() {
     places();
     besideLinks();
     savedBesides();
+    wayBackInterleaved();
     decisions();
     fiftyCycles();
     closedWhileAway();
