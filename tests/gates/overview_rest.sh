@@ -24,12 +24,24 @@
 #      one sample around the mean). It STARTS ~50 ms later than before: the
 #      size change is taken once it has held for 50 ms, since following it
 #      from its first frame is following the flicker. Then the tiles end still.
+#   4. flicker AFTER a real resize, with a long size animation (`windows`
+#      speed 8: 800 ms): the window is resized -60x-40 and 0.5 s later, before
+#      that animation lands, it flickers again (30 ms, every 100-600 ms; each
+#      flicker restarts Hyprland's animation before it can land). From 2.5 s
+#      after the resize, 6 s sampled: one box per tile, the resized one; the
+#      trace saw the flicker, ended the resize's follow (`grid size
+#      follow-end`) and never retargeted. This is the hole 5cafa16 left: its
+#      follow ran until the value reached the goal, which never happened, so
+#      every later flicker moved the tile.
 # Control: --control --control-so a4d6892 (the build before the fix; copy it,
 # never rebuild that tree): only 2 fails -- the tiles twitch by 1-2 px at rest
 # (3-4 distinct boxes per tile in 6 s) from the fix's rest box, to the pixel --
 # while 1 and 3 pass. Recorded 2026-11-11: control FAILS as it must. Measured
 # the same day, the fix: resize motion +91..+95 ms to +828..+831 ms; a4d6892:
-# +45..+49 ms to +816..+906 ms.
+# +45..+49 ms to +816..+906 ms. Control --control-so 5cafa16 (the follow
+# before it was bounded): fails 4 only. a4d6892 fails 2 and 4. Recorded
+# 2026-11-11 with phase 4: fix PASS x2 (resize motion ends +831/+832 ms),
+# 5cafa16 FAILS 4 only (+827 ms), a4d6892 FAILS 2 and 4 (+822 ms).
 source "$(dirname "$0")/lib.sh"
 gate_begin ovr
 control_build "a4d6892 (the build before the fix)"
@@ -58,8 +70,9 @@ go 1; kw k1 900 600
 ev 'hl.window_rule({ match = { class = "size_flicker" }, float = true })'
 wait_for 6 '[ -n "$(xdisplay)" ]' || { $R win env DISPLAY=:99 true >/dev/null 2>&1; wait_for 6 '[ -n "$(xdisplay)" ]'; }
 D=$(xdisplay); [ -n "$D" ] || skip "XWayland never announced a display"
-# 40 s, 15 px, held 30 ms, every 100-600 ms, from 7 s after it maps to 16 s
-$R win env DISPLAY="$D" "$FIX" 40 15 30 100 600 7 16 >/dev/null
+# 40 s, 15 px, held 30 ms, every 100-600 ms, from 7 s after it maps to 16 s,
+# and again from 21 s to 30 s (phase 4)
+$R win env DISPLAY="$D" "$FIX" 40 15 30 100 600 7 16 21 30 >/dev/null
 T0=$(date +%s%3N)
 wait_for 6 '[ -n "$(addr_of size_flicker)" ]' || skip "the X11 fixture never mapped"
 check "the fixture floats (Hyprland only honours an X11 client's own resize then)" "$(is "$(win size_flicker .floating)" true)" "$(win size_flicker '{floating,size}')"
@@ -114,4 +127,28 @@ check "3: the motion ends when it did before the fix (+$RESIZE_END_MS ms, +-$(($
     "last change +${2:-?} ms after the resize (first +${1:-?} ms)"
 END=$(awk -v t0="$TR" '$1 > t0 + 1700' "$GOUT/resize.samp" | cut -d' ' -f2- | sort -u | grep -c .)
 check "3: the tiles end still" "$(is "$END" 1)" "$END distinct boxes in the last 800 ms"
+RESIZED=$(lastbox "$GOUT/resize.samp" 2)
+
+# 4. flicker AFTER a real resize, the size animation long enough (800 ms) that
+#    each flicker restarts it before it lands
+wait_for 6 "[ \$(( \$(date +%s%3N) - $T0 )) -ge 20000 ]"
+ev 'hl.animation({ leaf = "windows", enabled = true, speed = 8, bezier = "default" })'
+wait_for 6 "[ \$(( \$(date +%s%3N) - $T0 )) -ge 20500 ]"
+ev "hl.dispatch(hl.dsp.window.resize({ window = [[address:$(addr_of size_flicker)]], x = -60, y = -40, relative = true }))"
+wait_for 6 "[ \$(( \$(date +%s%3N) - $T0 )) -ge 23000 ]"
+RT0=$(trace | grep -c 'grid retarget')
+sample 6000 "$GOUT/after.samp"
+nf4=$(SU cat "$LOG" 2>/dev/null | awk '/^flicker/ { sub("t=", "", $3); if ($3 + 0 >= 21) n++ } END { print n + 0 }')
+check "4: the client flickered after the resize (>= 8 times)" "$(ge "$nf4" 8)" "$nf4 flickers"
+check "4: k1's tile never moves" "$(is "$(boxes "$GOUT/after.samp" 1)" 1)" "$(cut -d' ' -f2- "$GOUT/after.samp" | cut -d'|' -f1 | sort | uniq -c | sort -rn | head -4 | tr '\n' ';')"
+check "4: size_flicker's tile never moves" "$(is "$(boxes "$GOUT/after.samp" 2)" 1)" "$(cut -d' ' -f2- "$GOUT/after.samp" | cut -d'|' -f2 | sort | uniq -c | sort -rn | head -4 | tr '\n' ';')"
+check "4: ...and the resize moved it (not the phase-3 box)" "$([ -n "$(lastbox "$GOUT/after.samp" 2)" ] && [ "$(lastbox "$GOUT/after.samp" 2)" != "$RESIZED" ] && echo 1)" "now $(lastbox "$GOUT/after.samp" 2), after phase 3 $RESIZED"
+if [ "$CONTROL" = 1 ]; then
+    subskip "4: the grid trace" "a control build's trace has no follow-end lines"
+else
+    rt=$(( $(trace | grep -c 'grid retarget') - RT0 ))
+    fe=$(trace | grep -c 'grid size follow-end [a-z]* size_flicker')
+    check "4: the resize's follow ended (grid size follow-end)" "$(ge "$fe" 1)" "$fe lines: $(trace | grep 'grid size follow-end' | tail -2 | tr '\n' ';')"
+    check "4: ...and no tile was retargeted while it flickered" "$(is "$rt" 0)" "$rt retargets: $(trace | grep 'grid retarget' | tail -2 | tr '\n' ';')"
+fi
 gate_end

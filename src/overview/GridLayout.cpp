@@ -325,6 +325,20 @@ namespace OvInternal {
         return window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     }
 
+    // How long a follow may last: 1.5x the window's own size animation
+    // (Hyprland's `windows`/`windowsMove` speed, in deciseconds, as its
+    // animation manager reads it), GridReflow::FOLLOW_CAP_FALLBACK_MS when
+    // there is none to read. Real time, as the follow is.
+    static double gridFollowCapMs(const PHLWINDOW& window) {
+        if (!window->m_realSize)
+            return Hyprdrive::GridReflow::FOLLOW_CAP_FALLBACK_MS;
+        const auto CFG  = window->m_realSize->getConfig().lock();
+        const auto VALS = CFG && CFG->pValues ? CFG->pValues.lock() : CFG;
+        if (!VALS || VALS->internalSpeed <= 0.01F)
+            return Hyprdrive::GridReflow::FOLLOW_CAP_FALLBACK_MS;
+        return 1.5 * VALS->internalSpeed * 100.0;
+    }
+
     void gridObserveSizes(const SGridOwnerScope& owner, const PHLMONITOR& monitor, const PHLWINDOW& resizing) {
         if (!monitor || owner.monitor() != monitor->m_id)
             return;
@@ -350,16 +364,35 @@ namespace OvInternal {
             entry.window     = window;
             entry.monitor    = monitor->m_id;
 
+            using Hyprdrive::GridReflow::EFollowEnd;
             using Hyprdrive::GridReflow::ESize;
-            const auto VALUE  = window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-            const auto RESULT = Hyprdrive::GridReflow::observe(entry.track, KNOWN, GOAL, VALUE, FRAME, NOW, REAL, window == resizing);
+            const auto VALUE     = window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+            const bool FOLLOWED  = entry.track.following;
+            const bool LATCHED   = entry.track.latched;
+            const auto FOLLOWT0  = entry.track.followSince;
+            const auto FOLLOWCAP = gridFollowCapMs(window);
+            const auto RESULT    = Hyprdrive::GridReflow::observe(entry.track, KNOWN, GOAL, VALUE, FRAME, NOW, REAL, FOLLOWCAP, window == resizing);
             if (RESULT == ESize::PENDING || entry.track.following)
                 waiting = true;
 
-            if (RESULT != ESize::STEADY && RESULT != ESize::FIRST && RESULT != ESize::FOLLOWING && gridTraceOn()) {
-                const char* WHAT = RESULT == ESize::PENDING ? "pending" : RESULT == ESize::ADOPTED ? "adopted" : "rejected";
-                gridTrace(std::format("size {} {} {:.1f}x{:.1f} goal {:.1f}x{:.1f} (since {:.0f} ms) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y, GOAL.x, GOAL.y,
-                                      REAL(entry.track.since), FRAME, monitor->m_name));
+            if (gridTraceOn()) {
+                if (RESULT != ESize::STEADY && RESULT != ESize::FIRST && RESULT != ESize::FOLLOWING) {
+                    const char* WHAT = RESULT == ESize::PENDING ? "pending" : RESULT == ESize::ADOPTED ? "adopted" : "rejected";
+                    gridTrace(std::format("size {} {} {:.1f}x{:.1f} goal {:.1f}x{:.1f} (since {:.0f} ms) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y, GOAL.x,
+                                          GOAL.y, REAL(entry.track.since), FRAME, monitor->m_name));
+                }
+                if (FOLLOWED && (!entry.track.following || RESULT == ESize::ADOPTED)) {
+                    const auto  WHY  = entry.track.following ? EFollowEnd::DIVERTED : entry.track.followEnd;
+                    const char* WHAT = WHY == EFollowEnd::LANDED ? "landed" : WHY == EFollowEnd::CAPPED ? "capped" : "diverted";
+                    gridTrace(std::format("size follow-end {} {} holds {:.1f}x{:.1f} after {:.0f} ms (cap {:.0f}) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y,
+                                          REAL(FOLLOWT0), FOLLOWCAP, FRAME, monitor->m_name));
+                }
+                if (entry.track.following && (!FOLLOWED || RESULT == ESize::ADOPTED))
+                    gridTrace(std::format("size follow-start {} toward {:.1f}x{:.1f} value {:.1f}x{:.1f} cap {:.0f} ms frame {} mon {}", window->m_class, GOAL.x, GOAL.y, VALUE.x,
+                                          VALUE.y, FOLLOWCAP, FRAME, monitor->m_name));
+                if (KNOWN && LATCHED != entry.track.latched)
+                    gridTrace(std::format("size {} {} {:.1f}x{:.1f} frame {} mon {}", entry.track.latched ? "latch-on" : "latch-off", window->m_class, entry.track.adopted.x,
+                                          entry.track.adopted.y, FRAME, monitor->m_name));
             }
         }
 

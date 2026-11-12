@@ -17,6 +17,8 @@
 #include <cmath>
 #include <cstdio>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 using namespace Hyprdrive::GridReflow;
 
@@ -73,6 +75,8 @@ static SRow layRow(const Vector2D& sa, const Vector2D& sb) {
     const double X        = X0 + (USABLE_W - ROWW) / 2.0;
     return SRow{CBox{X, Y0, sa.x * SCALE, sa.y * SCALE}, CBox{X + sa.x * SCALE + GAP, Y0, sb.x * SCALE, sb.y * SCALE}};
 }
+
+static const Vector2D SIM_SA{900, 600}, SB_SIM{700, 500};
 
 // ---------------------------------------------------------------- the control
 // The OLD gridReflowBox (GridLayout.cpp at a4d6892, lines 597-661), verbatim in
@@ -138,8 +142,9 @@ static CBox query(const SNewTile& t, uint64_t frame, const CBox& slot) {
 }
 // The size the grid lays the window out with this frame. `value` is the size
 // animation's current value (default: no animation, value == goal).
+static double g_followCap = FOLLOW_CAP_FALLBACK_MS; // GridLayout.cpp: 1.5x the size animation
 static Vector2D ownerSize(SNewTile& t, uint64_t frame, const Vector2D& goal, ESize* result = nullptr, const Vector2D* value = nullptr) {
-    const auto R = observe(t.size, t.sizeKnown, goal, value ? *value : goal, frame, g_now, ELAPSED);
+    const auto R = observe(t.size, t.sizeKnown, goal, value ? *value : goal, frame, g_now, ELAPSED, g_followCap);
     t.sizeKnown  = true;
     if (result)
         *result = R;
@@ -154,6 +159,148 @@ static Vector2D animValue(const Vector2D& from, const Vector2D& to, double start
         return to;
     const float E = EASE(static_cast<float>(T), false);
     return Vector2D{from.x + (to.x - from.x) * E, from.y + (to.y - from.y) * E};
+}
+
+
+// ---------------------------------------------------------------- the previous follow, as a control
+// SSizeTrack/observe as of 5cafa16 (the first "real change keeps its old
+// motion" commit), verbatim in its statements: once a change was adopted it
+// followed the animated value until a frame where value == goal, whatever the
+// goal did meanwhile. The tester's hole: a window flickering more often than
+// its size animation lasts never lets that frame come, and every flicker moves
+// the tile again.
+struct SPrevTrack {
+    Vector2D adopted, pending, input;
+    TP       since{};
+    bool     hasPending = false;
+    bool     following  = false;
+    uint64_t lastFrame  = 0;
+};
+static ESize prevObserve(SPrevTrack& t, bool known, const Vector2D& goal, const Vector2D& value, uint64_t frame, const TP& now) {
+    const auto TAKE = [&](ESize result) {
+        t.adopted    = goal;
+        t.hasPending = false;
+        t.following  = value != goal;
+        t.input      = t.following ? value : goal;
+        return result;
+    };
+    if (!known || frame - t.lastFrame > 1) {
+        t           = SPrevTrack{};
+        t.lastFrame = frame;
+        return TAKE(ESize::FIRST);
+    }
+    t.lastFrame = frame;
+    if (t.following)
+        return TAKE(ESize::FOLLOWING);
+    if (!sizesDiffer(goal, t.adopted)) {
+        const bool HAD = t.hasPending;
+        t.hasPending   = false;
+        t.input        = t.adopted;
+        return HAD ? ESize::REJECTED : ESize::STEADY;
+    }
+    t.input = t.adopted;
+    if (!t.hasPending) {
+        t.hasPending = true;
+        t.pending    = goal;
+        t.since      = now;
+        return ESize::PENDING;
+    }
+    t.pending = goal;
+    if (ELAPSED(t.since) >= SIZE_SETTLE_MS)
+        return TAKE(ESize::ADOPTED);
+    return ESize::PENDING;
+}
+
+// ---------------------------------------------------------------- the tester's sequences, simulated
+// The overview_rest fixture as the tester ran it: a window whose goal is
+// `base` (SA, or SA - resize from `resizeAt` on) minus `shrink` px on both
+// axes during each flicker (held `holdMs`, gaps `gapMin..gapMax` ms, drawn
+// from a fixed LCG); Hyprland animating the value toward each new goal over
+// `animMs` from wherever it is; owner frames every FRAME_MS. Counts how often
+// the window's tile box changes inside [measureFrom, endMs).
+struct SFlicker {
+    double   startMs = 500, endMs = 12000, holdMs = 30, gapMin = 100, gapMax = 600, shrink = 4;
+    double   animMs = 1000, resizeAt = -1, measureFrom = 0;
+    Vector2D resize{-60, -40};
+    bool     flicker = true;
+};
+struct SSimResult {
+    int    changes = 0, distinct = 0, adopted = 0, rejected = 0, retargets = 0, latches = 0, followEnds = 0;
+    double restAt = -1; // the last change of the tile box after resizeAt (ms)
+    CBox   last;
+};
+static std::vector<std::pair<double, double>> flickerTimes(const SFlicker& f) {
+    std::vector<std::pair<double, double>> out;
+    uint32_t                               rng = 7;
+    for (double t = f.startMs; t < f.endMs;) {
+        out.emplace_back(t, t + f.holdMs);
+        rng = rng * 1103515245u + 12345u;
+        t += f.holdMs + f.gapMin + (f.gapMax - f.gapMin) * ((rng >> 8) % 10000) / 10000.0;
+    }
+    return out;
+}
+static SSimResult simulate(const SFlicker& f, bool previous) {
+    const auto  FLICKS = flickerTimes(f);
+    SSimResult  res;
+    SNewTile    neu;
+    SPrevTrack  prev;
+    bool        prevKnown = false;
+    Vector2D    goal = SIM_SA, animFrom = SIM_SA;
+    double      animStart = -1e9;
+    CBox        before;
+    std::vector<CBox> seen;
+    g_now         = 0;
+    g_followCap   = 1.5 * f.animMs;
+    for (uint64_t frame = 1; g_now < f.endMs; ++frame, g_now += FRAME_MS) {
+        Vector2D base = f.resizeAt >= 0 && g_now >= f.resizeAt ? SIM_SA + f.resize : SIM_SA;
+        bool     in   = false;
+        for (const auto& [a, b] : FLICKS)
+            in = in || (f.flicker && g_now >= a && g_now < b);
+        const Vector2D G = in ? Vector2D{base.x - f.shrink, base.y - f.shrink} : base;
+        if (G != goal) { // Hyprland restarts the size animation from where it is
+            animFrom  = animValue(animFrom, goal, animStart, f.animMs);
+            goal      = G;
+            animStart = g_now;
+        }
+        const Vector2D VALUE = animValue(animFrom, goal, animStart, f.animMs);
+        Vector2D       input;
+        ESize          r{};
+        if (previous) {
+            r         = prevObserve(prev, prevKnown, goal, VALUE, frame, g_now);
+            prevKnown = true;
+            input     = prev.input;
+        } else {
+            const bool WASL = neu.size.latched, WASF = neu.size.following;
+            input           = ownerSize(neu, frame, goal, &r, &VALUE);
+            res.latches += !WASL && neu.size.latched;
+            res.followEnds += WASF && !neu.size.following;
+        }
+        res.adopted += r == ESize::ADOPTED;
+        res.rejected += r == ESize::REJECTED;
+        CBox       out;
+        const auto STEP = step(neu.ease, neu.known, SAsk{layRow(input, SB_SIM).a, nullptr, false, false, frame, DURATION}, g_now, ELAPSED, EASE, out);
+        neu.known       = true;
+        if (g_now >= f.measureFrom) {
+            res.retargets += STEP == EStep::RETARGETED;
+            if (!seen.empty() && maxEdgeDelta(out, before) > 0)
+                ++res.changes;
+            seen.push_back(out);
+        }
+        if (f.resizeAt >= 0 && g_now > f.resizeAt && frame > 1 && maxEdgeDelta(out, before) > 0)
+            res.restAt = g_now;
+        before = out;
+    }
+    std::vector<CBox> uniq;
+    for (const auto& b : seen)
+        if (std::none_of(uniq.begin(), uniq.end(), [&](const CBox& u) { return maxEdgeDelta(u, b) == 0; }))
+            uniq.push_back(b);
+    res.distinct = static_cast<int>(uniq.size());
+    res.last     = before;
+    return res;
+}
+static void printSim(const char* name, const SSimResult& n, const SSimResult& p) {
+    std::printf("%-46s new: %d boxes/%d changes (adopted %d, rejected %d, latches %d, follow ends %d)  previous: %d boxes/%d changes (adopted %d)\n", name, n.distinct,
+                n.changes, n.adopted, n.rejected, n.latches, n.followEnds, p.distinct, p.changes, p.adopted);
 }
 
 int main() {
@@ -284,7 +431,7 @@ int main() {
 
         // the overview's own resize handle: taken on the frame it happens
         g_now += FRAME_MS;
-        CHECK(observe(t.size, true, Vector2D{800, 500}, Vector2D{800, 500}, ++frame, g_now, ELAPSED, true) == ESize::ADOPTED && t.size.input == Vector2D(800, 500));
+        CHECK(observe(t.size, true, Vector2D{800, 500}, Vector2D{800, 500}, ++frame, g_now, ELAPSED, g_followCap, true) == ESize::ADOPTED && t.size.input == Vector2D(800, 500));
 
         // an absence (the overview did not draw this window for a while) takes
         // the size as it is: no settle wait on the frame it comes back
@@ -445,6 +592,211 @@ int main() {
         CBox FAR = REST.a;
         FAR.x += 0.6;
         CHECK(step(t.ease, true, SAsk{FAR, nullptr, false, false, 3, DURATION}, g_now, ELAPSED, EASE, out) == EStep::RETARGETED);
+    }
+
+
+    // ---------------- 5. The tester's sequences: the follow can never switch the filter off
+    {
+        // 5a. A real resize (-60x-40), then 30 ms flickers every 100-600 ms, with a
+        // long size animation (1 s: every flicker restarts it before it lands).
+        // From the resize's end on (adoption + animation + reflow), no tile motion.
+        for (const double ANIM : {500.0, 1000.0}) {
+            SFlicker f;
+            f.animMs      = ANIM;
+            f.resizeAt    = 3000;
+            f.measureFrom = f.resizeAt + SIZE_SETTLE_MS + ANIM + DURATION + 2 * FRAME_MS;
+            const auto N  = simulate(f, false);
+            const auto P  = simulate(f, true);
+            printSim(ANIM == 1000.0 ? "5a 30 ms flicker after a resize, 1 s anim" : "5a 30 ms flicker after a resize, 500 ms anim", N, P);
+            CHECK(N.changes == 0 && N.distinct == 1);
+            CHECK(maxEdgeDelta(N.last, layRow(SIM_SA + f.resize, SB_SIM).a) <= SLOT_NOISE_PX); // ...and it is the resized slot (the ease's own half-pixel rule)
+            if (ANIM == 1000.0)
+                CHECK(P.changes > 0); // CONTROL: the previous follow moved the tile at every flicker
+        }
+
+        // 5b/5c. Alternations each held longer than SIZE_SETTLE_MS (80 ms, 300 ms),
+        // every 100-600 ms: the first out-and-back is followed, then the track
+        // latches and the tile stays put.
+        for (const double HOLD : {80.0, 300.0}) {
+            SFlicker f;
+            f.holdMs      = HOLD;
+            f.animMs      = 479;
+            f.measureFrom = 2500;
+            const auto N  = simulate(f, false);
+            const auto P  = simulate(f, true);
+            printSim(HOLD == 80.0 ? "5b 80 ms alternation every 100-600 ms" : "5c 300 ms alternation every 100-600 ms", N, P);
+            CHECK(N.changes == 0 && N.distinct == 1);
+            CHECK(N.latches == 1 && N.adopted == 2);
+            CHECK(maxEdgeDelta(N.last, layRow(SIM_SA, SB_SIM).a) <= SLOT_NOISE_PX); // held on the stable size
+            CHECK(P.changes > 0);                                         // CONTROL: every alternation moved it
+        }
+
+        // 5d. One 80 ms flicker every 1.5-2.5 s: the first moves the tile (it is
+        // adopted, and so is the way back), the latch holds through the next.
+        {
+            SFlicker f;
+            f.holdMs      = 80;
+            f.gapMin      = 1500;
+            f.gapMax      = 2500;
+            f.endMs       = 20000;
+            f.animMs      = 479;
+            f.measureFrom = 2000;
+            const auto N  = simulate(f, false);
+            const auto P  = simulate(f, true);
+            printSim("5d one 80 ms flicker every 2 s", N, P);
+            CHECK(N.changes == 0 && N.latches == 1);
+            CHECK(P.changes > 0);
+        }
+
+        // 5e. A real resize DURING a flicker storm lands on time: no later than
+        // the same resize without flickers (plus a flicker's length and a frame),
+        // and on its slot.
+        {
+            SFlicker f;
+            f.resize   = Vector2D{-300, -200};
+            f.animMs   = 479;
+            f.resizeAt = 3000;
+            SFlicker quiet = f;
+            quiet.flicker  = false;
+            const auto N   = simulate(f, false);
+            const auto Q   = simulate(quiet, false);
+            std::printf("5e resize in a 30 ms flicker storm: at rest +%.0f ms (no storm: +%.0f ms)\n", N.restAt - f.resizeAt, Q.restAt - f.resizeAt);
+            CHECK(N.restAt > 0 && N.restAt <= Q.restAt + f.holdMs + FRAME_MS);
+            CHECK(maxEdgeDelta(N.last, layRow(SIM_SA + f.resize, SB_SIM).a) <= SLOT_NOISE_PX);
+            // ...and the storm went on after it: nothing moved once it was down
+            SFlicker after   = f;
+            after.measureFrom = Q.restAt + FRAME_MS;
+            CHECK(simulate(after, false).changes == 0);
+
+            // the same resize while LATCHED (an 80 ms alternation before it): taken
+            // FLAP_SETTLE_MS late at worst, twice if a flicker lands on the adoption
+            SFlicker latched  = f;
+            latched.holdMs    = 80;
+            latched.resizeAt  = 6000;
+            const auto L      = simulate(latched, false);
+            SFlicker lquiet   = latched;
+            lquiet.flicker    = false;
+            const auto LQ     = simulate(lquiet, false);
+            std::printf("5e resize while latched: at rest +%.0f ms (no storm: +%.0f ms)\n", L.restAt - latched.resizeAt, LQ.restAt - latched.resizeAt);
+            CHECK(L.restAt > 0 && L.restAt <= LQ.restAt + 2 * FLAP_SETTLE_MS + latched.holdMs);
+            CHECK(maxEdgeDelta(L.last, layRow(SIM_SA + f.resize, SB_SIM).a) <= SLOT_NOISE_PX);
+        }
+    }
+
+    // ---------------- 5f. The reporter's case: a floating Wayland window alternating between two
+    // sizes 1-2 px apart, each held 16-500 ms (no size animation: Hyprland takes
+    // the size from its commits). The tile never moves, not even once.
+    {
+        for (const double PX : {1.5, 2.0}) {
+            for (const double HOLD : {16.0, 80.0, 300.0, 500.0}) {
+                SFlicker f;
+                f.shrink      = PX;
+                f.holdMs      = HOLD;
+                f.animMs      = 1; // no animation: the value is the goal on the next frame
+                f.measureFrom = 0;
+                const auto N  = simulate(f, false);
+                const auto P  = simulate(f, true);
+                char       name[64];
+                std::snprintf(name, sizeof name, "5f %.1f px alternation held %.0f ms", PX, HOLD);
+                printSim(name, N, P);
+                CHECK(N.changes == 0 && N.adopted == 0);
+                if (HOLD >= 80.0)
+                    CHECK(P.changes > 0); // CONTROL: the previous filter took every hold past 50 ms
+            }
+        }
+        // ...while a lasting 2 px resize is still taken, SMALL_SETTLE_MS after it
+        SNewTile t;
+        uint64_t frame = 1;
+        g_now          = 0;
+        ownerSize(t, frame, SA);
+        const Vector2D NUDGE{SA.x - 2, SA.y - 2};
+        double         first = -1, adopted = -1;
+        for (int i = 0; i < 60 && adopted < 0; ++i) {
+            g_now += FRAME_MS;
+            ESize r{};
+            ownerSize(t, ++frame, NUDGE, &r);
+            if (first < 0)
+                first = g_now;
+            if (r == ESize::ADOPTED)
+                adopted = g_now;
+        }
+        CHECK(adopted > 0 && adopted - first >= SMALL_SETTLE_MS && adopted - first < SMALL_SETTLE_MS + FRAME_MS && t.size.input == NUDGE);
+    }
+
+    // ---------------- 6. The follow: scoped to the adopted goal, bounded in time
+    {
+        // 6a. A goal change mid-follow is a candidate: the grid holds the adopted
+        // goal (never the value heading elsewhere) until the new one is adopted.
+        const Vector2D BIG{1100, 700}, OTHER{1000, 650};
+        SNewTile       t;
+        uint64_t       frame = 1;
+        g_now                = 0;
+        g_followCap          = 1.5 * 1000;
+        ownerSize(t, frame, SA);
+        const double R1 = g_now + FRAME_MS;
+        double       r2 = -1, adopt2 = -1;
+        Vector2D     goal = SA, animFrom = SA;
+        double       animStart = -1e9;
+        bool         heldGoal = true, followedAfter = true;
+        for (int i = 0; i < 120; ++i) {
+            g_now += FRAME_MS;
+            const Vector2D G = g_now < R1 + 200 ? BIG : OTHER;
+            if (G != goal) {
+                animFrom  = animValue(animFrom, goal, animStart, 1000);
+                goal      = G;
+                animStart = g_now;
+                if (G == OTHER)
+                    r2 = g_now;
+            }
+            const Vector2D VALUE = animValue(animFrom, goal, animStart, 1000);
+            ESize          r{};
+            const Vector2D IN = ownerSize(t, ++frame, goal, &r, &VALUE);
+            if (r2 > 0 && adopt2 < 0 && r == ESize::ADOPTED)
+                adopt2 = g_now;
+            if (r2 > 0 && adopt2 < 0)
+                heldGoal = heldGoal && IN == BIG && t.size.followEnd == EFollowEnd::DIVERTED;
+            if (adopt2 > 0 && VALUE != OTHER)
+                followedAfter = followedAfter && IN == VALUE;
+        }
+        CHECK(r2 > 0 && adopt2 - r2 >= SIZE_SETTLE_MS && adopt2 - r2 < SIZE_SETTLE_MS + FRAME_MS);
+        CHECK(heldGoal);      // between: the adopted goal, not the diverted value
+        CHECK(followedAfter); // the new adoption is followed like the first
+        CHECK(t.size.input == OTHER && !t.size.following && t.size.followEnd == EFollowEnd::LANDED);
+
+        // 6b. A value that never lands (the goal jitters within SIZE_NOISE_PX and
+        // restarts a 1 s animation every 100 ms): the follow ends at its cap.
+        SNewTile   c;
+        SPrevTrack p;
+        frame = 1;
+        g_now = 0;
+        ownerSize(c, frame, SA);
+        prevObserve(p, false, SA, SA, frame, g_now);
+        goal      = SA;
+        animFrom  = SA;
+        animStart = -1e9;
+        double adoptAt = -1, endAt = -1;
+        for (int i = 0; i < 320; ++i) {
+            g_now += FRAME_MS;
+            const Vector2D G = i < 3 ? SA : Vector2D{BIG.x + ((i / 6) % 2 ? 0.6 : 0.0), BIG.y};
+            if (G != goal) {
+                animFrom  = animValue(animFrom, goal, animStart, 1000);
+                goal      = G;
+                animStart = g_now;
+            }
+            const Vector2D VALUE = animValue(animFrom, goal, animStart, 1000);
+            ESize          r{};
+            ownerSize(c, ++frame, goal, &r, &VALUE);
+            prevObserve(p, true, goal, VALUE, frame, g_now);
+            if (r == ESize::ADOPTED && adoptAt < 0)
+                adoptAt = g_now;
+            if (adoptAt > 0 && endAt < 0 && !c.size.following)
+                endAt = g_now;
+        }
+        std::printf("6b value never lands: follow capped %.0f ms after adoption (cap %.0f); previous still following after %.0f ms: %s\n", endAt - adoptAt, g_followCap,
+                    g_now - adoptAt, p.following ? "yes" : "no");
+        CHECK(endAt > 0 && endAt - adoptAt >= g_followCap && endAt - adoptAt < g_followCap + FRAME_MS && c.size.followEnd == EFollowEnd::CAPPED);
+        CHECK(c.size.input == c.size.adopted);
+        CHECK(p.following); // CONTROL: the previous follow never ended
     }
 
     std::printf("grid_reflow_test: %d checks, %d failed\n", g_checks, g_failed);

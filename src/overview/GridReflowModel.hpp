@@ -29,12 +29,14 @@
 // And the size the grid lays a window out with is filtered (SSizeTrack): a
 // change of the animation's GOAL is taken by the frame only when it has moved
 // by more than rounding noise AND stayed moved for SIZE_SETTLE_MS; from then
-// on the grid follows the animated value to its end, as it always did. A
+// on the grid follows the animated value toward that goal, as it always did,
+// for no longer than the animation lasts. A
 // client that resizes itself and back within a frame or two, a configure in
 // flight and the animation out and back: none of them reach the grid.
 
 #include "MotionMath.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -173,22 +175,89 @@ namespace Hyprdrive::GridReflow {
     // animation and then eased -- 765 ms on the rig for a -300x-200 resize --
     // and a window closing in the overview let the survivors grow with their
     // own retile. That motion is kept: once a change is ADOPTED the grid
-    // FOLLOWS the animated value for the rest of that animation, exactly as it
-    // used to, and holds the goal when it ends. What it no longer follows is a
-    // change that never got adopted: the goal flicked away and back within
-    // SIZE_SETTLE_MS, and the animation's way out and back again. Following
-    // from the first sight of a new goal would follow exactly that -- the
-    // twitch -- so a real change starts moving the tiles SIZE_SETTLE_MS late
-    // and ends on the same frame as before (the animation's end, then the ease).
+    // FOLLOWS the animated value toward THAT goal, exactly as it used to, and
+    // holds the goal when it lands. What it no longer follows is a change that
+    // never got adopted: the goal flicked away and back within SIZE_SETTLE_MS,
+    // and the animation's way out and back again. Following from the first
+    // sight of a new goal would follow exactly that -- the twitch -- so a real
+    // change starts moving the tiles SIZE_SETTLE_MS late and ends on the same
+    // frame as before (the animation's end, then the ease).
+    //
+    // THE FOLLOW IS SCOPED AND BOUNDED (a tester, 2026-11-11: one adoption,
+    // then a 30 ms flicker every 100-600 ms with a long size animation -- each
+    // flicker restarted the animation before it landed, the follow never
+    // ended, and every later flicker moved the tile; 57 retargets in 12 s).
+    // The follow belongs to the adopted goal only:
+    //   - the goal moves elsewhere mid-follow: the value now heads for a goal
+    //     nobody adopted, so the follow ENDS (DIVERTED) and the grid holds the
+    //     adopted goal -- the end of the very animation it was following, so
+    //     the tile goes nowhere the adopted change would not have taken it.
+    //     The new goal is a candidate like any other: pending, then adopted
+    //     (and followed) or rejected;
+    //   - the value never lands (a goal jittering within SIZE_NOISE_PX keeps
+    //     restarting it): the follow ends after `followCapMs` of real time
+    //     (CAPPED), 1.5x the window's own size animation (GridLayout.cpp);
+    //   - and it ends, as before, on the frame the value reaches the goal
+    //     (LANDED).
+    // After any of the three the grid holds the adopted goal.
+    //
+    // A SIZE THAT FLAPS BETWEEN TWO VALUES (hysteresis). A change held longer
+    // than SIZE_SETTLE_MS is adopted -- an 80 ms or a 300 ms flicker included,
+    // and each one moved the tile out and back. One such out-and-back is a
+    // fact (the window really was that size for a while); the same two sizes
+    // trading places again and again is noise to the user, whatever its
+    // amplitude. So: an adoption that RETURNS to the size adopted before the
+    // previous one, within FLAP_WINDOW_MS of it, LATCHES the track; while
+    // latched a change must hold for FLAP_SETTLE_MS instead of SIZE_SETTLE_MS;
+    // the latch lets go after LATCH_QUIET_MS with the goal on the adopted size
+    // (any departure, adopted or not, restarts that wait). Chosen over a
+    // pixel-amplitude rule because the pattern, not the size of the step, is
+    // what makes it noise, and because its cost is bounded and simple: a real,
+    // lasting resize while latched is taken FLAP_SETTLE_MS after it happens
+    // instead of SIZE_SETTLE_MS, and a window that genuinely keeps changing,
+    // each size held longer than that, is still followed.
+    //
+    // A SMALL CHANGE WAITS LONGER (the reporter's window, 2026-11-11: a
+    // floating Wayland mpv at scale 1.5 whose size Hyprland takes from its
+    // commits; events ~1.5 physical px, held 16-500 ms, two sizes a pixel or
+    // two apart). A change of at most SMALL_SIZE_PX per axis must hold for
+    // SMALL_SETTLE_MS before it is taken -- longer than any such event -- so
+    // it never reaches the grid, not even once; a lasting change that small
+    // is taken SMALL_SETTLE_MS late, when a tile moving a pixel is not
+    // something anyone waits for. A bigger change (measured from the first
+    // frame the goal left the adopted size) keeps SIZE_SETTLE_MS.
+    inline constexpr double SMALL_SIZE_PX   = 2.0;
+    inline constexpr double SMALL_SETTLE_MS = 600.0;
+    inline constexpr double FLAP_WINDOW_MS = 1000.0;
+    inline constexpr double FLAP_SETTLE_MS = 400.0;
+    inline constexpr double LATCH_QUIET_MS = 3000.0;
+    // No size animation readable: a generous fixed bound on a follow.
+    inline constexpr double FOLLOW_CAP_FALLBACK_MS = 1000.0;
+
+    enum class EFollowEnd : uint8_t {
+        NONE,
+        LANDED,   // the value reached the goal
+        CAPPED,   // followCapMs of real time ran out first
+        DIVERTED, // the goal moved elsewhere: hold the adopted goal
+    };
+
     template <class TP>
     struct SSizeTrack {
-        Vector2D adopted;    // the goal the grid has taken
-        Vector2D pending;    // a goal it has seen, not taken yet
-        Vector2D input;      // what the grid lays the window out with
-        TP       since{};
-        bool     hasPending = false;
-        bool     following  = false; // input = the animated value until it reaches the goal
-        uint64_t lastFrame  = 0;
+        Vector2D   adopted; // the goal the grid has taken
+        Vector2D   pending; // a goal it has seen, not taken yet
+        Vector2D   input;   // what the grid lays the window out with
+        TP         since{}; // the frame the goal first left `adopted`
+        bool       hasPending = false;
+        bool       following  = false; // input = the animated value toward `adopted`
+        TP         followSince{};
+        EFollowEnd followEnd = EFollowEnd::NONE; // why the last follow ended
+        uint64_t   lastFrame = 0;
+        // hysteresis
+        Vector2D before;            // the size adopted before `adopted`
+        bool     hasBefore = false; // ...if there was one this sighting
+        TP       adoptedAt{};
+        TP       quietSince{}; // the last frame the goal was away from `adopted`
+        bool     latched = false;
     };
 
     enum class ESize : uint8_t {
@@ -196,25 +265,40 @@ namespace Hyprdrive::GridReflow {
         STEADY,    // unchanged (within SIZE_NOISE_PX)
         PENDING,   // changed, not for long enough yet: the grid keeps the old size
         ADOPTED,   // changed and stayed changed: the grid takes it now
-        FOLLOWING, // an adopted change still animating: the grid follows the value
-        REJECTED,  // changed and came back before SIZE_SETTLE_MS: never reached the grid
+        FOLLOWING, // an adopted change still animating toward its goal: the grid follows the value
+        REJECTED,  // changed and came back before the settle time: never reached the grid
     };
 
     // The owner's per-frame look at one window's size: its animation's `goal`
     // and current `value`. `realElapsedMs(tp)` is wall-clock ms since `tp`: a
     // filter on the input is not an animation, so anim_scale does not stretch
-    // it. `immediate` takes a real change at once (the overview's own resize
-    // handle: the user is the one changing it, every frame).
+    // it. `followCapMs` bounds a follow in real time. `immediate` takes a real
+    // change at once (the overview's own resize handle: the user is the one
+    // changing it, every frame). The caller learns of follow ends and latch
+    // changes by comparing `following` / `latched` before and after.
     template <class TP, class Elapsed>
     ESize observe(SSizeTrack<TP>& t, bool known, const Vector2D& goal, const Vector2D& value, uint64_t frame, const TP& now, const Elapsed& realElapsedMs,
-                  bool immediate = false) {
+                  double followCapMs, bool immediate = false) {
         // Taking a change: follow its animation if there is one left.
         const auto TAKE = [&](ESize result) {
-            t.adopted    = goal;
-            t.hasPending = false;
-            t.following  = value != goal;
-            t.input      = t.following ? value : goal;
+            if (result != ESize::FIRST) {
+                t.before    = t.adopted;
+                t.hasBefore = true;
+            }
+            t.adopted     = goal;
+            t.adoptedAt   = now;
+            t.quietSince  = now;
+            t.hasPending  = false;
+            t.following   = value != goal;
+            t.followSince = now;
+            t.followEnd   = EFollowEnd::NONE;
+            t.input       = t.following ? value : goal;
             return result;
+        };
+        const auto ENDFOLLOW = [&](EFollowEnd why) {
+            t.following = false;
+            t.followEnd = why;
+            t.input     = t.adopted;
         };
 
         if (!known || frame - t.lastFrame > 1) {
@@ -226,19 +310,33 @@ namespace Hyprdrive::GridReflow {
         }
         t.lastFrame = frame;
 
-        if (t.following) {
-            // Exactly the old input until the animation lands (Hyprland warps
-            // the value onto the goal on its last tick), a goal moved again
-            // mid-way included.
-            return TAKE(ESize::FOLLOWING);
-        }
-
         if (!sizesDiffer(goal, t.adopted)) {
             const bool HAD = t.hasPending;
             t.hasPending   = false;
-            t.input        = t.adopted; // NOT the value: it may be animating back from a flicker
+            if (t.following) {
+                // Exactly the old input until the animation lands (Hyprland
+                // warps the value onto the goal on its last tick) -- or until
+                // the bound runs out.
+                if (value == goal)
+                    ENDFOLLOW(EFollowEnd::LANDED);
+                else if (realElapsedMs(t.followSince) >= followCapMs)
+                    ENDFOLLOW(EFollowEnd::CAPPED);
+                else {
+                    t.input = value;
+                    return ESize::FOLLOWING;
+                }
+                return ESize::STEADY;
+            }
+            t.input = t.adopted; // NOT the value: it may be animating back from a flicker
+            if (t.latched && !HAD && realElapsedMs(t.quietSince) >= LATCH_QUIET_MS)
+                t.latched = false;
             return HAD ? ESize::REJECTED : ESize::STEADY;
         }
+
+        // The goal is away from the adopted one.
+        t.quietSince = now;
+        if (t.following)
+            ENDFOLLOW(EFollowEnd::DIVERTED);
 
         if (immediate)
             return TAKE(ESize::ADOPTED);
@@ -252,9 +350,14 @@ namespace Hyprdrive::GridReflow {
         }
 
         t.pending = goal;
-        if (realElapsedMs(t.since) >= SIZE_SETTLE_MS)
-            return TAKE(ESize::ADOPTED);
-        return ESize::PENDING;
+        const bool   SMALL  = std::abs(goal.x - t.adopted.x) <= SMALL_SIZE_PX && std::abs(goal.y - t.adopted.y) <= SMALL_SIZE_PX;
+        const double SETTLE = std::max(t.latched ? FLAP_SETTLE_MS : SIZE_SETTLE_MS, SMALL ? SMALL_SETTLE_MS : SIZE_SETTLE_MS);
+        if (realElapsedMs(t.since) < SETTLE)
+            return ESize::PENDING;
+        // Back to the size before the last adoption, soon after it: a flap.
+        if (t.hasBefore && !sizesDiffer(goal, t.before) && realElapsedMs(t.adoptedAt) <= FLAP_WINDOW_MS)
+            t.latched = true;
+        return TAKE(ESize::ADOPTED);
     }
 
 } // namespace Hyprdrive::GridReflow
