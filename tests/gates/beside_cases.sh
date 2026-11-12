@@ -87,6 +87,7 @@ GW=$(win game.exe .workspace.id); START=$(ids)
 check "B: setup: the game is fullscreen on a desktop of its own" "$(is "$(win game.exe .fullscreen)/$GW" "2/2")" "$(win game.exe .fullscreen)/$GW ($START)"
 asked dialog gpick; sleep 0.9; settle 3 ids
 check "B: prompted over a game: beside, shown, focused" "$(is "$(win gpick .workspace.id)/$(shown)/$(active)" "$((GW + 1))/$((GW + 1))/gpick")" "gpick on $(win gpick .workspace.id), shown $(shown), active $(active)"
+check "B: the dialog is drawn at its own size" "$(is "$(win gpick '"\(.size[0])x\(.size[1])"')" "\"480x360\"")" "$(win gpick '[.at,.size]')"
 check "B: the game stays fullscreen on its desktop" "$(is "$(win game.exe .fullscreen)/$(win game.exe .workspace.id)" "2/$GW")" "$(win game.exe .fullscreen)/$(win game.exe .workspace.id)"
 xclose gpick; wait_for 4 "[ \"\$(shown)\" = $GW ]"; sleep 0.8; settle 3 ids
 check "B: closed: back on the game, focused, still fullscreen, not minimized" "$(is "$(shown)/$(active)/$(win game.exe .fullscreen)/$(win game.exe .hidden)" "$GW/game.exe/2/false")" "shown $(shown), active $(active), fs $(win game.exe .fullscreen), hidden $(win game.exe .hidden)"

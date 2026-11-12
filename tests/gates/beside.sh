@@ -11,7 +11,8 @@
 # FullscreenBook::link).
 # Asserts, from 1:{a,b} 2:{c}, a fullscreen (a trip: a on 2, c bumped to 3):
 #   - PROMPTED (launched through the compositor: Intent's launch grant) X11
-#     dialog: on the desktop right after a's, shown, focused; a stays
+#     dialog: on the desktop right after a's, shown, focused, at its own size
+#     and place (it was left at -10,-10 21x21, invisible); a stays
 #     fullscreen; a second prompted one (from the app again) joins it; both
 #     closed: the view is back on a, a focused, the desktops as before
 #   - UNPROMPTED (mapped behind the compositor's back, no click before): on
@@ -52,6 +53,7 @@ P1=$(win pick1 .workspace.id)
 check "prompted: the dialog opens on the desktop right after the app's" "$(is "$P1" $((AW + 1)))" "app on $AW, dialog on $P1, $(ids)"
 check "prompted: shown" "$(is "$(shown)" "$P1")" "shown $(shown)"
 check "prompted: focused" "$(is "$(active)" pick1)" "active $(active)"
+check "prompted: drawn at its own size where it asked (not -10,-10 21x21)" "$(is "$(win pick1 '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')" "\"100,100 480x360\"")" "$(win pick1 '[.at,.size]')"
 check "the app stays fullscreen on its desktop" "$(is "$(win a .fullscreen)/$(win a .workspace.id)" "2/$AW")" "$(win a .fullscreen)/$(win a .workspace.id)"
 go "$AW"; sleep 0.9 # back on the app, the first one still open
 asked dialog pick2; sleep 0.9; settle 3 ids
