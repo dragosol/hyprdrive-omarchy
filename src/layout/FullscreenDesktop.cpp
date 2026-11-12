@@ -6,6 +6,7 @@
 #include "FullscreenBook.hpp"
 #include "ConfigureHold.hpp"
 #include "TripSizes.hpp"
+#include "TripFrame.hpp"
 #include "DesktopStrip.hpp"
 #include "Config.hpp"
 #include "DebugPaths.hpp"
@@ -446,6 +447,9 @@ namespace Hyprdrive::FullscreenDesktop {
             trace(std::format("{} fullscreen on {}: to {}{}", w->m_class, HOME->m_id, at, owes ? " (owed back)" : ""));
             const auto [SEEN, SEENSIZE] = seenAt(w);
             const auto WAS              = others(HOME, w);
+            // Its last good frame, while it is on screen as it was: drawn
+            // until it has drawn at its new size (TripFrame.hpp).
+            TripFrame::hold(w);
             // Shown first, then moved in: a window never sits on a desktop that
             // is not on screen -- Hyprland suspends windows there, and a game
             // (Wine) stops drawing: it arrived blank for a frame or two.
@@ -569,6 +573,7 @@ namespace Hyprdrive::FullscreenDesktop {
             trace(std::format("{} out of fullscreen: home to {}", w->m_class, home->m_id));
             const auto SEEN = seenAt(w);
             const auto WAS  = others(home, w);
+            TripFrame::hold(w); // (TripFrame.hpp: its last good frame, before the view moves)
             if (MON && MON->m_activeWorkspace == SPACE && home->m_monitor.lock() == MON)
                 show(MON, home);
             g_carrying = {.win = w, .home = true};
@@ -1516,6 +1521,7 @@ namespace Hyprdrive::FullscreenDesktop {
     void init() {
         DesktopOrder::onRenumbered(syncPlaces);
         ConfigureHold::setGate(sizesWait);
+        TripFrame::init();
         restore();
         g_healDue = "load";
         arm(1);
@@ -1609,6 +1615,7 @@ namespace Hyprdrive::FullscreenDesktop {
         DesktopOrder::onRenumbered(nullptr);
         // Nothing stays held by a gate whose code goes with the plugin.
         ConfigureHold::setGate(nullptr);
+        TripFrame::shutdown();
         g_monAddHook.reset();
         g_monGoneHook.reset();
         g_monLayoutHook.reset();

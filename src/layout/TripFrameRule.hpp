@@ -1,0 +1,81 @@
+#pragma once
+
+// A TRIP NEVER SHOWS AN UNDRAWN PICTURE (user, 2026-11-11: "battle.net
+// struggling exiting in and out of fullscreen - animation is buggy"; the
+// recording: the launcher's box white or black for a few frames as the toggle
+// starts and again as it lands, and the launcher small on a bare desktop).
+//
+// A trip sends its window one size each way (TripSizes.hpp), but a client
+// that redraws late (Wine, CEF) shows its OLD buffer at the new size for a
+// while -- too small in a fullscreen box, too big in its tile -- and then,
+// at the new size, a blank first frame (CEF: white) before its real one. So
+// from the moment the trip changes its size, the window is drawn from a
+// snapshot of its last good frame, fitted into the travelling box
+// (TripFrame.cpp), until the client has presented a real frame at the new
+// size. This is the pure decision: when is the live window good again?
+//
+// Decided by what the client COMMITS, not by what kind of window it is:
+//   - it was never sent another size (a trip that kept its size): at once,
+//     once that is clear (UNCHANGED_MS);
+//   - its SECOND commit at the size it was sent: the first may be the blank
+//     one (the X server's background, CEF's white), the second is drawn;
+//   - a client that commits once and then stays still (a plain X11 client
+//     redrawing once): SETTLE_MS after that one commit -- longer than the
+//     ~150 ms a CEF launcher takes from its white frame to its real one;
+//   - a client that never draws at all still appears: TIMEOUT_MS after the
+//     snapshot, whatever it did.
+// All in real time: it is the client's pace, not an animation (the speed
+// setting does not slow the client down).
+namespace Hyprdrive::TripFrameRule {
+    constexpr double UNCHANGED_MS = 100.0;
+    constexpr double SETTLE_MS    = 250.0;
+    constexpr double TIMEOUT_MS   = 400.0;
+
+    struct SState {
+        bool   resized = false; // it was sent a size other than the snapshot's
+        int    drawn   = 0;     // commits at that size since
+        double firstMs = -1.0;  // when the first of them came (ms since the snapshot)
+    };
+
+    // The client was sent a size: `differs` from the snapshot's. A new size
+    // starts the count again (a quick toggle back mid-hold).
+    inline void sent(SState& s, bool differs, bool changedSinceLast) {
+        if (!differs) {
+            s = {};
+            return;
+        }
+        if (!s.resized || changedSinceLast)
+            s = {.resized = true};
+    }
+    // It committed, `atSent`: at the size it was sent.
+    inline void committed(SState& s, double ms, bool atSent) {
+        if (!s.resized || !atSent)
+            return;
+        if (s.drawn++ == 0)
+            s.firstMs = ms;
+    }
+
+    enum class ERelease { Hold, Drawn, Settled, Unchanged, Timeout };
+    inline const char* why(ERelease r) {
+        switch (r) {
+            case ERelease::Hold: return "held";
+            case ERelease::Drawn: return "its second frame at the new size";
+            case ERelease::Settled: return "one frame at the new size, then still";
+            case ERelease::Unchanged: return "its size did not change";
+            case ERelease::Timeout: return "it did not draw in time";
+        }
+        return "?";
+    }
+    // `ms`: real time since the snapshot.
+    inline ERelease decide(const SState& s, double ms) {
+        if (s.resized && s.drawn >= 2)
+            return ERelease::Drawn;
+        if (s.resized && s.drawn == 1 && ms - s.firstMs >= SETTLE_MS)
+            return ERelease::Settled;
+        if (ms >= TIMEOUT_MS)
+            return ERelease::Timeout;
+        if (!s.resized && ms >= UNCHANGED_MS)
+            return ERelease::Unchanged;
+        return ERelease::Hold;
+    }
+}
