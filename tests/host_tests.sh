@@ -113,6 +113,8 @@
 #   grid_reflow_test  GridReflowModel.hpp: the overview grid's reflow ease and its
 #                     size filter; a box query between frames never moves a tile
 #                     (the old gridReflowBox is kept verbatim as the control).
+#   grid_solve_test   GridSolve.hpp: the grid's creation order and one solve per
+#                     drawn frame (a mid-draw re-solve is kept as the control).
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
