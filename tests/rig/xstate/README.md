@@ -90,3 +90,14 @@ and back to stays fullscreen.
 the `overview_rest` gate forces for the "tiles shake at rest" reports. Float it
 (Hyprland only honours an X11 client's own configure on a floating window);
 its arguments are in the file's header.
+## slow_redraw.c -- a launcher that redraws late (gate fs_trip_x11)
+
+Battle.net's launcher (Wine + CEF) under a fullscreen trip: `slow_redraw --lag 150 --flash --insist
+[--echo] [--size WxH] [--min WxH]` maps a 900x620 window (min 640x480, class `slow_redraw.exe`) with no
+background, paints it white at once on each resize (`--flash`, CEF's first frame) and solid orange
+`--lag` ms later, asks for its own size again after a tile resized it (`--insist`), and with `--echo`
+asks to REMOVE FULLSCREEN when it is told a size that does not cover the screen while FULLSCREEN is
+set (Wine's state sync). It logs `t=<ms> size WxH fs=<0|1>` per configure: the gate reads that log
+to see every size the client was ever sent. Build it into a directory user hyprtest can read
+(`$GOUT`, `/tmp/hl-<name>`): the session scratchpad is not, and the window then never maps (the
+exec fails with "Permission denied" in the client's own log, nothing in Hyprland's).
