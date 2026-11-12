@@ -93,9 +93,19 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     // HOVERED tile's box is asked for, from inside that draw (Window.hpp
     // g_midDrawProbe) -- the box query a real session makes mid-draw and the
     // rig does not (#9, #7). A test instrument; off by default.
+    // `probe_draw self`: every draw asks for the box of the window it is
+    // drawing -- in the strip too, where that window is drawn as a mini (#10).
     if (TOPIC == "probe_draw") {
-        const bool ON = data.size() > 1 && std::string{data[1]} == "on";
-        if (!ON) {
+        const std::string MODE = data.size() > 1 ? std::string{data[1]} : std::string{};
+        if (MODE == "self") {
+            OverviewWindow::g_midDrawProbe = [](const PHLWINDOW& drawn) {
+                const auto MONITOR = drawn ? drawn->m_monitor.lock() : nullptr;
+                if (const auto OV = MONITOR ? openScrollOverviewForMonitor(MONITOR) : nullptr)
+                    (void)OV->tileBox(drawn);
+            };
+            return {.success = false, .error = "probe_draw self"};
+        }
+        if (MODE != "on") {
             OverviewWindow::g_midDrawProbe = nullptr;
             return {.success = false, .error = "probe_draw off"};
         }
@@ -259,7 +269,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         return {};
     }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|mem|identity|activate <class>|movehere <class>|drawn <class>|probe_draw on|off|scratchpad|type [text]|press <keycode>"};
+        return {.success = false, .error = "hyprdrive:debug frames|mem|identity|activate <class>|movehere <class>|drawn <class>|probe_draw on|self|off|scratchpad|type [text]|press <keycode>"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

@@ -106,10 +106,10 @@ SDispatcher* findDispatcher(const std::string_view name) {
             // one that is not here cannot be called at all (user, 2026-09-19:
             // "attempt to call a nil value (field 'debug')").
             .name            = "debug",
-            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|exclusive|gesture state|desktop|rows|dockmenu|stripclean|type|type \\S+|activate \\S+|movehere \\S+|tile \\S+|drawn \\S+|probe_draw (on|off)|xgeom|hooks|identity|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
+            .argPattern      = std::regex{"^(frames|mem|motion|windows|glass|scratchpad|lockstate|exclusive|gesture state|desktop|rows|dockmenu|stripclean|type|type \\S+|activate \\S+|movehere \\S+|tile \\S+|drawn \\S+|probe_draw (on|self|off)|xgeom|hooks|identity|press [0-9]+|ripple|ripple -?[0-9.]+ -?[0-9.]+)$"},
             .defaultArg      = "frames",
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | exclusive | gesture state | desktop | rows | dockmenu | stripclean | identity | type [text] | activate <class> | movehere <class> | tile <class> | drawn <class> | probe_draw on|off | xgeom | press <keycode> | ripple [x y]",
+            .invalidArgError = "expected: frames | mem | motion | scratchpad | lockstate | exclusive | gesture state | desktop | rows | dockmenu | stripclean | identity | type [text] | activate <class> | movehere <class> | tile <class> | drawn <class> | probe_draw on|self|off | xgeom | press <keycode> | ripple [x y]",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "debug"); },
             .luaLegacy       = [](lua_State* L) {
                 Hyprdrive::Compat::noteLegacyUse(Hyprdrive::Compat::ELegacy::LUA, "hl.plugin.scrolloverview.debug");
