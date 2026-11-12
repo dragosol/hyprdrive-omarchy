@@ -192,6 +192,8 @@ run motion_math_test tests/unit/motion_math_test.cpp $(pkg-config --cflags --lib
 run plate_color_test tests/unit/plate_color_test.cpp
 # shellcheck disable=SC2046
 run grid_reflow_test tests/unit/grid_reflow_test.cpp $(pkg-config --cflags --libs hyprutils)
+# shellcheck disable=SC2046
+run grid_solve_test tests/unit/grid_solve_test.cpp $(pkg-config --cflags --libs hyprutils)
 run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run identity_parsers_test tests/unit/identity_parsers_test.cpp
 # shellcheck disable=SC2046

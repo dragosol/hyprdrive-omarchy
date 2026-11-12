@@ -1,4 +1,5 @@
 #include "GridLayout.hpp"
+#include "GridSolve.hpp"
 #include "OverviewGeometry.hpp"
 #include "OverviewInternal.hpp"
 
@@ -149,6 +150,11 @@ namespace OvInternal {
 
             out.emplace_back(window);
         }
+
+        // In the order the windows were MADE (GridSolve.hpp order()): Hyprland's
+        // list is reordered by every focus and raise, and the grid followed it,
+        // so a tile could change slots under a hover.
+        Hyprdrive::GridSolve::order(out, 0, out.size(), [](const PHLWINDOW& w) { return w->m_stableID; });
     }
 
     std::vector<PHLWINDOW> overviewGridWindows(const PHLWORKSPACE& workspace) {
@@ -293,6 +299,7 @@ namespace OvInternal {
         if (!CTX.enabled)
             return;
 
+        const size_t OWN = out.size();
         for (const auto& window : Desktop::windowState()->windows()) {
             // Promotable, not promoted: a RELEASING tile must leave the grid
             // immediately so the survivors close up WHILE it travels (F3-b-iii,
@@ -300,6 +307,9 @@ namespace OvInternal {
             if (getOverviewWindowToShow(window) == window && overviewGridPromotableIn(CTX, window, monitor))
                 out.emplace_back(window);
         }
+        // The promoted ones after the desktop's own, as before, in their own
+        // creation order.
+        Hyprdrive::GridSolve::order(out, OWN, out.size(), [](const PHLWINDOW& w) { return w->m_stableID; });
     }
 
     std::vector<PHLWINDOW> overviewMainGridWindows(const PHLWORKSPACE& workspace, PHLMONITOR monitor) {
@@ -322,7 +332,11 @@ namespace OvInternal {
         const auto& SIZES = gridView().sizes;
         if (const auto IT = SIZES.find(window.get()); IT != SIZES.end() && IT->second.window.lock() == window)
             return IT->second.track.input;
-        return window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+        // Not observed yet (it mapped after this frame's look, or lives on
+        // another monitor and was promoted here): the size its layout gave it.
+        // Never the live value -- the tile pass moves a window's current size
+        // onto its tile while it draws it (GridSolve.hpp).
+        return window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
     }
 
     // How long a follow may last: 1.5x the window's own size animation
@@ -407,7 +421,7 @@ namespace OvInternal {
         std::erase_if(grid().sizes, [monitor](const auto& entry) { return entry.second.monitor == monitor; });
     }
 
-    // THE SOLVER, and it is now solved ONCE for the whole grid instead of once
+    // THE SOLVER (GridSolve.hpp solve), and it is now solved ONCE for the whole grid instead of once
     // per tile. Everything below the membership walk -- the row-count search,
     // the per-row heights, the centring -- used to run in full for EVERY box
     // query, and a frame asks for a tile's box 4-6 times per tile per monitor
@@ -421,110 +435,12 @@ namespace OvInternal {
     // changed is that the row walk now assigns every cell as it goes instead of
     // stopping at the target.
     namespace {
-        void solveGrid(const std::vector<PHLWINDOW>& windows, const std::vector<Vector2D>& sizes, const CBox& usable, float gap, std::vector<CBox>& out) {
-            out.clear();
-
-            const size_t COUNT = windows.size();
-            const float  GAP   = gap;
-
-            // SCORED WITH THE ROWS PLACEMENT WILL ACTUALLY BUILD (user, 2026-09-23:
-            // "I see 5 windows and a lot of space on the right and left of them").
-            //
-            // This used to give every window an EQUAL cell -- usable width over the
-            // column count -- and take the smallest scale any window allowed in
-            // it. With mixed widths that is the WIDEST window's scale: a
-            // full-width window in a cell sized for a fifth of the row pinned the
-            // scale, and the half-width windows beside it were then drawn far
-            // narrower than their cells. Placement below packs by REAL widths, so
-            // the row came out a good deal narrower than the screen and the
-            // difference sat empty at both ends.
-            //
-            // Now each candidate row count is split exactly as placement splits it
-            // (earlier rows take the remainder), and the scale is the largest that
-            // fits every row's REAL total width and the rows' real stacked height.
-            // It can only be equal or larger than the old answer: the old per-cell
-            // bound was a stricter version of the same constraint.
-            size_t bestRows  = 0;
-            float  bestScale = 0.F;
-            for (size_t rows = 1; rows <= COUNT; ++rows) {
-                const size_t BASE  = COUNT / rows;
-                const size_t EXTRA = COUNT % rows;
-
-                float  scale    = 1.F;
-                float  sumRowH  = 0.F;
-                size_t first    = 0;
-                bool   feasible = true;
-                for (size_t row = 0; row < rows; ++row) {
-                    const size_t N = BASE + (row < EXTRA ? 1 : 0);
-                    if (N == 0) {
-                        feasible = false;
-                        break;
-                    }
-
-                    float rowW = 0.F, rowH = 0.F;
-                    for (size_t i = first; i < first + N; ++i) {
-                        rowW += std::max(1.F, sc<float>(sizes[i].x));
-                        rowH = std::max(rowH, std::max(1.F, sc<float>(sizes[i].y)));
-                    }
-                    first += N;
-
-                    const float ROOM = sc<float>(usable.w) - GAP * sc<float>(N - 1);
-                    if (ROOM <= 1.F) {
-                        feasible = false;
-                        break;
-                    }
-                    scale = std::min(scale, ROOM / rowW);
-                    sumRowH += rowH;
-                }
-
-                const float ROOMH = sc<float>(usable.h) - GAP * sc<float>(rows - 1);
-                if (!feasible || ROOMH <= 1.F || sumRowH <= 0.F)
-                    continue;
-                scale = std::min(scale, ROOMH / sumRowH);
-
-                if (scale > bestScale) {
-                    bestScale = scale;
-                    bestRows  = rows;
-                }
-            }
-
-            if (bestRows == 0 || bestScale <= 0.F)
-                return;
-
-            // Spread the windows over the rows as evenly as possible, earlier rows take
-            // the remainder.
-            const size_t BASE  = COUNT / bestRows;
-            const size_t EXTRA = COUNT % bestRows;
-
-            out.resize(COUNT);
-
-            size_t rowFirst = 0;
-            float  y        = sc<float>(usable.y);
-            for (size_t row = 0; row < bestRows; ++row) {
-                const size_t ROWCOUNT = BASE + (row < EXTRA ? 1 : 0);
-
-                float rowWidth = GAP * sc<float>(ROWCOUNT - 1);
-                float rowH     = 0.F;
-                for (size_t i = 0; i < ROWCOUNT; ++i) {
-                    rowWidth += sc<float>(sizes[rowFirst + i].x) * bestScale;
-                    rowH = std::max(rowH, sc<float>(sizes[rowFirst + i].y) * bestScale);
-                }
-
-                float x = sc<float>(usable.x) + (sc<float>(usable.w) - rowWidth) / 2.F;
-                for (size_t i = rowFirst; i < rowFirst + ROWCOUNT; ++i) {
-                    out[i] = CBox{x, y, sc<float>(sizes[i].x) * bestScale, sc<float>(sizes[i].y) * bestScale};
-                    x += sc<float>(sizes[i].x) * bestScale + GAP;
-                }
-
-                y += rowH + GAP;
-                rowFirst += ROWCOUNT;
-            }
-        }
-
         // THE MEMO, and every field of it is a KEY: the slot vector is only
         // reused when nothing the solver reads has moved. There is no
-        // generation number to forget to bump, and no frame counter -- a frame
-        // counter would have been wrong twice over. renderSearch publishes the
+        // generation number to forget to bump, and the frame counter keys ONE
+        // thing only: inside the frame that draws, the sizes (GridSolve.hpp
+        // frameSolveHolds) -- a window's size read mid-draw can be its tile's.
+        // Everything else stays keyed by value: renderSearch publishes the
         // top-chrome height MID-frame, so two calls in one frame legitimately
         // disagree about `usable`; and a hit test between frames must see the
         // layout that is actually on screen, which is the one whose inputs are
@@ -554,6 +470,9 @@ namespace OvInternal {
             // --- value
             std::vector<CBox> slots;
             bool              valid = false;
+            // The drawn frame it was solved in (0: solved outside one) --
+            // GridSolve.hpp frameSolveHolds.
+            uint64_t          frame = 0;
         };
 
         bool sameBox(const CBox& a, const CBox& b) {
@@ -668,6 +587,8 @@ namespace OvInternal {
         }
 
         const uint64_t MEMBERSGEN = Membership::generation();
+        const bool     INDRAW     = SGridOwnerScope::current(monitor) != nullptr;
+        const uint64_t FRAME      = overviewFrameOn(monitor);
 
         auto&      MEMOS = gridMemos();
         SGridMemo* hit   = nullptr;
@@ -678,7 +599,11 @@ namespace OvInternal {
                 continue;
             if (!sameBox(memo.usable, usable) || memo.query != g_search.query.text)
                 continue;
-            if (memo.members != MEMBERS || memo.sizes != SIZES)
+            if (memo.members != MEMBERS)
+                continue;
+            // ONE SOLVE PER DRAWN FRAME (GridSolve.hpp): a size that reads
+            // differently later in the frame that solved it does not re-solve.
+            if (memo.sizes != SIZES && !Hyprdrive::GridSolve::frameSolveHolds(INDRAW, memo.frame, FRAME, true))
                 continue;
 
             hit = &memo;
@@ -701,8 +626,9 @@ namespace OvInternal {
             hit->usable       = usable;
             hit->members      = MEMBERS;
             hit->sizes        = SIZES;
+            hit->frame        = INDRAW ? FRAME : 0;
 
-            solveGrid(WINDOWS, SIZES, usable, GAP, hit->slots);
+            Hyprdrive::GridSolve::solve(SIZES, usable, GAP, hit->slots);
             hit->valid = !hit->slots.empty();
         }
 
