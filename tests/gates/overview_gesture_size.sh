@@ -127,6 +127,9 @@ run_case() {
 }
 
 rig_start
+# The synthetic gesture is the native tree's (docs/DEBUG.md `gesture`); a
+# build without it (the Omarchy flavour) cannot be driven here.
+dbg "gesture wait 1" | grep -q "expected:" && skip "this build has no synthetic gesture (hyprdrive:debug gesture)"
 setup 1.5
 cfg '{general={gaps_in=5,gaps_out=10,border_size=2,layout="dwindle"}}'
 cfg '{plugin={hyprdrive={scale=0.82,layout="horizontal",workspace_gap=40}}}'
