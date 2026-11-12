@@ -171,6 +171,24 @@ void    noteFocus(const PHLWINDOW& window, Desktop::eFocusReason reason);
 void    syncPointerFocus(PHLMONITOR monitor, const Vector2D& point);
 void    releasePointerFocus();
 
+// A window holds an ACTIVE pointer lock or confinement (a game, Moonlight).
+// The cursor is then the window's, parked on the lock's point, and never "on
+// the dock" -- not even when that point lies over the pill.
+bool    pointerHeldByClient();
+
+// The monitor shows ONE fullscreen window on Hyprland's solitary path: the
+// renderer draws only that window and RENDER_POST_WINDOWS never fires, so the
+// dock is not on screen there, whatever autohide says. A dock that is not
+// drawn takes no input -- no hit test, no seat, no swallowed motion, click or
+// wheel (issue #11: the pointer on an INVISIBLE pill over a fullscreen game
+// took its keyboard and mouse). A composited fullscreen window (anything that
+// blocks the solitary path) keeps today's dock, drawn and live.
+bool    notDrawnOn(PHLMONITOR monitor);
+// pointerHeldByClient() or notDrawnOn(monitor): the dock stands down there.
+bool    inputInert(PHLMONITOR monitor);
+// syncPointerFocus holds the seat right now (the pointer is on the dock).
+bool    seatHeld();
+
 // X24. A click inside the pill, in the same monitor-local RENDER px as
 // pillContains. An icon min/maxes the app's window on THIS desktop: restore
 // if it is hidden, minimize if it is visible. A window only on another

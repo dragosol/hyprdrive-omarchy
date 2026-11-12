@@ -501,6 +501,14 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
     // no icon to fly to -- the target lookup failed and the flight was dropped
     // on its first frame, which is why it teleported. The dock now comes out for
     // the flight and slides away after it.
+    // A HELD POINTER (a game's lock or confinement) is parked on its lock
+    // point, and Hyprland warps it back there after every motion. A point low
+    // on the screen sits over the pill, and every pointer rule above read it
+    // as "on the dock": the pill came out and the hover hook took the seat
+    // from the game (issue #11; the native tree's fix of 2026-10-19). Under a
+    // lock only the overlay or a flight hold the dock out.
+    if (pointerHeldByClient())
+        want = false;
     want = want || overlayHoldsDock() || Flight::anyOn(monitor);
 
     if (want == R.shown) {

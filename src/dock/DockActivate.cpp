@@ -171,6 +171,19 @@ void restoreDockSeat() {
         surf = WINDOW->wlSurface()->resource();
     if (g_pSeatManager && surf)
         g_pSeatManager->setKeyboardFocus(surf);
+
+    // A HELD pointer gets its pointer focus back too (issue #11; the native
+    // tree's fix of 2026-10-19). Hyprland's locked path only warps the cursor
+    // to the lock point and returns -- it never enters the surface again --
+    // and relative motion goes to the pointer focus, so a game the dock took
+    // the seat from stayed deaf to the mouse while its keys worked. Anything
+    // unheld needs nothing here: the next motion enters whatever is under the
+    // cursor.
+    if (const auto HLSURF = g_pSeatManager && surf ? Desktop::View::CWLSurface::fromResource(surf) : nullptr;
+        HLSURF && HLSURF->constraint() && HLSURF->constraint()->isActive() && g_pSeatManager->m_state.pointerFocus != surf) {
+        const auto BOX = HLSURF->getSurfaceBoxGlobal();
+        g_pSeatManager->setPointerFocus(surf, BOX.has_value() ? HLSURF->constraint()->logicPositionHint() - BOX->pos() : Vector2D{});
+    }
 }
 }
 

@@ -20,7 +20,8 @@ void feedPointerMotion(const Vector2D& delta) {
 
         // Pressure does not carry: leave the barrier, or the monitor, and the
         // push starts again from zero.
-        if (!BOX.containsPoint(POINT) || POINT.y < BOX.y + BOX.h - EDGE_BAND)
+        // A held pointer presses nothing: its cursor is parked on the lock point.
+        if (pointerHeldByClient() || !BOX.containsPoint(POINT) || POINT.y < BOX.y + BOX.h - EDGE_BAND)
             R.pressure = 0.F;
         else
             R.pressure += sc<float>(std::max(0.0, delta.y)); // only DOWNWARD motion presses a bottom edge
