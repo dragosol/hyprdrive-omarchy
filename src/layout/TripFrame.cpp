@@ -217,6 +217,27 @@ namespace Hyprdrive::TripFrame {
                 wl_event_source_timer_update(g_timer, 25);
         }
 
+        // How much of the surface this commit repainted (0..1): a frame the
+        // client DREW repaints all of it; X / XWayland also commit for
+        // other reasons (a frame callback, an exposure elsewhere), with
+        // little or no damage -- those are not a frame.
+        double repainted(const SP<CWLSurfaceResource>& s) {
+            const auto AREA = [](const CRegion& r) {
+                double a = 0;
+                for (const auto& R : r.getRects())
+                    a += double(R.x2 - R.x1) * double(R.y2 - R.y1);
+                return a;
+            };
+            const auto&  C  = s->m_current;
+            const double SA = C.size.x * C.size.y, BA = C.bufferSize.x * C.bufferSize.y;
+            double       f  = 0;
+            if (SA > 0)
+                f = std::max(f, AREA(C.damage.copy().intersect(CBox{{}, C.size})) / SA);
+            if (BA > 0)
+                f = std::max(f, AREA(C.bufferDamage.copy().intersect(CBox{{}, C.bufferSize})) / BA);
+            return f;
+        }
+
         void onCommit(const PHLWINDOWREF& ref) {
             const auto W = ref.lock();
             SHeld*     H = W ? find(W) : nullptr;
@@ -225,7 +246,12 @@ namespace Hyprdrive::TripFrame {
             const Vector2D SENT = W->getReportedSize();
             TripFrameRule::sent(H->state, !near(SENT, H->snapSize), !near(SENT, H->sent));
             H->sent = SENT;
-            TripFrameRule::committed(H->state, msSince(H->at), near(W->wlSurface()->resource()->m_current.size, SENT));
+            const auto RES = W->wlSurface()->resource();
+            const bool AT  = near(RES->m_current.size, SENT);
+            const double REP = repainted(RES);
+            if (AT && H->state.resized)
+                trace(std::format("{} commit at {}x{} after {:.0f} ms, {:.0f}% repainted", W->m_class, SENT.x, SENT.y, msSince(H->at), REP * 100));
+            TripFrameRule::committed(H->state, msSince(H->at), AT && REP >= TripFrameRule::FULL_REPAINT);
             review();
         }
 

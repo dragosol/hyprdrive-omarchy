@@ -17,8 +17,18 @@
 // Decided by what the client COMMITS, not by what kind of window it is:
 //   - it was never sent another size (a trip that kept its size): at once,
 //     once that is clear (UNCHANGED_MS);
-//   - its SECOND commit at the size it was sent: the first may be the blank
-//     one (the X server's background, CEF's white), the second is drawn;
+//   - its SECOND FRAME at the size it was sent: the first may be the blank
+//     one (the X server's background, CEF's white), the second is drawn. A
+//     frame is a commit that repaints (nearly) all of the window, and the
+//     second counts only MIN_GAP_MS after the first: XWayland re-commits the
+//     same blank picture, fully damaged, when something else happens to the
+//     window (measured on the rig: 60 ms after the white frame, as the
+//     launcher's helper window mapped and the desktop re-arranged; counting
+//     it released the hold on the white frame). A client's real frame comes
+//     its redraw time after the blank one (CEF: ~150 ms); one that draws
+//     faster than MIN_GAP_MS waits for its next frame or SETTLE_MS. A heuristic
+//     on purpose: commits do not say what is in them, and reading the buffer
+//     back each frame costs a GPU stall;
 //   - a client that commits once and then stays still (a plain X11 client
 //     redrawing once): SETTLE_MS after that one commit -- longer than the
 //     ~150 ms a CEF launcher takes from its white frame to its real one;
@@ -30,6 +40,8 @@ namespace Hyprdrive::TripFrameRule {
     constexpr double UNCHANGED_MS = 100.0;
     constexpr double SETTLE_MS    = 250.0;
     constexpr double TIMEOUT_MS   = 400.0;
+    constexpr double FULL_REPAINT = 0.5; // of the window's area: a frame, not a touch-up
+    constexpr double MIN_GAP_MS   = 100.0;
 
     struct SState {
         bool   resized = false; // it was sent a size other than the snapshot's
@@ -47,10 +59,13 @@ namespace Hyprdrive::TripFrameRule {
         if (!s.resized || changedSinceLast)
             s = {.resized = true};
     }
-    // It committed, `atSent`: at the size it was sent.
+    // It committed a FRAME (a full repaint, FULL_REPAINT), `atSent`: at the
+    // size it was sent.
     inline void committed(SState& s, double ms, bool atSent) {
         if (!s.resized || !atSent)
             return;
+        if (s.drawn >= 1 && ms - s.firstMs < MIN_GAP_MS)
+            return; // the same blank picture again, re-committed
         if (s.drawn++ == 0)
             s.firstMs = ms;
     }

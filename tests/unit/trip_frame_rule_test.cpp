@@ -30,6 +30,16 @@ int main() {
         committed(s, 155, true); // drawn
         CHECK(decide(s, 155) == ERelease::Drawn);
     }
+    {   // XWayland re-commits the white frame 60 ms later (the helper window mapped): not a frame
+        SState s;
+        sent(s, true, true);
+        committed(s, 1, true);   // white
+        committed(s, 62, true);  // white again
+        CHECK(s.drawn == 1);
+        CHECK(decide(s, 62) == ERelease::Hold);
+        committed(s, 152, true); // drawn
+        CHECK(decide(s, 152) == ERelease::Drawn);
+    }
     {   // a client that draws once, late, and then stays still
         SState s;
         sent(s, true, true);
@@ -66,8 +76,8 @@ int main() {
         CHECK(s.drawn == 0);
         committed(s, 30, true);
         CHECK(decide(s, 40) == ERelease::Hold);
-        committed(s, 60, true);
-        CHECK(decide(s, 60) == ERelease::Drawn);
+        committed(s, 160, true);
+        CHECK(decide(s, 160) == ERelease::Drawn);
         // the same size again is not a new one
         SState t;
         sent(t, true, true);
