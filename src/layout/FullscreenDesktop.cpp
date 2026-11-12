@@ -1356,8 +1356,12 @@ namespace Hyprdrive::FullscreenDesktop {
         // stays there quietly, marked. Only while that app is still
         // fullscreen on its desktop; else it is an ordinary window there.
         const auto WS = w->m_workspace;
+        // (By the desktop, or by its NUMBER when that desktop has gone:
+        // Hyprland drops an emptied desktop the moment the view leaves it,
+        // and makes a new one under that number for a window launched there.)
         for (auto it = g_debts.begin(); it != g_debts.end(); ++it) {
-            if (!it->beside || it->space.lock() != WS)
+            const auto SPACE = it->space.lock();
+            if (!it->beside || (SPACE ? SPACE != WS : placeOf(*it) != WS->m_id))
                 continue;
             const auto APP  = it->app.lock();
             const auto HOME = it->home.lock();

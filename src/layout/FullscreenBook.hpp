@@ -156,7 +156,7 @@ namespace Hyprdrive::FullscreenBook {
     // the link's: while the app is still fullscreen on its desktop, the debt
     // becomes the link again, owing what it owed.
     struct SRelinkFacts {
-        bool besideDebt    = false; // the window's desktop is a beside debt's
+        bool besideDebt    = false; // the window's desktop is a beside debt's (the desktop, or a new one in its place)
         bool appFullscreen = false; // ...whose app is mapped, fullscreen on its own desktop
         bool sameMonitor   = false; // ...on the debt's monitor
     };

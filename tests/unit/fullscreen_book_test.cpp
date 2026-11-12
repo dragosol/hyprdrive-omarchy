@@ -1092,14 +1092,14 @@ namespace linksim {
         std::vector<int> wins; // own windows (Trip: the app)
     };
     struct SLaunch {
-        Key  desk; // the view when it was launched
+        Id   id; // the NUMBER of the desktop on view when it was launched (Hyprland's exec rule: made again if it has gone)
         bool prompted;
     };
     constexpr int SETTLE_TICKS = 3; // 250 ms in 100 ms ticks
 
     struct World {
         Row                  row;
-        bool                 relinkOn = true, membersOn = true;
+        bool                 relinkOn = true, byPlace = true, membersOn = true;
         std::vector<SDesk>   desks;
         std::vector<SWin>    wins;
         std::vector<SLink>   links;
@@ -1184,7 +1184,7 @@ namespace linksim {
             if (!desk(d) || (driving ? target : active) == d)
                 return;
             target  = d;
-            driving = 2;
+            driving = 3;
         }
         bool member(const SLink& l, int w) {
             return std::ranges::find(l.wins, w) != l.wins.end();
@@ -1204,9 +1204,8 @@ namespace linksim {
         }
 
         // Placement at openEarly: over the app -> beside; else openedOn.
-        void map(Key where, bool prompted) {
-            if (!desk(where))
-                where = active;
+        void map(Id id, bool prompted) {
+            Key where = byId(id) ? byId(id)->key : id >= 1 ? create(id) : active;
             wins.push_back({nextWin++, where});
             SWin& w = wins.back();
             if (where == appSpace && appOk()) {
@@ -1248,7 +1247,7 @@ namespace linksim {
             if (!relinkOn)
                 return;
             for (auto it = debts.begin(); it != debts.end(); ++it)
-                if (it->beside && it->space == where) {
+                if (it->beside && (it->space == where || (byPlace && !desk(it->space) && placeOf(*it) == desk(where)->id))) {
                     if (!relink({.besideDebt = true, .appFullscreen = appOk(), .sameMonitor = true}))
                         return;
                     SLink l{appSpace, where, desk(where)->id, true, prompted, it->wins};
@@ -1351,7 +1350,10 @@ namespace linksim {
         }
         void tick() {
             ++now;
-            if (driving > 0 && --driving == 0 && desk(target))
+            // (The monitor shows the target a tick before the strip is at
+            // rest: Hyprland drops the desktop it left at once, the strip
+            // still slides.)
+            if (driving > 0 && --driving == 1 && desk(target))
                 active = target;
             step("tick");
         }
@@ -1388,7 +1390,7 @@ namespace linksim {
     }
 
     // Returns the number of failing rounds.
-    int run(bool relinkOn, bool membersOn, int rounds, unsigned seed, bool print) {
+    int run(bool relinkOn, bool byPlace, bool membersOn, int rounds, unsigned seed, bool print) {
         std::mt19937 rng(seed);
         int          bad = 0;
         const Row    ROWS[] = {Row{}, Row::block(1, 10)};
@@ -1398,6 +1400,7 @@ namespace linksim {
             World     w   = make(ROW, H);
             w.relinkOn = relinkOn;
             w.membersOn = membersOn;
+            w.byPlace   = byPlace;
             const std::set<Id> START{ROW.idOf(H), ROW.idOf(H + 1)}; // before the fullscreen trip
             const int          STEPS = 10 + rng() % 70;
             for (int s = 0; s < STEPS; ++s) {
@@ -1409,7 +1412,7 @@ namespace linksim {
                     case 0:
                     case 1:
                         if (w.appFs && w.pending.size() < 3) {
-                            w.pending.push_back({w.active, rng() % 4 != 0});
+                            w.pending.push_back({w.desk(w.active) ? w.desk(w.active)->id : NO_PLACE, rng() % 4 != 0});
                             w.log.push_back("launch from " + std::to_string(w.desk(w.active) ? w.desk(w.active)->id : -1));
                         }
                         break;
@@ -1419,7 +1422,7 @@ namespace linksim {
                             const size_t I = rng() % w.pending.size();
                             const auto   L = w.pending[I];
                             w.pending.erase(w.pending.begin() + I);
-                            w.map(L.desk, L.prompted);
+                            w.map(L.id, L.prompted);
                             w.step(L.prompted ? "map (asked)" : "map (unasked)");
                         }
                         break;
@@ -1447,7 +1450,7 @@ namespace linksim {
             while (!w.pending.empty()) {
                 const auto L = w.pending.back();
                 w.pending.pop_back();
-                w.map(L.desk, L.prompted);
+                w.map(L.id, L.prompted);
                 w.step("map (late)");
             }
             for (int i = 0; i < 4; ++i)
@@ -1485,14 +1488,18 @@ namespace linksim {
 }
 
 static void wayBackInterleaved() {
-    CHECK(linksim::run(true, true, 20000, 20261111, true) == 0);
+    CHECK(linksim::run(true, true, true, 20000, 20261111, true) == 0);
     // The generator finds the old race: without relink, a window launched from
     // the Beside desktop that maps after the link ended is "a desktop of its
     // own" and the room is never given back...
-    CHECK(linksim::run(false, true, 20000, 20261111, false) > 0);
+    CHECK(linksim::run(false, false, true, 20000, 20261111, false) > 0);
+    // ...relinking only on the same desktop is not enough: Hyprland dropped the
+    // emptied one the moment the view left it and makes a new one under that
+    // number for the window launched from there...
+    CHECK(linksim::run(true, false, true, 20000, 20261111, false) > 0);
     // ...and without the members, one that joined the link is someone else's
     // once the app leaves fullscreen with it still open.
-    CHECK(linksim::run(true, false, 20000, 20261111, false) > 0);
+    CHECK(linksim::run(true, true, false, 20000, 20261111, false) > 0);
     // relink is that rule, and nothing else.
     for (int m = 0; m < 8; ++m)
         CHECK(relink({.besideDebt = !!(m & 1), .appFullscreen = !!(m & 2), .sameMonitor = !!(m & 4)}) == (m == 7));
