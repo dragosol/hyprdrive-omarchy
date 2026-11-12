@@ -4,6 +4,8 @@
 #include "DesktopOrder.hpp"
 #include "Rows.hpp"
 #include "FullscreenBook.hpp"
+#include "ConfigureHold.hpp"
+#include "TripSizes.hpp"
 #include "DesktopStrip.hpp"
 #include "Config.hpp"
 #include "DebugPaths.hpp"
@@ -185,6 +187,31 @@ namespace Hyprdrive::FullscreenDesktop {
                 if (T.win.lock() == w)
                     return &T;
             return nullptr;
+        }
+
+        // ONE SIZE EACH WAY (TripSizes.hpp): between a fullscreen change and
+        // the trip's move it calls for, the window's sizes wait; the pass that
+        // moves it (reconcile) releases them, once.
+        bool sizesWait(const PHLWINDOW& w) {
+            if (!w)
+                return false;
+            const STrip* T  = tripOf(w);
+            const auto   WS = w->m_workspace;
+            const bool   WAIT = TripSizes::wait({
+                  .mapped      = w->m_isMapped,
+                  .carrying    = g_carrying.win.lock() == w,
+                  .onTrip      = T != nullptr,
+                  .onTripSpace = T && WS && T->space.lock() == WS,
+                  .fullscreen  = fullscreen(w),
+                  .ordinary    = WS && DesktopOrder::ordinary(WS) && WS->m_monitor.lock(),
+                  .others      = WS ? othersOn(WS, w) : 0,
+                  .settled     = std::ranges::any_of(g_settled, [&](const PHLWINDOWREF& r) { return r.lock() == w; }),
+            });
+            // The pass that ends the wait is due (it is, after every fullscreen
+            // change; this keeps it so whatever held the event back).
+            if (WAIT && !g_carrying.win)
+                arm(1);
+            return WAIT;
         }
 
         // Show `ws` on `mon`: the strip's slide (reversible where it is), else Hyprland's.
@@ -1251,6 +1278,8 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             // (A beside debt waiting for its windows to go is looked at again
             // when one closes or moves: the hooks below.)
+            // Every size held for a move this pass made (or decided against).
+            ConfigureHold::release();
             int next = watch || LINK_WATCH ? 60 : !g_trips.empty() || !g_origins.empty() || !g_links.empty() ? 250 : 0;
             if (COMPACT_MS > 0 && (next == 0 || COMPACT_MS < next))
                 next = COMPACT_MS;
@@ -1486,6 +1515,7 @@ namespace Hyprdrive::FullscreenDesktop {
 
     void init() {
         DesktopOrder::onRenumbered(syncPlaces);
+        ConfigureHold::setGate(sizesWait);
         restore();
         g_healDue = "load";
         arm(1);
@@ -1577,6 +1607,8 @@ namespace Hyprdrive::FullscreenDesktop {
         // (Also at Hyprland's exit: the handover then goes with the process.)
         save();
         DesktopOrder::onRenumbered(nullptr);
+        // Nothing stays held by a gate whose code goes with the plugin.
+        ConfigureHold::setGate(nullptr);
         g_monAddHook.reset();
         g_monGoneHook.reset();
         g_monLayoutHook.reset();

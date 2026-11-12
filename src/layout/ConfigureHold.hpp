@@ -48,4 +48,17 @@ namespace Hyprdrive::ConfigureHold {
 
     // PLUGIN_EXIT: nothing may stay held once the hook is gone.
     void flush();
+
+    // A WINDOW WHOSE SIZES WAIT FOR A MOVE ABOUT TO HAPPEN (user, 2026-11-11:
+    // Battle.net "struggling exiting in and out of fullscreen"). A fullscreen
+    // trip (FullscreenDesktop) is decided a pass after the fullscreen change,
+    // and its move takes the window out of fullscreen and back
+    // (moveWindowToWorkspace): an X11 client was sent fullscreen, its tile on
+    // the next desktop, its mosaic size and fullscreen again within 3 ms -- and
+    // a slow one (Wine/CEF) then drew every one of them, late, white first,
+    // while the trip carried it. `gate` says, per window, that its sizes wait:
+    // noted, not sent. release() sends each noted window ONCE whose gate has
+    // opened (Hyprland's own check drops a size the client already has).
+    void setGate(std::function<bool(const PHLWINDOW&)> gate);
+    void release();
 }
