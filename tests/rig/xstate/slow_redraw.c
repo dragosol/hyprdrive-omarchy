@@ -17,6 +17,14 @@
 //                  FULLSCREEN (it no longer covers the screen)
 //     --size WxH   preferred (and initial) size, default 900x620
 //     --min WxH    WM_NORMAL_HINTS minimum size, default 640x480
+//     --child S    a second window of the same app (same WM_CLASS, same pid:
+//                  one process), 360x240, mapped S seconds after start and
+//                  unmapped --child-life ms later -- a launcher's helper window
+//     --child-fs MS  the same, MS ms after each time the window goes
+//                  fullscreen: it maps on the trip's desktop
+//     --child-unfs MS  the same, MS ms after each time it leaves fullscreen:
+//                  it maps at home, while the trip comes back
+//     --child-life MS  how long a child stays mapped (default 500; 0: for good)
 // It honours _NET_WM_STATE_FULLSCREEN as any client does: the WM sizes it. It
 // prints one line per resize: "t=<ms> size WxH fs=<0|1>" and per repaint.
 #include <poll.h>
@@ -52,6 +60,7 @@ static void fill(xcb_window_t w, xcb_gcontext_t gc, uint32_t rgb, uint16_t W, ui
 int main(int argc, char** argv) {
     double lag = 0.150, seconds = 120;
     int    flash = 0, insist = 0, echo = 0, pw = 900, ph = 620, mw = 640, mh = 480;
+    double childAt = -1, childFs = -1, childUnfs = -1, childLife = 0.5;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--lag") && i + 1 < argc)
             lag = atof(argv[++i]) / 1000.0;
@@ -67,6 +76,14 @@ int main(int argc, char** argv) {
             sscanf(argv[++i], "%dx%d", &mw, &mh);
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc)
             seconds = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--child") && i + 1 < argc)
+            childAt = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--child-fs") && i + 1 < argc)
+            childFs = atof(argv[++i]) / 1000.0;
+        else if (!strcmp(argv[i], "--child-unfs") && i + 1 < argc)
+            childUnfs = atof(argv[++i]) / 1000.0;
+        else if (!strcmp(argv[i], "--child-life") && i + 1 < argc)
+            childLife = atof(argv[++i]) / 1000.0;
     }
     c = xcb_connect(NULL, NULL);
     if (xcb_connection_has_error(c)) {
@@ -95,6 +112,7 @@ int main(int argc, char** argv) {
     xcb_gcontext_t gc = xcb_generate_id(c);
     const uint32_t fg = 0xff8800;
     xcb_create_gc(c, gc, w, XCB_GC_FOREGROUND, &fg);
+    xcb_window_t cw = XCB_WINDOW_NONE; // the helper window: made when first due (created up front, the WM took its size for the main one)
     xcb_map_window(c, w);
     xcb_flush(c);
     printf("slow_redraw: window 0x%x lag=%.0fms flash=%d insist=%d size=%dx%d min=%dx%d\n", w, lag * 1000, flash, insist, pw, ph, mw, mh);
@@ -103,6 +121,8 @@ int main(int argc, char** argv) {
     const double  START = now();
     int           W = pw, H = ph, drawnW = -1, drawnH = -1, fs = 0, first = 1;
     double        paintAt = 0, insistAt = 0;
+    double        childMapAt = childAt >= 0 ? START + childAt : 0, childUnmapAt = 0;
+    int           childUp = 0;
     struct pollfd pfd = {.fd = xcb_get_file_descriptor(c), .events = POLLIN};
     for (;;) {
         const double t = now();
@@ -125,7 +145,41 @@ int main(int argc, char** argv) {
                 fflush(stdout);
             }
         }
+        if (childMapAt > 0 && t >= childMapAt) {
+            childMapAt = 0;
+            if (cw == XCB_WINDOW_NONE) {
+                cw                     = xcb_generate_id(c);
+                const uint32_t cvals[] = {XCB_BACK_PIXMAP_NONE, XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_EXPOSURE};
+                xcb_create_window(c, XCB_COPY_FROM_PARENT, cw, scr->root, 0, 0, 360, 240, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, scr->root_visual,
+                                  XCB_CW_BACK_PIXMAP | XCB_CW_EVENT_MASK, cvals);
+                const char ctitle[] = "slow redraw helper";
+                xcb_change_property(c, XCB_PROP_MODE_REPLACE, cw, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8, strlen(ctitle), ctitle);
+                xcb_change_property(c, XCB_PROP_MODE_REPLACE, cw, A_NAME, A_UTF8, 8, strlen(ctitle), ctitle);
+                xcb_change_property(c, XCB_PROP_MODE_REPLACE, cw, XCB_ATOM_WM_CLASS, XCB_ATOM_STRING, 8, sizeof cls, cls);
+            }
+            if (!childUp) {
+                xcb_map_window(c, cw);
+                xcb_flush(c);
+                childUp = 1;
+                printf("t=%.0f child mapped\n", (t - START) * 1000);
+                fflush(stdout);
+            }
+            if (childLife > 0)
+                childUnmapAt = t + childLife;
+        }
+        if (childUnmapAt > 0 && t >= childUnmapAt) {
+            childUnmapAt = 0;
+            xcb_unmap_window(c, cw);
+            xcb_flush(c);
+            childUp = 0;
+            printf("t=%.0f child unmapped\n", (t - START) * 1000);
+            fflush(stdout);
+        }
         double wake = 1.0;
+        if (childMapAt > 0 && childMapAt - t < wake)
+            wake = childMapAt - t;
+        if (childUnmapAt > 0 && childUnmapAt - t < wake)
+            wake = childUnmapAt - t;
         if (paintAt > 0 && paintAt - t < wake)
             wake = paintAt - t;
         if (insistAt > 0 && insistAt - t < wake)
@@ -161,6 +215,8 @@ int main(int argc, char** argv) {
                         fflush(stdout);
                     }
                 }
+            } else if (type == XCB_EXPOSE && ((xcb_expose_event_t*)ev)->window == cw) {
+                fill(cw, gc, 0x22aa44, 360, 240);
             } else if (type == XCB_EXPOSE) {
                 // Exposed at the size it has drawn: repaint at once; else the
                 // lagged repaint does it.
@@ -181,6 +237,10 @@ int main(int argc, char** argv) {
                 }
                 if (f != fs) {
                     fs = f;
+                    if (fs && childFs >= 0)
+                        childMapAt = now() + childFs;
+                    if (!fs && childUnfs >= 0)
+                        childMapAt = now() + childUnfs;
                     printf("t=%.0f fullscreen=%d\n", (now() - START) * 1000, fs);
                     fflush(stdout);
                 }

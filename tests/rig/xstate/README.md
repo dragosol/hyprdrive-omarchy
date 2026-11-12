@@ -101,3 +101,10 @@ set (Wine's state sync). It logs `t=<ms> size WxH fs=<0|1>` per configure: the g
 to see every size the client was ever sent. Build it into a directory user hyprtest can read
 (`$GOUT`, `/tmp/hl-<name>`): the session scratchpad is not, and the window then never maps (the
 exec fails with "Permission denied" in the client's own log, nothing in Hyprland's).
+
+The launcher's helper windows: `--child S` maps a second window of the same app (same `WM_CLASS`,
+same pid: one process; 360x240, green) S seconds after start and unmaps it `--child-life` ms later
+(default 500; 0 keeps it); `--child-fs MS` / `--child-unfs MS` do the same MS ms after each time the
+main window goes into / out of fullscreen (the helper maps on the trip's desktop / at home while
+the trip comes back). The helper's size is remembered for the class like any window's (Mosaic's
+per-app sizes), so a later run's main window can open at it: compare against the run's own start.
