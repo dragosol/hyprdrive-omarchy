@@ -809,16 +809,24 @@ namespace Hyprdrive::Mosaic {
         // Any other window leaving (closed, moved, dragged off) is an edit.
         // A window opening or arriving consumes the hold (backFromTrip).
         void holdForTrip(const SP<Layout::ITarget>& target) {
-            ++m_edits;
-            const int  I = indexOf(target);
             const auto W = target ? target->window() : PHLWINDOW{};
+            // The traveller's app's own windows leaving are not an edit
+            // (MosaicTripHold: a launcher's helper closing while it is away).
+            if (MosaicTripHold::isEdit(m_tripHold ? &m_tripHold->keys : nullptr, tripApp(W)))
+                ++m_edits;
+            const int I = indexOf(target);
             // Not a trip: a hold kept for another window's trip stays, outdated
             // by the edit (backFromTrip will see it and say so).
             if (I < 0 || !W || !Hyprdrive::FullscreenDesktop::carrying(W, false))
                 return;
+            ++m_edits;
             STripHold hold{.entry = m_entries[sc<size_t>(I)], .tree = m_tree, .tiledHold = m_tiledHold, .dropAt = m_dropAt, .canvasDrop = m_canvasDrop};
             hold.keys.traveller = target.get();
-            hold.keys.index     = sc<size_t>(I);
+            hold.keys.app       = tripApp(W);
+            std::vector<MosaicTripHold::SKey> before;
+            for (size_t i = 0; i < sc<size_t>(I); ++i)
+                before.push_back(tripKey(m_entries[i]));
+            hold.keys.index = MosaicTripHold::placeOf(hold.keys, before);
             for (const auto& E : m_entries)
                 if (E.target.lock() != target)
                     hold.keys.rest.push_back(tripKey(E));
@@ -828,36 +836,50 @@ namespace Hyprdrive::Mosaic {
         }
         // It comes home from that trip: back in its place, its tile and the
         // arrangement as they were -- if nothing changed here meanwhile (else
-        // false, and it arrives as any window does: the normal rules).
+        // false, and it arrives as any window does: the normal rules). A
+        // window of its app arriving meanwhile keeps the hold.
         bool backFromTrip(const SP<Layout::ITarget>& target) {
             if (!m_tripHold)
                 return false;
-            auto       hold = std::move(*m_tripHold);
-            m_tripHold.reset();
             const auto W = target ? target->window() : PHLWINDOW{};
             std::vector<MosaicTripHold::SKey> now;
             for (const auto& E : m_entries)
                 now.push_back(tripKey(E));
-            if (!MosaicTripHold::restorable(hold.keys, target.get(), W && Hyprdrive::FullscreenDesktop::carrying(W, true), now, m_edits,
-                                            m_dropAt.has_value() || m_canvasDrop.has_value())) {
-                ++m_edits;
-                if (W && hold.keys.traveller == target.get())
-                    trace(std::format("trip: {} home, but its desktop changed meanwhile: it arrives as any window", appOf(W)));
+            // A drop or a swap set an arrangement -- not one the app's own
+            // window arriving set (a helper opened at the pointer).
+            const auto OWNDROP = [&](const PHLWINDOW& d) { return !MosaicTripHold::isEdit(&m_tripHold->keys, tripApp(d)); };
+            const bool ARRANGED = (m_dropAt && !OWNDROP(m_dropAt->target.lock() ? m_dropAt->target.lock()->window() : PHLWINDOW{})) ||
+                (m_canvasDrop && !OWNDROP(m_canvasDrop->target.lock() ? m_canvasDrop->target.lock()->window() : PHLWINDOW{}));
+            const auto WHY = MosaicTripHold::decide(m_tripHold->keys, target.get(), tripApp(W), W && Hyprdrive::FullscreenDesktop::carrying(W, true), now, m_edits,
+                                                    ARRANGED, !m_tripHold->tree.empty());
+            if (WHY == MosaicTripHold::EHome::Sibling) {
+                trace(std::format("trip: {} (its app's own window) arrives meanwhile: the hold stays", appOf(W)));
                 return false;
             }
+            auto hold = std::move(*m_tripHold);
+            m_tripHold.reset();
             ++m_edits;
+            if (WHY != MosaicTripHold::EHome::Restore) {
+                if (W && hold.keys.traveller == target.get())
+                    trace(std::format("trip: {} home, but its desktop changed meanwhile: it arrives as any window ({})", appOf(W), MosaicTripHold::why(WHY)));
+                return false;
+            }
             m_dragHold.reset();
             hold.entry.target = target;
-            m_entries.insert(m_entries.begin() + sc<std::ptrdiff_t>(MosaicTripHold::homeIndex(hold.keys, m_entries.size())), hold.entry);
+            m_entries.insert(m_entries.begin() + sc<std::ptrdiff_t>(MosaicTripHold::homeIndex(hold.keys, now)), hold.entry);
             m_tree        = std::move(hold.tree);
             m_tiledHold   = hold.tiledHold;
             m_dropAt      = hold.dropAt;
             m_canvasDrop  = hold.canvasDrop;
-            trace(std::format("trip: {} home to place {} of {}", appOf(W), hold.keys.index, m_entries.size()));
+            trace(std::format("trip: {} home to place {} of {}", appOf(W), indexOf(target), m_entries.size()));
             return true;
         }
+        static MosaicTripHold::SApp tripApp(const PHLWINDOW& w) {
+            return w ? MosaicTripHold::SApp{.pid = w->getPID(), .cls = appOf(w)} : MosaicTripHold::SApp{};
+        }
         static MosaicTripHold::SKey tripKey(const SMosaicEntry& e) {
-            return {.who = e.target.lock().get(), .w = e.natural.x, .h = e.natural.y, .id = e.id};
+            const auto T = e.target.lock();
+            return {.who = T.get(), .w = e.natural.x, .h = e.natural.y, .id = e.id, .app = tripApp(T ? T->window() : PHLWINDOW{})};
         }
 
         void newTarget(SP<Layout::ITarget> target) override {
@@ -1200,7 +1222,8 @@ namespace Hyprdrive::Mosaic {
             const int I = indexOf(target);
             if (I < 0)
                 return;
-            ++m_edits;
+            if (MosaicTripHold::isEdit(m_tripHold ? &m_tripHold->keys : nullptr, tripApp(target ? target->window() : PHLWINDOW{})))
+                ++m_edits;
             // IN THE TILES, DWINDLE'S RESIZE (user, 2026-10-23: "behave exactly
             // like dwindle"): live, the splits DwindleAlgorithm::resizeTarget
             // moves (dwindle:smart_resizing or not), every tile following.
