@@ -103,6 +103,9 @@
 #                     $HYPRDRIVE_SIBLING_TREE (default ../hyprdrive-native, beside
 #                     this checkout); SKIP when it is not there or does not
 #                     carry the list. HYPRDRIVE_SIBLING_TREE= skips it.
+#   grid_reflow_test  GridReflowModel.hpp: the overview grid's reflow ease and its
+#                     size filter; a box query between frames never moves a tile
+#                     (the old gridReflowBox is kept verbatim as the control).
 #
 # Anything that needs a running Hyprland is a GATE (tests/gates/), not a host
 # test.
@@ -180,6 +183,8 @@ run motion_spacing_test tests/unit/motion_spacing_test.cpp
 # shellcheck disable=SC2046
 run motion_math_test tests/unit/motion_math_test.cpp $(pkg-config --cflags --libs hyprutils)
 run plate_color_test tests/unit/plate_color_test.cpp
+# shellcheck disable=SC2046
+run grid_reflow_test tests/unit/grid_reflow_test.cpp $(pkg-config --cflags --libs hyprutils)
 run icon_overrides_test tests/unit/icon_overrides_test.cpp
 run identity_parsers_test tests/unit/identity_parsers_test.cpp
 # shellcheck disable=SC2046

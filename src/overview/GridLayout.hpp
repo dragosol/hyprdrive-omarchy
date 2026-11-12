@@ -29,6 +29,7 @@
 // now and unit-tested there.
 
 #include "Overview.hpp"
+#include "GridReflowModel.hpp"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -57,19 +58,28 @@ namespace OvInternal {
     // straight to its new slot. Each window keeps its own reflow clock: when its
     // target slot changes it travels there over mission_control_reflow_ms.
     // OVERVIEW_CPP_SPEC B4 + user requirement U4.
+    //
+    // The ease itself is GridReflowModel.hpp's SEase; this adds the window it
+    // belongs to, so a recycled address never inherits a dead window's ease.
     struct SGridReflow {
-        PHLWINDOWREF    window;
-        CBox            from;
-        CBox            to;
-        Time::steady_tp start;
-        uint64_t        lastFrame    = 0;
-        bool            promotedLast = false;
+        PHLWINDOWREF                                window;
+        Hyprdrive::GridReflow::SEase<Time::steady_tp> ease;
+    };
+
+    // The size the grid lays one window out with (GridReflowModel.hpp:
+    // SSizeTrack): its size animation's goal, adopted by the owning frame
+    // once it has moved past rounding noise and stayed moved.
+    struct SGridSize {
+        PHLWINDOWREF                                     window;
+        MONITORID                                        monitor = MONITOR_INVALID;
+        Hyprdrive::GridReflow::SSizeTrack<Time::steady_tp> track;
     };
 
     // The grid's whole mutable state. See the header note for why there is one.
     struct SGridAnimator {
         std::unordered_map<Desktop::View::CWindow*, SGridReflow>  reflows;
         std::unordered_map<Desktop::View::CWindow*, SGridRelease> releases;
+        std::unordered_map<Desktop::View::CWindow*, SGridSize>    sizes;
 
         // Which OUTPUTS are still travelling, so their overview needs another
         // frame. One bool for the whole session was wrong with two monitors up:
@@ -89,6 +99,46 @@ namespace OvInternal {
     };
 
     SGridAnimator& grid();
+    // The same state, read-only: what every box QUERY gets.
+    const SGridAnimator& gridView();
+
+    // WHO MAY MOVE THE GRID (GridReflowModel.hpp has the bug this answers).
+    // One overview frame owns the grid's eases and its input sizes: while a
+    // scope is alive for a monitor, box queries about that monitor STEP the
+    // eases (advance, seed, retarget); with none alive -- a hit test, a commit
+    // or damage handler, a tooltip, the drag, a debug report -- they PEEK,
+    // which is const. Only COverview can open one (the constructor is
+    // private), and the functions that mutate take it as an argument, so the
+    // compiler holds every other caller to the read.
+    class SGridOwnerScope {
+      public:
+        ~SGridOwnerScope();
+        SGridOwnerScope(const SGridOwnerScope&)            = delete;
+        SGridOwnerScope& operator=(const SGridOwnerScope&) = delete;
+
+        // The scope owning `monitor` right now, or null.
+        static const SGridOwnerScope* current(const PHLMONITOR& monitor);
+        MONITORID                     monitor() const {
+            return m_monitor;
+        }
+
+      private:
+        friend class ::COverview;
+        explicit SGridOwnerScope(const PHLMONITOR& monitor);
+
+        MONITORID              m_monitor = MONITOR_INVALID;
+        const SGridOwnerScope* m_prev    = nullptr;
+    };
+
+    // The owner's per-frame size snapshot: every window on the monitor has its
+    // size goal looked at once, and a change the grid has not taken yet keeps
+    // the frames coming until it is taken or gone. `resizing` is the window
+    // the overview's own resize handle is changing, taken without the wait.
+    void gridObserveSizes(const SGridOwnerScope& owner, const PHLMONITOR& monitor, const PHLWINDOW& resizing);
+    // An overview closed: its windows' sizes are taken fresh next time.
+    void gridForgetSizes(MONITORID monitor);
+    // A tile handed a start box by an EVENT (a cancelled drop), not a query.
+    void gridReflowSeed(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& from, const CBox& to);
 
     // "This output still owes a frame", and "take that debt". Free functions so
     // no caller has to remember that the flag is keyed by output now.
@@ -144,8 +194,9 @@ namespace OvInternal {
     float gridReflowEase(float t, bool exiting = false);
     bool  gridBoxesDiffer(const CBox& a, const CBox& b);
     // Called from getOverviewWindowBox, i.e. many times per window per frame from
-    // render, hit-test and drag alike. Restarting only when the *target* moves
-    // keeps it idempotent within a frame, so those call sites cannot disagree.
+    // render, hit-test and drag alike. Inside the owning frame
+    // (SGridOwnerScope) it steps the window's ease; anywhere else it peeks,
+    // so a query can never re-aim it.
     CBox  gridReflowBox(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom = nullptr, bool promoted = false, bool exiting = false);
 
 } // namespace OvInternal

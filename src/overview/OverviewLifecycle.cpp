@@ -21,6 +21,8 @@ COverview::~COverview() {
     // texture cache beside it already lives for the life of the plugin.
     
     grid().dragExcluded = nullptr;
+    if (const auto MONITOR = pMonitor.lock())
+        gridForgetSizes(MONITOR->m_id);
     if (g_pointerGrabOverview == this)
         g_pointerGrabOverview = nullptr;
     transferSharedStateOwnership();
@@ -625,6 +627,14 @@ void COverview::onPreRender() {
     // and the hot corner's ripple. They join the pacer like the rest.
     if (!closingTiles.empty() || std::exchange(deskGlideMoving, false) || std::exchange(stripClean.moving, false) || Hyprdrive::Ripple::activeOn(pMonitor.lock()))
         gridSetReflowActive(pMonitor.lock());
+
+    // The grid's input for this frame (GridLayout.hpp: gridObserveSizes),
+    // looked at once, before anything asks for a box. It may ask for the
+    // next frame, so it comes before the pacer takes the debt below.
+    {
+        const SGridOwnerScope OWNER{pMonitor.lock()};
+        gridObserveSizes(OWNER, pMonitor.lock(), resize.activeWindow.lock());
+    }
 
     if (gridTakeReflowActive(pMonitor.lock())) {
         reflowPacer->setValueAndWarp(0.F);

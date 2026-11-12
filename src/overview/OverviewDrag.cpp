@@ -1213,9 +1213,7 @@ void COverview::commitDropCancel(const SOverviewDropSite& site) {
             const auto  FLOATBOX = draggedWindowBox(WSIDX);
             const float SCALEDIV = std::max(scale->value(), 0.01F) * std::max(MON->m_scale, 0.01F);
 
-            grid().reflows[site.window.get()] = SGridReflow{site.window, CBox{overviewPointToGlobal(WSIDX, FLOATBOX.pos()), FLOATBOX.size() * (1.F / SCALEDIV)}, slot,
-                                                          Time::steadyNow(), overviewFrameOn(MON), false};
-            gridSetReflowActive(MON);
+            gridReflowSeed(site.window, MON, CBox{overviewPointToGlobal(WSIDX, FLOATBOX.pos()), FLOATBOX.size() * (1.F / SCALEDIV)}, slot);
         }
     }
 

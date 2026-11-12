@@ -299,7 +299,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
                 firstFramePrev = CBox{C.x + (windowBox.x - C.x) * K, C.y + (windowBox.y - C.y) * K, windowBox.w * K, windowBox.h * K};
         }
         const bool HAVEPREV = firstFramePrev || (PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2);
-        const bool SEARCHMOTION = ((((!g_search.query.text.empty() || grid().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
+        const bool SEARCHMOTION = ((((!g_search.query.text.empty() || gridView().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
                                     !scale->isBeingAnimated()) ||
                                    ZOOMING) &&
             HAVEPREV;

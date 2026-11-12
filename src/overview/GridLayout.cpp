@@ -2,7 +2,11 @@
 #include "OverviewGeometry.hpp"
 #include "OverviewInternal.hpp"
 
+#include "DebugPaths.hpp"
+
 #include <algorithm>
+#include <cstdio>
+#include <format>
 #include <ranges>
 
 // Every body here came out of OverviewInternal.hpp unchanged except for the two
@@ -24,6 +28,61 @@ namespace OvInternal {
     SGridAnimator& grid() {
         static SGridAnimator ANIMATOR;
         return ANIMATOR;
+    }
+
+    const SGridAnimator& gridView() {
+        return grid();
+    }
+
+    namespace {
+        const SGridOwnerScope* g_ownerTop = nullptr;
+
+        // THE TRACE: `touch $XDG_RUNTIME_DIR/hyprdrive-mosaic.on` (the switch
+        // the Mosaic trace already uses, read once a second here) and every
+        // retarget and every size the grid hears about goes to
+        // hyprdrive-mosaic.log as a `grid` line -- so a reporter's log shows
+        // what moved a tile and why, if a tile ever moves at rest again.
+        bool gridTraceOn() {
+            static Time::steady_tp checked{};
+            static bool            on    = false;
+            static bool            ever  = false;
+            const auto             NOW   = Time::steadyNow();
+            if (!ever || NOW - checked > std::chrono::seconds(1)) {
+                ever    = true;
+                checked = NOW;
+                on      = Hyprdrive::DebugPaths::flagOn("hyprdrive-mosaic.on");
+            }
+            return on;
+        }
+
+        void gridTrace(const std::string& line) {
+            if (FILE* const F = Hyprdrive::DebugPaths::openLog("hyprdrive-mosaic.log")) {
+                std::fprintf(F, "%lld grid %s\n", (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                             line.c_str());
+                std::fclose(F);
+            }
+        }
+
+        std::string traceBox(const CBox& b) {
+            return std::format("{:.1f},{:.1f} {:.1f}x{:.1f}", b.x, b.y, b.w, b.h);
+        }
+    }
+
+    SGridOwnerScope::SGridOwnerScope(const PHLMONITOR& monitor) : m_monitor(monitor ? monitor->m_id : MONITOR_INVALID), m_prev(g_ownerTop) {
+        g_ownerTop = this;
+    }
+
+    SGridOwnerScope::~SGridOwnerScope() {
+        g_ownerTop = m_prev;
+    }
+
+    const SGridOwnerScope* SGridOwnerScope::current(const PHLMONITOR& monitor) {
+        if (!monitor)
+            return nullptr;
+        for (auto* scope = g_ownerTop; scope; scope = scope->m_prev)
+            if (scope->m_monitor == monitor->m_id)
+                return scope;
+        return nullptr;
     }
 
     void gridSetReflowActive(const PHLMONITOR& monitor) {
@@ -146,7 +205,31 @@ namespace OvInternal {
     // stops matching it leaves the grid, so gridReflowBox is never called for it
     // and it cuts -- the exact mirror of the pull-in defect. Keep it promoted for
     // one release after the match dies so it still has somewhere to travel FROM.
-    bool overviewGridReleasing(const PHLWINDOW& window, PHLMONITOR monitor) {
+    //
+    // Arming and starting that clock is the owning frame's business
+    // (SGridOwnerScope). A query outside it reads the same answer without
+    // writing it: armed-but-not-started counts as releasing from now, and an
+    // expired or stale entry as gone, but nothing is armed, started or erased.
+    static bool overviewGridReleasingPeek(const PHLWINDOW& window, PHLMONITOR monitor) {
+        const int DURATION = gridReleaseMs();
+        if (DURATION <= 0 || !window)
+            return false;
+
+        if (overviewGridPromotable(window, monitor))
+            return false;
+
+        const auto& G  = gridView();
+        const auto  IT = G.releases.find(window.get());
+        if (IT == G.releases.end())
+            return false;
+        if (IT->second.window.lock() != window || !validMapped(window))
+            return false;
+        if (!IT->second.started)
+            return true;
+        return overviewAnimElapsedMs(IT->second.start) <= sc<float>(DURATION) + GRID_RELEASE_GRACE_MS;
+    }
+
+    static bool overviewGridReleasingStep(const SGridOwnerScope&, const PHLWINDOW& window, PHLMONITOR monitor) {
         const int DURATION = gridReleaseMs();
         if (DURATION <= 0 || !window)
             return false;
@@ -187,6 +270,12 @@ namespace OvInternal {
         return true;
     }
 
+    bool overviewGridReleasing(const PHLWINDOW& window, PHLMONITOR monitor) {
+        if (const auto* OWNER = SGridOwnerScope::current(monitor))
+            return overviewGridReleasingStep(*OWNER, window, monitor);
+        return overviewGridReleasingPeek(window, monitor);
+    }
+
     bool overviewGridPromoted(const PHLWINDOW& window, PHLMONITOR monitor) {
         return overviewGridPromotable(window, monitor) || overviewGridReleasing(window, monitor);
     }
@@ -219,8 +308,68 @@ namespace OvInternal {
         return windows;
     }
 
+    // WHAT SIZE THE GRID LAYS A WINDOW OUT WITH. It used to be the size
+    // animation's CURRENT value, read afresh by every query -- so a window
+    // mid-animation, mid-configure, or resizing itself for a moment handed the
+    // solver a different size each time it was asked, and the solver moved its
+    // slot (and its row's) accordingly. The grid means "the size this window
+    // has", so it reads the size the owning frame adopted for it
+    // (gridObserveSizes): the animation's GOAL -- where Hyprland is taking the
+    // window, the same for every frame of a move/resize animation -- taken
+    // only once it has moved past rounding noise and stayed moved. A window
+    // the frame has not looked at yet (opened since) answers with its goal.
     Vector2D overviewGridWindowSize(const PHLWINDOW& window) {
-        return window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT).size();
+        const auto& SIZES = gridView().sizes;
+        if (const auto IT = SIZES.find(window.get()); IT != SIZES.end() && IT->second.window.lock() == window)
+            return IT->second.track.adopted;
+        return window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    }
+
+    void gridObserveSizes(const SGridOwnerScope& owner, const PHLMONITOR& monitor, const PHLWINDOW& resizing) {
+        if (!monitor || owner.monitor() != monitor->m_id)
+            return;
+
+        auto& G = grid();
+        if (G.sizes.size() > 128)
+            std::erase_if(G.sizes, [](const auto& entry) { return !entry.second.window.lock(); });
+
+        // The frame about to be drawn: render() counts it after this runs.
+        const uint64_t FRAME   = overviewFrameOn(monitor) + 1;
+        const auto     NOW     = Time::steadyNow();
+        const auto     REAL    = [](const Time::steady_tp& since) { return Hyprdrive::Motion::Clock::realMs(since); };
+        bool           waiting = false;
+
+        for (const auto& window : Desktop::windowState()->windows()) {
+            if (!window || !window->m_isMapped || window->m_monitor != monitor)
+                continue;
+
+            auto&      entry = G.sizes[window.get()];
+            const bool KNOWN = entry.window.lock() == window && entry.monitor == monitor->m_id;
+            const auto OLD   = entry.track.adopted;
+            const auto GOAL  = window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            entry.window     = window;
+            entry.monitor    = monitor->m_id;
+
+            using Hyprdrive::GridReflow::ESize;
+            const auto RESULT = Hyprdrive::GridReflow::observe(entry.track, KNOWN, GOAL, FRAME, NOW, REAL, window == resizing);
+            if (RESULT == ESize::PENDING)
+                waiting = true;
+
+            if (RESULT != ESize::STEADY && RESULT != ESize::FIRST && gridTraceOn()) {
+                const char* WHAT = RESULT == ESize::PENDING ? "pending" : RESULT == ESize::ADOPTED ? "adopted" : "rejected";
+                gridTrace(std::format("size {} {} {:.1f}x{:.1f} goal {:.1f}x{:.1f} (since {:.0f} ms) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y, GOAL.x, GOAL.y,
+                                      REAL(entry.track.since), FRAME, monitor->m_name));
+            }
+        }
+
+        // A size the grid has not taken yet needs a later frame to be taken
+        // (or dropped) on -- a static overview draws nothing on its own.
+        if (waiting)
+            gridSetReflowActive(monitor);
+    }
+
+    void gridForgetSizes(MONITORID monitor) {
+        std::erase_if(grid().sizes, [monitor](const auto& entry) { return entry.second.monitor == monitor; });
     }
 
     // THE SOLVER, and it is now solved ONCE for the whole grid instead of once
@@ -594,70 +743,70 @@ namespace OvInternal {
         return Hyprdrive::Geometry::boxesDiffer(a, b);
     }
 
+    namespace {
+        Hyprdrive::GridReflow::SAsk gridAsk(const PHLMONITOR& monitor, const CBox& slot, const CBox* enterFrom, bool promoted, bool exiting, int duration) {
+            return Hyprdrive::GridReflow::SAsk{slot, enterFrom, promoted, exiting, overviewFrameOn(monitor), sc<float>(duration)};
+        }
+
+        const auto ANIM_ELAPSED = [](const Time::steady_tp& since) { return overviewAnimElapsedMs(since); };
+        const auto REFLOW_EASE  = [](float t, bool exiting) { return gridReflowEase(t, exiting); };
+
+        // THE ONLY WRITER of a reflow ease: the owning frame. Seeding a tile
+        // that was not in the grid last frame (OVERVIEW_CPP_SPEC F3-b-i: a
+        // first appearance, or a search promoting it off another desktop, is
+        // seeded where it really sits so the ease carries it in), advancing it,
+        // and re-aiming it when its slot moved -- GridReflowModel.hpp step(),
+        // which is the old body of this function.
+        CBox gridReflowStep(const SGridOwnerScope&, const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom, bool promoted, bool exiting,
+                            int duration) {
+            auto& G = grid();
+            if (G.reflows.size() > 64)
+                std::erase_if(G.reflows, [](const auto& entry) { return !entry.second.window.lock(); });
+
+            auto&      entry = G.reflows[window.get()];
+            const bool KNOWN = entry.window.lock() == window;
+            const auto WAS   = entry.ease.to;
+            const auto ASK   = gridAsk(monitor, slot, enterFrom, promoted, exiting, duration);
+
+            CBox       out;
+            using Hyprdrive::GridReflow::EStep;
+            const auto RESULT = Hyprdrive::GridReflow::step(entry.ease, KNOWN, ASK, Time::steadyNow(), ANIM_ELAPSED, REFLOW_EASE, out);
+            entry.window      = window;
+
+            if (RESULT == EStep::SEEDED ? gridBoxesDiffer(out, slot) : RESULT != EStep::SETTLED)
+                gridSetReflowActive(monitor);
+
+            if (RESULT == EStep::RETARGETED && gridTraceOn())
+                gridTrace(std::format("retarget {} {} -> {} from {} frame {} mon {}", window->m_class, traceBox(WAS), traceBox(slot), traceBox(out), ASK.frame, monitor->m_name));
+
+            return out;
+        }
+
+        CBox gridReflowPeek(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom, bool promoted, bool exiting, int duration) {
+            const auto& G     = gridView();
+            const auto  IT    = G.reflows.find(window.get());
+            const bool  FOUND = IT != G.reflows.end();
+            const bool  KNOWN = FOUND && IT->second.window.lock() == window;
+            return Hyprdrive::GridReflow::peek(FOUND ? &IT->second.ease : nullptr, KNOWN, gridAsk(monitor, slot, enterFrom, promoted, exiting, duration), ANIM_ELAPSED,
+                                               REFLOW_EASE);
+        }
+    }
+
     CBox gridReflowBox(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& slot, const CBox* enterFrom, bool promoted, bool exiting) {
-        const uint64_t FRAME = overviewFrameOn(monitor);
         const int DURATION = exiting ? gridReleaseMs() : overviewMissionControlReflowMs();
         if (DURATION <= 0)
             return slot;
 
-        const auto NOW = Time::steadyNow();
-        auto&      G   = grid();
+        if (const auto* OWNER = SGridOwnerScope::current(monitor))
+            return gridReflowStep(*OWNER, monitor, window, slot, enterFrom, promoted, exiting, DURATION);
+        return gridReflowPeek(monitor, window, slot, enterFrom, promoted, exiting, DURATION);
+    }
 
-        if (G.reflows.size() > 64)
-            std::erase_if(G.reflows, [](const auto& entry) { return !entry.second.window.lock(); });
-
-        auto& entry = G.reflows[window.get()];
-
-        // OVERVIEW_CPP_SPEC F3-b-i. A tile that was not in the grid last frame is
-        // ENTERING now -- first appearance, or a search promoting it off another
-        // desktop. Seeding from `slot` makes from == to and draws it straight at its
-        // destination, which is exactly the "matches just spawn in" defect. Seed it
-        // where it really sits and the ease below carries it in.
-        //
-        // Untouched-for-a-while stands in for "was not in the grid", so searching the
-        // same window a second time re-enters properly instead of reusing its stale
-        // settled entry. KNOWN == false also catches a recycled address handing a new
-        // window a dead one's entry.
-        const bool KNOWN = entry.window.lock() == window;
-        // An entering tile is seeded off-screen on purpose, so it is culled -- and
-        // on frames where that culls the whole workspace, its pass is skipped and
-        // this function is not called at all. Reseeding then would throw away an
-        // ease that is still running and draw the tile at its destination.
-        const bool INFLIGHT = KNOWN && overviewAnimElapsedMs(entry.start) < sc<float>(DURATION);
-        // Genuinely absent: a tile that stopped being drawn entirely, stayed gone
-        // long enough to finish whatever it was doing, and is coming back.
-        const bool UNDRAWN = KNOWN && !INFLIGHT && FRAME - entry.lastFrame > 1;
-        // ...and the case staleness can never see, because the tile was on screen
-        // the whole time: it just crossed onto the active card.
-        const bool JOINED = KNOWN && promoted && !entry.promotedLast;
-
-        if (!KNOWN || UNDRAWN || JOINED) {
-            const CBox START = enterFrom ? *enterFrom : slot;
-            entry            = SGridReflow{window, START, slot, NOW, FRAME, promoted};
-            if (gridBoxesDiffer(START, slot))
-                gridSetReflowActive(monitor);
-            return START;
-        }
-
-        entry.lastFrame    = FRAME;
-        entry.promotedLast = promoted;
-
-        const float ELAPSED = overviewAnimElapsedMs(entry.start);
-        const float T       = gridReflowEase(ELAPSED / sc<float>(DURATION), exiting);
-        const CBox  CURRENT = Hyprdrive::Motion::lerp(entry.from, entry.to, T);
-
-        if (gridBoxesDiffer(slot, entry.to)) {
-            entry.from  = CURRENT; // retarget from where the tile actually is
-            entry.to    = slot;
-            entry.start = NOW;
-            gridSetReflowActive(monitor);
-            return CURRENT;
-        }
-
-        if (T < 1.F)
-            gridSetReflowActive(monitor);
-
-        return CURRENT;
+    void gridReflowSeed(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& from, const CBox& to) {
+        if (!window || !monitor)
+            return;
+        grid().reflows[window.get()] = SGridReflow{window, {from, to, Time::steadyNow(), overviewFrameOn(monitor), false}};
+        gridSetReflowActive(monitor);
     }
 
 } // namespace OvInternal

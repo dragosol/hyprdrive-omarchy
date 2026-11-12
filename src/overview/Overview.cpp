@@ -499,6 +499,12 @@ void COverview::render() {
     ++g_overviewFrame;
     ++g_overviewFramesByMonitor[MONITOR->m_id];
 
+    // THIS FRAME OWNS THE GRID (GridLayout.hpp: SGridOwnerScope). Every box
+    // asked for while it draws steps the reflow eases; every box asked for
+    // anywhere else -- input, commit and damage handlers, debug reports --
+    // only reads them.
+    const SGridOwnerScope GRIDOWNER{MONITOR};
+
     if (g_pointerGrabOverview && g_pointerGrabOverview != this && g_pointerGrabOverview->drag.activeWindow && isOverviewPointerOnMonitor(MONITOR))
         lastMousePosLocal = getOverviewMousePosLocal(MONITOR);
 
