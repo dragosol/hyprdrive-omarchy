@@ -943,6 +943,7 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CIntValue>(KEY("mission_control_gap"), "gap between mission-control grid tiles", 40, SIntValueOptions{.min = 0}));
     addKey(makeShared<CIntValue>(KEY("mission_control_reflow_ms"), "ms for a grid tile to travel to a new slot", 300, SIntValueOptions{.min = 0}));
     addKey(makeShared<CBoolValue>(KEY("strip"), "workspace thumbnail strip across the top of the overview", true));
+    addKey(makeShared<CBoolValue>(KEY("scratchpad_bar_exit"), "while a scratchpad is shown, stripe the bar with 'hover to exit scratchpad' and hide the scratchpad on a dwell there", true));
     addKey(makeShared<CIntValue>(KEY("strip_height"), "logical px the strip band reserves at the top of the workspace", 260,
                                  SIntValueOptions{.min = 0}));
     addKey(makeShared<CIntValue>(KEY("strip_max_screen_pct"), "ceiling on the strip band as a percent of screen height, so a strip cell never dwarfs a window preview", 30,
@@ -1788,6 +1789,11 @@ int getMissionControlReflowMs() {
 
 bool getStrip() {
     static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip");
+    return *VAL != 0;
+}
+
+bool getScratchpadBarExit() {
+    static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:scratchpad_bar_exit");
     return *VAL != 0;
 }
 

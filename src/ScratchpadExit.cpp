@@ -378,7 +378,7 @@ namespace ScrollOverview::ScratchpadExit {
     static void renderBar(PHLMONITOR monitor) {
         auto&       st   = g_state[monitor->m_id];
         const float BARL = OvInternal::overviewTopChromeBottomL(monitor) - sc<float>(monitor->m_position.y);
-        const bool  WANT = !dragging() && shownScratchpad(monitor) && BARL >= BAR_MIN_HL;
+        const bool  WANT = Config::getScratchpadBarExit() && !dragging() && shownScratchpad(monitor) && BARL >= BAR_MIN_HL;
         if (WANT != st.barShown) {
             st.barShown = WANT;
             st.barSince = Time::steadyNow();

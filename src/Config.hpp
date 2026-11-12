@@ -287,6 +287,7 @@ bool          getMissionControl();
 int           getMissionControlGap();
 int           getMissionControlReflowMs();
 bool          getStrip();
+bool          getScratchpadBarExit();
 int           getStripHeight();
 int           getStripMaxScreenPct();
 bool          getSearchDictionary();
