@@ -327,6 +327,9 @@ constexpr const char* KEY_BLUR_VIBR   = "plugin:hyprdrive:dock:blur_vibrancy";
 constexpr const char* KEY_AUTOHIDE     = "plugin:hyprdrive:dock:autohide";
 constexpr const char* KEY_PRESSURE     = "plugin:hyprdrive:dock:pressure_threshold";
 constexpr const char* KEY_REQ_PRESSURE = "plugin:hyprdrive:dock:require_pressure";
+// DockFullscreen.cpp: the dock over a fullscreen window (owner, 2026-11-12).
+constexpr const char* KEY_SHOW_OVER_FS  = "plugin:hyprdrive:dock:show_over_fullscreen";
+constexpr const char* KEY_FS_GAMES_ONLY = "plugin:hyprdrive:dock:fullscreen_hide_games_only";
 constexpr const char* KEY_SHOW_DELAY   = "plugin:hyprdrive:dock:show_delay_ms";
 constexpr const char* KEY_HIDE_DELAY   = "plugin:hyprdrive:dock:hide_delay_ms";
 constexpr const char* KEY_AUTOHIDE_MS  = "plugin:hyprdrive:dock:autohide_ms";
@@ -541,6 +544,15 @@ extern bool opensInEmptyDesktop(const std::string& id);
 extern void toggleEmptyDesktop(const std::string& id);
 extern bool opensInFullscreen(const std::string& id);
 extern void toggleOpenFullscreen(const std::string& id);
+// HIDE DOCK IN FULLSCREEN, per app (owner, 2026-11-12: "an option under dock
+// context menu in get info for specific apps to not show dock in fullscreen"):
+// `hide-dock-fullscreen-apps`, beside the other two lists.
+extern bool hidesDockInFullscreen(const std::string& id);
+extern void toggleHideDockInFullscreen(const std::string& id);
+// DockFullscreen.cpp: the monitor's desktop shows a fullscreen window the dock
+// keeps away from (the two settings and the app's Get Info flag). Read by
+// updateAutohide every call; what it reads was settled at the last event.
+extern bool fullscreenKeepsDockAway(PHLMONITOR monitor);
 extern void toggleFavorite(const std::string& id);
 
 // X33. The reference's `getInterestingWindows()`: the one filter every list the
@@ -1012,6 +1024,7 @@ enum class ERow : uint8_t {
     InfoLine,   // "Version  1.3.1": click copies the value (kept whole in `exec`)
     InfoReveal, // Show in Files
     InfoIcon,   // App Icon: the settings panel's Icons section, on this app (exec = desktop id)
+    InfoHideDockFs, // Hide Dock in Fullscreen: a check, flips in place (exec = desktop id; owner, 2026-11-12)
     InfoCopyAll,
     InfoBack,
     // The overview, filtered on the app (user, 2026-09-24).

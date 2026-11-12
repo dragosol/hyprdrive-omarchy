@@ -189,6 +189,16 @@ bool    inputInert(PHLMONITOR monitor);
 // syncPointerFocus holds the seat right now (the pointer is on the dock).
 bool    seatHeld();
 
+// THE DOCK OVER A FULLSCREEN WINDOW (DockFullscreen.cpp). A window went
+// fullscreen or left it, opened, closed, moved, took the focus, or a desktop
+// was switched: which fullscreen window each monitor shows is settled again on
+// the next turn of the loop, and the dock slides away (or may come back) then
+// -- not on the next pointer motion, which a pointer resting on the dock
+// never sends (issue #12). Coalesced; safe from any listener.
+void    noteFullscreenCover();
+// PLUGIN_EXIT: the queued settle is cancelled.
+void    forgetFullscreenCovers();
+
 // X24. A click inside the pill, in the same monitor-local RENDER px as
 // pillContains. An icon min/maxes the app's window on THIS desktop: restore
 // if it is hidden, minimize if it is visible. A window only on another

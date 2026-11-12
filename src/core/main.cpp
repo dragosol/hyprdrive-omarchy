@@ -145,6 +145,8 @@ static CHyprSignalListener g_pDockClickHook;
 static CHyprSignalListener g_pDockScrollHook;
 static CHyprSignalListener g_pDockRenderHook;
 static CHyprSignalListener g_pDockStandDownHook;
+static CHyprSignalListener g_pDockFsWsHook;
+static CHyprSignalListener g_pDockFsSpecialHook;
 // The doLater the stand-down queued; 0 = none (cancelled at unload).
 static uint32_t            g_dockStandDownSeq = 0;
 static CHyprSignalListener g_pScratchExitRenderHook;
@@ -304,22 +306,37 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pMembOpenHook  = Event::bus()->m_events.window.open.listen([](PHLWINDOW w) {
         Membership::bump("window.open");
         Hyprdrive::Dock::onWindowOpen(w);
+        Hyprdrive::Dock::noteFullscreenCover();
     });
     g_pMembLateHook  = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW) { Membership::bump("window.openLate"); });
     g_pMembCloseHook = Event::bus()->m_events.window.close.listen([](PHLWINDOW w) {
         Membership::bump("window.close");
         Hyprdrive::Mosaic::onWindowClose(w); // its mosaic size, remembered per app
         Hyprdrive::Dock::onWindowClose(w);   // a menu row for it leaves the menu
+        Hyprdrive::Dock::noteFullscreenCover();
     });
     g_pMembKillHook  = Event::bus()->m_events.window.kill.listen([](PHLWINDOW) { Membership::bump("window.kill"); });
-    g_pDockFocusHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason reason) { Hyprdrive::Dock::noteFocus(w, reason); });
+    g_pDockFocusHook = Event::bus()->m_events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason reason) {
+        Hyprdrive::Dock::noteFocus(w, reason);
+        Hyprdrive::Dock::noteFullscreenCover();
+    });
     g_pMembGoneHook  = Event::bus()->m_events.window.destroy.listen([](PHLWINDOWREF) { Membership::bump("window.destroy"); });
     g_pMembPinHook   = Event::bus()->m_events.window.pin.listen([](PHLWINDOW) { Membership::bump("window.pin"); });
     g_pMembFloatHook = Event::bus()->m_events.window.floating.listen([](PHLWINDOW) { Membership::bump("window.floating"); });
     g_pMembTitleHook = Event::bus()->m_events.window.title.listen([](PHLWINDOW) { Membership::bump("window.title"); });
     g_pMembClassHook = Event::bus()->m_events.window.class_.listen([](PHLWINDOW) { Membership::bump("window.class"); });
-    g_pMembWsHook    = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) { Membership::bump("window.moveToWorkspace"); });
-    g_pMembFullHook  = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW) { Membership::bump("window.fullscreen"); });
+    g_pMembWsHook    = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) {
+        Membership::bump("window.moveToWorkspace");
+        Hyprdrive::Dock::noteFullscreenCover();
+    });
+    g_pMembFullHook  = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW) {
+        Membership::bump("window.fullscreen");
+        Hyprdrive::Dock::noteFullscreenCover();
+    });
+    // The dock over a fullscreen window (DockFullscreen.cpp): what a monitor
+    // shows changes with its desktop too.
+    g_pDockFsWsHook      = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE) { Hyprdrive::Dock::noteFullscreenCover(); });
+    g_pDockFsSpecialHook = Event::bus()->m_events.workspace.specialActive.listen([](PHLWORKSPACE, PHLMONITOR) { Hyprdrive::Dock::noteFullscreenCover(); });
 
     // The dock's keys as they stood BEFORE this reload parsed anything. See the
     // abortAll below for what it is compared against.
@@ -335,6 +352,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // drop a touchpad gesture that is still under the hand.
         attachPadFingerListeners();
         Hyprdrive::FingerSwipe::rescan();
+        Hyprdrive::Dock::noteFullscreenCover(); // DockFullscreen.cpp
         // FIRST, before anything in this plugin reads a config value this pass:
         // a value the user set under the old plugin:scrolloverview: name is
         // copied onto its plugin:hyprdrive: twin here and nowhere else, so the
@@ -872,6 +890,9 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_pDockScrollHook.reset();
     g_pDockRenderHook.reset();
     g_pDockStandDownHook.reset();
+    g_pDockFsWsHook.reset();
+    g_pDockFsSpecialHook.reset();
+    Hyprdrive::Dock::forgetFullscreenCovers();
     if (g_pEventLoopManager && g_dockStandDownSeq)
         g_pEventLoopManager->removeDoLater(g_dockStandDownSeq);
     g_dockStandDownSeq = 0;

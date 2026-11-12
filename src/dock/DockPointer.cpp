@@ -1071,6 +1071,13 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
     if (ROW->kind == ERow::StackRenameField || ROW->kind == ERow::InfoLine || ROW->disabled)
         return true; // the field and the question are not buttons
 
+    // A setting, like the "Always Open in" chips: it flips and the menu stays
+    // on Get Info, the check drawn (or gone) where the pointer is.
+    if (ROW->kind == ERow::InfoHideDockFs) {
+        toggleHideDockInFullscreen(ROW->exec);
+        ROW->glyph = hidesDockInFullscreen(ROW->exec) ? MenuGlyph::CHECK : "";
+        return true;
+    }
     if (ROW->kind == ERow::Details || ROW->kind == ERow::InfoBack) {
         const bool INFO    = ROW->kind == ERow::Details;
         const auto ITEM    = g_menu->item;

@@ -160,7 +160,7 @@ static void toggleIdList(SEmptyDesktopStore& STORE, const char* name, const std:
     STORE.stamp   = std::filesystem::last_write_time(PATH, ec);
 }
 
-static SEmptyDesktopStore g_emptyDesktopStore, g_fullscreenStore;
+static SEmptyDesktopStore g_emptyDesktopStore, g_fullscreenStore, g_hideDockFsStore;
 
 bool opensInEmptyDesktop(const std::string& id) {
     return !id.empty() && Hyprdrive::AppIdentity::StoreIds::contains(idList(g_emptyDesktopStore, "empty-desktop-apps"), id, canonId);
@@ -176,6 +176,15 @@ bool opensInFullscreen(const std::string& id) {
 
 void toggleOpenFullscreen(const std::string& id) {
     toggleIdList(g_fullscreenStore, "fullscreen-apps", id);
+}
+
+bool hidesDockInFullscreen(const std::string& id) {
+    return !id.empty() && Hyprdrive::AppIdentity::StoreIds::contains(idList(g_hideDockFsStore, "hide-dock-fullscreen-apps"), id, canonId);
+}
+
+void toggleHideDockInFullscreen(const std::string& id) {
+    toggleIdList(g_hideDockFsStore, "hide-dock-fullscreen-apps", id);
+    noteFullscreenCover(); // a fullscreen window of this app may be up right now
 }
 
 void toggleFavorite(const std::string& id) {

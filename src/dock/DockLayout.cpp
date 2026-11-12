@@ -385,10 +385,19 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
         return;
     }
 
+    // A fullscreen window the dock keeps away from (DockFullscreen.cpp, owner
+    // 2026-11-12): no reveal, and a dock already out -- held by a pointer
+    // resting on it, or pinned with autohide off -- slides away now, without
+    // the hide delay (that delay is for a pointer leaving). Never the
+    // overview's dock: with autohide on it returned above, and with autohide
+    // off it would otherwise be pulled from the overview over that desktop.
+    const bool AWAY = !scrollOverviewForMonitor(monitor) && fullscreenKeepsDockAway(monitor);
+
     if (!autohideOn()) {
-        if (!R.shown) {
+        const bool PINNED = !AWAY || overlayHoldsDock() || Flight::anyOn(monitor);
+        if (R.shown != PINNED) {
             R.from      = hiddenFraction(monitor);
-            R.shown     = true;
+            R.shown     = PINNED;
             R.changedAt = Time::steadyNow();
         }
         R.pending  = false;
@@ -509,6 +518,10 @@ void updateAutohide(PHLMONITOR monitor, const STally& tally) {
     // lock only the overlay or a flight hold the dock out.
     if (pointerHeldByClient())
         want = false;
+    if (AWAY) {
+        want      = false;
+        immediate = true;
+    }
     want = want || overlayHoldsDock() || Flight::anyOn(monitor);
 
     if (want == R.shown) {

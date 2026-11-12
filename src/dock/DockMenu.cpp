@@ -524,6 +524,15 @@ std::vector<SRow> infoRows(const SItem& item) {
         rows.emplace_back(SRow{.kind = ERow::ShowWindows, .label = "Open windows", .glyph = MenuGlyph::WINDOW, .hint = std::to_string(N) + "  \uf054"});
 
     rows.emplace_back(SRow{.kind = ERow::Separator});
+    // HIDE DOCK IN FULLSCREEN (owner, 2026-11-12: "an option under dock context
+    // menu in get info for specific apps to not show dock in fulscreen, so it's
+    // buriede in Get Info"). Checked, a fullscreen window of this app keeps the
+    // dock away whatever the two dock settings say (DockFullscreen.cpp). A
+    // check like the stack menu's: the mark when on, the label alone when off.
+    // Keyed on the desktop id, as the menu's other per-app lists are.
+    if (const auto ID = itemDesktopId(item); !ID.empty())
+        rows.emplace_back(SRow{.kind = ERow::InfoHideDockFs, .label = "Hide Dock in Fullscreen", .exec = ID,
+                               .glyph = hidesDockInFullscreen(ID) ? MenuGlyph::CHECK : ""});
     // App Icon (user, 2026-10-13): change it right here rather than hunting
     // for the app in the settings panel. Only an app with a desktop id can
     // have an override -- that is what the store is keyed on.
