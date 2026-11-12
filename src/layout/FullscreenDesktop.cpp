@@ -127,6 +127,7 @@ namespace Hyprdrive::FullscreenDesktop {
         // the new one).
         std::vector<std::pair<PHLWINDOWREF, PHLWORKSPACEREF>> g_lastSpace;
         std::vector<PHLWINDOWREF> g_unasked; // ...without being asked for: marked urgent once mapped
+        std::vector<PHLWINDOWREF> g_asked;   // ...asked for: the view glides to it and it gets the focus once mapped
         PHLWORKSPACEREF          g_leftSpace; // the desktop the last trip ended on (justLeft)
         std::chrono::steady_clock::time_point g_leftAt;
         PHLWORKSPACEREF          g_enteredSpace; // the desktop the last trip went to (justEntered)
@@ -746,9 +747,16 @@ namespace Hyprdrive::FullscreenDesktop {
                               prompted ? "" : " (unasked: not shown)"));
             w->m_workspace = space;
             w->m_monitor   = MON;
-            if (prompted)
-                show(MON, space);
-            else {
+            if (prompted) {
+                // ...ONCE THE MAP IS OVER (the film, 2026-11-11): switched to
+                // in the middle of Hyprland's map -- the view and the focus
+                // moved before the window had its place in the layout -- an
+                // X11 dialog was left at -10,-10, 21x21: invisible on its
+                // desktop. Hyprland's own focus would switch at once (no
+                // glide); showBesides glides there and focuses it.
+                w->m_noInitialFocus = true;
+                g_asked.emplace_back(w);
+            } else {
                 // UNASKED (owner: "not be focused"): it goes quietly, the view
                 // and the pointer stay on the app; the dock and the strip say
                 // it is there (urgent, once it is mapped: showBesides).
@@ -782,6 +790,12 @@ namespace Hyprdrive::FullscreenDesktop {
                 trace(std::format("{} shown on {}", W->m_class, W->m_workspace->m_id));
             }
             g_besides.clear();
+            for (const auto& REF : std::exchange(g_asked, {}))
+                if (const auto W = REF.lock(); W && W->m_isMapped && W->m_workspace && DesktopOrder::ordinary(W->m_workspace))
+                    if (const auto MON = W->m_workspace->m_monitor.lock()) {
+                        show(MON, W->m_workspace);
+                        Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_OTHER);
+                    }
             for (const auto& REF : std::exchange(g_unasked, {}))
                 if (const auto W = REF.lock(); W && W->m_isMapped && !W->m_isUrgent && Desktop::focusState()->window() != W) {
                     W->m_isUrgent = true;
@@ -1376,12 +1390,8 @@ namespace Hyprdrive::FullscreenDesktop {
             join(l, w);
             g_links.push_back(std::move(l));
             trace(std::format("{} opened on owed beside {}: the link again{}", w->m_class, WS->m_id, prompted ? "" : " (unasked: not shown)"));
-            if (prompted)
-                show(MON, WS);
-            else {
-                w->m_noInitialFocus = true;
-                g_unasked.emplace_back(w);
-            }
+            w->m_noInitialFocus = true;
+            (prompted ? g_asked : g_unasked).emplace_back(w);
             arm(1);
             return;
         }
@@ -1585,6 +1595,7 @@ namespace Hyprdrive::FullscreenDesktop {
         g_compactDue = nullptr;
         g_besides.clear();
         g_unasked.clear();
+        g_asked.clear();
         g_links.clear();
         g_moved.clear();
         releaseHeld(true);
