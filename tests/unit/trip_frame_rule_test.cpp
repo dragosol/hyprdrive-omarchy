@@ -68,6 +68,28 @@ int main() {
         CHECK(decide(s, 50) == ERelease::Hold);
         CHECK(decide(s, 100) == ERelease::Unchanged);
     }
+    {   // ...but not while its size is still waiting to be sent (the trip's gate)
+        SState s;
+        sent(s, false, false);
+        CHECK(decide(s, 150, true) == ERelease::Hold);
+        CHECK(decide(s, 399, true) == ERelease::Hold);
+        CHECK(decide(s, 400, true) == ERelease::Timeout);
+        // sent at last: a real resize, held for its frames
+        sent(s, true, true);
+        CHECK(decide(s, 200, false) == ERelease::Hold);
+    }
+    {   // a client that redraws late with no blank frame first (slow_redraw
+        // without --flash): it was TOLD the new size at once, so the hold
+        // waits for its frame -- it never counts as "unchanged" while it has
+        // not committed (the reported size of an X11 window follows commits)
+        SState s;
+        sent(s, true, true); // told the new size at 1 ms
+        CHECK(decide(s, 100) == ERelease::Hold);
+        CHECK(decide(s, 149) == ERelease::Hold);
+        committed(s, 150, true); // its one real frame
+        CHECK(decide(s, 150) == ERelease::Hold);
+        CHECK(decide(s, 400) == ERelease::Settled);
+    }
     {   // a quick toggle back mid-hold: another size, the count starts again
         SState s;
         sent(s, true, true);

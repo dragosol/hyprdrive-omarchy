@@ -61,4 +61,9 @@ namespace Hyprdrive::ConfigureHold {
     // opened (Hyprland's own check drops a size the client already has).
     void setGate(std::function<bool(const PHLWINDOW&)> gate);
     void release();
+
+    // `w` has a size noted and not sent yet (by the gate or a CHold): what
+    // it was last sent is not what it will get (TripFrame: a trip's size is
+    // still to come).
+    bool waiting(const PHLWINDOW& w);
 }

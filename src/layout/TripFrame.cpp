@@ -50,6 +50,7 @@
 #include <hyprland/src/Compositor.hpp>
 #include "TripFrame.hpp"
 #include "TripFrameRule.hpp"
+#include "ConfigureHold.hpp"
 #include "DebugPaths.hpp"
 #include "IOverview.hpp"
 
@@ -98,6 +99,13 @@ namespace Hyprdrive::TripFrame {
         }
         double msSince(const Clock::time_point& t) {
             return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+        }
+        // The size the client was last TOLD. Not getReportedSize(): for an
+        // X11 window that is the size of its last COMMIT (commitWindow copies
+        // the pending size over), so a client that redraws late seemed never
+        // to have been sent the trip's size (TripFrameRule.hpp).
+        Vector2D sentSize(const PHLWINDOW& w) {
+            return w->m_pendingReportedSize.x > 0 && w->m_pendingReportedSize.y > 0 ? w->m_pendingReportedSize : w->getReportedSize();
         }
         SHeld* find(const PHLWINDOW& w) {
             for (auto& H : g_held)
@@ -191,10 +199,10 @@ namespace Hyprdrive::TripFrame {
                     it = g_held.erase(it);
                     continue;
                 }
-                const Vector2D SENT = W->getReportedSize();
+                const Vector2D SENT = sentSize(W);
                 TripFrameRule::sent(it->state, !near(SENT, it->snapSize), !near(SENT, it->sent));
                 it->sent = SENT;
-                const auto R = TripFrameRule::decide(it->state, msSince(it->at));
+                const auto R = TripFrameRule::decide(it->state, msSince(it->at), ConfigureHold::waiting(W));
                 if (R != TripFrameRule::ERelease::Hold) {
                     release(it, TripFrameRule::why(R));
                     it = g_held.begin(); // (released: start over, cheap -- one or two holds)
@@ -243,7 +251,7 @@ namespace Hyprdrive::TripFrame {
             SHeld*     H = W ? find(W) : nullptr;
             if (!H || !W->wlSurface() || !W->wlSurface()->resource())
                 return;
-            const Vector2D SENT = W->getReportedSize();
+            const Vector2D SENT = sentSize(W);
             TripFrameRule::sent(H->state, !near(SENT, H->snapSize), !near(SENT, H->sent));
             H->sent = SENT;
             const auto RES = W->wlSurface()->resource();
@@ -347,7 +355,7 @@ namespace Hyprdrive::TripFrame {
         if (SHeld* H = find(w)) {
             H->at    = Clock::now();
             H->state = {};
-            H->sent  = w->getReportedSize();
+            H->sent  = sentSize(w);
             trace(std::format("{} held again (it has not drawn since)", w->m_class));
             armTimer();
             return;
@@ -363,7 +371,7 @@ namespace Hyprdrive::TripFrame {
         auto fb = g_pHyprRenderer->makeSnapshotFB(w);
         if (!fb || !fb->isAllocated() || !fb->getTexture() || !fb->getTexture()->ok() || fb->m_size.x < 2 || fb->m_size.y < 2)
             return;
-        g_held.push_back({.win = w, .mon = MON, .fb = std::move(fb), .src = SRC, .snapSize = SIZE, .sent = w->getReportedSize(), .at = Clock::now()});
+        g_held.push_back({.win = w, .mon = MON, .fb = std::move(fb), .src = SRC, .snapSize = SIZE, .sent = sentSize(w), .at = Clock::now()});
         const PHLWINDOWREF REF = w;
         g_held.back().commit   = w->wlSurface()->resource()->m_events.commit.listen([REF] { onCommit(REF); });
         trace(std::format("{} held at {}x{} (its last good frame)", w->m_class, SIZE.x, SIZE.y));

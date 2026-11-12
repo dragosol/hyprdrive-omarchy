@@ -16,7 +16,13 @@
 //
 // Decided by what the client COMMITS, not by what kind of window it is:
 //   - it was never sent another size (a trip that kept its size): at once,
-//     once that is clear (UNCHANGED_MS);
+//     once that is clear (UNCHANGED_MS) -- and only clear when no size is
+//     still waiting to be sent (ConfigureHold). "Sent" is what the client
+//     was TOLD (m_pendingReportedSize), not Hyprland's "reported" size: for
+//     an X11 window that one only follows on the client's next commit, so a
+//     client that redraws late (no blank frame first) still had its old size
+//     100 ms in, and the hold let go of the old buffer stretched into the
+//     travelling box (10 of 11 holds, slow_redraw without --flash);
 //   - its SECOND FRAME at the size it was sent: the first may be the blank
 //     one (the X server's background, CEF's white), the second is drawn. A
 //     frame is a commit that repaints (nearly) all of the window, and the
@@ -81,15 +87,16 @@ namespace Hyprdrive::TripFrameRule {
         }
         return "?";
     }
-    // `ms`: real time since the snapshot.
-    inline ERelease decide(const SState& s, double ms) {
+    // `ms`: real time since the snapshot; `waiting`: a size is still to be
+    // sent to it (the trip's own, held back by its gate).
+    inline ERelease decide(const SState& s, double ms, bool waiting = false) {
         if (s.resized && s.drawn >= 2)
             return ERelease::Drawn;
         if (s.resized && s.drawn == 1 && ms - s.firstMs >= SETTLE_MS)
             return ERelease::Settled;
         if (ms >= TIMEOUT_MS)
             return ERelease::Timeout;
-        if (!s.resized && ms >= UNCHANGED_MS)
+        if (!s.resized && !waiting && ms >= UNCHANGED_MS)
             return ERelease::Unchanged;
         return ERelease::Hold;
     }

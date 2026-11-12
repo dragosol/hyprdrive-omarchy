@@ -3,6 +3,7 @@
 
 #include <hyprland/src/desktop/view/Window.hpp>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -94,6 +95,10 @@ namespace Hyprdrive::ConfigureHold {
     }
     bool held() {
         return g_depth > 0;
+    }
+    bool waiting(const PHLWINDOW& w) {
+        const auto IS = [&](const SHeld& h) { return h.window.lock() == w; };
+        return w && (std::ranges::any_of(g_gated, IS) || std::ranges::any_of(g_held, IS));
     }
 
     CHold::CHold() {
