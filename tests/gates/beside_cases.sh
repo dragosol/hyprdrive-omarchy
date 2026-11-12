@@ -25,8 +25,9 @@
 #      too, no desktop is left behind.
 #   E. fullscreen_desktop = "stay": no Beside, the dialog opens on the app's
 #      desktop, nothing moves.
-# Control (--control --control-so a4d6892): B/C/D fail (the dialog stayed
-# over the app: floats were never moved beside).
+# Control (--control --control-so a4d6892): fails from A on (no way back:
+# the view stayed on the made desktop, which was never given back). Recorded
+# 2026-11-11 on a4d6892: control FAILS as it must.
 source "$(dirname "$0")/lib.sh"
 gate_begin bsc
 control_build "a4d6892, e.g. /home/dragos/Projects/hyprdrive-native/hyprdrive.so"
