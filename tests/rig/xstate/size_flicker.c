@@ -8,9 +8,10 @@
 // only honours an X11 client's own configure on a floating window.
 //
 //   cc -O2 -o size_flicker tests/rig/xstate/size_flicker.c $(pkg-config --cflags --libs xcb)
-//   DISPLAY=:N ./size_flicker [seconds] [shrink px] [hold ms] [min gap ms] [max gap ms] [first s]
+//   DISPLAY=:N ./size_flicker [seconds] [shrink px] [hold ms] [min gap ms] [max gap ms] [first s] [last s]
 //     defaults: 20 s, 15 px, 10 ms, 100..600 ms between flickers, the first
-//     one 2 s after the window maps
+//     one 2 s after the window maps, none after `last` s (default: to the end;
+//     the window stays mapped, still)
 //   It prints one line per flicker (`flicker <n> t=<s>`) to stdout.
 #include <poll.h>
 #include <stdint.h>
@@ -57,6 +58,7 @@ int main(int argc, char** argv) {
     const double   GAPMIN  = argc > 4 ? atof(argv[4]) : 100;
     const double   GAPMAX  = argc > 5 ? atof(argv[5]) : 600;
     const double   FIRST   = argc > 6 ? atof(argv[6]) : 2;
+    const double   LAST    = argc > 7 ? atof(argv[7]) : SECONDS;
     const uint32_t W = 800, H = 600;
 
     xcb_connection_t* c = xcb_connect(NULL, NULL);
@@ -88,6 +90,11 @@ int main(int argc, char** argv) {
     }
     int n = 0;
     while (now() - START < SECONDS) {
+        if (now() - START >= LAST) {
+            pump(c, w, gc);
+            sleepMs(5);
+            continue;
+        }
         // The size it has NOW: the compositor may have placed it at another one.
         xcb_get_geometry_reply_t* g = xcb_get_geometry_reply(c, xcb_get_geometry(c, w), NULL);
         if (!g)

@@ -67,8 +67,9 @@ namespace OvInternal {
     };
 
     // The size the grid lays one window out with (GridReflowModel.hpp:
-    // SSizeTrack): its size animation's goal, adopted by the owning frame
-    // once it has moved past rounding noise and stayed moved.
+    // SSizeTrack): a change of its size animation's goal, taken by the owning
+    // frame once it has moved past rounding noise and stayed moved, then the
+    // animated value followed to the animation's end.
     struct SGridSize {
         PHLWINDOWREF                                     window;
         MONITORID                                        monitor = MONITOR_INVALID;
@@ -131,8 +132,8 @@ namespace OvInternal {
     };
 
     // The owner's per-frame size snapshot: every window on the monitor has its
-    // size goal looked at once, and a change the grid has not taken yet keeps
-    // the frames coming until it is taken or gone. `resizing` is the window
+    // size looked at once, and a change the grid has not taken yet, or is
+    // following, keeps the frames coming. `resizing` is the window
     // the overview's own resize handle is changing, taken without the wait.
     void gridObserveSizes(const SGridOwnerScope& owner, const PHLMONITOR& monitor, const PHLWINDOW& resizing);
     // An overview closed: its windows' sizes are taken fresh next time.

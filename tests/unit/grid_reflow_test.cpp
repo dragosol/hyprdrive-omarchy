@@ -136,12 +136,24 @@ static CBox ownerStep(SNewTile& t, uint64_t frame, const CBox& slot) {
 static CBox query(const SNewTile& t, uint64_t frame, const CBox& slot) {
     return peek(t.known ? &t.ease : nullptr, t.known, SAsk{slot, nullptr, false, false, frame, DURATION}, ELAPSED, EASE);
 }
-static Vector2D ownerSize(SNewTile& t, uint64_t frame, const Vector2D& goal, ESize* result = nullptr) {
-    const auto R = observe(t.size, t.sizeKnown, goal, frame, g_now, ELAPSED);
+// The size the grid lays the window out with this frame. `value` is the size
+// animation's current value (default: no animation, value == goal).
+static Vector2D ownerSize(SNewTile& t, uint64_t frame, const Vector2D& goal, ESize* result = nullptr, const Vector2D* value = nullptr) {
+    const auto R = observe(t.size, t.sizeKnown, goal, value ? *value : goal, frame, g_now, ELAPSED);
     t.sizeKnown  = true;
     if (result)
         *result = R;
-    return t.size.adopted;
+    return t.size.input;
+}
+
+// Hyprland's size animation, as the grid sees it: from `from` to `to` over
+// `ms`, eased; on its last tick the value is warped onto the goal exactly.
+static Vector2D animValue(const Vector2D& from, const Vector2D& to, double startMs, double ms) {
+    const double T = (g_now - startMs) / ms;
+    if (T >= 1.0)
+        return to;
+    const float E = EASE(static_cast<float>(T), false);
+    return Vector2D{from.x + (to.x - from.x) * E, from.y + (to.y - from.y) * E};
 }
 
 int main() {
@@ -272,13 +284,100 @@ int main() {
 
         // the overview's own resize handle: taken on the frame it happens
         g_now += FRAME_MS;
-        CHECK(observe(t.size, true, Vector2D{800, 500}, ++frame, g_now, ELAPSED, true) == ESize::ADOPTED && t.size.adopted == Vector2D(800, 500));
+        CHECK(observe(t.size, true, Vector2D{800, 500}, Vector2D{800, 500}, ++frame, g_now, ELAPSED, true) == ESize::ADOPTED && t.size.input == Vector2D(800, 500));
 
         // an absence (the overview did not draw this window for a while) takes
         // the size as it is: no settle wait on the frame it comes back
         frame += 5;
         g_now += 500;
         CHECK(ownerSize(t, frame, SA, &r) == SA && r == ESize::FIRST);
+    }
+
+    // ---------------- 2b. A flicker WITH its size animation: out and back never reach the grid
+    {
+        // The goal goes 15 px smaller for 30 ms; Hyprland animates the value
+        // toward it (400 ms) and, when the goal comes back, back again. The old
+        // input -- the value -- moves the whole time; the grid's must not.
+        SNewTile       t;
+        uint64_t       frame = 1;
+        g_now                = 0;
+        ownerSize(t, frame, SA);
+        g_now += FRAME_MS;
+        ownerSize(t, ++frame, SA);
+        const double OUT  = g_now;
+        Vector2D     from = SA;
+        bool         still = true, oldMoved = false;
+        double       back  = -1;
+        for (int i = 0; i < 40; ++i) {
+            g_now += FRAME_MS;
+            const bool AWAY = g_now - OUT < 30;
+            if (!AWAY && back < 0) {
+                back = g_now;
+                from = animValue(SA, SA_SMALL, OUT, 400);
+            }
+            const Vector2D GOAL  = AWAY ? SA_SMALL : SA;
+            const Vector2D VALUE = AWAY ? animValue(SA, SA_SMALL, OUT, 400) : animValue(from, SA, back, 400);
+            still                = still && ownerSize(t, ++frame, GOAL, nullptr, &VALUE) == SA;
+            oldMoved             = oldMoved || sizesDiffer(VALUE, SA) || std::abs(VALUE.x - SA.x) > 0.5;
+        }
+        CHECK(still);
+        CHECK(oldMoved); // CONTROL: the old input (the value) did move
+    }
+
+    // ---------------- 3a. A real resize keeps the OLD motion: it follows the animation, then eases
+    {
+        // The goal goes to BIG at frame 20 and stays; Hyprland animates the value
+        // there over 450 ms. Old: the grid reads the value every frame. New: the
+        // change is taken SIZE_SETTLE_MS later, then the value is followed to the
+        // end. Following from the first frame would follow a flicker just the
+        // same (2b) -- the twitch -- so the first SIZE_SETTLE_MS cannot match;
+        // from the adoption on the grid's INPUT is the old one exactly, and the
+        // tile comes to rest on the same frame.
+        const Vector2D BIG{1100, 700};
+        SOldReflow     old;
+        SNewTile       neu;
+        g_now = 0;
+        bool   sameBefore = true, sameInputAfter = true;
+        int    adoptFrame = -1, oldFirst = -1, newFirst = -1, oldRest = -1, newRest = -1;
+        double changeAt   = 0;
+        const CBox FINAL  = layRow(BIG, SB).a;
+        CBox       prevO, prevN;
+        for (int frame = 1; frame <= 90; ++frame) {
+            if (frame == 20)
+                changeAt = g_now;
+            const Vector2D GOAL  = frame < 20 ? SA : BIG;
+            const Vector2D VALUE = frame < 20 ? SA : animValue(SA, BIG, changeAt, 450);
+            ESize          r{};
+            const Vector2D IN = ownerSize(neu, frame, GOAL, &r, &VALUE);
+            if (r == ESize::ADOPTED && adoptFrame < 0)
+                adoptFrame = frame;
+            if (adoptFrame >= 0)
+                sameInputAfter = sameInputAfter && IN == VALUE;
+            const CBox O = oldReflowBox(old, frame, layRow(VALUE, SB).a, nullptr, false, false);
+            const CBox N = ownerStep(neu, frame, layRow(IN, SB).a);
+            if (frame < 20)
+                sameBefore = sameBefore && O.x == N.x && O.y == N.y && O.w == N.w && O.h == N.h;
+            if (frame > 1) {
+                if (oldFirst < 0 && maxEdgeDelta(O, prevO) > 0)
+                    oldFirst = frame;
+                if (newFirst < 0 && maxEdgeDelta(N, prevN) > 0)
+                    newFirst = frame;
+            }
+            if (maxEdgeDelta(O, FINAL) > 0.5)
+                oldRest = frame + 1;
+            if (maxEdgeDelta(N, FINAL) > 0.5)
+                newRest = frame + 1;
+            prevO = O;
+            prevN = N;
+            g_now += FRAME_MS;
+        }
+        CHECK(sameBefore);
+        CHECK(adoptFrame > 20 && (adoptFrame - 20) * FRAME_MS >= SIZE_SETTLE_MS && (adoptFrame - 21) * FRAME_MS < SIZE_SETTLE_MS);
+        CHECK(sameInputAfter);       // the old input, to the bit, from the adoption on
+        CHECK(newRest == oldRest);   // and the tile comes to rest on the same frame
+        CHECK(newFirst - oldFirst == adoptFrame - 21); // the value first moves on frame 21
+        std::printf("real resize: old moves frames %d..%d, new %d..%d (starts %d frames late, ends on the same frame)\n", oldFirst, oldRest, newFirst, newRest,
+                    newFirst - oldFirst);
     }
 
     // ---------------- 3. A real, lasting change reflows with the SAME timing and curve as before

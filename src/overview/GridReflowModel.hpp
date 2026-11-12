@@ -26,11 +26,12 @@
 // tile drawn right now" without moving anything. A query can no longer start
 // an ease, whatever the window's size happens to read at that instant.
 //
-// And the size the grid lays a window out with is filtered (SSizeTrack): the
-// animation's GOAL, not its current value, adopted by the frame only when it
-// has moved by more than rounding noise AND stayed moved for SIZE_SETTLE_MS.
-// A client that resizes itself and back within a frame or two, a configure in
-// flight, a size animation's intermediate values: none of them reach the grid.
+// And the size the grid lays a window out with is filtered (SSizeTrack): a
+// change of the animation's GOAL is taken by the frame only when it has moved
+// by more than rounding noise AND stayed moved for SIZE_SETTLE_MS; from then
+// on the grid follows the animated value to its end, as it always did. A
+// client that resizes itself and back within a frame or two, a configure in
+// flight and the animation out and back: none of them reach the grid.
 
 #include "MotionMath.hpp"
 
@@ -165,48 +166,84 @@ namespace Hyprdrive::GridReflow {
     // ------------------------------------------------------------------ size
 
     // The size the grid lays one window out with.
+    //
+    // A REAL CHANGE KEEPS ITS OLD MOTION (owner, 2026-11-11: the timings are
+    // intentional). Before the fix the grid read the size animation's current
+    // value, so a resize moved the tiles for the whole of Hyprland's size
+    // animation and then eased -- 765 ms on the rig for a -300x-200 resize --
+    // and a window closing in the overview let the survivors grow with their
+    // own retile. That motion is kept: once a change is ADOPTED the grid
+    // FOLLOWS the animated value for the rest of that animation, exactly as it
+    // used to, and holds the goal when it ends. What it no longer follows is a
+    // change that never got adopted: the goal flicked away and back within
+    // SIZE_SETTLE_MS, and the animation's way out and back again. Following
+    // from the first sight of a new goal would follow exactly that -- the
+    // twitch -- so a real change starts moving the tiles SIZE_SETTLE_MS late
+    // and ends on the same frame as before (the animation's end, then the ease).
     template <class TP>
     struct SSizeTrack {
-        Vector2D adopted;
-        Vector2D pending;
+        Vector2D adopted;    // the goal the grid has taken
+        Vector2D pending;    // a goal it has seen, not taken yet
+        Vector2D input;      // what the grid lays the window out with
         TP       since{};
         bool     hasPending = false;
+        bool     following  = false; // input = the animated value until it reaches the goal
         uint64_t lastFrame  = 0;
     };
 
     enum class ESize : uint8_t {
-        FIRST,    // first sight (or back after an absence): taken as is
-        STEADY,   // unchanged (within SIZE_NOISE_PX)
-        PENDING,  // changed, not for long enough yet: the grid keeps the old size
-        ADOPTED,  // changed and stayed changed: the grid takes it now
-        REJECTED, // changed and came back before SIZE_SETTLE_MS: never reached the grid
+        FIRST,     // first sight (or back after an absence): taken as is
+        STEADY,    // unchanged (within SIZE_NOISE_PX)
+        PENDING,   // changed, not for long enough yet: the grid keeps the old size
+        ADOPTED,   // changed and stayed changed: the grid takes it now
+        FOLLOWING, // an adopted change still animating: the grid follows the value
+        REJECTED,  // changed and came back before SIZE_SETTLE_MS: never reached the grid
     };
 
-    // The owner's per-frame look at one window's size (the animation's goal).
-    // `realElapsedMs(tp)` is wall-clock ms since `tp`: a filter on the input is
-    // not an animation, so anim_scale does not stretch it. `immediate` takes a
-    // real change at once (the overview's own resize handle: the user is the
-    // one changing it, every frame).
+    // The owner's per-frame look at one window's size: its animation's `goal`
+    // and current `value`. `realElapsedMs(tp)` is wall-clock ms since `tp`: a
+    // filter on the input is not an animation, so anim_scale does not stretch
+    // it. `immediate` takes a real change at once (the overview's own resize
+    // handle: the user is the one changing it, every frame).
     template <class TP, class Elapsed>
-    ESize observe(SSizeTrack<TP>& t, bool known, const Vector2D& goal, uint64_t frame, const TP& now, const Elapsed& realElapsedMs, bool immediate = false) {
+    ESize observe(SSizeTrack<TP>& t, bool known, const Vector2D& goal, const Vector2D& value, uint64_t frame, const TP& now, const Elapsed& realElapsedMs,
+                  bool immediate = false) {
+        // Taking a change: follow its animation if there is one left.
+        const auto TAKE = [&](ESize result) {
+            t.adopted    = goal;
+            t.hasPending = false;
+            t.following  = value != goal;
+            t.input      = t.following ? value : goal;
+            return result;
+        };
+
         if (!known || frame - t.lastFrame > 1) {
-            t = SSizeTrack<TP>{goal, goal, now, false, frame};
-            return ESize::FIRST;
+            // First sight: what the grid always read, the value (an overview
+            // opened over a window mid-animation follows it, as before).
+            t           = SSizeTrack<TP>{};
+            t.lastFrame = frame;
+            return TAKE(ESize::FIRST);
         }
         t.lastFrame = frame;
+
+        if (t.following) {
+            // Exactly the old input until the animation lands (Hyprland warps
+            // the value onto the goal on its last tick), a goal moved again
+            // mid-way included.
+            return TAKE(ESize::FOLLOWING);
+        }
 
         if (!sizesDiffer(goal, t.adopted)) {
             const bool HAD = t.hasPending;
             t.hasPending   = false;
+            t.input        = t.adopted; // NOT the value: it may be animating back from a flicker
             return HAD ? ESize::REJECTED : ESize::STEADY;
         }
 
-        if (immediate) {
-            t.adopted    = goal;
-            t.hasPending = false;
-            return ESize::ADOPTED;
-        }
+        if (immediate)
+            return TAKE(ESize::ADOPTED);
 
+        t.input = t.adopted;
         if (!t.hasPending) {
             t.hasPending = true;
             t.pending    = goal;
@@ -215,11 +252,8 @@ namespace Hyprdrive::GridReflow {
         }
 
         t.pending = goal;
-        if (realElapsedMs(t.since) >= SIZE_SETTLE_MS) {
-            t.adopted    = goal;
-            t.hasPending = false;
-            return ESize::ADOPTED;
-        }
+        if (realElapsedMs(t.since) >= SIZE_SETTLE_MS)
+            return TAKE(ESize::ADOPTED);
         return ESize::PENDING;
     }
 

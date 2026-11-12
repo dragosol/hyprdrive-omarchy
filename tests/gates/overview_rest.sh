@@ -17,17 +17,19 @@
 #   2. 6 s of flickering (the client logs >= 8 flickers): each tile still has ONE
 #      box, the same as at rest; the grid trace saw the flicker (`grid size
 #      pending` / `rejected` lines) and never retargeted at rest
-#   3. a real resize of the flickering window by -300x-200 (relative): both tiles
-#      move (the neighbour reflows too), the motion is over within 400 ms of its
-#      first change (one reflow: 300 ms, its sub-pixel tail is invisible), and
-#      the tiles end still
+#   3. with the flicker over, a real resize of the window by -300x-200
+#      (relative): both tiles move and the motion ENDS when it did before the
+#      fix -- the grid follows the size animation, then eases (a4d6892 on the
+#      rig: last change at +816/+851/+906 ms; the check allows that spread plus
+#      one sample around the mean). It STARTS ~50 ms later than before: the
+#      size change is taken once it has held for 50 ms, since following it
+#      from its first frame is following the flicker. Then the tiles end still.
 # Control: --control --control-so a4d6892 (the build before the fix; copy it,
-# never rebuild that tree): 2 fails -- the tiles twitch by 1-2 px at rest (3-4
-# distinct boxes per tile in 6 s) while the rest box (1) is the fix's, to the
-# pixel -- and 3 fails because they keep twitching. Recorded 2026-11-11: control
-# FAILS as it must. Without the flicker (measured by hand on the rig) the same
-# resize moved the tiles for 765 ms before the fix -- the grid followed the size
-# ANIMATION, then eased -- and for 224 ms on it: one reflow toward the size goal.
+# never rebuild that tree): only 2 fails -- the tiles twitch by 1-2 px at rest
+# (3-4 distinct boxes per tile in 6 s) from the fix's rest box, to the pixel --
+# while 1 and 3 pass. Recorded 2026-11-11: control FAILS as it must. Measured
+# the same day, the fix: resize motion +91..+95 ms to +828..+831 ms; a4d6892:
+# +45..+49 ms to +816..+906 ms.
 source "$(dirname "$0")/lib.sh"
 gate_begin ovr
 control_build "a4d6892 (the build before the fix)"
@@ -49,13 +51,15 @@ sample() {
 boxes() { cut -d' ' -f2- "$1" | cut -d'|' -f"$2" | sort -u | grep -c .; }
 lastbox() { tail -1 "$1" | cut -d' ' -f2- | cut -d'|' -f"$2"; }
 
+RESIZE_END_MS=${RESIZE_END_MS:-858}     # a4d6892 on the rig: 816, 851, 906 ms (mean)
+RESIZE_SPREAD_MS=${RESIZE_SPREAD_MS:-50} # ...the rig's own spread over those three runs
 rig_start; trace_on
 go 1; kw k1 900 600
 ev 'hl.window_rule({ match = { class = "size_flicker" }, float = true })'
 wait_for 6 '[ -n "$(xdisplay)" ]' || { $R win env DISPLAY=:99 true >/dev/null 2>&1; wait_for 6 '[ -n "$(xdisplay)" ]'; }
 D=$(xdisplay); [ -n "$D" ] || skip "XWayland never announced a display"
-# 40 s, 15 px, held 30 ms, every 100-600 ms, the first one 7 s after it maps
-$R win env DISPLAY="$D" "$FIX" 40 15 30 100 600 7 >/dev/null
+# 40 s, 15 px, held 30 ms, every 100-600 ms, from 7 s after it maps to 16 s
+$R win env DISPLAY="$D" "$FIX" 40 15 30 100 600 7 16 >/dev/null
 T0=$(date +%s%3N)
 wait_for 6 '[ -n "$(addr_of size_flicker)" ]' || skip "the X11 fixture never mapped"
 check "the fixture floats (Hyprland only honours an X11 client's own resize then)" "$(is "$(win size_flicker .floating)" true)" "$(win size_flicker '{floating,size}')"
@@ -89,18 +93,25 @@ else
     check "2: ...and never retargeted a tile at rest" "$(is "$rt" 0)" "$rt retargets: $(trace | grep 'grid retarget' | head -2 | tr '\n' ';')"
 fi
 
-# 3. a real resize still reflows, as one reflow
+# 3. a real resize (the flicker over) moves the tiles as before the fix: with
+#    the size animation, then the ease -- the same end, sample for sample
+wait_for 12 "[ \$(( \$(date +%s%3N) - $T0 )) -ge 17000 ]"
 sample 2500 "$GOUT/resize.samp" &
 SP=$!; _bg_pids="${_bg_pids:-} $SP"
 sleep 0.8; TR=$(date +%s%3N)
 ev "hl.dispatch(hl.dsp.window.resize({ window = [[address:$(addr_of size_flicker)]], x = -300, y = -200, relative = true }))"
 wait "$SP"
-SPAN=$(awk -v t0="$TR" '{ ms = $1; $1 = ""; if (NR > 1 && $0 != prev && ms > t0) { if (!first) first = ms; last = ms } prev = $0 }
-    END { if (first) printf "%d %d", first - t0, last - first; else print "none" }' "$GOUT/resize.samp")
+# first and last change after the resize, ms after it; the sampling interval
+SPAN=$(awk -v t0="$TR" '{ ms = $1; $1 = ""; if (NR > 1 && $0 != prev && ms > t0) { if (!first) first = ms; last = ms } prev = $0; n++; if (NR == 1) a = ms; z = ms }
+    END { if (first) printf "%d %d %d", first - t0, last - t0, (z - a) / (n - 1); else print "none" }' "$GOUT/resize.samp")
 set -- $SPAN
-echo "info  rest $REST; flickers $nf; resize: first change +${1:-?} ms, motion ${2:-?} ms"
+echo "info  rest $REST; flickers $nf; resize: first change +${1:-?} ms, last +${2:-?} ms, a sample every ${3:-?} ms"
 check "3: both tiles moved" "$([ "$(lastbox "$GOUT/resize.samp" 1)" != "${REST%%|*}" ] && [ "$(lastbox "$GOUT/resize.samp" 2)" != "${REST#*|}" ] && echo 1)" "k1 $(lastbox "$GOUT/resize.samp" 1) size_flicker $(lastbox "$GOUT/resize.samp" 2), rest $REST"
-check "3: one reflow: over within 400 ms of its first change" "$([ "$SPAN" != none ] && [ "$2" -le 400 ] && echo 1)" "first change +${1:-?} ms after the resize, motion lasted ${2:-?} ms"
+# The control (a4d6892) ended its motion at +RESIZE_END_MS (recorded below);
+# the fix must end within one sample of it either way, plus the rig's spread.
+check "3: the motion ends when it did before the fix (+$RESIZE_END_MS ms, +-$((${3:-20} + RESIZE_SPREAD_MS)) ms)" \
+    "$([ "$SPAN" != none ] && [ $(( ${2} - RESIZE_END_MS )) -le $((${3} + RESIZE_SPREAD_MS)) ] && [ $(( RESIZE_END_MS - ${2} )) -le $((${3} + RESIZE_SPREAD_MS)) ] && echo 1)" \
+    "last change +${2:-?} ms after the resize (first +${1:-?} ms)"
 END=$(awk -v t0="$TR" '$1 > t0 + 1700' "$GOUT/resize.samp" | cut -d' ' -f2- | sort -u | grep -c .)
 check "3: the tiles end still" "$(is "$END" 1)" "$END distinct boxes in the last 800 ms"
 gate_end

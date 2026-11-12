@@ -310,19 +310,19 @@ namespace OvInternal {
 
     // WHAT SIZE THE GRID LAYS A WINDOW OUT WITH. It used to be the size
     // animation's CURRENT value, read afresh by every query -- so a window
-    // mid-animation, mid-configure, or resizing itself for a moment handed the
-    // solver a different size each time it was asked, and the solver moved its
-    // slot (and its row's) accordingly. The grid means "the size this window
-    // has", so it reads the size the owning frame adopted for it
-    // (gridObserveSizes): the animation's GOAL -- where Hyprland is taking the
-    // window, the same for every frame of a move/resize animation -- taken
-    // only once it has moved past rounding noise and stayed moved. A window
-    // the frame has not looked at yet (opened since) answers with its goal.
+    // mid-configure, or resizing itself for a moment, handed the solver a
+    // different size each time it was asked, and the solver moved its slot
+    // (and its row's) accordingly. Now it is what the owning frame decided
+    // for it (gridObserveSizes, GridReflowModel.hpp SSizeTrack): a change of
+    // the animation's GOAL is taken only once it moved past rounding noise and
+    // stayed moved, and from then on the grid follows the animated value to
+    // the animation's end, exactly as before. A window the frame has not
+    // looked at yet (opened since) answers with its current value, as before.
     Vector2D overviewGridWindowSize(const PHLWINDOW& window) {
         const auto& SIZES = gridView().sizes;
         if (const auto IT = SIZES.find(window.get()); IT != SIZES.end() && IT->second.window.lock() == window)
-            return IT->second.track.adopted;
-        return window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            return IT->second.track.input;
+        return window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     }
 
     void gridObserveSizes(const SGridOwnerScope& owner, const PHLMONITOR& monitor, const PHLWINDOW& resizing) {
@@ -351,11 +351,12 @@ namespace OvInternal {
             entry.monitor    = monitor->m_id;
 
             using Hyprdrive::GridReflow::ESize;
-            const auto RESULT = Hyprdrive::GridReflow::observe(entry.track, KNOWN, GOAL, FRAME, NOW, REAL, window == resizing);
-            if (RESULT == ESize::PENDING)
+            const auto VALUE  = window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+            const auto RESULT = Hyprdrive::GridReflow::observe(entry.track, KNOWN, GOAL, VALUE, FRAME, NOW, REAL, window == resizing);
+            if (RESULT == ESize::PENDING || entry.track.following)
                 waiting = true;
 
-            if (RESULT != ESize::STEADY && RESULT != ESize::FIRST && gridTraceOn()) {
+            if (RESULT != ESize::STEADY && RESULT != ESize::FIRST && RESULT != ESize::FOLLOWING && gridTraceOn()) {
                 const char* WHAT = RESULT == ESize::PENDING ? "pending" : RESULT == ESize::ADOPTED ? "adopted" : "rejected";
                 gridTrace(std::format("size {} {} {:.1f}x{:.1f} goal {:.1f}x{:.1f} (since {:.0f} ms) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y, GOAL.x, GOAL.y,
                                       REAL(entry.track.since), FRAME, monitor->m_name));
@@ -363,7 +364,8 @@ namespace OvInternal {
         }
 
         // A size the grid has not taken yet needs a later frame to be taken
-        // (or dropped) on -- a static overview draws nothing on its own.
+        // (or dropped) on, and one it follows needs a frame per animation
+        // tick -- a static overview draws nothing on its own.
         if (waiting)
             gridSetReflowActive(monitor);
     }
