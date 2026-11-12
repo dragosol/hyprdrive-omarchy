@@ -40,6 +40,18 @@ int main() {
         committed(s, 152, true); // drawn
         CHECK(decide(s, 152) == ERelease::Drawn);
     }
+    {   // ...or 102 ms later, past MIN_GAP_MS, because the helper mapped later
+        // and the desktop re-arranged: the window was only MOVED since its
+        // last commit, so the commit is the X server's, not a frame
+        SState s;
+        sent(s, true, true);
+        committed(s, 21, true);                // white
+        committed(s, 123, true, true);         // re-committed after a move
+        CHECK(s.drawn == 1);
+        CHECK(decide(s, 123) == ERelease::Hold);
+        committed(s, 171, true);               // drawn
+        CHECK(decide(s, 171) == ERelease::Drawn);
+    }
     {   // a client that draws once, late, and then stays still
         SState s;
         sent(s, true, true);

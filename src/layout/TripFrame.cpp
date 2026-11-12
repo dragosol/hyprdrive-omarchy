@@ -65,6 +65,7 @@ namespace Hyprdrive::TripFrame {
             CBox                     src;      // the window inside the snapshot, monitor px
             Vector2D                 snapSize; // its size then, logical
             Vector2D                 sent;     // the size it was last sent
+            Vector2D                 cSize, cPos; // the size and place it had been sent at its last commit
             Clock::time_point        at;       // the hold's start (real time)
             TripFrameRule::SState    state;
             CHyprSignalListener      commit;
@@ -257,9 +258,15 @@ namespace Hyprdrive::TripFrame {
             const auto RES = W->wlSurface()->resource();
             const bool AT  = near(RES->m_current.size, SENT);
             const double REP = repainted(RES);
+            // Moved since its last commit, its size the same: the X server's
+            // re-commit of what it has (TripFrameRule.hpp).
+            const bool MOVED = W->m_isX11 && near(SENT, H->cSize) && !near(W->m_reportedPosition, H->cPos);
+            H->cSize         = SENT;
+            H->cPos          = W->m_reportedPosition;
             if (AT && H->state.resized)
-                trace(std::format("{} commit at {}x{} after {:.0f} ms, {:.0f}% repainted", W->m_class, SENT.x, SENT.y, msSince(H->at), REP * 100));
-            TripFrameRule::committed(H->state, msSince(H->at), AT && REP >= TripFrameRule::FULL_REPAINT);
+                trace(std::format("{} commit at {}x{} after {:.0f} ms, {:.0f}% repainted{}", W->m_class, SENT.x, SENT.y, msSince(H->at), REP * 100,
+                                  MOVED ? " (only moved since its last: not a frame)" : ""));
+            TripFrameRule::committed(H->state, msSince(H->at), AT && REP >= TripFrameRule::FULL_REPAINT, MOVED);
             review();
         }
 
@@ -356,6 +363,8 @@ namespace Hyprdrive::TripFrame {
             H->at    = Clock::now();
             H->state = {};
             H->sent  = sentSize(w);
+            H->cSize = H->sent;
+            H->cPos  = w->m_reportedPosition;
             trace(std::format("{} held again (it has not drawn since)", w->m_class));
             armTimer();
             return;
@@ -371,7 +380,7 @@ namespace Hyprdrive::TripFrame {
         auto fb = g_pHyprRenderer->makeSnapshotFB(w);
         if (!fb || !fb->isAllocated() || !fb->getTexture() || !fb->getTexture()->ok() || fb->m_size.x < 2 || fb->m_size.y < 2)
             return;
-        g_held.push_back({.win = w, .mon = MON, .fb = std::move(fb), .src = SRC, .snapSize = SIZE, .sent = sentSize(w), .at = Clock::now()});
+        g_held.push_back({.win = w, .mon = MON, .fb = std::move(fb), .src = SRC, .snapSize = SIZE, .sent = sentSize(w), .cSize = sentSize(w), .cPos = w->m_reportedPosition, .at = Clock::now()});
         const PHLWINDOWREF REF = w;
         g_held.back().commit   = w->wlSurface()->resource()->m_events.commit.listen([REF] { onCommit(REF); });
         trace(std::format("{} held at {}x{} (its last good frame)", w->m_class, SIZE.x, SIZE.y));

@@ -30,7 +30,12 @@
 //     same blank picture, fully damaged, when something else happens to the
 //     window (measured on the rig: 60 ms after the white frame, as the
 //     launcher's helper window mapped and the desktop re-arranged; counting
-//     it released the hold on the white frame). A client's real frame comes
+//     it released the hold on the white frame). Nor does a commit that
+//     came after Hyprland only MOVED the window since its last commit (its
+//     size the same): XWayland re-commits the picture it has when an X11
+//     window is moved -- 120 ms after the white frame when the helper mapped
+//     later, past MIN_GAP_MS, and the hold let go on white again (fs_trip_x11
+//     check 4, 1 frame in 170). A client's real frame comes
 //     its redraw time after the blank one (CEF: ~150 ms); one that draws
 //     faster than MIN_GAP_MS waits for its next frame or SETTLE_MS. A heuristic
 //     on purpose: commits do not say what is in them, and reading the buffer
@@ -66,9 +71,10 @@ namespace Hyprdrive::TripFrameRule {
             s = {.resized = true};
     }
     // It committed a FRAME (a full repaint, FULL_REPAINT), `atSent`: at the
-    // size it was sent.
-    inline void committed(SState& s, double ms, bool atSent) {
-        if (!s.resized || !atSent)
+    // size it was sent; `movedOnly`: since its last commit it was moved, not
+    // resized (the commit is the X server's, not the client's).
+    inline void committed(SState& s, double ms, bool atSent, bool movedOnly = false) {
+        if (!s.resized || !atSent || movedOnly)
             return;
         if (s.drawn >= 1 && ms - s.firstMs < MIN_GAP_MS)
             return; // the same blank picture again, re-committed
