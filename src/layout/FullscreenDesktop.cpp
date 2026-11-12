@@ -279,6 +279,15 @@ namespace Hyprdrive::FullscreenDesktop {
         };
         std::vector<STravel> g_travels;
         constexpr double     TRAVEL_MIN_MS = 220.0;
+        // What Hyprland's own size callback does on every animated step
+        // (setValue runs no callback): the border and shadow follow the box
+        // the window travels in. Without it they stayed at the box of the last
+        // layout step -- a thin outline anchored top-left inside a window
+        // coming home from fullscreen (MosaicDrive.cpp had the same).
+        void followDecos(const PHLWINDOW& w) {
+            if (w && w->m_isMapped && !w->isHidden())
+                w->updateWindowDecos();
+        }
 
         // THE WINDOW STAYS WHERE IT IS SEEN. Moved to another desktop, a window
         // would vanish from its place and turn up on a desktop still sliding in
@@ -303,6 +312,7 @@ namespace Hyprdrive::FullscreenDesktop {
             const Vector2D GOAL = w->positionAnimation()->goal(), GSIZE = w->sizeAnimation()->goal();
             w->positionAnimation()->setValue(screen ? seen - OFF : seen);
             w->sizeAnimation()->setValue(seenSize);
+            followDecos(w);
             (void)GOAL;
             (void)GSIZE;
             std::erase_if(g_travels, [&](const STravel& t) { return t.win.lock() == w; });
@@ -1338,6 +1348,7 @@ namespace Hyprdrive::FullscreenDesktop {
             if (T >= 1.0 - 1e-4) {
                 W->positionAnimation()->setValueAndWarp(GOAL);
                 W->sizeAnimation()->setValueAndWarp(GSIZE);
+                followDecos(W);
                 it = g_travels.erase(it);
                 continue;
             }
@@ -1347,6 +1358,7 @@ namespace Hyprdrive::FullscreenDesktop {
             const Vector2D SIZE  = it->seenSize + (GSIZE - it->seenSize) * U;
             W->positionAnimation()->setValue(it->screen ? PLACE - offsetOf(W->m_workspace) : PLACE);
             W->sizeAnimation()->setValue(SIZE);
+            followDecos(W);
             it->drawn = {it->screen ? PLACE : PLACE + offsetOf(W->m_workspace), SIZE};
             ++it;
         }
