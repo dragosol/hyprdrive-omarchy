@@ -85,7 +85,9 @@ var sections = [
         { type: "slider", key: P + "scale", label: "Overview size", min: 0.4, max: 0.9, step: 0.01, fmt: "percent",
           desc: "How large the desktop cards are, as a share of the screen." },
         { type: "slider", key: P + "mission_control_gap", label: "Grid spacing", min: 0, max: 120, step: 2, unit: "px",
-          desc: "Room between windows in the grid." }
+          desc: "Room between windows in the grid." },
+        { type: "choice", key: P + "overview_tile_order", label: "Window order",
+          desc: "How the windows are ordered in the grid, from the top left. Last used puts the window you used most recently first; Order opened, the oldest first; Match desktop position lays them out as they sit on the desktop. Taken as the overview opens, so nothing moves while it is up." }
       ]},
       { title: "Backdrop", rows: [
         { type: "choice", key: P + "backdrop", label: "Behind the cards",

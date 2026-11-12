@@ -55,6 +55,22 @@ for m in hd.KEY_META:
     if not same and ALLOWED.get(key) != (got, want):
         fails.append("%s: Config.cpp default %r, panel default %r" % (key, got, want))
 
+# A default the plugin also spells as an enum constant: the constant names the
+# registered literal (the overview tile order -- Config.hpp, one default for
+# the owner to choose).
+ENUM_DEFAULTS = {PREFIX + "overview_tile_order": ("OVERVIEW_TILE_ORDER_DEFAULT", "ETileOrder",
+                                                   {"RECENT": "recent", "CREATED": "created", "POSITION": "position"})}
+hpp = (ROOT / "src" / "core" / "Config.hpp").read_text()
+for key, (const, enum, names) in ENUM_DEFAULTS.items():
+    m = re.search(r"constexpr\s+%s\s+%s\s*=\s*%s::(\w+)" % (enum, const, enum), hpp)
+    k = reg.get(key)
+    lit = re.fullmatch(r'Hyprlang::STRING\{"([^"]*)"\}', k.raw_default.strip()) if k else None
+    checked += 1
+    if not m or not lit:
+        fails.append("%s: %s or its registered literal not found" % (key, const))
+    elif names.get(m.group(1)) != lit.group(1):
+        fails.append("%s: Config.hpp %s is %s, Config.cpp registers %r" % (key, const, m.group(1), lit.group(1)))
+
 for f in fails:
     print("FAIL", f)
 print("config_defaults_test: %d defaults compared, %d failed" % (checked, len(fails)))

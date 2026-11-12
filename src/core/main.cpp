@@ -341,6 +341,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // A reload can drop plugin-registered beziers, and may have changed the
         // animation:curve preset: point the house names at it again.
         Hyprdrive::Motion::sync();
+        // The overview's tile order (GridLayout.hpp): read here, not per frame.
+        OvInternal::gridTileOrderReload();
         healStuckOverviewSubmap();
 
         // `omarchy theme set` writes colors.toml and reloads Hyprland, so the
@@ -646,6 +648,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     Hyprdrive::Config::registerDispatcher("show_desktop", Hyprdrive::ShowDesktop::dispatch);
     Hyprdrive::Config::registerGesture(::onRegisterOverviewGesture, ::overviewGestureKeyword);
     Hyprdrive::Config::registerConfig();
+    // Its keys exist now: the overview's tile order (also on every reload).
+    OvInternal::gridTileOrderReload();
     // The "mosaic" layout (Mosaic.hpp). Registered whether or not the panel has
     // enabled it: a desktop whose saved layout is mosaic must find it at login.
     Hyprdrive::Mosaic::registerLayout(HYPRDRIVE_HANDLE);

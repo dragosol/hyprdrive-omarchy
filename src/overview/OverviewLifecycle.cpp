@@ -83,6 +83,11 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     adoptWallpaperStash();
     layout                       = Hyprdrive::Config::getLayout();
     sharedStateOwner             = scrollOverviews().empty();
+    // The session's tile order (GridLayout.hpp gridOrderTake): the first
+    // overview up takes it, before anything below asks for a box, so the
+    // grid opens in it and keeps it while the overview is up.
+    if (sharedStateOwner)
+        OvInternal::gridOrderTake();
     usesSubmapKeybinds           = hasOverviewSubmap();
     // The overview's own mouse binds must let a press through when the
     // overview itself lets it through -- over a TOP/OVERLAY layer (the bar,

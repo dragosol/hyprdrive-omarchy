@@ -64,6 +64,11 @@ BACKDROPS = [
     {"value": "live", "label": "Live"},
     {"value": "auto", "label": "Auto"},
 ]
+TILE_ORDERS = [
+    {"value": "recent", "label": "Last used"},
+    {"value": "created", "label": "Order opened"},
+    {"value": "position", "label": "Match desktop position"},
+]
 FULLSCREEN_DESKTOPS = [
     {"value": "next", "label": "Its own desktop"},
     {"value": "free", "label": "The next free desktop"},
@@ -131,6 +136,7 @@ KEY_META = [
     _k(PLUGIN + "strip_cleanup_button", "bool", "overview", True),
     _k(PLUGIN + "scale", "float", "overview", 0.82, min=0.4, max=0.9),
     _k(PLUGIN + "mission_control_gap", "int", "overview", 40, min=0, max=160),
+    _k(PLUGIN + "overview_tile_order", "enum", "overview", "recent", options=TILE_ORDERS),
     _k(PLUGIN + "backdrop", "enum", "overview", "snapshot", options=BACKDROPS),
     _k(PLUGIN + "search:dictionary", "bool", "overview", False),
     _k(PLUGIN + "search:translate", "bool", "overview", False),

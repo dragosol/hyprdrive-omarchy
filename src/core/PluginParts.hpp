@@ -125,6 +125,7 @@ namespace OvInternal {
     void overviewQueryEdited();
     void cancelPointerHandoff(); // Overview.cpp
     bool pointerOnTopLayer(PHLMONITOR monitor); // OverviewInput.cpp
+    void gridTileOrderReload(); // GridLayout.cpp
 }
 
 // Tap-SUPER toggles the overview.

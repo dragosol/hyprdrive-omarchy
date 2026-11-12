@@ -178,6 +178,20 @@ namespace OvInternal {
     bool                   overviewGridPromoted(const PHLWINDOW& window, PHLMONITOR monitor);
     Vector2D               overviewGridWindowSize(const PHLWINDOW& window);
 
+    // --- order ----------------------------------------------------------------
+    // THE TILE ORDER (plugin:hyprdrive:overview_tile_order, GridSolve.hpp),
+    // taken ONCE per overview session: what every window's place in the focus
+    // history and its centre on its desktop were as the overview opened.
+    // COverview's constructor takes it for the first overview of a session,
+    // before anything has asked for a box; nothing while the overview is up
+    // changes it -- a hover's focus, a raise, or the tile pass moving a window
+    // onto its tile while it draws it. A window opened since has no entry and
+    // is appended; a closed one is simply no longer a member.
+    void                   gridOrderTake();
+    // The mode: read on config.reloaded (main.cpp) and by every take (a
+    // `hyprctl eval hl.config` set announces no reload), never per frame.
+    void                   gridTileOrderReload();
+
     // --- layout ---------------------------------------------------------------
     bool overviewGridLayout(const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out);
     // The slot `window` owns on `monitor`, if it owns one at all. `promotedOut`

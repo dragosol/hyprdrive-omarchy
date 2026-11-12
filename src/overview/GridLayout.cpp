@@ -5,6 +5,8 @@
 
 #include "DebugPaths.hpp"
 
+#include <hyprland/src/desktop/history/WindowHistoryTracker.hpp>
+
 #include <algorithm>
 #include <cstdio>
 #include <format>
@@ -120,6 +122,103 @@ namespace OvInternal {
         return window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID;
     }
 
+    namespace {
+        // One window's entry in the session's order snapshot.
+        struct SOrderEntry {
+            PHLWINDOWREF            window;
+            uint64_t                rank = 0; // its place in the focus history, 0 the most recent
+            std::optional<Vector2D> centre;   // its centre on its desktop, if it had one
+        };
+
+        struct SOrderSnapshot {
+            std::unordered_map<const Desktop::View::CWindow*, SOrderEntry> entries;
+            Hyprdrive::Config::ETileOrder mode = Hyprdrive::Config::OVERVIEW_TILE_ORDER_DEFAULT;
+            // Bumped by every take and every change of the mode: a key of the
+            // layout memo, so a solve from the previous session's snapshot or
+            // the previous mode is never reused.
+            uint64_t generation = 1;
+            // POSITION: each desktop's order as it was dealt the first time
+            // its grid was laid out this session (GridSolve.hpp
+            // positionOrder), window -> its place. Kept for the session, so a
+            // window opened meanwhile is appended instead of re-dealing rows.
+            std::unordered_map<WORKSPACEID, std::unordered_map<const Desktop::View::CWindow*, std::pair<PHLWINDOWREF, size_t>>> dealt;
+        };
+
+        SOrderSnapshot& orderSnapshot() {
+            static SOrderSnapshot SNAPSHOT;
+            return SNAPSHOT;
+        }
+
+        const SOrderEntry* orderEntry(const PHLWINDOW& window) {
+            const auto& ENTRIES = orderSnapshot().entries;
+            const auto  IT      = ENTRIES.find(window.get());
+            return IT != ENTRIES.end() && IT->second.window.lock() == window ? &IT->second : nullptr;
+        }
+
+        // Where the window sits on its desktop: the box its layout gave it
+        // (the goal, never the live value), or for a minimized one the box it
+        // was minimized from.
+        std::optional<Vector2D> desktopCentre(const PHLWINDOW& window) {
+            CBox box;
+            if (Hyprdrive::Minimize::originalWorkspace(window) != WORKSPACE_INVALID)
+                box = Hyprdrive::Minimize::originalBox(window);
+            else
+                box = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            if (box.w <= 0 || box.h <= 0)
+                return std::nullopt;
+            return box.middle();
+        }
+
+        // The walk's sort key. Created and position both walk in creation
+        // order (position is dealt onto it by overviewGridLayout: positionDeal);
+        // recent walks last used first.
+        std::tuple<bool, uint64_t, uint64_t> orderKey(const PHLWINDOW& window) {
+            if (orderSnapshot().mode != Hyprdrive::Config::ETileOrder::RECENT)
+                return {false, 0, window->m_stableID};
+            const auto* ENTRY = orderEntry(window);
+            return Hyprdrive::GridSolve::recentKey(ENTRY != nullptr, ENTRY ? ENTRY->rank : 0, window->m_stableID);
+        }
+    }
+
+    void gridOrderTake() {
+        auto& SNAP = orderSnapshot();
+        SNAP.entries.clear();
+        SNAP.dealt.clear();
+        ++SNAP.generation;
+        // The mode too, once per open: a value set with `hyprctl eval
+        // hl.config(...)` announces no reload, and is in effect from the next
+        // open (gridTileOrderReload has it at once on a reload).
+        SNAP.mode = Hyprdrive::Config::getOverviewTileOrder();
+
+        // Hyprland's focus history, oldest first (a window enters it at the
+        // FRONT when it opens and moves to the back each time it is focused).
+        const auto& HISTORY = Desktop::History::windowTracker()->fullHistory();
+        const auto  N       = sc<uint64_t>(HISTORY.size());
+        for (uint64_t i = 0; i < N; ++i) {
+            const auto WINDOW = HISTORY[i].lock();
+            if (!WINDOW)
+                continue;
+            SNAP.entries[WINDOW.get()] = SOrderEntry{WINDOW, N - 1 - i, desktopCentre(WINDOW)};
+        }
+        // A window the history does not hold: after every one it does, in
+        // the order they were made (the key's tie).
+        for (const auto& WINDOW : Desktop::windowState()->windows()) {
+            if (!WINDOW || SNAP.entries.contains(WINDOW.get()))
+                continue;
+            SNAP.entries[WINDOW.get()] = SOrderEntry{WINDOW, N, desktopCentre(WINDOW)};
+        }
+    }
+
+    void gridTileOrderReload() {
+        auto&      SNAP = orderSnapshot();
+        const auto MODE = Hyprdrive::Config::getOverviewTileOrder();
+        if (MODE == SNAP.mode)
+            return;
+        SNAP.mode = MODE;
+        SNAP.dealt.clear();
+        ++SNAP.generation;
+    }
+
     // The home-workspace membership rule, into a buffer the caller owns so the
     // per-frame layout memo can rebuild its key without allocating.
     static void overviewGridWindowsInto(const PHLWORKSPACE& workspace, std::vector<PHLWINDOW>& out) {
@@ -151,10 +250,10 @@ namespace OvInternal {
             out.emplace_back(window);
         }
 
-        // In the order the windows were MADE (GridSolve.hpp order()): Hyprland's
-        // list is reordered by every focus and raise, and the grid followed it,
-        // so a tile could change slots under a hover.
-        Hyprdrive::GridSolve::order(out, 0, out.size(), [](const PHLWINDOW& w) { return w->m_stableID; });
+        // In the session's order (gridOrderTake, GridSolve.hpp order()), never
+        // Hyprland's list: that is reordered by every click and raise, and the
+        // grid followed it, so a tile could change slots under a hover.
+        Hyprdrive::GridSolve::order(out, 0, out.size(), orderKey);
     }
 
     std::vector<PHLWINDOW> overviewGridWindows(const PHLWORKSPACE& workspace) {
@@ -307,9 +406,10 @@ namespace OvInternal {
             if (getOverviewWindowToShow(window) == window && overviewGridPromotableIn(CTX, window, monitor))
                 out.emplace_back(window);
         }
-        // The promoted ones after the desktop's own, as before, in their own
-        // creation order.
-        Hyprdrive::GridSolve::order(out, OWN, out.size(), [](const PHLWINDOW& w) { return w->m_stableID; });
+        // The promoted ones after the desktop's own, as before, in the same
+        // order among themselves (position: creation order -- they are not on
+        // this desktop, so they have no place on it to match).
+        Hyprdrive::GridSolve::order(out, OWN, out.size(), orderKey);
     }
 
     std::vector<PHLWINDOW> overviewMainGridWindows(const PHLWORKSPACE& workspace, PHLMONITOR monitor) {
@@ -467,6 +567,8 @@ namespace OvInternal {
             CBox                                 usable;
             std::vector<Desktop::View::CWindow*> members;
             std::vector<Vector2D>                sizes;
+            // The tile order's snapshot and mode (gridOrderTake).
+            uint64_t                             orderGen       = 0;
             // --- value
             std::vector<CBox> slots;
             bool              valid = false;
@@ -489,6 +591,42 @@ namespace OvInternal {
             static std::vector<SGridMemo> MEMOS;
             return MEMOS;
         }
+    }
+
+    // THE POSITION ORDER, onto the walk's (creation-order) members: the first
+    // time this session a desktop's grid is laid out it is dealt from where
+    // each member sat on it as the overview opened (the snapshot's centres --
+    // never the window's box, which mid-draw is its tile's), and from then on
+    // that order is kept: the dealt windows first, in it, then everyone it
+    // does not know (opened since, or promoted by a search) in the walk's
+    // order. A closed window simply is no member any more.
+    static void positionDeal(const PHLWORKSPACE& workspace, std::vector<PHLWINDOW>& windows, const CBox& usable, float gap) {
+        auto& DEALT = orderSnapshot().dealt;
+        auto  IT    = DEALT.find(workspace->m_id);
+        if (IT == DEALT.end()) {
+            std::vector<Vector2D>                sizes;
+            std::vector<std::optional<Vector2D>> centres;
+            for (const auto& WINDOW : windows) {
+                const auto* ENTRY = orderEntry(WINDOW);
+                sizes.emplace_back(overviewGridWindowSize(WINDOW));
+                centres.emplace_back(ENTRY && overviewGridHomeWorkspace(WINDOW) == workspace->m_id ? ENTRY->centre : std::nullopt);
+            }
+            std::vector<size_t> perm;
+            Hyprdrive::GridSolve::positionOrder(sizes, centres, usable, gap, perm);
+            IT = DEALT.emplace(workspace->m_id, std::unordered_map<const Desktop::View::CWindow*, std::pair<PHLWINDOWREF, size_t>>{}).first;
+            for (size_t k = 0; k < perm.size(); ++k)
+                if (centres[perm[k]])
+                    IT->second[windows[perm[k]].get()] = {windows[perm[k]], k};
+        }
+
+        const auto& PLACES = IT->second;
+        const auto  PLACE  = [&PLACES](const PHLWINDOW& w) -> std::pair<bool, size_t> {
+            const auto P = PLACES.find(w.get());
+            if (P == PLACES.end() || P->second.first.lock() != w)
+                return {true, 0};
+            return {false, P->second.second};
+        };
+        std::ranges::stable_sort(windows, [&PLACE](const PHLWINDOW& a, const PHLWINDOW& b) { return PLACE(a) < PLACE(b); });
     }
 
     bool overviewGridLayout(const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out) {
@@ -524,14 +662,7 @@ namespace OvInternal {
                                                      WINDOWS[i]->m_class, WINDOWS[i]->m_title);
         }
 
-        size_t index = WINDOWS.size();
-        for (size_t i = 0; i < WINDOWS.size(); ++i) {
-            if (WINDOWS[i] == target) {
-                index = i;
-                break;
-            }
-        }
-        if (index >= WINDOWS.size())
+        if (std::ranges::find(WINDOWS, target) == WINDOWS.end())
             return false;
 
         CBox usable = {monitor->m_position, monitor->m_size};
@@ -577,6 +708,19 @@ namespace OvInternal {
         if (usable.w <= 1 || usable.h <= 1)
             return false;
 
+        if (orderSnapshot().mode == Hyprdrive::Config::ETileOrder::POSITION)
+            positionDeal(workspace, WINDOWS, usable, GAP);
+
+        size_t index = WINDOWS.size();
+        for (size_t i = 0; i < WINDOWS.size(); ++i) {
+            if (WINDOWS[i] == target) {
+                index = i;
+                break;
+            }
+        }
+        if (index >= WINDOWS.size())
+            return false;
+
         MEMBERS.clear();
         SIZES.clear();
         MEMBERS.reserve(WINDOWS.size());
@@ -587,6 +731,7 @@ namespace OvInternal {
         }
 
         const uint64_t MEMBERSGEN = Membership::generation();
+        const uint64_t ORDERGEN   = orderSnapshot().generation;
         const bool     INDRAW     = SGridOwnerScope::current(monitor) != nullptr;
         const uint64_t FRAME      = overviewFrameOn(monitor);
 
@@ -599,7 +744,7 @@ namespace OvInternal {
                 continue;
             if (!sameBox(memo.usable, usable) || memo.query != g_search.query.text)
                 continue;
-            if (memo.members != MEMBERS)
+            if (memo.members != MEMBERS || memo.orderGen != ORDERGEN)
                 continue;
             // ONE SOLVE PER DRAWN FRAME (GridSolve.hpp): a size that reads
             // differently later in the frame that solved it does not re-solve.
@@ -627,6 +772,7 @@ namespace OvInternal {
             hit->members      = MEMBERS;
             hit->sizes        = SIZES;
             hit->frame        = INDRAW ? FRAME : 0;
+            hit->orderGen     = ORDERGEN;
 
             Hyprdrive::GridSolve::solve(SIZES, usable, GAP, hit->slots);
             hit->valid = !hit->slots.empty();

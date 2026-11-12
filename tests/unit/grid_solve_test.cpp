@@ -1,6 +1,8 @@
 // Host test for GridSolve.hpp: the overview grid's order and the one-solve-
 // per-drawn-frame rule (#9 "a hovered tile jumps right with motion off", #7
-// "tiles shake with motion on").
+// "tiles shake with motion on"), and the three tile orders the overview can
+// take as it opens (plugin:hyprdrive:overview_tile_order): last used,
+// creation order, and matching the windows' places on the desktop.
 //
 // THE FORCED REPRODUCTION. Two windows side by side, 621x670 logical each (the
 // reporter's 1920x1080 at 1.5, Omarchy's gaps), in the rig's grid area. The
@@ -179,6 +181,122 @@ int main() {
         const auto&        M3 = query(memos, THREEM, USABLE, GAP, true, 9);
         for (size_t i = 0; i < 3; ++i)
             CHECK(M3[i] == A3[i]);
+    }
+
+    // 4. LAST USED (recentKey): the rank the overview took as it opened, 0 the
+    //    most recent, whatever order the window list is in; a window opened
+    //    since (unknown) is appended in creation order.
+    {
+        struct W {
+            char     name;
+            bool     known;
+            uint64_t rank, seq;
+        };
+        const auto KEY = [](const W& w) { return recentKey(w.known, w.rank, w.seq); };
+        // a used last, then c, then b; d never focused (the history's front).
+        std::vector<std::vector<W>> lists = {
+            {{'a', true, 0, 1}, {'b', true, 2, 2}, {'c', true, 1, 3}, {'d', true, 3, 4}},
+            {{'d', true, 3, 4}, {'c', true, 1, 3}, {'b', true, 2, 2}, {'a', true, 0, 1}},
+            {{'b', true, 2, 2}, {'d', true, 3, 4}, {'a', true, 0, 1}, {'c', true, 1, 3}},
+        };
+        for (auto& list : lists) {
+            order(list, 0, list.size(), KEY);
+            std::string got;
+            for (const auto& w : list)
+                got += w.name;
+            CHECK(got == "acbd");
+        }
+        // Opened while the overview is up: after every known one, oldest first,
+        // and nothing known moves.
+        std::vector<W> grown = {{'f', false, 0, 9}, {'a', true, 0, 1}, {'e', false, 0, 8}, {'b', true, 1, 2}};
+        order(grown, 0, grown.size(), KEY);
+        std::string got;
+        for (const auto& w : grown)
+            got += w.name;
+        CHECK(got == "abef");
+        // Hyprland's history rank ties (windows it never held): creation order.
+        std::vector<W> tied = {{'y', true, 5, 7}, {'x', true, 5, 3}};
+        order(tied, 0, tied.size(), KEY);
+        CHECK(tied[0].name == 'x');
+    }
+
+    // 5. MATCH THE DESKTOP (positionOrder): an order, laid out by solve().
+    {
+        const CBox                  GRID = {0.0, 0.0, 1800.0, 900.0};
+        const std::vector<Vector2D> FOUR(4, Vector2D{800.0, 450.0});
+        const auto DEAL = [](const std::vector<Vector2D>& sizes, const std::vector<size_t>& perm) {
+            std::vector<Vector2D> out;
+            for (const size_t I : perm)
+                out.push_back(sizes[I]);
+            return out;
+        };
+        // Created a, b, c, d; on the desktop: a bottom right, b top left,
+        // c bottom left, d top right.
+        const std::vector<std::optional<Vector2D>> AT = {Vector2D{1400.0, 800.0}, Vector2D{300.0, 200.0}, Vector2D{400.0, 820.0}, Vector2D{1300.0, 180.0}};
+        std::vector<size_t>                        perm;
+        CHECK(positionOrder(FOUR, AT, GRID, 40.F, perm) == 2);
+        CHECK((perm == std::vector<size_t>{1, 3, 2, 0})); // b d / c a
+        // The rows it was dealt for are the rows the solve builds, and the
+        // tiles are the plain solve's boxes (equal sizes: the same slots).
+        CHECK(solveRows(DEAL(FOUR, perm), GRID, 40.F) == 2);
+        std::vector<CBox> slots, plain;
+        solve(DEAL(FOUR, perm), GRID, 40.F, slots);
+        solve(FOUR, GRID, 40.F, plain);
+        CHECK(slots.size() == 4 && plain.size() == 4);
+        for (size_t k = 0; k < 4; ++k)
+            CHECK(slots[k] == plain[k]);
+        // b top left, a bottom right.
+        CHECK(slots[0].x < slots[1].x && slots[0].y < slots[2].y);
+        CHECK(slots[3].x > slots[2].x && slots[3].y > slots[1].y);
+
+        // Already in reading order: the given order.
+        const std::vector<std::optional<Vector2D>> READING = {Vector2D{300.0, 200.0}, Vector2D{1300.0, 180.0}, Vector2D{400.0, 820.0}, Vector2D{1400.0, 800.0}};
+        positionOrder(FOUR, READING, GRID, 40.F, perm);
+        CHECK((perm == std::vector<size_t>{0, 1, 2, 3}));
+
+        // One row (wide grid): left to right by x alone, whatever the y.
+        const CBox WIDE = {0.0, 0.0, 4000.0, 300.0};
+        CHECK(positionOrder(FOUR, AT, WIDE, 40.F, perm) == 1);
+        CHECK((perm == std::vector<size_t>{1, 2, 3, 0})); // b(300) c(400) d(1300) a(1400)
+
+        // Fully overlapping windows: creation order.
+        const std::vector<std::optional<Vector2D>> STACKED(4, Vector2D{960.0, 540.0});
+        positionOrder(FOUR, STACKED, GRID, 40.F, perm);
+        CHECK((perm == std::vector<size_t>{0, 1, 2, 3}));
+
+        // No place on this desktop (opened since, or promoted by a search):
+        // after every placed one, in the order given -- even when the row
+        // they land in is read left to right.
+        const std::vector<std::optional<Vector2D>> SOME = {std::nullopt, Vector2D{1300.0, 200.0}, std::nullopt, Vector2D{300.0, 200.0}};
+        positionOrder(FOUR, SOME, WIDE, 40.F, perm);
+        CHECK((perm == std::vector<size_t>{3, 1, 0, 2}));
+
+        // Mixed sizes: the dealt rows are the solver's own choice for the
+        // dealt order, and no other row count fits it better.
+        const std::vector<Vector2D>                MIXED = {{1700.0, 400.0}, {400.0, 400.0}, {400.0, 400.0}};
+        const std::vector<std::optional<Vector2D>> MAT   = {Vector2D{900.0, 900.0}, Vector2D{200.0, 100.0}, Vector2D{1600.0, 100.0}};
+        const size_t                               MROWS = positionOrder(MIXED, MAT, GRID, 40.F, perm);
+        CHECK(MROWS == 2);
+        CHECK((perm == std::vector<size_t>{1, 2, 0})); // the two small ones on top, left to right
+        float scale = 0.F;
+        CHECK(solveRows(DEAL(MIXED, perm), GRID, 40.F, &scale) == MROWS);
+        for (size_t r = 1; r <= 3; ++r)
+            CHECK(rowsScale(DEAL(MIXED, perm), r, GRID, 40.F) <= scale);
+
+        // A many-window desktop: every dealing it answers is self-consistent.
+        std::vector<Vector2D>                many;
+        std::vector<std::optional<Vector2D>> at;
+        for (int i = 0; i < 9; ++i) {
+            many.push_back({300.0 + 70.0 * (i % 4), 200.0 + 50.0 * (i % 3)});
+            at.push_back(Vector2D{100.0 + 211.0 * ((i * 5) % 9), 80.0 + 97.0 * ((i * 7) % 9)});
+        }
+        const size_t MANYROWS = positionOrder(many, at, GRID, 40.F, perm);
+        CHECK(MANYROWS > 0 && perm.size() == 9);
+        CHECK(solveRows(DEAL(many, perm), GRID, 40.F) == MANYROWS);
+
+        // Nothing to lay out, or a mismatched ask.
+        CHECK(positionOrder({}, {}, GRID, 40.F, perm) == 0 && perm.empty());
+        CHECK(positionOrder(FOUR, {}, GRID, 40.F, perm) == 0);
     }
 
     std::printf("grid_solve_test: %d checks, %d failed\n", g_checks, g_failed);

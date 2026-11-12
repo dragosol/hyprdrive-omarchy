@@ -534,6 +534,12 @@ static void registerConfigValuesFor() {
     addKey(makeShared<CBoolValue>(KEY("mission_control"), "lay the focused workspace out as a mission-control grid", true));
     addKey(makeShared<CIntValue>(KEY("mission_control_gap"), "gap between mission-control grid tiles", 40, SIntValueOptions{.min = 0}));
     addKey(makeShared<CIntValue>(KEY("mission_control_reflow_ms"), "ms for a grid tile to travel to a new slot", 300, SIntValueOptions{.min = 0}));
+    // The default: Config.hpp OVERVIEW_TILE_ORDER_DEFAULT, spelled here as the
+    // literal docs/CONFIG.md and the settings read (config_defaults_test).
+    addKey(makeShared<CStringValue>(KEY("overview_tile_order"),
+                                    "the order of the overview grid's tiles, top left to bottom right: recent (the most recently used window first), created (the "
+                                    "order the windows were opened) or position (as the windows sit on the desktop); taken as the overview opens",
+                                    Hyprlang::STRING{"recent"}));
     addKey(makeShared<CBoolValue>(KEY("strip"), "workspace thumbnail strip across the top of the overview", true));
     addKey(makeShared<CIntValue>(KEY("strip_height"), "logical px the strip band reserves at the top of the workspace", 260,
                                  SIntValueOptions{.min = 0}));
@@ -775,6 +781,18 @@ int getMissionControlGap() {
 int getMissionControlReflowMs() {
     static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:mission_control_reflow_ms");
     return std::max<int>(0, sc<int>(*VAL));
+}
+
+ETileOrder getOverviewTileOrder() {
+    static auto& VAL = valueRef<std::string>("plugin:hyprdrive:overview_tile_order");
+    const auto&  V   = *VAL;
+    if (V == "recent")
+        return ETileOrder::RECENT;
+    if (V == "created")
+        return ETileOrder::CREATED;
+    if (V == "position")
+        return ETileOrder::POSITION;
+    return OVERVIEW_TILE_ORDER_DEFAULT;
 }
 
 bool getStrip() {

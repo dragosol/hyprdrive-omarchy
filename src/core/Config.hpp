@@ -42,6 +42,19 @@ enum class EBackdrop {
     AUTO,      // LIVE while the wallpaper changes rarely, SNAPSHOT while it animates
 };
 
+// The order of the overview grid's tiles, top left to bottom right
+// (plugin:hyprdrive:overview_tile_order; GridSolve.hpp). Taken when the
+// overview opens and held while it is up.
+enum class ETileOrder {
+    RECENT,   // "recent": the most recently used window first
+    CREATED,  // "created": the order the windows were opened, oldest first
+    POSITION, // "position": tiles placed as the windows sit on the desktop
+};
+// The owner has not chosen the default yet. Changing it is three edits that
+// tests/config_defaults_test.py holds together: this, the literal registered
+// in Config.cpp, and hdpanel's KEY_META.
+inline constexpr ETileOrder OVERVIEW_TILE_ORDER_DEFAULT = ETileOrder::RECENT;
+
 void registerDispatcher(const std::string& name, TDispatcher dispatcher);
 void registerGesture(TGestureRegistrar gestureRegistrar, TGestureKeyword gestureKeyword);
 void registerConfig();
@@ -302,6 +315,7 @@ std::string   getTerminal();
 bool          getMissionControl();
 int           getMissionControlGap();
 int           getMissionControlReflowMs();
+ETileOrder    getOverviewTileOrder();
 bool          getStrip();
 int           getStripHeight();
 int           getStripMaxScreenPct();

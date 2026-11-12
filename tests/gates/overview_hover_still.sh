@@ -14,8 +14,9 @@
 # Rig: 1920x1080 at scale 1.5 with a 26 px top bar, gaps 5/10, border 2 (the
 # reporter's Omarchy), the horizontal overview at 0.82; desktop 1 one window,
 # desktop 3 the row under test (2 and 4 empty, as in his video).
-# Asserts, for motion off (anim_scale 0) and on (1), with 2 and with 3 windows
-# in the row: the pointer rests on each tile's centre in turn for 1.2 s while
+# Asserts, in each tile order (created, recent, position), for motion off
+# (anim_scale 0) and on (1), with 2 and with 3 windows in the row: the
+# pointer rests on each tile's centre in turn for 1.2 s while
 # `hyprdrive:debug drawn` (where the tile pass DREW each tile) is sampled
 # ~60 Hz; every sample of every tile has its centre within 1 px of where it
 # was drawn at rest, and the hovered tile is drawn larger than at rest (the
@@ -90,11 +91,17 @@ run_case() {
     $R overview >/dev/null; sleep 1.2
 }
 
-run_case off2 0 on a1 a2
-run_case on2 1 on a1 a2
-kw a3; sleep 1
-run_case off3 0 on a1 a2 a3
-run_case on3 1 on a1 a2 a3
-run_case plain3 0 off a1 a2 a3
+# Every tile order (plugin:hyprdrive:overview_tile_order): in `recent` the
+# hover's focus must not reorder the grid either.
+for mode in created recent position; do
+    cfg "{plugin={hyprdrive={overview_tile_order=\"$mode\"}}}"
+    if [ -n "$(addr_of a3)" ]; then close_win "$(addr_of a3)"; sleep 1; fi
+    run_case $mode.off2 0 on a1 a2
+    run_case $mode.on2 1 on a1 a2
+    kw a3; sleep 1
+    run_case $mode.off3 0 on a1 a2 a3
+    run_case $mode.on3 1 on a1 a2 a3
+    run_case $mode.plain3 0 off a1 a2 a3
+done
 
 gate_end
