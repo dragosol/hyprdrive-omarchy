@@ -764,6 +764,19 @@ namespace Hyprdrive::Mosaic {
             }
             if (pickerOpen() || blocked)
                 return;
+            // ONLY WHILE ITS DESKTOP IS THE ONE SHOWN (user, 2026-11-13: a
+            // swipe away from the zoomed-out canvas left it "bumped to the left
+            // and off screen, but I haven't actually left the desktop").
+            // Hyprland's switch moves the pointer (simulateMouseMovement) after
+            // the new desktop is active but before it announces it, so this
+            // ran with the canvas just left still live: its zoomed boxes are
+            // screen places, the pick found one of its windows under the
+            // pointer, and focusing it pulled the monitor back to that desktop
+            // in the middle of the switch -- which then sent it a screen away
+            // as the desktop it had left. Super's zoom picks on the desktop
+            // shown (superMove below); so does this now.
+            if (!A->shownNow())
+                return;
             const auto W = A->zoomedWindowAt(P);
             // The hovered title (mosaic:zoom_labels "hover"): a new one redraws,
             // so the last one's pill goes with it.
