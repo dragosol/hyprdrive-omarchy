@@ -858,6 +858,8 @@ std::string debugMenuReport(PHLMONITOR monitor) {
     for (const auto& I : layout(monitor).items)
         if (!I.wmClass.empty())
             icons += std::format("\n icon {} {}", I.wmClass, BOX(I.iconBox));
+        else if (!I.uri.empty())
+            icons += std::format("\n location {} {}", I.uri, BOX(I.iconBox));
     std::string out = "dockmenu:";
     if (panelOn(monitor)) {
         out += std::format(" pane {}{}", BOX(g_hover.drawn), g_hover.panel->out ? " (out)" : "");
