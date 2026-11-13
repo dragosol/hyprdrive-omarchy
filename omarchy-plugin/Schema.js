@@ -42,6 +42,10 @@ var sections = [
       { title: "Apps", rows: [
         { type: "choice", dropdown: true, key: P + "general:file_manager", label: "File manager",
           desc: "Where the dock's folders and stacks, Open in Files and Show in Files open. System default follows your desktop's default for folders." }
+      ]},
+      { title: "Scratchpad", rows: [
+        { type: "toggle", key: P + "scratchpad_bar_exit", label: "Hover the bar to exit",
+          desc: "While a scratchpad is up, the top bar shows “hover to exit scratchpad”. Rest the pointer there and the scratchpad hides. Off keeps the bar as it is: you close the scratchpad yourself." }
       ]}
     ]
   },
