@@ -570,7 +570,12 @@ def on_battery():
 
 # Keys the panel no longer offers. A store that still holds one drops it, so
 # 40-panel.lua stops writing it the next time it is saved.
-RETIRED_KEYS = (PLUGIN + "mosaic:canvas_super_move",)
+RETIRED_KEYS = (
+    PLUGIN + "mosaic:canvas_super_move",
+    # Never released; renamed dock:hide_over_fullscreen / dock:hide_over_games.
+    PLUGIN + "dock:show_over_fullscreen",
+    PLUGIN + "dock:fullscreen_hide_games_only",
+)
 
 
 def load_store():
