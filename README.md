@@ -42,6 +42,13 @@ your Omarchy theme instead of shipping one of its own.
   still jump desktops directly).
 - Super/Alt/Ctrl+click a dock app that is not running (or "Open in Empty
   Workspace" in its menu) opens it on an empty desktop.
+- **Window order** (`overview_tile_order`): tiles go by last used (the
+  default), by the order the windows were opened, or laid out to match where
+  the windows sit on the desktop. The order holds still while the overview is
+  open.
+- **Keys act on what you point at:** Super+F, Super+T and the other window
+  shortcuts act on the hovered tile, and on a hovered window preview in the
+  dock.
 - **Smooth frames** (Hyprdrive panel -> Textures, `smooth_frames`): lets
   Hyprland render ahead when the GPU runs late, so animations drop a refresh
   instead of halving the frame rate. hyprdrive suggests it once if the overview
@@ -54,6 +61,15 @@ your Omarchy theme instead of shipping one of its own.
 - Minimize/restore flies into the icon, motion-blurred (`dock:minimize_motion_blur`). Hover an icon for live window previews.
 - Windows the layout moves or resizes (retiles, the scrolling tape, opening, the scratchpad) are motion-blurred too (`layout_motion_blur`).
 - With autohide off, tiled windows under the dock shorten to clear it (`dock:windows_make_room`).
+- **Out of the way of fullscreen apps:** by default the dock keeps away from
+  fullscreen games and the screensaver, and it never takes the keyboard or the
+  mouse from a game. Settings > Dock > Visibility has "Hide dock over all
+  fullscreen windows" (`dock:hide_over_fullscreen`, off) and "Keep it away
+  from games and the screensaver" (`dock:hide_over_games`, on). For one app,
+  right-click its icon > Get Info > Hide Dock in Fullscreen.
+- **Open maximized or fullscreen:** an app's right-click menu can open it
+  maximized, fullscreen, or always in fullscreen. Window previews have their
+  own right-click menu and a close button.
 - Stacks, macOS style: a pinned folder shows its 4 newest files as a pile;
   click it and they fan out, or it opens as a searchable pane when the fan
   would not fit. Space previews the hovered item (GNOME Sushi), arrows and
@@ -108,6 +124,17 @@ shoots the zoomed-out view. With that choice,
 hovering a window on the canvas also pans it into view.
 Super+drag drops a window where you let go; push against the screen's edge while
 dragging to pan. The overview's desktop strip shows the whole canvas zoomed out.
+
+**Desktops and fullscreen**:
+
+- **Fullscreen gets its own desktop:** a window that goes fullscreen from a
+  desktop it shares moves to a desktop of its own beside it, and comes home
+  when it leaves fullscreen or closes. Moving a window onto a desktop with a
+  fullscreen app takes that app out of fullscreen. A plugin reload keeps
+  fullscreen windows fullscreen.
+- **No stray empty desktops:** when monitors, scale or layout change, the empty
+  desktops in between are removed and the later ones move down.
+- **Wine, Proton and Steam** windows show their real name and icon.
 
 **Hot corner** (off by default; panel -> Overview): rest the pointer in a screen
 corner to open the overview, and again to close it, with an optional ripple.
