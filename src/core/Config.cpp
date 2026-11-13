@@ -235,13 +235,14 @@ static void registerConfigValuesFor() {
     // there and inert while off, so it is not a key here.
     addKey(makeShared<CBoolValue>(KEY("dock:autohide"), "hyprgnomedock: hide the dock until the bottom edge is pressed (D2D autohide)", true));
     // The owner, 2026-11-12 (issues #11, #12): "setting for first option with a
-    // sub-setting for games and screensaver only". Off (the default), the dock
-    // keeps away while the monitor's desktop shows a fullscreen window; the
-    // sub-setting narrows that to games and Omarchy's screensaver. An app
-    // checked in its Get Info keeps it away whatever these say (DockFullscreen.cpp).
-    addKey(makeShared<CBoolValue>(KEY("dock:show_over_fullscreen"), "the dock reveals over a fullscreen window (off: it keeps away while one is shown)", false));
-    addKey(makeShared<CBoolValue>(KEY("dock:fullscreen_hide_games_only"),
-                                  "with show_over_fullscreen off: keep away only from fullscreen games and the screensaver", false));
+    // sub-setting for games and screensaver only", and 2026-11-13: "by default
+    // dock should be 'only keep it away from games and screensaver' and the
+    // first setting on hiding it from everything fullscreen should be off".
+    // An app checked in its Get Info keeps it away whatever these say
+    // (DockFullscreen.cpp).
+    addKey(makeShared<CBoolValue>(KEY("dock:hide_over_fullscreen"), "the dock keeps away while any fullscreen window is shown", false));
+    addKey(makeShared<CBoolValue>(KEY("dock:hide_over_games"),
+                                  "the dock keeps away while a fullscreen game or the screensaver is shown (implied by hide_over_fullscreen)", true));
     addKey(makeShared<CFloatValue>(KEY("dock:pressure_threshold"),
                                    "hyprgnomedock: px of motion pushed into the bottom edge before the dock reveals (D2D pressure-threshold)", 100.F,
                                    SFloatValueOptions{.min = 0.F, .max = 2000.F}));

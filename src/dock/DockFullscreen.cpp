@@ -8,9 +8,11 @@
 // window and
 //   - that window's app is checked in its Get Info (hide-dock-fullscreen-apps),
 //     whatever the two settings say; or
-//   - dock:show_over_fullscreen is off (the default), and either
-//     dock:fullscreen_hide_games_only is off, or the window is a game
+//   - dock:hide_over_fullscreen is on (off by default): any fullscreen window; or
+//   - dock:hide_over_games is on (the default): the window is a game
 //     (FullscreenGuard::isGame) or Omarchy's screensaver.
+// So by default the dock keeps away from games and the screensaver and
+// reveals over every other fullscreen app (owner, 2026-11-13).
 // Maximized is not fullscreen; the overview's dock is its own (updateAutohide
 // returns before asking). Hotkey numbers and a flight still bring it out: both
 // are something the user just did.
@@ -60,17 +62,17 @@ namespace {
         return {.window = W, .game = SAVER || FullscreenGuard::isGame(W), .flagged = hidesDockInFullscreen(ID)};
     }
 
-    bool showOverFullscreen() {
+    bool hideOverAll() {
         if (!Config::g_pluginKeysRegistered)
-            return true;
-        static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY_SHOW_OVER_FS);
+            return false;
+        static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY_HIDE_OVER_FS);
         return *VAL != 0;
     }
 
-    bool gamesOnly() {
+    bool hideOverGames() {
         if (!Config::g_pluginKeysRegistered)
             return false;
-        static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY_FS_GAMES_ONLY);
+        static auto& VAL = Config::valueRef<Hyprlang::INT>(KEY_HIDE_OVER_GAMES);
         return *VAL != 0;
     }
 }
@@ -114,9 +116,7 @@ bool fullscreenKeepsDockAway(PHLMONITOR monitor) {
         return false;
     if (IT->second.flagged)
         return true;
-    if (showOverFullscreen())
-        return false;
-    return !gamesOnly() || IT->second.game;
+    return hideOverAll() || (IT->second.game && hideOverGames());
 }
 }
 }

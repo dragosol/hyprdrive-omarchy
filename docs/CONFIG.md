@@ -77,8 +77,8 @@ Prefix: `plugin:hyprdrive:dock:`
 | `corner_radius` | int | `24` | >= 0 | hyprgnomedock: pill corner radius |
 | `minimize_ms` | int | `400` | 0 .. 2000 | hyprgnomedock: minimize/restore flight duration, 0 to teleport (Y5: GNOME's MINIMIZE_WINDOW_ANIMATION_TIME) |
 | `autohide` | bool | `true` |  | hyprgnomedock: hide the dock until the bottom edge is pressed (D2D autohide) |
-| `show_over_fullscreen` | bool | `false` |  | the dock reveals over a fullscreen window (off: it keeps away while one is shown) |
-| `fullscreen_hide_games_only` | bool | `false` |  | with show_over_fullscreen off: keep away only from fullscreen games and the screensaver |
+| `hide_over_fullscreen` | bool | `false` |  | the dock keeps away while any fullscreen window is shown |
+| `hide_over_games` | bool | `true` |  | the dock keeps away while a fullscreen game or the screensaver is shown (implied by hide_over_fullscreen) |
 | `pressure_threshold` | float | `100` | 0 .. 2000 | hyprgnomedock: px of motion pushed into the bottom edge before the dock reveals (D2D pressure-threshold) |
 | `require_pressure` | bool | `false` |  | hyprgnomedock: the bottom edge must be PUSHED past pressure_threshold, not merely touched (D2D require-pressure-to-show) |
 | `show_delay_ms` | int | `250` | 0 .. 5000 | hyprgnomedock: delay from the barrier trigger to the reveal (D2D show-delay) |

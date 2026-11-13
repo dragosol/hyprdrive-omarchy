@@ -398,7 +398,7 @@ Item {
     if (row.key && missingKeys[row.key]) return false
     switch (row.when) {
     case "dockOn": return kb("plugin:hyprdrive:dock:enabled")
-    case "fsDockHides": return kb("plugin:hyprdrive:dock:enabled") && !kb("plugin:hyprdrive:dock:show_over_fullscreen")
+    case "fsDockGames": return kb("plugin:hyprdrive:dock:enabled") && !kb("plugin:hyprdrive:dock:hide_over_fullscreen")
     case "mountsOn": return kb("plugin:hyprdrive:dock:enabled") && kb("plugin:hyprdrive:dock:show_mounts")
     case "springOn": return kb("plugin:hyprdrive:drag:spring_dock") || kb("plugin:hyprdrive:drag:spring_edges")
     case "hotCornerOn": return kb("plugin:hyprdrive:hot_corner:enabled")

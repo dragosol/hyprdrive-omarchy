@@ -328,8 +328,8 @@ constexpr const char* KEY_AUTOHIDE     = "plugin:hyprdrive:dock:autohide";
 constexpr const char* KEY_PRESSURE     = "plugin:hyprdrive:dock:pressure_threshold";
 constexpr const char* KEY_REQ_PRESSURE = "plugin:hyprdrive:dock:require_pressure";
 // DockFullscreen.cpp: the dock over a fullscreen window (owner, 2026-11-12).
-constexpr const char* KEY_SHOW_OVER_FS  = "plugin:hyprdrive:dock:show_over_fullscreen";
-constexpr const char* KEY_FS_GAMES_ONLY = "plugin:hyprdrive:dock:fullscreen_hide_games_only";
+constexpr const char* KEY_HIDE_OVER_FS    = "plugin:hyprdrive:dock:hide_over_fullscreen";
+constexpr const char* KEY_HIDE_OVER_GAMES = "plugin:hyprdrive:dock:hide_over_games";
 constexpr const char* KEY_SHOW_DELAY   = "plugin:hyprdrive:dock:show_delay_ms";
 constexpr const char* KEY_HIDE_DELAY   = "plugin:hyprdrive:dock:hide_delay_ms";
 constexpr const char* KEY_AUTOHIDE_MS  = "plugin:hyprdrive:dock:autohide_ms";

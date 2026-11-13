@@ -18,20 +18,22 @@
 #   3. pointer resting on the dock, then a game opens fullscreen and LOCKS the
 #      pointer without the pointer moving: its keys arrive at once, and
 #      relative motion reaches it
-#   (1-3 run with dock:show_over_fullscreen on, so the dock does reveal there.)
-#   4. dock:show_over_fullscreen off (the default): the pointer resting on the
-#      shown dock, a composited fullscreen kitty opens by dispatch -- the dock
-#      slides away with no pointer motion (#12), and the bottom edge does not
-#      bring it back; switched on, the edge reveals it as before
-#   5. fullscreen_hide_games_only: it reveals over a plain fullscreen kitty and
-#      keeps away from one of class org.omarchy.screensaver (pointer resting)
-#   6. an app checked "Hide Dock in Fullscreen" in Get Info (the store file
-#      hide-dock-fullscreen-apps, written directly: the rig cannot click a menu
-#      row): with show_over_fullscreen ON, that app fullscreen keeps the dock
-#      away, another app fullscreen does not
+#   (1-3 run with both dock settings below off, so the dock does reveal there.)
+#   4. the defaults (hide_over_games on, hide_over_fullscreen off), the
+#      pointer resting on the shown dock: a plain composited fullscreen kitty
+#      opens by dispatch -- the edge still reveals the dock over it; one of
+#      class org.omarchy.screensaver opens -- the dock slides away with no
+#      pointer motion (#12), and the bottom edge does not bring it back
+#   5. hide_over_fullscreen on: the pointer resting on the dock, the plain
+#      kitty opens -- the dock goes, and the edge does not bring it back
+#   6. both off: it reveals over the screensaver class too
+#   7. both off, an app checked "Hide Dock in Fullscreen" in Get Info (the
+#      store file hide-dock-fullscreen-apps, written directly: the rig cannot
+#      click a menu row): that app fullscreen keeps the dock away, another app
+#      fullscreen does not
 # Control (--control --control-so <32a3f63>): 1 fails (the key and the click
-# never reach the game) and 4-6 fail; a build with only the input fix
-# (e6ac39f) fails 4-6.
+# never reach the game) and the keep-away checks of 4, 5 and 7 fail; a build
+# with only the input fix (e6ac39f) fails those keep-away checks.
 # NOT covered: XWayland's own lock emulation (Wine), a real GPU's direct
 # scanout (the rig is headless; render.preChecks fires on both paths).
 source "$(dirname "$0")/lib.sh"
@@ -50,7 +52,7 @@ SU rm -rf "$EV/state" 2>/dev/null
 mkdir -p "$EV/state/hyprdrive"; chmod 777 "$EV/state" "$EV/state/hyprdrive"
 rig_start --env XDG_STATE_HOME="$EV/state"
 # 1-3 test the input with the dock allowed over fullscreen windows
-cfg '{plugin={hyprdrive={dock={show_over_fullscreen=true}}}}'
+cfg '{plugin={hyprdrive={dock={hide_over_fullscreen=false, hide_over_games=false}}}}'
 
 # game LOG CLASS MODE -- the lock client, launched by the compositor (the pointer does not move)
 game() {
@@ -135,35 +137,45 @@ unglass() { local a; a=$(addr_of "$1"); fs "$a" unset; sleep 0.8; close_win "$a"
 blob() { local d; d=$(pixdiff "$1" "$2"); echo "${d#* }"; }
 away() { $R ptr move 960 540 >/dev/null; sleep 1.2; shot "$EV/$1.png"; }
 
-cfg '{plugin={hyprdrive={dock={show_over_fullscreen=false, fullscreen_hide_games_only=false}}}}'
-to_pill
-glassy fsk; sleep 0.6; shot "$EV/4a.png"
-away 4ref
-check "4: default, pointer resting on the dock: a fullscreen window opening sends it away" "$(le "$(blob "$EV/4a.png" "$EV/4ref.png")" 3000)" "blob $(blob "$EV/4a.png" "$EV/4ref.png")"
-to_pill; shot "$EV/4b.png"
-check "4: ... and the bottom edge does not bring it back" "$(le "$(blob "$EV/4b.png" "$EV/4ref.png")" 3000)" "blob $(blob "$EV/4b.png" "$EV/4ref.png")"
-cfg '{plugin={hyprdrive={dock={show_over_fullscreen=true}}}}'
-away 4ref2; to_pill; shot "$EV/4c.png"
-check "4: show_over_fullscreen on: the edge reveals it over the window, as before" "$(ge "$(blob "$EV/4c.png" "$EV/4ref2.png")" 20000)" "blob $(blob "$EV/4c.png" "$EV/4ref2.png")"
-
-cfg '{plugin={hyprdrive={dock={show_over_fullscreen=false, fullscreen_hide_games_only=true}}}}'
-away 5ref; to_pill; shot "$EV/5a.png"
-check "5: games only: it reveals over a plain fullscreen kitty" "$(ge "$(blob "$EV/5a.png" "$EV/5ref.png")" 20000)" "blob $(blob "$EV/5a.png" "$EV/5ref.png")"
+# ---- 4. the defaults: games and the screensaver only
+cfg '{plugin={hyprdrive={dock={hide_over_fullscreen=false, hide_over_games=true}}}}'
+glassy fsk
+away 4ref; to_pill; shot "$EV/4a.png"
+check "4: default: the edge reveals the dock over a plain fullscreen app" "$(ge "$(blob "$EV/4a.png" "$EV/4ref.png")" 20000)" "blob $(blob "$EV/4a.png" "$EV/4ref.png")"
 unglass fsk
 to_pill
-glassy org.omarchy.screensaver; sleep 0.6; shot "$EV/5b.png"
-away 5ref2
-check "5: ... and keeps away from the screensaver, the pointer resting on it" "$(le "$(blob "$EV/5b.png" "$EV/5ref2.png")" 3000)" "blob $(blob "$EV/5b.png" "$EV/5ref2.png")"
+glassy org.omarchy.screensaver; sleep 0.6; shot "$EV/4b.png"
+away 4ref2
+check "4: default, pointer resting on the dock: the screensaver opening sends it away" "$(le "$(blob "$EV/4b.png" "$EV/4ref2.png")" 3000)" "blob $(blob "$EV/4b.png" "$EV/4ref2.png")"
+to_pill; shot "$EV/4c.png"
+check "4: ... and the bottom edge does not bring it back" "$(le "$(blob "$EV/4c.png" "$EV/4ref2.png")" 3000)" "blob $(blob "$EV/4c.png" "$EV/4ref2.png")"
 unglass org.omarchy.screensaver
 
-cfg '{plugin={hyprdrive={dock={show_over_fullscreen=true, fullscreen_hide_games_only=false}}}}'
+# ---- 5. hide over all fullscreen windows
+cfg '{plugin={hyprdrive={dock={hide_over_fullscreen=true}}}}'
+to_pill
+glassy fsk; sleep 0.6; shot "$EV/5a.png"
+away 5ref
+check "5: hide_over_fullscreen, pointer resting on the dock: a plain fullscreen app sends it away" "$(le "$(blob "$EV/5a.png" "$EV/5ref.png")" 3000)" "blob $(blob "$EV/5a.png" "$EV/5ref.png")"
+to_pill; shot "$EV/5b.png"
+check "5: ... and the bottom edge does not bring it back" "$(le "$(blob "$EV/5b.png" "$EV/5ref.png")" 3000)" "blob $(blob "$EV/5b.png" "$EV/5ref.png")"
+unglass fsk
+
+# ---- 6. both off
+cfg '{plugin={hyprdrive={dock={hide_over_fullscreen=false, hide_over_games=false}}}}'
+glassy org.omarchy.screensaver
+away 6ref; to_pill; shot "$EV/6a.png"
+check "6: both off: the edge reveals it over the screensaver too" "$(ge "$(blob "$EV/6a.png" "$EV/6ref.png")" 20000)" "blob $(blob "$EV/6a.png" "$EV/6ref.png")"
+unglass org.omarchy.screensaver
+
+# ---- 7. per app (Get Info), both settings off
 echo kitty > "$EV/state/hyprdrive/hide-dock-fullscreen-apps"; chmod 666 "$EV/state/hyprdrive/hide-dock-fullscreen-apps"
 glassy kitty
-away 6ref; to_pill; shot "$EV/6a.png"
-check "6: show_over_fullscreen on, kitty checked in Get Info: kept away from fullscreen kitty" "$(le "$(blob "$EV/6a.png" "$EV/6ref.png")" 3000)" "blob $(blob "$EV/6a.png" "$EV/6ref.png")"
+away 7ref; to_pill; shot "$EV/7a.png"
+check "7: both off, kitty checked in Get Info: kept away from fullscreen kitty" "$(le "$(blob "$EV/7a.png" "$EV/7ref.png")" 3000)" "blob $(blob "$EV/7a.png" "$EV/7ref.png")"
 unglass kitty
 glassy other
-away 6ref2; to_pill; shot "$EV/6b.png"
-check "6: ... another app fullscreen: it reveals" "$(ge "$(blob "$EV/6b.png" "$EV/6ref2.png")" 20000)" "blob $(blob "$EV/6b.png" "$EV/6ref2.png")"
+away 7ref2; to_pill; shot "$EV/7b.png"
+check "7: ... another app fullscreen: it reveals" "$(ge "$(blob "$EV/7b.png" "$EV/7ref2.png")" 20000)" "blob $(blob "$EV/7b.png" "$EV/7ref2.png")"
 unglass other
 gate_end

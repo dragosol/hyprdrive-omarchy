@@ -152,8 +152,8 @@ KEY_META = [
     # Dock
     _k(PLUGIN + "dock:enabled", "bool", "dock", True),
     _k(PLUGIN + "dock:autohide", "bool", "dock", True),
-    _k(PLUGIN + "dock:show_over_fullscreen", "bool", "dock", False),
-    _k(PLUGIN + "dock:fullscreen_hide_games_only", "bool", "dock", False),
+    _k(PLUGIN + "dock:hide_over_fullscreen", "bool", "dock", False),
+    _k(PLUGIN + "dock:hide_over_games", "bool", "dock", True),
     _k(PLUGIN + "dock:windows_make_room", "bool", "dock", True),
     _k(PLUGIN + "dock:monitor", "str", "dock", ""),  # options: monitor_options(), per dump
     _k(PLUGIN + "dock:isolate_in_overview", "bool", "dock", False),
