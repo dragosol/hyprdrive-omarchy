@@ -711,6 +711,10 @@ struct SDockVisualState {
     bool        menuUp = false;
     std::string menuClass, menuUri;
     int         menuRow = -1;
+    // What its rows SAY: Get Info, a confirm, Rename swap the rows in place
+    // (DockPointer's menuClick) without the menu closing or a box moving, and
+    // a click with the pointer still has nothing else to repaint them.
+    size_t menuRows = 0;
 
     bool operator==(const SDockVisualState&) const = default;
 };

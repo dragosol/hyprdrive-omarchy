@@ -562,11 +562,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // Desktop never has a window drag in flight, and lets a menu miss through
         // (its menu may have no drawn geometry to hit-test); a let-through miss
         // then falls into the pill ladder, exactly as the overview's own dock does.
-        if (Hyprdrive::DockInput::handleMenu(MONITOR, LOCAL, ROLE, PRESSED, false, true).claimed) {
-            info.cancelled = true;
-            return;
-        }
-        if (Hyprdrive::DockInput::handlePill(MONITOR, LOCAL, ROLE, PRESSED, false).claimed) {
+        //
+        // Then the frame what the click changed needs, asked for here: a click
+        // with the pointer still has no motion event behind it to ask. With
+        // motion on, the tooltip's fade or the hover lean happened to be
+        // pumping frames under the pointer anyway; with motion off nothing
+        // was, and a menu opened by a right-click stayed undrawn -- its rows
+        // 0x0, nothing on screen -- until something else repainted (owner,
+        // XPS, 2026-11-13). damageIfChanged damages only what changed, and
+        // pumps the frames an animation that the click started asks for.
+        const bool CLAIMED = Hyprdrive::DockInput::handleMenu(MONITOR, LOCAL, ROLE, PRESSED, false, true).claimed ||
+            Hyprdrive::DockInput::handlePill(MONITOR, LOCAL, ROLE, PRESSED, false).claimed;
+        Hyprdrive::Dock::damageIfChanged(MONITOR);
+        if (CLAIMED) {
             info.cancelled = true;
             return;
         }

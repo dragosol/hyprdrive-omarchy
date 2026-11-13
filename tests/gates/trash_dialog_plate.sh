@@ -55,9 +55,6 @@ open_dlg() {
     local t; t=$(dm | sed -n 's|^ location trash:/// \([-0-9]*,[-0-9]* [0-9]*x[0-9]*\).*|\1|p' | head -1)
     [ -n "$t" ] || return 1
     $R ptr move $(P $(centre "$t")) >/dev/null; sleep 0.4; $R ptr click right >/dev/null; sleep 0.8
-    # A frame: the rows are laid out as the menu draws, and with motion off
-    # nothing else asks the rig for one (0x0 rows on 2026-11-13).
-    $R shot "$GOUT/menu.png" >/dev/null 2>&1
     local row; row=$(dm | grep 'kind 7 "Empty Trash"' | grep -o '[-0-9]*,[-0-9]* [0-9]*x[0-9]*' | head -1)
     [ -n "$row" ] || return 1
     $R ptr move $(P $(centre "$row")) >/dev/null; sleep 0.3; $R ptr click left >/dev/null

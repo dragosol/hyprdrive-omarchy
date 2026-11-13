@@ -745,6 +745,9 @@ bool damageIfChanged(PHLMONITOR monitor) {
             state.menuUp    = true;
             state.menuClass = g_menu->item.wmClass;
             state.menuUri   = g_menu->item.uri;
+            state.menuRows  = g_menu->rows.size();
+            for (const auto& ROW : g_menu->rows)
+                state.menuRows = state.menuRows * 31 + std::hash<std::string>{}(ROW.label) + sc<size_t>(ROW.kind) + (ROW.disabled ? 7 : 0);
             for (size_t i = 0; i < g_menu->rows.size(); ++i) {
                 if (!g_menu->rows[i].box.empty() && g_menu->rows[i].box.containsPoint(MOUSE)) {
                     state.menuRow = sc<int>(i);
