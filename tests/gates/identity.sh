@@ -35,6 +35,13 @@ cc -O2 -o "$GOUT/fake_wine" "$ROOT/tests/rig/identity/fake_wine.c" $(pkg-config 
 H=/var/tmp/hdg-$HL_NAME-home; SU rm -rf "$H" 2>/dev/null; rm -rf "$H"; mkdir -p "$H"
 trap '_gate_cleanup; SU rm -rf "$H" 2>/dev/null; rm -rf "$H" 2>/dev/null' EXIT
 for f in steam-native umu lutris wine-menus; do cp -a "$ROOT/tests/fixtures/identity/$f/home/user/." "$H/"; done
+# The prefixes' dosdevices/c: links (the repository holds no symlinks: see
+# tests/unit/fixture_links.hpp).
+while IFS= read -r p; do
+    case "$p" in steam-native/home/user/*|umu/home/user/*|lutris/home/user/*|wine-menus/home/user/*)
+        d="$H/${p#*/home/user/}/dosdevices"; mkdir -p "$d"; ln -sfn ../drive_c "$d/c:" ;;
+    esac
+done < "$ROOT/tests/fixtures/identity/dosdevices.list"
 grep -rlI /home/user "$H" | while read -r f; do sed -i "s|/home/user|$H|g" "$f"; done
 # Steam left "Overwatch 2" behind when the game was renamed: the newest
 # shortcut speaks for the app id. A checkout gives both files one mtime.

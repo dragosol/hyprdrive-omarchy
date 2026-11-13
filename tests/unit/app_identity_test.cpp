@@ -7,6 +7,7 @@
 // their session's app, Lutris's configpath/yml mismatch, a native app,
 // unreadable /proc, Wine's systray fallback window. Then canonicalKey on the
 // store formats in use today, and the fast tier.
+#include "fixture_links.hpp"
 #include "AppIdentity.hpp"
 #include "IconPng.hpp"
 #include "Resolvers.hpp"
@@ -48,6 +49,7 @@ namespace {
         std::error_code ec;
         f.root = (g_tmp / name).string();
         fs::copy("tests/fixtures/identity/" + name, f.root, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+        fixtureLinks(name, f.root);
         f.src = std::make_unique<FileSources>(FileSources::Options{
             .root = f.root, .env = Env::forHome("/home/user"), .writePng = [](const Ico::Picked& p, const std::string& out) { return IconPng::write(p, out); }});
         const fs::path APPS = f.root + "/home/user/.local/share/applications";

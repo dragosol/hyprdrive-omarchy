@@ -5,6 +5,7 @@
 // library whose stat does not answer in time is skipped, remembered, and
 // costs one probe timeout, not one per rebuild; a stop with jobs queued and a
 // slow source returns at once.
+#include "fixture_links.hpp"
 #include "Engine.hpp"
 #include "IconPng.hpp"
 
@@ -34,6 +35,7 @@ namespace {
         std::error_code ec;
         const auto      ROOT = (g_tmp / name).string();
         fs::copy("tests/fixtures/identity/" + name, ROOT, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+        fixtureLinks(name, ROOT);
         return std::make_unique<FileSources>(FileSources::Options{
             .root = ROOT, .env = Env::forHome("/home/user"), .writePng = [](const Ico::Picked& p, const std::string& out) { return IconPng::write(p, out); }});
     }

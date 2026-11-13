@@ -4,6 +4,7 @@
 // -> the theme name anyway), the stopgap's 30 s retry for a miss, and the
 // newest-shortcut rule AppSearch uses. Plus FileSources' bounds: the cap, a
 // directory, a FIFO, a relative path.
+#include "fixture_links.hpp"
 #include "IconPng.hpp"
 #include "SteamLibrary.hpp"
 
@@ -33,6 +34,7 @@ static std::string copyFixture(const std::string& name, const fs::path& tmp) {
     std::error_code ec;
     fs::create_directories(tmp, ec);
     fs::copy("tests/fixtures/identity/" + name, DST, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+    fixtureLinks(name, DST);
     if (ec)
         std::cerr << "copy " << name << ": " << ec.message() << "\n";
     return DST.string();
