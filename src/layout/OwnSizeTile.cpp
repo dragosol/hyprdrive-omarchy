@@ -213,8 +213,17 @@ namespace Hyprdrive::OwnSizeTile {
         }
         if (!w->m_xdgSurface || !w->m_xdgSurface->m_toplevel)
             return false;
-        const Vector2D MIN = w->m_xdgSurface->m_toplevel->layoutMinSize();
-        const Vector2D MAX = w->m_xdgSurface->m_toplevel->layoutMaxSize();
+        // The sizes as the program gave them -- window geometry, the size of
+        // the window Hyprland draws -- not layoutMinSize/layoutMaxSize, which
+        // add the geometry's OFFSET (a GTK window's shadow margin). Nautilus's
+        // "Empty Trash?" (an AdwAlertDialog, fixed at 300x250) maps with its
+        // 20 px shadow: it tiled at 320x270, its plate drawn 300x250 in the
+        // window's top-left corner and the border, the rounding and the blur
+        // around a box 20 px bigger (XPS, 2026-11-13: "two mismatched rounded
+        // shapes"). Tiled, GTK drops the shadow and the offset is 0 again --
+        // too late, the tile already had its size.
+        const Vector2D MIN = w->m_xdgSurface->m_toplevel->m_current.minSize;
+        const Vector2D MAX = w->m_xdgSurface->m_toplevel->m_current.maxSize;
         if (MIN.x < 1 || MIN.y < 1 || std::abs(MAX.x - MIN.x) >= 1 || std::abs(MAX.y - MIN.y) >= 1)
             return false;
         size = MIN;
