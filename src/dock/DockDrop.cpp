@@ -355,7 +355,8 @@ namespace {
             return WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE;
         }
 
-        bool                     m_over = false;
+        bool                     m_over    = false;
+        bool                     m_dropped = false; // landed on a client: kept alive for its late receive
         std::vector<std::string> m_paths;
     };
 
@@ -363,7 +364,52 @@ namespace {
     std::string          g_outIcon;   // what the ghost under the pointer shows
 
     bool outActive() {
-        return g_out && !g_out->m_over && PROTO::data && PROTO::data->m_dnd.currentSource.lock() == g_out;
+        return g_out && !g_out->m_over && !g_out->m_dropped && PROTO::data && PROTO::data->m_dnd.currentSource.lock() == g_out;
+    }
+
+    // H8. A DROP ONTO A CLIENT ENDS OUR DRAG. Hyprland's dropDrag() sends the
+    // drop and then leaves the drag STANDING -- the source stays current --
+    // until the target answers wl_data_offer.finish, and only then completes
+    // it. A target that never finishes (kitty pastes the path and is done) left
+    // it standing for good: our ghost glued to the pointer through every click,
+    // and the next drag from a real client was spent tearing the dead one down
+    // (initiateDrag aborts a current drag and starts nothing).
+    //
+    // So the drop is the end, as it is for the user: the ghost goes at once
+    // (m_dropped), and the drag is completed a moment later if the target has
+    // not done it by then. Not at once: completing re-focuses the pointer, and
+    // a pointer-focus change marks every drag offer dead -- the target's
+    // receive, still on its way, would be refused and nothing would land. The
+    // source stays alive (held by g_out until the next drag or unload) for that
+    // receive, since offers hold it only weakly. A late finish from the target
+    // finds no drag and does nothing.
+    constexpr int    DROP_SETTLE_MS = 1000;
+    wl_event_source* g_dropSettle   = nullptr;
+
+    bool oursIsCurrent() {
+        return g_out && PROTO::data && PROTO::data->m_dnd.currentSource.lock() == g_out;
+    }
+
+    int dropSettled(void*) {
+        if (g_dropSettle) {
+            wl_event_source_remove(g_dropSettle);
+            g_dropSettle = nullptr;
+        }
+        if (oursIsCurrent() && !g_out->m_over) {
+            PROTO::data->completeDrag(); // dnd_drop_performed + dnd_finished to us
+            g_out->m_over = true;
+        }
+        return 0;
+    }
+
+    void endDroppedOut() {
+        if (!oursIsCurrent() || g_out->m_over)
+            return; // aborted (cancelled() ran), or already completed by the target
+        g_out->m_dropped = true;
+        if (!g_dropSettle && g_pCompositor && g_pCompositor->m_wlEventLoop)
+            g_dropSettle = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, dropSettled, nullptr);
+        if (g_dropSettle)
+            wl_event_source_timer_update(g_dropSettle, DROP_SETTLE_MS);
     }
 }
 
@@ -505,8 +551,11 @@ namespace Hyprdrive::DockDrop {
         D.dndSurface.reset();
 
         D.mouseButton = Event::bus()->m_events.input.mouse.button.listen([](IPointer::SButtonEvent e, Event::SCallbackInfo&) {
-            if (e.state == WL_POINTER_BUTTON_STATE_RELEASED && PROTO::data)
-                PROTO::data->dropDrag();
+            if (e.state != WL_POINTER_BUTTON_STATE_RELEASED || !PROTO::data)
+                return;
+            PROTO::data->dropDrag();
+            endDroppedOut();
+            damageAll(); // the ghost goes with the drag
         });
         D.mouseMove = Event::bus()->m_events.input.mouse.move.listen([](Vector2D pos, Event::SCallbackInfo&) {
             if (!PROTO::data)
@@ -568,7 +617,7 @@ namespace Hyprdrive::DockDrop {
     void onPointerMove(PHLMONITOR monitor, const Vector2D& local) {
         if (outActive())
             damageAll(); // the ghost follows the pointer
-        else if (g_out) {
+        else if (g_out && !g_out->m_dropped) {
             g_out.reset(); // that drag is over: let the source go
             damageAll();
         }
@@ -669,7 +718,11 @@ namespace Hyprdrive::DockDrop {
         g_fetchWorker.join();
         // Our source's code is about to be unloaded: a drag of ours must not
         // outlive it (the drag state and the offers hold it only weakly).
-        if (outActive())
+        if (g_dropSettle) {
+            wl_event_source_remove(g_dropSettle);
+            g_dropSettle = nullptr;
+        }
+        if (oursIsCurrent())
             PROTO::data->abortDrag();
         g_out.reset();
         closeRead();
