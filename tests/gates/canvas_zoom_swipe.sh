@@ -19,8 +19,17 @@
 #   - past half (70%, slow): desktop 2 shown, its window focused, the screen
 #     not empty;
 #   - swiped back: desktop 1 shown, its windows on screen.
+# THE SAME SWIPE TOWARD A DESKTOP NOT MADE YET crashed the compositor (rig,
+# 2026-11-13; the XPS's unexplained SIGSEGV in COverviewWorkspaceGesture::end
+# of 2026-11-10 15:43). Hyprland makes the new desktop and switches to it
+# holding it only as the monitor's active one; the zoom's hover switched back
+# mid-switch, the new desktop was freed, and Hyprland's swipe end looked it
+# up by id and wrote its slide through the null. So, with desktop 2 gone
+# (workspace_swipe_create_new, Hyprland's default) and motion on and off:
+#   - past half: a new desktop 2 is shown, the compositor still up.
 # Control (--control --control-so <70e25cd, the build before the fix>): past
-# half, desktop 1 is still shown, focused on its own window, the screen empty.
+# half, desktop 1 is still shown, focused on its own window, the screen empty;
+# toward a desktop not made yet, the compositor dies (SIGSEGV).
 source "$(dirname "$0")/lib.sh"
 gate_begin czs
 control_build "70e25cd (before the canvas zoom swipe fix)"
@@ -78,4 +87,22 @@ run_case() {
 }
 run_case on 1
 run_case off 0
+
+# new_case TAG ANIM -- past half toward a desktop that does not exist yet
+new_case() {
+    local tag=$1 anim=$2
+    cfg "{plugin={hyprdrive={anim_scale=$anim}}}"
+    go 1; settle 3 geom
+    $R ptr move 700 540 >/dev/null; sleep 0.3
+    g 'swipe 3 down 500'; sleep 1.2
+    g 'swipe 3 left 210 20 12'; sleep 1.5
+    local S; S=$(shown)
+    check "$tag: toward a desktop not made yet: the compositor is up, desktop 2 shown, empty" \
+        "$(is "$S $(J workspaces 2>/dev/null | jq -r '.[] | select(.id == 2) | .windows')" "2 0")" "shown '${S:-none: compositor gone}'"
+    [ -n "$S" ] || return 1
+    go 1; sleep 0.8
+    $R ptr click >/dev/null; sleep 1
+}
+close_win "$(addr_of zd)"; wait_for 3 "[ -z \"\$(addr_of zd)\" ]"; go 1; sleep 1
+new_case new-on 1 && new_case new-off 0
 gate_end
