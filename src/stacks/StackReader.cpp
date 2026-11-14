@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <fcntl.h>
@@ -189,6 +190,23 @@ namespace {
 
     int                                   g_inotify = -1;
     std::unordered_map<int, std::string>  g_watchDir; // wd -> dir
+    // NO WATCH, SO IT IS READ AGAIN (2026-11-14): a user at the kernel's inotify
+    // instance limit (128 by default; a desktop with many apps reaches it) gets
+    // no watch, and a listing read once was then kept for good -- a stack that
+    // never showed a new file. A folder asked for and not watched is read again
+    // when its listing is older than this; nothing else can tell it changed.
+    constexpr auto                                                         UNWATCHED_MAX_AGE = std::chrono::seconds(3);
+    std::unordered_map<std::string, bool>                                  g_unwatched; // dir -> asked for, no watch
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_readAt;    // dir -> its listing's time
+    bool                                                                   g_noInotify = false; // tests: as at the limit
+
+    // g_mutex held. An unwatched folder's listing that has aged out.
+    bool agedOut(const std::string& dir) {
+        if (!g_unwatched.contains(dir))
+            return false;
+        const auto IT = g_readAt.find(dir);
+        return IT == g_readAt.end() || std::chrono::steady_clock::now() - IT->second > UNWATCHED_MAX_AGE;
+    }
 
     void notify() {
         g_generation.fetch_add(1);
@@ -215,6 +233,7 @@ namespace {
                 auto result = readDirectory(job.dir);
                 lock.lock();
                 g_cache[job.dir]    = std::move(result);
+                g_readAt[job.dir]   = std::chrono::steady_clock::now();
                 g_inflight[job.dir] = false;
                 // The folder changed while it was being read: this answer may
                 // predate the change, so read it again (review 2026-09-24).
@@ -279,8 +298,11 @@ namespace Hyprdrive::StackReader {
     SListing listing(const std::string& dir) {
         std::lock_guard l(g_mutex);
         const auto      IT = g_cache.find(dir);
-        if (IT != g_cache.end() && IT->second.ready)
-            return IT->second;
+        if (IT != g_cache.end() && IT->second.ready) {
+            if (!agedOut(dir))
+                return IT->second;
+            IT->second.ready = false; // the old entries stay to draw until the new read lands
+        }
         if (!g_inflight[dir]) {
             g_inflight[dir] = true;
             enqueue(SJob{.kind = SJob::EKind::List, .dir = dir});
@@ -291,6 +313,8 @@ namespace Hyprdrive::StackReader {
     SStatus status(const std::string& dir) {
         std::lock_guard l(g_mutex);
         const auto      IT = g_cache.find(dir);
+        if (IT != g_cache.end() && IT->second.ready && agedOut(dir))
+            IT->second.ready = false;
         if (IT == g_cache.end() || !IT->second.ready) {
             if (!g_inflight[dir]) {
                 g_inflight[dir] = true;
@@ -310,11 +334,37 @@ namespace Hyprdrive::StackReader {
             IT->second.ready = false; // keep the old entries to draw until the new read lands
     }
 
+    // Which of the asked-for folders have no watch; one that newly has none is
+    // read afresh, as a new watch's folder is.
+    static void noteUnwatched(const std::vector<std::string>& dirs) {
+        std::lock_guard                       l(g_mutex);
+        std::unordered_map<std::string, bool> now;
+        for (const auto& D : dirs) {
+            if (std::ranges::any_of(g_watchDir, [&](const auto& kv) { return kv.second == D; }))
+                continue;
+            now[D] = true;
+            if (!g_unwatched.contains(D))
+                if (auto IT = g_cache.find(D); IT != g_cache.end())
+                    IT->second.ready = false;
+        }
+        g_unwatched = std::move(now);
+    }
+
+    void disableInotifyForTest() {
+        if (g_inotify >= 0)
+            ::close(g_inotify);
+        g_inotify = -1;
+        g_watchDir.clear();
+        g_noInotify = true;
+    }
+
     void watch(const std::vector<std::string>& dirs) {
-        if (g_inotify < 0)
+        if (g_inotify < 0 && !g_noInotify)
             g_inotify = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-        if (g_inotify < 0)
+        if (g_inotify < 0) {
+            noteUnwatched(dirs);
             return;
+        }
         for (auto it = g_watchDir.begin(); it != g_watchDir.end();) {
             if (std::ranges::find(dirs, it->second) == dirs.end()) {
                 inotify_rm_watch(g_inotify, it->first);
@@ -326,9 +376,17 @@ namespace Hyprdrive::StackReader {
             if (std::ranges::any_of(g_watchDir, [&](const auto& kv) { return kv.second == D; }))
                 continue;
             const int WD = inotify_add_watch(g_inotify, D.c_str(), IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF | IN_ATTRIB);
-            if (WD >= 0)
-                g_watchDir[WD] = D;
+            if (WD < 0)
+                continue; // no watch: noteUnwatched reads it afresh, then again as it ages
+            g_watchDir[WD] = D;
+            // A folder that is (re)starting to be watched was NOT watched a moment
+            // ago -- unpinned, or gone and back -- so whatever the cache holds for
+            // it is from before, and nothing told the cache what changed in
+            // between. Re-pinning a folder served that old listing ("Empty folder,
+            // 0 of 0" over a folder with files) until some later file event.
+            invalidate(D);
         }
+        noteUnwatched(dirs);
     }
 
     int inotifyFd() {
@@ -414,5 +472,8 @@ namespace Hyprdrive::StackReader {
         g_cache.clear();
         g_inflight.clear();
         g_dirty.clear();
+        g_unwatched.clear();
+        g_readAt.clear();
+        g_noInotify = false;
     }
 }

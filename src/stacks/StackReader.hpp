@@ -36,6 +36,7 @@ namespace Hyprdrive::StackReader {
     void     watch(const std::vector<std::string>& dirs); // inotify on exactly these dirs
     int      inotifyFd();                                // for wl_event_loop_add_fd; -1 if none
     void     drainInotify();                             // call when inotifyFd() is readable
+    void     disableInotifyForTest();                    // tests: as a session at the inotify instance limit
 
     struct STrashResult {
         uint64_t    seq   = 0;
