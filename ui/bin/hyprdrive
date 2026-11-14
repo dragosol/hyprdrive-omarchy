@@ -41,6 +41,7 @@ snapshot, read from its registry.json (asked with the last ETag), never from
 issue text. The settings ask at most once every 6 hours, only while
 they are open; `hyprdrive update --never-check` stops that.
 """
+import fcntl
 import json
 import os
 import pathlib
@@ -408,6 +409,25 @@ def checkout_dir(info):
 
 
 def install(target_ref, label, yes, info, rebuild=False):
+    """One at a time (#15, 2026-11-14: Update clicked again while the first was
+    still building -- two builds in one checkout wipe each other's .build/ and
+    both fail). The lock is the kernel's, so it goes when this process does,
+    however it ends."""
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        lock = open(STATE / "update.lock", "w")
+    except OSError:  # no state directory to lock in: as before the lock
+        return install_locked(target_ref, label, yes, info, rebuild)
+    with lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("A Hyprdrive update is already running (look for its terminal window). Nothing changed.")
+            return 1
+        return install_locked(target_ref, label, yes, info, rebuild)
+
+
+def install_locked(target_ref, label, yes, info, rebuild=False):
     """Check out target_ref, build, install, reload. rebuild: the checkout as
     it is -- nothing fetched or checked out (`update --rebuild`)."""
     src = checkout_dir(info)

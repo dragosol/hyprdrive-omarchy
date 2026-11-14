@@ -316,6 +316,18 @@ with contextlib.redirect_stdout(shown), tempfile.TemporaryDirectory() as tmp:
         mod.hyprland_replaced = lambda: False
         os.environ.pop("HYPRLAND_INSTANCE_SIGNATURE", None)
 
+        # ONE UPDATE AT A TIME (#15): while another holds the lock nothing runs,
+        # and once it is gone the update goes ahead.
+        import fcntl
+        ran.clear()
+        mod.STATE.mkdir(parents=True, exist_ok=True)
+        with open(mod.STATE / "update.lock", "w") as other:
+            fcntl.flock(other, fcntl.LOCK_EX)
+            rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+            expect(rc == 1 and not ran, "%s: a second update while one runs does nothing (rc %s, ran %s)" % (mod.FLAVOR, rc, ran))
+        rc = mod.install("", "x", True, {"source": str(co)}, rebuild=True)
+        expect(rc == 0 and any(c[:2] == ["make", "install"] for c in ran), "%s: the lock is free again once the other update ends" % mod.FLAVOR)
+
         # A PARTIAL INSTALL IS NOT ROLLED BACK (review, 2026-11-09): once make
         # install has copied the new .so, checking the old version out would put
         # old settings over the new plugin. A plain build failure still goes back.
