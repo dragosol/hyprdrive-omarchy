@@ -150,6 +150,9 @@ PHLWINDOW recentWindow(const std::vector<PHLWINDOW>& windows) {
 }
 
 void stealDockSeat() {
+    // Never from the lock screen (restoreDockSeat).
+    if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked())
+        return;
     g_dockSeatHeld = true;
     if (!g_pSeatManager)
         return;
@@ -161,6 +164,13 @@ void restoreDockSeat() {
     if (!g_dockSeatHeld)
         return;
     g_dockSeatHeld = false;
+
+    // The session locked while the dock held the seat: the keyboard is the
+    // lock screen's now, and handing it to the window focused before the lock
+    // would send it the password (marketplace review, #13890). Hyprland
+    // refocuses that window itself on unlock.
+    if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked())
+        return;
 
     const auto WINDOW = Desktop::focusState()->window();
     if (!WINDOW || !WINDOW->m_isMapped)

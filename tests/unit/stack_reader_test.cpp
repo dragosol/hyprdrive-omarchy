@@ -18,7 +18,16 @@ static void check(bool ok, const std::string& what) {
 
 int main() {
     namespace fs = std::filesystem;
-    const auto DIR = fs::temp_directory_path() / ("stack_reader_test_" + std::to_string(::getpid()));
+    // mkdtemp: a directory of ours alone (0700) under a name nobody could have
+    // made first. "stack_reader_test_<pid>" could be precreated by another
+    // user with links in it, and every write below followed them
+    // (marketplace review, #13890).
+    std::string made = (fs::temp_directory_path() / "stack_reader_test.XXXXXX").string();
+    if (!mkdtemp(made.data())) {
+        std::printf("FAIL mkdtemp\n");
+        return 1;
+    }
+    const fs::path DIR = made;
     fs::create_directories(DIR / "sub");
     std::ofstream(DIR / ".hidden") << "x";
     std::ofstream(DIR / "a.png") << "x";

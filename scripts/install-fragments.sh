@@ -38,6 +38,27 @@ fi
 install -Dm644 "$LOADER_SRC" "$LOADER_DEST"
 echo "loader: $LOADER_DEST"
 
+# THE PLUGIN GOES IN FIRST, AND IN ONE STEP. The require line below makes
+# Hyprland reload its config and load the plugin at once, so the file it loads
+# has to be complete by then: a first install that added the line before this
+# copy had Hyprland open a half-written hyprdrive.so and crash (issue #14).
+# Written beside the target and renamed over it, so the path never names a
+# partial file, and a loaded plugin keeps the file it mapped.
+if [ -f "$ROOT/hyprdrive.so" ]; then
+    mkdir -p "$LIBDIR"
+    TMP_SO=$LIBDIR/.hyprdrive.so.$$
+    install -m755 "$ROOT/hyprdrive.so" "$TMP_SO"
+    # Same rule as the Makefile: the installed copy carries no debug information
+    # unless KEEP_DEBUG is set.
+    if [ -z "${KEEP_DEBUG:-}" ] && command -v strip >/dev/null 2>&1; then
+        strip --strip-debug "$TMP_SO"
+    fi
+    mv -f "$TMP_SO" "$LIBDIR/hyprdrive.so"
+    echo "plugin: $LIBDIR/hyprdrive.so"
+else
+    echo "install-fragments: no hyprdrive.so -- run make all first, then re-run this" >&2
+fi
+
 if [ -f "$HYPRLAND_LUA" ]; then
     if grep -q 'require("hypr.hyprdrive")' "$HYPRLAND_LUA" || grep -q "require('hypr.hyprdrive')" "$HYPRLAND_LUA"; then
         echo "hyprland.lua already requires hypr.hyprdrive"
@@ -51,19 +72,6 @@ LUA
     fi
 else
     echo "install-fragments: no $HYPRLAND_LUA -- add: require(\"hypr.hyprdrive\")" >&2
-fi
-
-if [ -f "$ROOT/hyprdrive.so" ]; then
-    install -Dm755 "$ROOT/hyprdrive.so" "$LIBDIR/hyprdrive.so"
-    # Same rule as the Makefile: the installed copy carries no debug information
-    # unless KEEP_DEBUG is set. This copy is the last one written, so it is the
-    # one that has to be stripped.
-    if [ -z "${KEEP_DEBUG:-}" ] && command -v strip >/dev/null 2>&1; then
-        strip --strip-debug "$LIBDIR/hyprdrive.so"
-    fi
-    echo "plugin: $LIBDIR/hyprdrive.so"
-else
-    echo "install-fragments: no hyprdrive.so -- run make all first, then re-run this" >&2
 fi
 
 PLUGIN_SRC=$ROOT/ui

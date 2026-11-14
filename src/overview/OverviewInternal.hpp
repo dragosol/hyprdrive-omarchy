@@ -335,6 +335,9 @@ extern PHLWINDOWREF g_focusAtOpen; // the focused window when the session opened
 void handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResource>& surface);
 
 inline void stealOverviewKeyboard() {
+    // The lock screen holds the keyboard; nothing of ours takes it away.
+    if (hyprdriveSessionLocked())
+        return;
     if (g_pSeatManager)
         g_pSeatManager->setKeyboardFocus(nullptr);
     releasePointerLocks();
@@ -352,6 +355,16 @@ inline void restoreOverviewKeyboard(const PHLWINDOW& window, const char* who = "
         if (overview && !overview->isClosing())
             return;
     }
+
+    // THE LOCK SCREEN KEEPS THE KEYBOARD (marketplace review, #13890). Locking
+    // closes every overview, and each one's teardown reaches this when its
+    // close animation ends -- after the locker took the seat. Hyprland's
+    // fullWindowFocus refuses while locked, but the direct setKeyboardFocus
+    // below does not: the window focused before the lock got the keyboard
+    // back, and with it the password being typed. Nothing is handed back
+    // while locked; Hyprland refocuses the window itself on unlock.
+    if (hyprdriveSessionLocked())
+        return;
 
     PHLWINDOW target = window;
     if (!Desktop::View::validMapped(target))

@@ -184,7 +184,8 @@ bool    pointerHeldByClient();
 // took its keyboard and mouse). A composited fullscreen window (anything that
 // blocks the solitary path) keeps today's dock, drawn and live.
 bool    notDrawnOn(PHLMONITOR monitor);
-// pointerHeldByClient() or notDrawnOn(monitor): the dock stands down there.
+// pointerHeldByClient(), notDrawnOn(monitor) or a locked session: the dock
+// stands down there.
 bool    inputInert(PHLMONITOR monitor);
 // syncPointerFocus holds the seat right now (the pointer is on the dock).
 bool    seatHeld();

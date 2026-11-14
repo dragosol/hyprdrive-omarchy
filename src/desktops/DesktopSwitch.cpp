@@ -218,8 +218,8 @@ namespace Hyprdrive::DesktopSwitch {
         void onAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& info) {
             if (info.cancelled || e.source != WL_POINTER_AXIS_SOURCE_WHEEL || e.axis != WL_POINTER_AXIS_VERTICAL_SCROLL || e.deltaDiscrete == 0)
                 return;
-            if (!Hyprdrive::Config::getValue<bool>(KEY_SCROLL))
-                return;
+            if (!Hyprdrive::Config::getValue<bool>(KEY_SCROLL) || (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked()))
+                return; // off, or locked: the wheel switches nothing at the lock screen
             const uint32_t MODS = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
             const uint32_t WANT = scrollMods();
             if (WANT == 0 || MODS != WANT)

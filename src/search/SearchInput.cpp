@@ -343,6 +343,7 @@ int onFileResultsReady(int fd, uint32_t mask, void* data) {
 // query, no half-typed compose sequence, no provider work still running, no
 // key repeating (hyprdriveSessionLocked).
 void onSessionLock() {
+    noteSessionLockSignal(); // before the closes below: they hand nothing back
     stopSearchRepeat();
     g_consumedPresses.clear();
     resetSearchSession();

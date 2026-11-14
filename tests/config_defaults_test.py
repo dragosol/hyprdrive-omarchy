@@ -8,14 +8,17 @@ Every KEY_META key that is a plugin key must be registered, and for bool, int
 and float keys the two defaults must be equal. Strings and enums are compared
 when Config.cpp's default is a plain literal.
 """
-import pathlib, re, sys
+import importlib.util, pathlib, re, sys
 from importlib.machinery import SourceFileLoader
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 from configkeys import parse  # noqa: E402
 
-hd = SourceFileLoader("hdpanel", str(ROOT / "ui" / "bin" / "hdpanel")).load_module()
+# load_module() is gone in Python 3.15: spec + exec_module instead.
+_loader = SourceFileLoader("hdpanel", str(ROOT / "ui" / "bin" / "hdpanel"))
+hd = importlib.util.module_from_spec(importlib.util.spec_from_loader("hdpanel", _loader))
+_loader.exec_module(hd)
 PREFIX = "plugin:hyprdrive:"
 reg = {}
 for k in parse(str(ROOT / "src" / "core" / "Config.cpp")):

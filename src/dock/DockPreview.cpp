@@ -1188,6 +1188,11 @@ bool notDrawnOn(PHLMONITOR monitor) {
 }
 
 bool inputInert(PHLMONITOR monitor) {
+    // Locked: the dock launches, opens and drags nothing (marketplace review,
+    // #13890 -- a dock that never hides kept its hit geometry under the lock
+    // screen, and a click there launched the app).
+    if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked())
+        return true;
     return pointerHeldByClient() || notDrawnOn(monitor);
 }
 

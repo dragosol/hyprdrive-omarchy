@@ -79,6 +79,7 @@ check: hyprdrive.so
 	python3 tests/manifest_check.py
 	python3 tests/schema_keys_test.py
 	python3 tests/config_defaults_test.py
+	bash tests/install_order_test.sh
 	python3 tests/private_modes_test.py
 	python3 tests/hdicons_test.py
 	python3 tests/update_cli_test.py
@@ -110,10 +111,11 @@ override PREFIX := $(HOME)/.local
 # which is how an undefined-symbol .so reached ~/.local/lib and killed every
 # login until the plugin was moved aside (2026-09-15).
 install: hyprdrive.so check
-	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/hyprdrive.so
+	install -Dm755 hyprdrive.so $(PREFIX)/lib/hyprdrive/.hyprdrive.so.new
 ifeq ($(KEEP_DEBUG),)
-	strip --strip-debug $(PREFIX)/lib/hyprdrive/hyprdrive.so
+	strip --strip-debug $(PREFIX)/lib/hyprdrive/.hyprdrive.so.new
 endif
+	mv -f $(PREFIX)/lib/hyprdrive/.hyprdrive.so.new $(PREFIX)/lib/hyprdrive/hyprdrive.so
 	install -Dm644 assets/scratchpad-symbolic.svg $(PREFIX)/lib/hyprdrive/scratchpad-symbolic.svg
 	install -Dm755 ui/bin/agent-run $(PREFIX)/lib/hyprdrive/agent-run
 	bash scripts/install-fragments.sh

@@ -159,7 +159,12 @@ std::vector<SItem> buildDockItems() {
         // with the generic application tile when the theme has none. The slot
         // used to be left blank -- a running app with nothing to click on.
         auto icon = AppSearch::iconForClass(RUNNING[i]);
-        if (icon.empty() && !RUNNING[i].empty()) {
+        // A CLASS IS A NAME, NEVER A PATH (marketplace review, #13890). An app
+        // id is whatever the client says, and resolveIconPath takes an absolute
+        // path as it is: a client naming itself "/some/huge.png" had the dock
+        // decode that file. Only a desktop entry or the user's own override
+        // may point at a file.
+        if (icon.empty() && !RUNNING[i].empty() && RUNNING[i].find('/') == std::string::npos) {
             icon = RUNNING[i];
             std::ranges::transform(icon, icon.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
         }

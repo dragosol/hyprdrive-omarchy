@@ -12,6 +12,12 @@ import subprocess
 import sys
 import tempfile
 
+# python3 on PATH is this interpreter, not a version manager's shim (issue #15).
+import pathlib as _pl, sys as _sys
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+import realpython  # noqa: E402
+realpython.pin()
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HD = ROOT / "ui/bin/hdicons"
 os.umask(0o022)

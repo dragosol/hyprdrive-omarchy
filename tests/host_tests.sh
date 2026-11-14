@@ -238,6 +238,7 @@ run stack_reader_test tests/unit/stack_reader_test.cpp src/stacks/StackReader.cp
 run search_backend_test tests/unit/search_backend_test.cpp src/search/SearchBackend.cpp src/core/Workers.cpp $(pkg-config --cflags --libs hyprutils libsystemd glib-2.0)
 # shellcheck disable=SC2046
 run icon_size_test tests/unit/icon_size_test.cpp $(pkg-config --cflags --libs cairo)
+run image_guard_test tests/unit/image_guard_test.cpp
 # shellcheck disable=SC2046
 run thumbs_test tests/unit/thumbs_test.cpp src/stacks/Thumbs.cpp src/core/Workers.cpp -DTHUMBS_SETTLE_MS=250 -pthread $(pkg-config --cflags --libs glib-2.0)
 # shellcheck disable=SC2046

@@ -519,8 +519,14 @@ uint32_t resolvedPadFingers() {
     return 0;
 }
 
+// NOTHING FIRES WHILE LOCKED (marketplace review, #13890). A click gesture, a
+// gesture's key chord and a gesture's dispatcher all act on the session, and
+// the touchpad is in reach of anyone at the lock screen. Each way out of this
+// file checks: dispatchNamed, fireMatchingKeybind, sendGestureChord,
+// tryFireClick; the trackpad gestures themselves are wrapped at registration
+// (CLockedOutGesture, GestureBinds.cpp).
 void dispatchNamed(const std::string& name, const std::string& arg) {
-    if (!g_pKeybindManager)
+    if (!g_pKeybindManager || hyprdriveSessionLocked())
         return;
     const auto IT = g_pKeybindManager->m_dispatchers.find(name);
     if (IT != g_pKeybindManager->m_dispatchers.end())
@@ -595,7 +601,7 @@ uint32_t resolveXkbKeycode(const std::string& key) {
 
 // Run compositor binds that match this chord (Print → screenshot __lua, etc).
 bool fireMatchingKeybind(uint32_t modmask, const std::string& key) {
-    if (!g_pKeybindManager)
+    if (!g_pKeybindManager || hyprdriveSessionLocked())
         return false;
     const xkb_keysym_t WANT = xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
     if (WANT == XKB_KEY_NoSymbol)
@@ -679,7 +685,7 @@ void fireClickAction(const SClickGesture& g) {
 }
 
 bool tryFireClick(uint32_t fingers, uint32_t eatButton) {
-    if (fingers < 2 || g_clickGestures.empty())
+    if (fingers < 2 || g_clickGestures.empty() || hyprdriveSessionLocked())
         return false;
     const uint32_t mods = g_pInputManager ? g_pInputManager->getModsFromAllKBs() : 0;
     for (const auto& g : g_clickGestures) {
@@ -744,7 +750,7 @@ void maybeClickFromHold(bool cancelled) {
 
 void sendGestureChord(const std::string& chord) {
     auto parts = splitChord(chord);
-    if (parts.empty())
+    if (parts.empty() || hyprdriveSessionLocked())
         return;
 
     std::string key = aliasKey(parts.back());

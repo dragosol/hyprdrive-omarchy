@@ -19,6 +19,7 @@
 #include "AppSearch.hpp"
 #include "Dock.hpp"
 #include "IconSize.hpp"
+#include "ImageGuard.hpp"
 #include "BuiltinIcons.hpp"
 #include "Config.hpp"
 #include "BorderFade.hpp"
@@ -655,7 +656,15 @@ SP<Render::ITexture> appIcon(const std::string& iconName, bool tintWhite, bool p
 
     // "@<theme>:<name>": that icon from another theme (dock stacks, 2026-09-24:
     // the stacks and the Trash follow the Omarchy theme's icons, or GTK's).
-    const std::string resolved = resolveAppIconPath(iconName);
+    // Never decoded before its size is known: an icon the size of a wall
+    // would be decoded whole, on this thread (ImageGuard.hpp). Refused, it
+    // draws as the generic tile below.
+    std::string resolved = resolveAppIconPath(iconName);
+    if (!resolved.empty() && !Hyprdrive::ImageGuard::decodable(resolved)) {
+        resolved = AppSearch::resolveIconPath("application-x-executable"); // AppSearch's generic tile
+        if (!resolved.empty() && !Hyprdrive::ImageGuard::decodable(resolved))
+            resolved.clear();
+    }
     if (const auto& PATH = resolved; !PATH.empty()) {
         const auto T1 = Prof::clock::now();
         Prof::icoResolveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(T1 - T0).count();

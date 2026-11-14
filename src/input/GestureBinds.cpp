@@ -1,6 +1,40 @@
 #include "PluginParts.hpp"
 using namespace PluginDetail;
 
+namespace {
+// EVERY TRACKPAD GESTURE STANDS DOWN WHILE LOCKED (marketplace review, #13890).
+// Hyprland runs a registered gesture whatever the session's state, so a swipe
+// at the lock screen closed windows, switched desktops and ran dispatchers.
+// A gesture that begins while locked is dropped whole: its update and end
+// never reach the gesture inside, so nothing is left half-begun.
+class CLockedOutGesture : public ITrackpadGesture {
+  public:
+    explicit CLockedOutGesture(UP<ITrackpadGesture>&& inner) : m_inner(std::move(inner)) {}
+
+    void begin(const STrackpadGestureBegin& e) override {
+        m_live = !hyprdriveSessionLocked();
+        if (m_live)
+            m_inner->begin(e);
+    }
+    void update(const STrackpadGestureUpdate& e) override {
+        if (m_live)
+            m_inner->update(e);
+    }
+    void end(const STrackpadGestureEnd& e) override {
+        if (m_live)
+            m_inner->end(e);
+        m_live = false;
+    }
+    bool isDirectionSensitive() override {
+        return m_inner->isDirectionSensitive();
+    }
+
+  private:
+    UP<ITrackpadGesture> m_inner;
+    bool                 m_live = false;
+};
+}
+
 namespace PluginDetail {
 // Register / unregister a trackpad gesture. Used by the hyprlang keyword, the
 // Lua `hyprdrive.gesture` function, and the `hyprdrive:gesture` dispatcher.
@@ -13,7 +47,7 @@ std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount, eTrack
         return std::unexpected("Invalid direction");
 
     const auto add = [&](UP<ITrackpadGesture>&& gesture) {
-        return g_pTrackpadGestures->addGesture(std::move(gesture), fingerCount, direction, modMask, deltaScale, disableInhibit);
+        return g_pTrackpadGestures->addGesture(makeUnique<CLockedOutGesture>(std::move(gesture)), fingerCount, direction, modMask, deltaScale, disableInhibit);
     };
 
     // The desktop swipe's Super twin (below) goes with it.
@@ -39,7 +73,7 @@ std::expected<void, std::string> applyTrackpadGesture(size_t fingerCount, eTrack
         // exactly). The same swipe with Super down switches desktops too,
         // unless the config binds that one itself (then this add is refused).
         if (RES && SUPERTWIN)
-            (void)g_pTrackpadGestures->addGesture(makeUnique<COverviewWorkspaceGesture>(), fingerCount, TRACKPAD_GESTURE_DIR_HORIZONTAL, HL_MODIFIER_META, deltaScale,
+            (void)g_pTrackpadGestures->addGesture(makeUnique<CLockedOutGesture>(makeUnique<COverviewWorkspaceGesture>()), fingerCount, TRACKPAD_GESTURE_DIR_HORIZONTAL, HL_MODIFIER_META, deltaScale,
                                                   disableInhibit);
         return RES;
     }

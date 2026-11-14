@@ -203,6 +203,7 @@ void                              dropScrollOverviewsForMonitor(PHLMONITOR monit
 bool                              openScrollOverview(PHLMONITOR monitor);
 // The session is locked (main.cpp): no overview opens and no key is taken.
 bool                              hyprdriveSessionLocked();
+void                              noteSessionLockSignal(); // the lock signal fired (OverviewOpen.cpp)
 
 // The dock's Show Windows (user, 2026-09-24): the overview, filtered as if
 // `query` had been typed. Starts a fresh session when the overview is not

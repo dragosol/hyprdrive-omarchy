@@ -106,8 +106,32 @@ bool openScrollOverview(PHLMONITOR monitor) {
 // and reached the search providers. While the session is locked no overview
 // opens, the raw key listener consumes nothing, and locking closes whatever
 // was open and drops its search (onSessionLock).
+//
+// FROM THE LOCK SIGNAL ON, not only once Hyprland calls the session locked.
+// The signal comes first: onSessionLock closes the overviews in it, and a
+// close that hands the keyboard back at once did so in that gap -- the window
+// focused before the lock got the keyboard for a moment as the lock started
+// (gate lock_inert, 2026-11-13). noteSessionLockSignal() covers the gap; it
+// lapses by itself if the lock never completes, so a lock that was refused
+// cannot leave the overview unable to open.
+namespace {
+    std::chrono::steady_clock::time_point g_lockSignalAt{};
+    bool                                  g_lockSignalled = false;
+}
+
+void noteSessionLockSignal() {
+    g_lockSignalled = true;
+    g_lockSignalAt  = std::chrono::steady_clock::now();
+}
+
 bool hyprdriveSessionLocked() {
-    return g_pSessionLockManager && g_pSessionLockManager->isSessionLocked();
+    if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked()) {
+        g_lockSignalled = false; // Hyprland's own answer from here on
+        return true;
+    }
+    if (g_lockSignalled && std::chrono::steady_clock::now() - g_lockSignalAt > std::chrono::seconds(5))
+        g_lockSignalled = false;
+    return g_lockSignalled;
 }
 
 bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
