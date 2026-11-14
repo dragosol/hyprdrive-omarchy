@@ -69,6 +69,11 @@ TILE_ORDERS = [
     {"value": "created", "label": "Order opened"},
     {"value": "position", "label": "Match desktop position"},
 ]
+TEXT_SIZES = [
+    {"value": "default", "label": "Default"},
+    {"value": "system", "label": "Match the system"},
+    {"value": "custom", "label": "Custom"},
+]
 FULLSCREEN_DESKTOPS = [
     {"value": "next", "label": "Its own desktop"},
     {"value": "free", "label": "The next free desktop"},
@@ -129,6 +134,9 @@ KEY_META = [
     _k(PLUGIN + "general:file_manager", "str", "general", ""),  # options: file_manager_options(), per dump
     _k(PLUGIN + "general:fullscreen_desktop", "enum", "general", "next", options=FULLSCREEN_DESKTOPS),
     _k(PLUGIN + "general:open_tiled", "bool", "general", False),
+    _k(PLUGIN + "general:scratchpad_bar_exit", "bool", "general", True),
+    _k(PLUGIN + "general:text_size", "enum", "general", "default", options=TEXT_SIZES),
+    _k(PLUGIN + "general:text_scale", "float", "general", 1.0, min=0.7, max=1.15),
     # Overview
     _k(PLUGIN + "tap_super", "bool", "overview", True),
     _k(PLUGIN + "mission_control", "bool", "overview", True),

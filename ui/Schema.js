@@ -43,6 +43,16 @@ var sections = [
         { type: "toggle", key: P + "general:open_tiled", label: "Windows float only when you float them",
           desc: "A window an app opens floating, such as a dialog or a fixed-size window (Wine and Proton windows included), is tiled instead, on every desktop. Mosaic desktops always do this, with the option on or off. Float rules in your config still float a window, and so do splash screens, tool palettes and the hyprdrive-float tag. A window you float yourself stays floating." }
       ]},
+      { title: "Scratchpad", rows: [
+        { type: "toggle", key: P + "general:scratchpad_bar_exit", label: "Hover the bar to exit",
+          desc: "While a scratchpad is up, the top bar shows \u201chover to exit scratchpad\u201d. Rest the pointer there and the scratchpad hides. Off keeps the bar as it is: you close the scratchpad yourself." }
+      ]},
+      { title: "Text", rows: [
+        { type: "choice", key: P + "general:text_size", label: "Text size",
+          desc: "Default is Hyprdrive\u2019s own text size. Match the system follows Omarchy\u2019s text size (omarchy display text size). Custom is the size you set below." },
+        { type: "slider", key: P + "general:text_scale", label: "Custom size", min: 0.7, max: 1.15, step: 0.05, fmt: "percent", when: "textCustom",
+          desc: "100% is the default size." }
+      ]},
       { title: "Apps", rows: [
         { type: "choice", dropdown: true, key: P + "general:file_manager", label: "File manager",
           desc: "Where the dock's folders and stacks, Open in Files and Show in Files open. System default follows your desktop's default for folders." }

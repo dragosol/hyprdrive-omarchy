@@ -233,6 +233,7 @@ CHyprColor    highlightForeground();
 int           themeRounding();
 float         themeRoundingPower();
 const std::string& themeFontFamily();
+float         themeTextScale(); // 1 = Hyprdrive's own sizes; Omarchy's [font] base-size / 12 (TextScale.hpp)
 CHyprColor    dockIndicatorColor();
 CHyprColor    dockBackgroundColor();
 int           dockCornerRadius();

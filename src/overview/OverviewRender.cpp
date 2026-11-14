@@ -22,6 +22,7 @@
 #include "ImageGuard.hpp"
 #include "BuiltinIcons.hpp"
 #include "Config.hpp"
+#include "TextScale.hpp"
 #include "BorderFade.hpp"
 #include "PlateColor.hpp"
 #include <hyprland/src/render/pass/TexPassElement.hpp>
@@ -873,6 +874,10 @@ SP<Render::ITexture> text(const std::string& str, const CHyprColor& color, int f
     // that do not pin a family inherit that. Bound by REFERENCE: themeFontFamily
     // hands back its cache, and this runs on every probe.
     const std::string& FAMILY = fontFamily.empty() ? Hyprdrive::Config::themeFontFamily() : fontFamily;
+    // Every caller's size is one drawn against Omarchy's default text size; it
+    // follows the size the system is set to (TextScale.hpp, #8). Before the
+    // cache key, which holds it.
+    fontSize = Hyprdrive::TextScale::scaled(fontSize, Hyprdrive::Config::themeTextScale());
 
     // A label that FITS is the same pixels at any maxWidth (renderText sizes
     // the texture to the text, ellipsising only past the limit), so maxWidth
@@ -942,6 +947,10 @@ SP<Render::ITexture> textWrapped(const std::string& str, const CHyprColor& color
         return nullptr;
 
     const std::string& FAMILY = fontFamily.empty() ? Hyprdrive::Config::themeFontFamily() : fontFamily;
+    // Every caller's size is one drawn against Omarchy's default text size; it
+    // follows the size the system is set to (TextScale.hpp, #8). Before the
+    // cache key, which holds it.
+    fontSize = Hyprdrive::TextScale::scaled(fontSize, Hyprdrive::Config::themeTextScale());
     const std::string  KEY    = std::format("{}\x1f{}\x1f{:x}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}", str, FAMILY, color.getAsHex(), fontSize, maxW, maxH, weight, (italic ? 1 : 0) | (centred ? 2 : 0));
     if (const auto IT = g_wrapCache.find(KEY); IT != g_wrapCache.end())
         return IT->second;

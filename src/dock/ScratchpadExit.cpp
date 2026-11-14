@@ -385,7 +385,10 @@ namespace Hyprdrive::ScratchpadExit {
     static void renderBar(PHLMONITOR monitor) {
         auto&       st   = g_state[monitor->m_id];
         const float BARL = OvInternal::overviewTopChromeBottomL(monitor) - sc<float>(monitor->m_position.y);
-        const bool  WANT = !dragging() && shownScratchpad(monitor) && BARL >= BAR_MIN_HL;
+        // Off: no strip, and with it no dwell exit -- onPointerMove acts only
+        // while barShown (general:scratchpad_bar_exit; inumineq, PR #13).
+        static auto& BAR_EXIT = Config::valueRef<Hyprlang::INT>("plugin:hyprdrive:general:scratchpad_bar_exit");
+        const bool   WANT     = *BAR_EXIT != 0 && !dragging() && shownScratchpad(monitor) && BARL >= BAR_MIN_HL;
         if (WANT != st.barShown) {
             st.barShown = WANT;
             st.barSince = Time::steadyNow();

@@ -118,6 +118,24 @@ static void registerConfigValuesFor() {
     // WINDOWS FLOAT ONLY WHEN YOU FLOAT THEM (WindowPlacement.cpp; owner,
     // 2026-11-10/11: "add an option to never load windows in floating mode to
     // general"; off by default, always on on Mosaic desktops).
+    // THE BAR STRIP OVER A SHOWN SCRATCHPAD CAN BE TURNED OFF (inumineq, PR
+    // #13, 2026-11-12: keyboard-only scratchpad users had the strip on their
+    // bar for good, and the dwell fired on the way to the clock). On, as it
+    // was. The drag zone is not this key's: it is the only way to drop a file
+    // outside the scratchpad.
+    addKey(makeShared<CBoolValue>(KEY("general:scratchpad_bar_exit"),
+                                  "while a scratchpad is shown, stripe the bar with 'hover to exit scratchpad' and hide the scratchpad on a dwell there", true));
+    // TEXT SIZE (TextScale.hpp; #8). Hyprdrive's own sizes unless the user
+    // asks for another (owner, 2026-11-14: following Omarchy's size by default
+    // made his text "too small ... keep the text size the way it was before
+    // and offer an option for users to change it").
+    // One choice, so going back to the default is one click.
+    addKey(makeShared<CStringValue>(KEY("general:text_size"),
+                                    "Hyprdrive's text size: default (its own sizes), system (Omarchy's [font] base-size in shell.toml; 12 = the default) or custom "
+                                    "(general:text_scale)",
+                                    Hyprlang::STRING{"default"}));
+    addKey(makeShared<CFloatValue>(KEY("general:text_scale"), "the text size used when general:text_size is custom; 1 = Hyprdrive's own sizes", 1.F,
+                                   SFloatValueOptions{.min = 0.7F, .max = 1.15F}));
     addKey(makeShared<CBoolValue>(KEY("general:open_tiled"),
                                   "windows float only when you float them: a window the app opens floating (a dialog, a fixed-size window, Wine and Proton's too) is "
                                   "tiled, on every desktop -- Mosaic desktops always do this; float rules, the hyprdrive-float tag, splash screens and tool palettes "

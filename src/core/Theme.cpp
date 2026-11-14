@@ -1,4 +1,5 @@
 #include "ConfigParts.hpp"
+#include "TextScale.hpp"
 using namespace ConfigDetail;
 
 namespace Hyprdrive::Config {
@@ -410,6 +411,58 @@ const std::string& themeFontFamily() {
         break;
     }
 
+    resolved = parsed;
+    return resolved;
+}
+
+// Behind THEME_POLL_MS like the family above: this runs for every text probe.
+float themeTextScale() {
+    static float           resolved = 1.F;
+    static std::string     parsedPath;
+    static time_t          parsedMtime = 0;
+    static float           parsed      = 1.F;
+    static Time::steady_tp checkedAt{};
+    static uint64_t        seenGeneration = 0;
+
+    const auto NOW = Time::steadyNow();
+    if (seenGeneration == g_themeGeneration && std::chrono::duration<float, std::milli>(NOW - checkedAt).count() < THEME_POLL_MS)
+        return resolved;
+    checkedAt      = NOW;
+    seenGeneration = g_themeGeneration;
+    resolved       = 1.F;
+
+    // default: Hyprdrive's own sizes. custom: the user's. system: Omarchy's, below.
+    const auto MODE = getValue<std::string>("plugin:hyprdrive:general:text_size");
+    if (MODE == "custom") {
+        static auto& OWN = valueRef<Hyprlang::FLOAT>("plugin:hyprdrive:general:text_scale");
+        resolved         = std::clamp(sc<float>(*OWN), Hyprdrive::TextScale::MIN_SCALE, Hyprdrive::TextScale::MAX_SCALE);
+        return resolved;
+    }
+    if (MODE != "system")
+        return resolved;
+
+    const char* const CFG  = std::getenv("XDG_CONFIG_HOME");
+    const char* const HOME = std::getenv("HOME");
+    const std::string PATH = (CFG && *CFG)  ? std::string{CFG} + "/omarchy/shell.toml" :
+                             (HOME && *HOME) ? std::string{HOME} + "/.config/omarchy/shell.toml" :
+                                               std::string{};
+    struct stat st {};
+    if (PATH.empty() || stat(PATH.c_str(), &st) != 0)
+        return resolved;
+    if (parsedPath != PATH || parsedMtime != st.st_mtime) {
+        parsedPath  = PATH;
+        parsedMtime = st.st_mtime;
+        parsed      = 1.F;
+        // A settings file, not a place for a large read on the render thread.
+        if (st.st_size > 0 && st.st_size <= 1024 * 1024) {
+            if (std::ifstream in{PATH}; in) {
+                std::string text(sc<size_t>(st.st_size), '\0');
+                in.read(text.data(), st.st_size);
+                text.resize(sc<size_t>(std::max<std::streamsize>(0, in.gcount())));
+                parsed = Hyprdrive::TextScale::fromShellToml(text);
+            }
+        }
+    }
     resolved = parsed;
     return resolved;
 }

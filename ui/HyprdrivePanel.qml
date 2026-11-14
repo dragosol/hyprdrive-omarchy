@@ -402,6 +402,7 @@ Item {
     case "mountsOn": return kb("plugin:hyprdrive:dock:enabled") && kb("plugin:hyprdrive:dock:show_mounts")
     case "springOn": return kb("plugin:hyprdrive:drag:spring_dock") || kb("plugin:hyprdrive:drag:spring_edges")
     case "hotCornerOn": return kb("plugin:hyprdrive:hot_corner:enabled")
+    case "textCustom": return String(k("plugin:hyprdrive:general:text_size")) === "custom"
     case "swapOn": return kb("plugin:hyprdrive:drag:hold_to_swap")
     case "stripOn": return kb("plugin:hyprdrive:strip")
     case "isolateOvApplies": return !kb("plugin:hyprdrive:dock:isolate_workspaces")
