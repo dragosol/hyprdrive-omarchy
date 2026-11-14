@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -67,7 +68,10 @@ static bool abortsIn(const fs::path& state, F body) {
     const pid_t PID = ::fork();
     if (PID == 0) {
         ::setenv("XDG_STATE_HOME", state.c_str(), 1);
-        // No core file for an expected abort.
+        // No core for an expected abort. A process that is not dumpable is never
+        // handed to the core handler; RLIMIT_CORE = 0 would still reach a piped
+        // one (systemd-coredump), which records a crash and notifies the user.
+        ::prctl(PR_SET_DUMPABLE, 0);
         std::signal(SIGABRT, SIG_DFL);
         body();
         ::_exit(0); // not reached
