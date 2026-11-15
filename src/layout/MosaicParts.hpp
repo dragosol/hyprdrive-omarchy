@@ -314,6 +314,11 @@ namespace Hyprdrive::Mosaic {
             const auto MON = WS ? WS->m_monitor.lock() : PHLMONITOR{};
             if (!MON || MON->m_activeWorkspace != WS || MON->m_activeSpecialWorkspace)
                 return;
+            // The overview is up: the pointer is on a tile or the strip, not on
+            // the canvas (user, 2026-11-14: a tile dropped on a strip desktop
+            // panned the desktop it left, and the pointer slid away with it).
+            if (openScrollOverviewForMonitor(MON))
+                return;
             const Vector2D P = g_pInputManager->getMouseCoordsInternal();
             const CBox     B = MON->logicalBox();
             if (!B.containsPoint(P))
