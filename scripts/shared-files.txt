@@ -7,6 +7,9 @@
 scripts/check-shared.sh
 scripts/shared-files.txt
 
+# the Hyprland minor this branch builds for (one per release line, the same in both repos)
+HYPRLAND_VERSION
+
 # AppIdentity (the module, its live API and debug dump, the GameApps resolvers)
 src/apps/identity
 src/apps/IdentityLive.cpp

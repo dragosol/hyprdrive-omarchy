@@ -19,6 +19,9 @@ import realpython  # noqa: E402
 realpython.pin()
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The Hyprland of the machine running the tests never decides the line: the
+# checks below that do not set it are the same-line case (0.56, as installed).
+os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.56"
 SRC = ROOT / "ui/bin/hyprdrive"
 failed = checks = 0
 
@@ -354,6 +357,207 @@ with contextlib.redirect_stdout(shown), tempfile.TemporaryDirectory() as tmp:
                    "%s: make install failed %s the .so was copied: checkout %s" % (
                        mod.FLAVOR, "after" if copied else "before", "goes back" if want_back else "stays"))
         mod.run = real_run
+
+    # ONE RELEASE LINE PER HYPRLAND MINOR: the wanted line is the Hyprland on
+    # PATH; another line than the one installed is installed whatever its number.
+    def said(fn, *a):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = fn(*a)
+        return rc, out.getvalue()
+
+    n = load("native", home)
+    state = home / ".local/state/hyprdrive"
+    record = lambda version, line=None: (state / "install.json").write_text(json.dumps(
+        dict({"version": version, "source": str(home / "nowhere")}, **({"hyprland": line} if line else {}))))
+    record("1.9.80", "0.56")
+    n.CHECK_CACHE.unlink(missing_ok=True)
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.57.1"
+    expect(n.running_hyprland() == "0.57" and n.lines_of(n.install_info()) == ("0.57", "0.56"), "the wanted line is the override's minor")
+    record("1.9.80")
+    expect(n.lines_of(n.install_info())[1] == "0.56", "an install record without a line is 0.56")
+    record("1.9.80", "0.56")
+    # The real probe: Hyprland on PATH, run with an XDG_RUNTIME_DIR (it refuses without one).
+    fakebin = home / "fakebin"
+    fakebin.mkdir()
+    (fakebin / "Hyprland").write_text('#!/bin/sh\n[ -n "$XDG_RUNTIME_DIR" ] || exit 1\n'
+                                      '[ "$1" = --version-json ] && printf \'{\\n    "version": "0.57.2",\\n    "commit": "x"\\n}\\n\'\n')
+    (fakebin / "Hyprland").chmod(0o755)
+    saved = {k: os.environ.pop(k, None) for k in ("HYPRDRIVE_HYPRLAND_VERSION", "XDG_RUNTIME_DIR", "PATH")}
+    os.environ["PATH"] = str(fakebin) + ":/usr/bin:/bin"
+    expect(n.running_hyprland() == "0.57", "Hyprland --version-json on PATH gives the minor, with no XDG_RUNTIME_DIR set")
+    os.environ["PATH"] = str(home / "empty")
+    expect(n.running_hyprland() is None and n.lines_of(n.install_info()) == ("0.56", "0.56"), "no Hyprland: the installed line")
+    for k, v in saved.items():
+        if v is not None:
+            os.environ[k] = v
+
+    rels = [{"tag_name": t, "draft": d, "prerelease": pr} for t, d, pr in (
+        ("v1.9.90", False, False),             # 0.56's, higher: not this line
+        ("v1.9.75-hl57", True, False),         # a draft
+        ("v1.9.74-hl57", False, True),         # a prerelease
+        ("v1.9.9-hl57", False, False),         # 1.9.9 < 1.9.72
+        ("v1.9.72-hl57", False, False),
+        ("v1.9.73-hl57x", False, False), ("xv1.9.79-hl57", False, False), ("v1.9.78-hl57", None, False),
+        ("v1.9.69-hl57", False, False))]
+    urls = []
+    LIST = "https://api.github.com/repos/dragosol/Hyprdrive/releases?per_page=100"
+
+    def nj(url, limit=0):
+        urls.append(url)
+        if url == LIST:
+            return rels
+        if url.endswith("/releases/latest"):
+            return {"tag_name": "v1.9.90"}
+        raise AssertionError("unexpected json " + url)
+    n.fetch_json = nj
+    r = n.check(refresh=True)
+    expect(r["latest"] == {"version": "1.9.72", "tag": "v1.9.72-hl57", "line": "0.57",
+                           "url": "https://github.com/dragosol/Hyprdrive/releases/tag/v1.9.72-hl57"},
+           "0.57: the highest -hl57 tag, not a higher plain tag, a draft or a prerelease (%r)" % r["latest"])
+    expect(urls == [LIST], "0.57: the release list is read, not /releases/latest")
+    expect(r["line"] == "0.57" and r["installedLine"] == "0.56" and r["switch"] and r["available"] and not r["unsupported"],
+           "switch: available although v1.9.72-hl57 is lower than the installed v1.9.80")
+    urls.clear()
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.56"
+    r = n.check()
+    expect(urls and urls[-1].endswith("/releases/latest") and r["latest"]["tag"] == "v1.9.90" and not r["switch"],
+           "the cache holds one line's answer: another line asks again")
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.57"
+    urls.clear()
+    n.check()
+    expect(urls == [LIST], "...and back")
+
+    picked = []
+    n.install = lambda ref, label, yes, info, rebuild=False: picked.append((ref, rebuild)) or 0
+    for version in ("1.9.80", "1.9.72"):
+        record(version, "0.56")
+        picked.clear()
+        rc, text = said(n.update, {"--yes"})
+        expect(rc == 0 and picked == [("v1.9.72-hl57", False)] and "Your Hyprland is 0.57; the Hyprdrive you have is built for 0.56." in text,
+               "switch: v1.9.72-hl57 installed over v%s, and why (%r)" % (version, text))
+    record("1.9.72", "0.57")
+    picked.clear()
+    rc, text = said(n.update, {"--yes"})
+    expect(rc == 0 and picked == [] and "newest" in text, "same line 0.57: the same version is not an update")
+    record("1.9.70", "0.57")
+    picked.clear()
+    n.update({"--yes"})
+    expect(picked == [("v1.9.72-hl57", False)], "same line 0.57: a newer -hl57 release is")
+
+    rels[:] = [x for x in rels if not x["tag_name"].endswith("-hl57") or x["draft"] or x["prerelease"]]
+    record("1.9.80", "0.56")
+    r = n.check(refresh=True)
+    expect(r["latest"] is None and r["switch"] and not r["available"], "no -hl57 release: nothing available")
+    picked.clear()
+    rc, text = said(n.update, {"--yes"})
+    expect(rc == 1 and picked == [] and "no release for Hyprland 0.57" in text, "no -hl57 release: nothing installed, and said (%r)" % text)
+    record("1.9.64", "0.57")
+    r = n.check(refresh=True)
+    expect(r["latest"] is None and not r["switch"] and not r["available"], "same line 0.57, no -hl57 release: nothing available")
+    rc, text = said(n.update, {"--check"})
+    expect(rc == 0 and "Hyprdrive has no release for Hyprland 0.57 on GitHub yet." in text,
+           "same line 0.57, no -hl57 release: --check says so (%r)" % text)
+    picked.clear()
+    rc, text = said(n.update, {"--yes"})
+    expect(rc == 0 and picked == [] and "no release for Hyprland 0.57" in text,
+           "same line 0.57, no -hl57 release: nothing installed, and said (%r)" % text)
+
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.58.0"
+    n.fetch_json = lambda url, limit=0: expect(False, "unsupported: no network") or {}
+    r = n.check(refresh=True)
+    expect(r["unsupported"] == "0.58" and not r["available"] and r["latest"] is None, "an unknown minor is reported as unsupported")
+    picked.clear()
+    rc, text = said(n.update, {"--yes"})
+    expect(rc == 1 and picked == [] and "Hyprdrive has no release for Hyprland 0.58 yet; nothing to install." in text,
+           "unsupported: nothing installed (%r)" % text)
+    n.fetch_json = nj
+
+    # --rebuild builds the checkout as it is: for another Hyprland it does not.
+    co = home / "checkout-native"
+    record("1.9.80", "0.56")
+    (state / "install.json").write_text(json.dumps({"version": "1.9.80", "source": str(co), "hyprland": "0.56"}))
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.57"
+    picked.clear()
+    rc, text = said(n.update, {"--rebuild", "--yes"})
+    expect(rc == 1 and picked == [] and "Hyprland 0.56" in text and "`hyprdrive update` switches" in text,
+           "--rebuild, a 0.56 checkout on Hyprland 0.57: nothing built (%r)" % text)
+    (co / "HYPRLAND_VERSION").write_text("0.57\n")
+    n.update({"--rebuild", "--yes"})
+    expect(picked == [("", True)], "--rebuild, a 0.57 checkout on Hyprland 0.57: rebuilt")
+    (co / "HYPRLAND_VERSION").unlink()
+
+    # A fresh clone is of the wanted line's branch.
+    n = load("native", home)
+    (state / "install.json").write_text(json.dumps({"version": "1.9.80", "hyprland": "0.56", "prefix": str(home / "pfx")}))
+    ran = []
+    n.run = lambda cmd, cwd=None, env=None: ran.append(cmd) or 0
+    n.install("v1.9.72-hl57", "x", True, n.install_info())
+    clone = next((c for c in ran if c[:2] == ["git", "clone"]), [])
+    expect(clone[2:4] == ["-b", "hyprland-0.57"], "a fresh clone for Hyprland 0.57 is of hyprland-0.57 (%r)" % clone)
+
+    # OMARCHY: the marketplace approves one commit. One of the other line is never installed.
+    q = load("omarchy", home)
+    q.SNAPSHOT_CACHE.unlink(missing_ok=True)
+    (state / "install.json").write_text(json.dumps({"version": "1.9.70", "hyprland": "0.56"}))
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.57"
+    lines_at = {A: None, B: b"0.57\n"}  # None: no HYPRLAND_VERSION at A (404)
+    approve = [A]
+    qrels = [{"tag_name": "v1.9.72-hl57", "draft": False, "prerelease": False}]
+
+    def qfetch(url, limit=0, etag=None):
+        if url == q.REGISTRY_URL:
+            q.fetch.etag = None
+            review = {"commit": approve[0], "repository": REPO, "pluginIds": [PID], "findings": [], "requestEventId": 7}
+            return json.dumps(source(sha=approve[0], review=review)).encode()
+        for sha, body in lines_at.items():
+            if url == "https://raw.githubusercontent.com/%s/%s/HYPRLAND_VERSION" % (REPO, sha):
+                if body is None:
+                    raise _ue.HTTPError(url, 404, "Not Found", {}, None)
+                if body == "down":
+                    raise _ue.HTTPError(url, 502, "Bad Gateway", {}, None)  # not a 404: not "no file"
+                return body
+        raise AssertionError("unexpected fetch " + url)
+
+    def qjson(url, limit=0):
+        if "search/issues" in url:
+            return {"items": []}
+        if url == "https://api.github.com/repos/%s/releases?per_page=100" % REPO:
+            return qrels
+        if url.endswith("/%s/manifest.json" % A):
+            return {"version": "1.9.71"}
+        if url.endswith("/%s/manifest.json" % B):
+            return {"version": "1.9.72"}
+        raise AssertionError("unexpected json " + url)
+    q.fetch = qfetch
+    q.fetch.etag = None
+    q.fetch_json = qjson
+    q.install = lambda ref, label, yes, info, rebuild=False: picked.append(ref) or 0
+    picked.clear()
+    rc, text = said(q.update, {"--yes"})
+    expect(picked == ["v1.9.72-hl57"] and "is not approved on the marketplace yet" in text,
+           "omarchy switch, the approved commit is 0.56's: the -hl57 release from GitHub, never the approved commit (%r)" % text)
+    picked.clear()
+    rc, text = said(q.update, {"--approved", "--yes"})
+    expect(rc == 1 and picked == [], "omarchy switch --approved, the approved commit is 0.56's: nothing installed")
+    approve[0] = B
+    picked.clear()
+    q.update({"--yes"})
+    expect(picked == [B], "omarchy switch, the approved commit is 0.57's: the marketplace path")
+    # The check saw B (0.57); right before building the registry names A (0.56).
+    real_q_check = q.check
+    seen_r = q.check(refresh=True)
+    approve[0] = A
+    q.check = lambda refresh=False: seen_r
+    picked.clear()
+    rc, text = said(q.update, {"--approved", "--yes"})
+    expect(rc == 1 and picked == [], "omarchy switch: re-resolved to a 0.56 commit before building: nothing installed (%r)" % text)
+    q.check = real_q_check
+    lines_at[A] = "down"
+    picked.clear()
+    rc, text = said(q.update, {"--yes"})
+    expect(rc == 1 and picked == [], "omarchy switch: the approved commit's line cannot be read: nothing installed")
+    os.environ["HYPRDRIVE_HYPRLAND_VERSION"] = "0.56"
 
     # the terminal
     os.environ["PATH"] = str(home / "bin")

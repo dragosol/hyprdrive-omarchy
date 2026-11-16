@@ -11,7 +11,8 @@ your Omarchy theme instead of shipping one of its own.
 [Demo film on YouTube](https://www.youtube.com/watch?v=RRkIViQvAOY) ·
 [Releases](https://github.com/dragosol/hyprdrive-omarchy/releases)
 
-> Built against Hyprland **0.56.2** (Omarchy 4).
+> Built against Hyprland **0.56.2** (Omarchy 4). This branch (`new-release`) is
+> for Hyprland 0.56; for Hyprland 0.57 use the `hyprland-0.57` branch.
 
 ## What it does
 
@@ -198,13 +199,21 @@ unless you want that value frozen across theme changes.
 
 Install the **latest release**, not the tip of the branch: the branch can be
 ahead of the last release with work that has not been released yet. Each release
-is a `vX.Y.Z` tag ([Releases](https://github.com/dragosol/hyprdrive-omarchy/releases)),
+is a tag ([Releases](https://github.com/dragosol/hyprdrive-omarchy/releases)),
 and the commands below check out the newest one.
+
+Each Hyprland version has its own branch and release tags, and the build stops
+if the branch does not match the Hyprland you have:
+
+| Hyprland | Branch          | Release tags  |
+|----------|-----------------|---------------|
+| 0.56     | `new-release`   | `vX.Y.Z`      |
+| 0.57     | `hyprland-0.57` | `vX.Y.Z-hl57` |
 
 The plugin is compiled against the Hyprland on your machine (the headers come
 with the `hyprland` package), so it is built locally rather than downloaded.
 
-**Needs:** Omarchy on Hyprland 0.56, and the build tools (`base-devel`, `pkgconf`;
+**Needs:** Omarchy on Hyprland 0.56 or 0.57, and the build tools (`base-devel`, `pkgconf`;
 everything else it links against ships with Omarchy). Optional: `ffmpeg` for the
 search easter egg, GNOME Sushi for Space-to-preview in dock stacks.
 
@@ -222,15 +231,19 @@ hyprctl reload
 ```
 
 Enable the panel with `omarchy plugin enable dragos.hyprdrive` (or answer yes when
-`plugin add` asks). To update: `omarchy plugin update dragos.hyprdrive`, then run
-`make clean && make install` in that folder again and log out and back in.
+`plugin add` asks). If `make install` stops because the checkout is for another
+Hyprland version, check out the branch it names (on Hyprland 0.57:
+`git fetch origin && git checkout hyprland-0.57`) and run it again. To update:
+`omarchy plugin update dragos.hyprdrive`, then run `make clean && make install`
+in that folder again and log out and back in.
 
 ### From source
 
 ```bash
 git clone https://github.com/dragosol/hyprdrive-omarchy.git ~/Projects/hyprdrive-omarchy
 cd ~/Projects/hyprdrive-omarchy
-git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"   # the latest release
+git checkout "$(git tag --list 'v*' --sort=-v:refname | grep -v -- -hl57 | head -1)"   # the latest release for Hyprland 0.56
+# Hyprland 0.57: git checkout "$(git tag --list 'v*-hl57' --sort=-v:refname | head -1)"
 make install
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl reload
@@ -245,14 +258,17 @@ asks before changing anything: `hyprdrive update --approved` installs the
 approved version, `hyprdrive update --github` the newest release without
 waiting. The settings panel shows **Update available!** beside the version when
 there is one. Click it for the same choices; it can copy the command for the
-approved version or install the newest one in your terminal.
+approved version or install the newest one in your terminal. After a Hyprland
+upgrade (0.56 to 0.57, or back) it installs the newest release of the matching
+branch.
 
 By hand:
 
 ```bash
 cd ~/Projects/hyprdrive-omarchy
 git fetch --tags
-git checkout "$(git tag --list 'v*' --sort=-v:refname | head -1)"
+git checkout "$(git tag --list 'v*' --sort=-v:refname | grep -v -- -hl57 | head -1)"   # Hyprland 0.56
+# Hyprland 0.57: git checkout "$(git tag --list 'v*-hl57' --sort=-v:refname | head -1)"
 make clean && make install   # builds, checks and installs; the running plugin is untouched
 hyprctl plugin unload ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so

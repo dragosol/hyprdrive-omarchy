@@ -1,5 +1,21 @@
 CXX ?= g++
 
+# ONE HYPRLAND MINOR PER BRANCH: this checkout builds for the one in
+# HYPRLAND_VERSION (new-release = 0.56, hyprland-0.57 = 0.57; ui/bin/hyprdrive's
+# LINES). Against the headers of another Hyprland it fails with thousands of
+# compiler errors, so it stops here first with one sentence naming the branch.
+# The native tree does this in scripts/prereqs.sh, which Omarchy does not have.
+# Not for the goals that compile nothing.
+ifneq ($(if $(MAKECMDGOALS),$(filter-out uninstall clean,$(MAKECMDGOALS)),all),)
+HD_LINE     := $(shell sed -n 's/^\([0-9]*\.[0-9]*\).*/\1/p' HYPRLAND_VERSION 2>/dev/null)
+HD_HYPRLAND := $(shell pkg-config --modversion hyprland 2>/dev/null)
+HD_MINOR    := $(shell printf '%s\n' '$(HD_HYPRLAND)' | sed -n 's/^\([0-9]*\.[0-9]*\).*/\1/p')
+ifneq ($(and $(HD_LINE),$(HD_MINOR),$(filter-out $(HD_LINE),$(HD_MINOR))),)
+HD_BRANCH   := $(if $(filter 0.56,$(HD_MINOR)),new-release,$(if $(filter 0.57,$(HD_MINOR)),hyprland-0.57))
+$(error This checkout is for Hyprland $(HD_LINE) and yours is $(HD_HYPRLAND): $(if $(HD_BRANCH),build the $(HD_BRANCH) branch instead (git fetch origin && git checkout $(HD_BRANCH)) or run hyprdrive update,Hyprdrive has no release for Hyprland $(HD_MINOR) yet))
+endif
+endif
+
 # The Lua Hyprland itself is linked to (scripts/lua_pc.sh): its headers' constants
 # must match the liblua the compositor runs. Arch has `lua` 5.5 (Hyprland's) AND
 # `lua54` (via libinput); the old "lua5.4 whenever it exists" pick crashed

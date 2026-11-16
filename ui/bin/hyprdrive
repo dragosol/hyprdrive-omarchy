@@ -29,6 +29,13 @@ installs either: --approved, the version the marketplace reviewed, or --github,
 the newest release without waiting. NATIVE (dragosol/Hyprdrive, plain Hyprland)
 has no marketplace: `update` installs the newest GitHub release.
 
+ONE RELEASE LINE PER HYPRLAND VERSION. A build is made for one Hyprland minor
+(HYPRLAND_VERSION in the checkout, recorded by make install): 0.56 is the
+branch and the vX.Y.Z releases it always was, 0.57 the hyprland-0.57 branch and
+its vX.Y.Z-hl57 releases. `update` installs from the line of the Hyprland on
+PATH (`Hyprland --version-json`), and moves to the other line when Hyprland was
+upgraded; a Hyprland with no line yet gets nothing.
+
 Installing = the README's own steps in your checkout (the one `make install` ran
 from; a fresh clone in ~/.local/share/hyprdrive/src when there is none): fetch,
 check out the release, build it from scratch, install, reload the plugin. A checkout with local
@@ -60,13 +67,19 @@ FLAVOR = "omarchy"  # "native" (dragosol/Hyprdrive) or "omarchy" (dragosol/hyprd
 
 if FLAVOR == "omarchy":
     REPO = "dragosol/hyprdrive-omarchy"
-    BRANCH = "new-release"
     INSTALL_URL = "https://github.com/dragosol/hyprdrive-omarchy#install"
 else:
     REPO = "dragosol/Hyprdrive"
-    BRANCH = "hyprland-native"
     INSTALL_URL = "https://github.com/dragosol/Hyprdrive#install"
 PLUGIN_ID = "dragos.hyprdrive"
+# The release lines, one per Hyprland minor: the branch each flavor builds it
+# from, and the suffix of its release tags (vX.Y.Z<suffix>). Only the "" line
+# is GitHub's "Latest" release; the others are found in the release list.
+LINES = {
+    "0.56": {"branch": {"native": "hyprland-native", "omarchy": "new-release"}, "suffix": ""},
+    "0.57": {"branch": {"native": "hyprland-0.57", "omarchy": "hyprland-0.57"}, "suffix": "-hl57"},
+}
+OLDEST_LINE = "0.56"  # an install from before the lines, with no record of its own
 MARKET = "omacom/omarchy-plugin-marketplace"
 
 HOME = pathlib.Path(os.environ.get("HOME") or pathlib.Path.home())
@@ -85,6 +98,7 @@ CLONE_DIR = HOME / ".local/share/hyprdrive/src"
 
 VERSION_RE = re.compile(r"^\d{1,4}(?:\.\d{1,6}){1,4}$")
 SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+MINOR_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})(?:[.+~-].*)?$")
 MAX_BODY = 512 * 1024
 # The marketplace's published snapshot (VERIFICATION.md): its registry, ~14 MB,
 # asked with the last ETag so an unchanged one costs a 304.
@@ -103,6 +117,12 @@ def parse_version(text):
     if not VERSION_RE.match(v):
         return None
     return tuple(int(p) for p in v.split("."))
+
+
+def minor_of(text):
+    """'0.57.1' / '0.57' -> '0.57'; None for anything else."""
+    m = MINOR_RE.match(text.strip()) if isinstance(text, str) else None
+    return "%d.%d" % (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def vstr(t):
@@ -159,45 +179,128 @@ def fetch_json(url, limit=MAX_BODY):
 
 # ---- what is installed ------------------------------------------------------
 def install_info():
-    """{'version', 'source', 'prefix'} from make install's record, else the
-    manifest beside this script (a checkout's ui/bin, or a copy of
-    the Omarchy panel with its manifest one folder up)."""
+    """{'version', 'source', 'prefix', 'hyprland'} from make install's record,
+    else the manifest beside this script (a checkout's ui/bin, or a copy of
+    the Omarchy panel with its manifest one folder up), and the HYPRLAND_VERSION
+    beside that manifest."""
     info = {}
     try:
         d = json.loads(INSTALL_JSON.read_text())
         if isinstance(d, dict):
-            info = {k: d[k] for k in ("version", "source", "prefix") if isinstance(d.get(k), str)}
+            info = {k: d[k] for k in ("version", "source", "prefix", "hyprland") if isinstance(d.get(k), str)}
     except (OSError, ValueError):
         pass
     here = pathlib.Path(__file__).resolve().parent
     for mf in (here.parent / "manifest.json", here.parent.parent / "manifest.json"):
-        if "version" in info:
+        if "version" in info and "hyprland" in info:
             break
         try:
             v = json.loads(mf.read_text()).get("version")
             if isinstance(v, str):
-                info["version"] = v
-                if (mf.parent / ".git").exists() and "source" not in info:
-                    info["source"] = str(mf.parent)
+                if "version" not in info:
+                    info["version"] = v
+                    if (mf.parent / ".git").exists() and "source" not in info:
+                        info["source"] = str(mf.parent)
+                if "hyprland" not in info and (mf.parent / "HYPRLAND_VERSION").is_file():
+                    info["hyprland"] = (mf.parent / "HYPRLAND_VERSION").read_text()
         except (OSError, ValueError):
             continue
     return info
 
 
+def checkout_line(src):
+    """The Hyprland minor a checkout builds for (its HYPRLAND_VERSION); one
+    from before the lines has none and is the oldest."""
+    try:
+        return minor_of((pathlib.Path(src) / "HYPRLAND_VERSION").read_text()) or OLDEST_LINE
+    except OSError:
+        return OLDEST_LINE
+
+
+def running_hyprland():
+    """The minor of the Hyprland on PATH ('0.57'), from its --version-json, or
+    None. HYPRDRIVE_HYPRLAND_VERSION stands in for it (the tests)."""
+    if os.environ.get("HYPRDRIVE_HYPRLAND_VERSION"):
+        return minor_of(os.environ["HYPRDRIVE_HYPRLAND_VERSION"])
+    exe = shutil.which("Hyprland")
+    if not exe:
+        return None
+    env = dict(os.environ)
+    # Hyprland refuses to start, even for --version-json, without
+    # XDG_RUNTIME_DIR (scripts/prereqs.sh does the same).
+    if not env.get("XDG_RUNTIME_DIR"):
+        env["XDG_RUNTIME_DIR"] = env.get("TMPDIR") or "/tmp"
+    try:
+        r = subprocess.run([exe, "--version-json"], capture_output=True, text=True, timeout=10, env=env)
+        d = json.loads(r.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return minor_of(d.get("version")) if isinstance(d, dict) else None
+
+
+def lines_of(info):
+    """(wanted, installed): the line of the Hyprland on PATH and the line of the
+    Hyprdrive installed. Hyprland unknown: wanted is the installed line, so
+    nothing changes."""
+    have = minor_of(info.get("hyprland")) or OLDEST_LINE
+    return running_hyprland() or have, have
+
+
+def branch_of(line):
+    return LINES.get(line, LINES[OLDEST_LINE])["branch"][FLAVOR]
+
+
 # ---- what is out there --------------------------------------------------------
-def latest_release():
-    d = fetch_json("https://api.github.com/repos/%s/releases/latest" % REPO)
-    tag = d.get("tag_name") if isinstance(d, dict) else None
-    v = parse_version(tag)
-    if not v:
-        raise ValueError("the latest release has no version tag")
-    return {"version": vstr(v), "tag": "v" + vstr(v),
-            "url": "https://github.com/%s/releases/tag/v%s" % (REPO, vstr(v))}
+def latest_release(line=OLDEST_LINE):
+    """The newest release of a line: {'version', 'tag', 'url', 'line'}, or None
+    when the line has none yet. Tag and URL are built here from the version
+    and the line's suffix, never taken from the response."""
+    suffix = LINES[line]["suffix"]
+    if not suffix:
+        d = fetch_json("https://api.github.com/repos/%s/releases/latest" % REPO)
+        tag = d.get("tag_name") if isinstance(d, dict) else None
+        v = parse_version(tag)
+        if not v:
+            raise ValueError("the latest release has no version tag")
+    else:
+        # Not marked Latest: the newest published release whose tag is exactly
+        # v<version><suffix>. Drafts and prereleases are not releases here.
+        d = fetch_json("https://api.github.com/repos/%s/releases?per_page=100" % REPO, 2 * 1024 * 1024)
+        pat = re.compile(r"^v(\d{1,4}(?:\.\d{1,6}){1,4})%s$" % re.escape(suffix))
+        v = None
+        for rel in d if isinstance(d, list) else []:
+            if not isinstance(rel, dict) or rel.get("draft") is not False or rel.get("prerelease") is not False:
+                continue
+            m = pat.match(rel.get("tag_name")) if isinstance(rel.get("tag_name"), str) else None
+            if m and newer(parse_version(m.group(1)), v):
+                v = parse_version(m.group(1))
+        if not v:
+            return None
+    tag = "v" + vstr(v) + suffix
+    return {"version": vstr(v), "tag": tag, "line": line,
+            "url": "https://github.com/%s/releases/tag/%s" % (REPO, tag)}
 
 
 def manifest_version_at(sha):
     d = fetch_json("https://raw.githubusercontent.com/%s/%s/manifest.json" % (REPO, sha), 64 * 1024)
     return vstr(parse_version(d.get("version"))) if isinstance(d, dict) else ""
+
+
+def line_at(sha):
+    """The Hyprland minor the commit `sha` builds for: its HYPRLAND_VERSION.
+    A commit without one (404) or with one that says nothing usable is from
+    before the lines: the oldest. Any other failure raises -- a guess could
+    put a commit of the wrong line on the user's Hyprland."""
+    try:
+        text = fetch("https://raw.githubusercontent.com/%s/%s/HYPRLAND_VERSION" % (REPO, sha), 1024)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return OLDEST_LINE
+        raise
+    try:
+        return minor_of((text or b"").decode("utf-8")) or OLDEST_LINE
+    except UnicodeDecodeError:
+        return OLDEST_LINE
 
 
 def published_snapshot(registry):
@@ -297,24 +400,30 @@ def check(refresh=False):
     """The settings' answer, cached for CHECK_TTL. Never raises."""
     info = install_info()
     installed = parse_version(info.get("version", ""))
+    line, have = lines_of(info)
     out = {"flavor": FLAVOR, "installed": vstr(installed), "installUrl": INSTALL_URL,
            "disabled": NEVER_CHECK.exists(), "available": False, "latest": None,
-           "marketplace": None, "approvedNewer": False, "error": None}
-    if out["disabled"] and not refresh:
+           "marketplace": None, "approvedNewer": False, "error": None,
+           "line": line, "installedLine": have, "switch": line != have,
+           "unsupported": None if line in LINES else line}
+    if (out["disabled"] and not refresh) or out["unsupported"]:
         return out
     cached = None
     try:
         cached = json.loads(CHECK_CACHE.read_text())
     except (OSError, ValueError):
         pass
-    if isinstance(cached, dict) and (cached.get("repo") != REPO or cached.get("schema") != CACHE_SCHEMA):
-        cached = None  # another Hyprdrive's answer (the two share the file), or an older format
+    if isinstance(cached, dict) and (cached.get("repo") != REPO or cached.get("schema") != CACHE_SCHEMA
+                                     or cached.get("line", OLDEST_LINE) != line):
+        # another Hyprdrive's answer (the two share the file), an older format,
+        # or another line's (one cached before the lines is the oldest's)
+        cached = None
     fresh = (isinstance(cached, dict) and not refresh and time.time() - cached.get("checkedAt", 0) < CHECK_TTL)
     remote = cached.get("remote") if fresh else None
     if not remote:
         remote = {"latest": None, "marketplace": None}
         try:
-            remote["latest"] = latest_release()
+            remote["latest"] = latest_release(line)
             if FLAVOR == "omarchy":
                 remote["marketplace"] = marketplace()
         except (OSError, ValueError, urllib.error.URLError) as e:
@@ -325,7 +434,8 @@ def check(refresh=False):
             try:
                 CACHE.mkdir(parents=True, exist_ok=True)
                 tmp = CHECK_CACHE.with_suffix(".tmp")
-                tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "repo": REPO, "checkedAt": time.time(), "remote": remote}))
+                tmp.write_text(json.dumps({"schema": CACHE_SCHEMA, "repo": REPO, "line": line,
+                                       "checkedAt": time.time(), "remote": remote}))
                 tmp.replace(CHECK_CACHE)
             except OSError:
                 pass
@@ -334,8 +444,11 @@ def check(refresh=False):
     latest = parse_version((out["latest"] or {}).get("version", ""))
     approved = parse_version(((out["marketplace"] or {}).get("approved") or {}).get("version", ""))
     # An unknown installed version is not "out of date": say nothing.
-    out["approvedNewer"] = bool(installed) and newer(approved, installed)
-    out["available"] = bool(installed) and (newer(latest, installed) or out["approvedNewer"])
+    # Another line: the approved commit may be of either line (update reads
+    # which), so it is not announced; any release of the wanted line is an update.
+    out["approvedNewer"] = bool(installed) and not out["switch"] and newer(approved, installed)
+    out["available"] = (bool(installed) and (newer(latest, installed) or out["approvedNewer"])) \
+        or (out["switch"] and bool(out["latest"]))
     return out
 
 
@@ -462,7 +575,8 @@ def install_locked(target_ref, label, yes, info, rebuild=False):
     if not rebuild:
         if src is None:
             CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
-            if run(["git", "clone", "-b", BRANCH, "https://github.com/%s.git" % REPO, str(CLONE_DIR)]) != 0:
+            branch = branch_of(lines_of(info)[0])
+            if run(["git", "clone", "-b", branch, "https://github.com/%s.git" % REPO, str(CLONE_DIR)]) != 0:
                 return 1
             src = CLONE_DIR
         else:
@@ -684,8 +798,17 @@ def open_in_terminal(args):
 # ---- update -------------------------------------------------------------------
 def describe(r):
     lines = ["Hyprdrive (%s): installed %s" % (r["flavor"], ("v" + r["installed"]) if r["installed"] else "version unknown")]
+    if r.get("unsupported"):
+        lines.append("Hyprdrive has no release for Hyprland %s yet; nothing to install." % r["unsupported"])
+        return "\n".join(lines)
+    if r.get("switch"):
+        lines.append("Your Hyprland is %s; the Hyprdrive you have is built for %s." % (r["line"], r["installedLine"]))
     if r["latest"]:
-        lines.append("Newest release on GitHub: v%s  %s" % (r["latest"]["version"], r["latest"]["url"]))
+        lines.append("Newest release on GitHub: %s  %s" % (r["latest"]["tag"], r["latest"]["url"]))
+    elif not r["error"] and not r.get("disabled"):
+        # Said on the same line too: a line with no release yet (a new
+        # Hyprland's) otherwise reports nothing but the installed version.
+        lines.append("Hyprdrive has no release for Hyprland %s on GitHub yet." % r["line"])
     mk = r.get("marketplace")
     if FLAVOR == "omarchy" and mk is not None:
         a, p = mk.get("approved"), mk.get("pending")
@@ -733,7 +856,16 @@ def update(flags):
         # The plugin, built again from the checkout as it is (the settings'
         # "Rebuild the plugin": they are newer than the plugin running). No
         # network: nothing is fetched.
-        return install("", "the plugin", "--yes" in flags, install_info(), rebuild=True)
+        info = install_info()
+        src, line = checkout_dir(info), running_hyprland()
+        if line and line not in LINES:
+            print("Hyprdrive has no release for Hyprland %s yet; nothing to build." % line)
+            return 1
+        if src is not None and line and checkout_line(src) != line:
+            print("%s is the Hyprdrive for Hyprland %s, and yours is %s: `hyprdrive update` switches to the one for %s."
+                  % (src, checkout_line(src), line, line))
+            return 1
+        return install("", "the plugin", "--yes" in flags, info, rebuild=True)
 
     checking = "--check" in flags
     r = check(refresh=("--refresh" in flags) or not checking)
@@ -741,22 +873,41 @@ def update(flags):
         print(json.dumps(r) if "--json" in flags else describe(r))
         return 0
     print(describe(r))
+    if r.get("unsupported"):
+        return 1
     if r["error"]:
         # Whatever is shown came from the cache: never install from it.
         print("Nothing installed: GitHub could not be reached to confirm the versions.")
         return 1
-    if not r["latest"] and not r["approvedNewer"]:
+    switch = r.get("switch")
+    if not switch and not r["latest"] and not r["approvedNewer"]:
         return 0
     info = install_info()
     yes = "--yes" in flags
-    installed = parse_version(r["installed"])
+    # ANOTHER LINE: the Hyprdrive installed is built for another Hyprland, so
+    # any release of the wanted line replaces it, whatever its number -- as
+    # though nothing were installed.
+    installed = None if switch else parse_version(r["installed"])
     latest = r["latest"]
     latest_v = parse_version((latest or {}).get("version", ""))
     approved = ((r.get("marketplace") or {}).get("approved")) or None
+    if switch and approved:
+        # The marketplace approves ONE commit, of either line: one built for
+        # another Hyprland is never offered (it is read again before building).
+        try:
+            if line_at(approved["sha"]) != r["line"]:
+                approved = None
+        except (OSError, ValueError, urllib.error.URLError) as e:
+            print("Nothing installed: GitHub could not be reached to read the approved version's Hyprland (%s)."
+                  % (getattr(e, "reason", None) or e))
+            return 1
     approved_v = parse_version((approved or {}).get("version", ""))
+    if switch and not latest and not approved:
+        print("Nothing installed: Hyprdrive has no release for Hyprland %s yet." % r["line"])
+        return 1
 
     def from_github():
-        return install(latest["tag"], "v%s from GitHub" % latest["version"], yes, info)
+        return install(latest["tag"], "%s from GitHub" % latest["tag"], yes, info)
 
     def from_marketplace(label="the version the marketplace approved", ask=yes):
         # Resolved again from the registry right before building: only the
@@ -764,12 +915,18 @@ def update(flags):
         # the check's answer or any cache of it (marketplace review, #11392).
         try:
             now = approved_release(revalidate=True)
+            # Its line, read again at the commit named now.
+            now_line = line_at(now["sha"]) if switch and now else None
         except (OSError, ValueError, urllib.error.URLError) as e:
             print("Nothing installed: the marketplace's registry could not be read (%s)." % (getattr(e, "reason", None) or e))
             return 1
         if not now or not newer(parse_version(now.get("version", "")), installed):
             print("No marketplace-approved version is newer than yours.")
             return 0
+        if switch and now_line != r["line"]:
+            print("Nothing installed: the version the marketplace approves now is built for Hyprland %s, not %s."
+                  % (now_line, r["line"]))
+            return 1
         return install(now["sha"], "v%s, %s" % (now["version"], label), ask, info)
 
     if FLAVOR != "omarchy":
@@ -781,11 +938,17 @@ def update(flags):
     if "--approved" in flags:
         if approved and newer(approved_v, installed):
             return from_marketplace()
+        if switch:
+            print("The marketplace has approved no version for Hyprland %s yet: nothing installed." % r["line"])
+            return 1
         print("No marketplace-approved version is newer than yours.")
         return 0
     if "--github" in flags:
         if newer(latest_v, installed):
             return from_github()
+        if switch:
+            print("Hyprdrive has no release for Hyprland %s on GitHub yet: nothing installed." % r["line"])
+            return 1
         print("You have the newest release.")
         return 0
     if not newer(latest_v, installed) and not newer(approved_v, installed):
@@ -795,12 +958,12 @@ def update(flags):
     if newer(approved_v, installed) and not newer(latest_v, approved_v):
         return from_marketplace()  # the newest release IS the approved one
     if not newer(approved_v, installed):
-        print("v%s is not approved on the marketplace yet. You can install it straight from GitHub now,"
-              "\nor wait for the marketplace." % latest["version"])
+        print("%s%s is not approved on the marketplace yet. You can install it straight from GitHub now,"
+              "\nor wait for the marketplace." % (latest["tag"], (" (for Hyprland %s)" % r["line"]) if switch else ""))
         return from_github()
     # Both: an approved version newer than yours, and a newer one still waiting.
     print("Two choices:\n  a) v%s, the version the marketplace approved\n  g) v%s from GitHub now, without waiting for its approval"
-          % (approved["version"], latest["version"]))
+          % (approved["version"], latest["tag"][1:]))
     if yes or not sys.stdin.isatty():
         print("Pick one: `hyprdrive update --approved` or `hyprdrive update --github`.")
         return 0
@@ -811,7 +974,7 @@ def update(flags):
     if pick.startswith("a"):
         return from_marketplace("approved", True)
     if pick.startswith("g"):
-        return install(latest["tag"], "v%s from GitHub" % latest["version"], True, info)
+        return install(latest["tag"], "%s from GitHub" % latest["tag"], True, info)
     print("Nothing changed.")
     return 0
 
