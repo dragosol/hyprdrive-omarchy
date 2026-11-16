@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/Context.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
@@ -36,7 +37,8 @@
 #include <unordered_set>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/render/OpenGL.hpp>
 #include <string>
 #include <string_view>
@@ -92,12 +94,15 @@ void clearFrameChromeBlur() {
 // rather than a fractional one and cannot change a pixel.
 void captureFrameChromeBlur(PHLMONITOR monitor) {
     g_frameChromeBlur.reset();
-    if (!monitor || !g_pHyprRenderer || !g_pHyprRenderer->m_renderData.currentFB)
+    if (!monitor || !g_pHyprRenderer)
+        return;
+    auto& ctx = g_pHyprRenderer->context();
+    if (!ctx.m_data.currentFB)
         return;
 
     const auto FBSIZE     = monitor->m_pixelSize;
     const auto RENDERSIZE = monitor->m_transformedSize;
-    const auto FBFORMAT   = g_pHyprRenderer->m_renderData.currentFB->m_drmFormat;
+    const auto FBFORMAT   = ctx.m_data.currentFB->m_drmFormat;
 
     auto& g_chromeBlurFB = g_chromeBlurFBs[monitor->m_id];
     if (!g_chromeBlurFB)
@@ -110,7 +115,7 @@ void captureFrameChromeBlur(PHLMONITOR monitor) {
             return;
     }
 
-    g_chromeBlurFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+    g_chromeBlurFB->setImageDescription(ctx.m_data.currentFB->imageDescription());
 
     CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
     // X99. This private FB is only sampled by the strip and the search-result
@@ -130,28 +135,27 @@ void captureFrameChromeBlur(PHLMONITOR monitor) {
     });
 
     // Dual-kawase the CURRENT overview main FB (cards + tiles if already drawn).
-    const auto BLURRED = g_pHyprRenderer->blurMainFramebuffer(1.F, &fullDamage);
+    const auto BLURREDFB = g_pHyprRenderer->blurMainFramebuffer(ctx, 1.F, fullDamage);
+    const auto BLURRED   = BLURREDFB ? BLURREDFB->getTexture() : nullptr;
     if (!BLURRED || !BLURRED->ok())
         return;
 
     // COPY into our FB so later window/dock live blurs cannot stomp it.
     {
-        auto bindChrome = g_pHyprRenderer->bindTempFB(g_chromeBlurFB);
+        auto bindChrome = g_pHyprRenderer->bindTempFB(ctx, g_chromeBlurFB);
 
-        const auto SAVEDDAMAGE               = g_pHyprRenderer->m_renderData.damage;
-        g_pHyprRenderer->m_renderData.damage = fullDamage;
-        auto restoreDamage                   = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE] { g_pHyprRenderer->m_renderData.damage = SAVEDDAMAGE; });
+        const auto SAVEDDAMAGE = ctx.m_data.damage;
+        ctx.m_data.damage      = fullDamage;
+        auto       restoreDamage = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE, &ctx] { ctx.m_data.damage = SAVEDDAMAGE; });
 
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
+        g_pHyprRenderer->draw(ctx, CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
 
         const auto SAVEDTRANSFORM = BLURRED->m_transform;
         BLURRED->m_transform      = Math::wlTransformToHyprutils(Math::invertTransform(monitor->m_transform));
         auto restoreTransform     = Hyprutils::Utils::CScopeGuard([BLURRED, SAVEDTRANSFORM] { BLURRED->m_transform = SAVEDTRANSFORM; });
 
-        g_pHyprRenderer->pushMonitorTransformEnabled(true);
-        auto restoreXform = Hyprutils::Utils::CScopeGuard([] { g_pHyprRenderer->popMonitorTransformEnabled(); });
-
         g_pHyprRenderer->draw(
+            ctx,
             CTexPassElement::SRenderData{
                 .tex    = BLURRED,
                 .box    = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y},
@@ -444,7 +448,7 @@ namespace {
             push(TOOL);
         push("window-close-symbolic");
         for (const auto& W : Desktop::windowState()->windows())
-            if (W && W->m_isMapped)
+            if (W && W->mapped())
                 push(AppSearch::iconForClass(Hyprdrive::AppIdentity::groupKey(W)));
         // The dock's icons at the size each monitor draws them (an autohidden
         // dock's first slide-in decoded them on its opening frames otherwise).
@@ -1014,11 +1018,12 @@ void clearTextCache() {
 }
 
 void flushPass(PHLMONITOR monitor) {
-    if (!monitor || g_pHyprRenderer->m_renderPass.empty())
+    auto& ctx = g_pHyprRenderer->context();
+    if (!monitor || ctx.m_pass.empty())
         return;
 
-    g_pHyprRenderer->m_renderPass.render(CRegion{CBox{{}, monitor->m_transformedSize}});
-    g_pHyprRenderer->m_renderPass.clear();
+    ctx.m_pass.render(ctx, CRegion{CBox{{}, monitor->m_transformedSize}});
+    ctx.m_pass.clear();
 }
 
 void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, int blurPasses) {
@@ -1049,7 +1054,7 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     // Y12 removed X99's -1 -- so it matches the capture (the sample path
     // ignores this; the capture bakes its own).
     data.blurPasses    = blurPasses;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(data));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<COverviewBlurPassElement>(data));
 }
 
 void themePlate(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur, bool lit, uint64_t fadeKey) {
@@ -1065,19 +1070,19 @@ void themePlate(const CBox& box, int rounding, float roundingPower, float alpha,
     bg.color         = CHyprColor{TINT.r, TINT.g, TINT.b, TINT.a * alpha};
     bg.round         = rounding;
     bg.roundingPower = roundingPower;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(bg));
 
     const int  BORDERSIZE = std::max(1, Hyprdrive::Config::getValue<int>("general:border_size"));
     CBorderPassElement::SBorderData border;
     border.box           = box.copy().round();
     const auto LIT     = Hyprdrive::Config::highlightColor().modifyA(1.F);
     const auto RESTING = Hyprdrive::Config::restingBorderColor();
-    border.grad1.reset(fadeKey ? Hyprdrive::BorderFade::color(g_pHyprRenderer->m_renderData.pMonitor.lock(), fadeKey, lit, RESTING, LIT) : lit ? LIT : RESTING);
+    border.grad1.reset(fadeKey ? Hyprdrive::BorderFade::color(g_pHyprRenderer->context().m_data.pMonitor.lock(), fadeKey, lit, RESTING, LIT) : lit ? LIT : RESTING);
     border.a             = alpha;
     border.borderSize    = BORDERSIZE;
     border.round         = rounding;
     border.roundingPower = roundingPower;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(border));
 }
 
 
@@ -1108,7 +1113,7 @@ void ringedPlate(const CBox& plate, int round, float roundingPower, const CHyprC
     if (ringPx <= 0.0) {
         // No ring: the fill over whatever is behind, as it always was.
         body.color = fill.modifyA(fill.a * alpha);
-        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(body));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(body));
         return;
     }
 
@@ -1118,12 +1123,12 @@ void ringedPlate(const CBox& plate, int round, float roundingPower, const CHyprC
     const auto SETTLED = Hyprdrive::PlateColor::settledBody({.r = sc<float>(fill.r), .g = sc<float>(fill.g), .b = sc<float>(fill.b), .a = sc<float>(fill.a)},
                                                  {.r = sc<float>(ring.r), .g = sc<float>(ring.g), .b = sc<float>(ring.b), .a = 1.F});
     body.color = CHyprColor{SETTLED.r, SETTLED.g, SETTLED.b, alpha};
-    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(body));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(body));
 
     // The ring only OUTSIDE the plate: the border shader draws `borderSize`
     // monitor-scaled px around the box with the outer radius round + that --
     // the geometry the ring rect had.
-    const auto   MON   = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    const auto   MON   = g_pHyprRenderer->context().m_data.pMonitor.lock();
     const double MS    = MON ? std::max(MON->m_scale, 0.01F) : 1.0;
     CBorderPassElement::SBorderData border;
     border.box           = plate;
@@ -1132,7 +1137,7 @@ void ringedPlate(const CBox& plate, int round, float roundingPower, const CHyprC
     border.borderSize    = std::max(1, sc<int>(std::round(ringPx / MS)));
     border.round         = round;
     border.roundingPower = roundingPower;
-    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(border));
 }
 
 CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale) {
@@ -1193,7 +1198,7 @@ CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bot
     label.tex = TEX;
     label.box = CBox{std::round(plate.x + PADX), std::round(plate.y + PADY), sc<float>(TEX->m_size.x), sc<float>(TEX->m_size.y)};
     label.a   = alpha;
-    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(label));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(label));
 
     return plate;
 }

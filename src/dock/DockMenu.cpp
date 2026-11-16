@@ -77,7 +77,7 @@ std::string itemDesktopId(const SItem& item) {
 // came off and comes back to. A scratchpad's is never the current one.
 static std::pair<std::string, bool> windowWhere(const PHLWINDOW& WINDOW, const PHLMONITOR& monitor) {
     const auto  ACTIVE   = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
-    const auto  ACTIVEID = ACTIVE && !ACTIVE->m_isSpecialWorkspace ? ACTIVE->m_id : WORKSPACE_INVALID;
+    const auto  ACTIVEID = ACTIVE && !Hyprdrive::Compat::isSpecial(ACTIVE) ? Hyprdrive::Compat::id(ACTIVE) : WORKSPACE_INVALID;
     std::string where;
     WORKSPACEID on = WORKSPACE_INVALID;
     if (Minimize::isMinimized(WINDOW)) {
@@ -86,8 +86,8 @@ static std::pair<std::string, bool> windowWhere(const PHLWINDOW& WINDOW, const P
     } else if (const auto SCRATCH = Scratchpad::workspaceFor(WINDOW))
         where = Scratchpad::label(SCRATCH);
     else if (WINDOW->m_workspace) {
-        where = WINDOW->m_workspace->m_name;
-        on    = WINDOW->m_workspace->m_id;
+        where = WINDOW->m_workspace->displayName();
+        on    = Hyprdrive::Compat::id(WINDOW->m_workspace);
     }
     if (ACTIVEID != WORKSPACE_INVALID && on == ACTIVEID)
         where += " \u00b7 current";
@@ -109,7 +109,7 @@ void appendWindowRows(std::vector<SRow>& rows, const std::vector<PHLWINDOW>& WIN
         const auto [where, HEREOK] = windowWhere(WINDOW, monitor);
         if (Minimize::isMinimized(WINDOW))
             ++minimized;
-        SRow row{.kind = ERow::Window, .label = elide(WINDOW->m_title.empty() ? item.wmClass : WINDOW->m_title), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where};
+        SRow row{.kind = ERow::Window, .label = elide(WINDOW->metadata().title().empty() ? item.wmClass : WINDOW->metadata().title()), .window = WINDOW, .glyph = MenuGlyph::WINDOW, .hint = where};
         // Its moves ride ITS row, as buttons, so which window they move is
         // never a question (user, 2026-10-08) and a window costs one row, not
         // four (user, 2026-11-03). Always four slots, so the buttons line up
@@ -360,7 +360,7 @@ std::vector<SRow> buildWindowRows(const SItem& item, const PHLWINDOW& window, co
         using W = MenuModel::EWinRow;
         switch (K) {
             case W::Header:
-                rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(window->m_title.empty() ? item.wmClass : window->m_title), .window = window, .glyph = MenuGlyph::WINDOW,
+                rows.emplace_back(SRow{.kind = ERow::Window, .label = elide(window->metadata().title().empty() ? item.wmClass : window->metadata().title()), .window = window, .glyph = MenuGlyph::WINDOW,
                                        .hint = where});
                 break;
             case W::Separator: rows.emplace_back(SRow{.kind = ERow::Separator}); break;
@@ -792,7 +792,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         d.clipBox = clipTo(d.clipBox);
         d.a *= ROWA;
         if (!d.clipBox.empty() && d.a > 0.001F)
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
     };
     const auto ADDRECT = [&](CRectPassElement::SRectData d) {
         if (ROWDY != 0.F) {
@@ -803,7 +803,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         d.clipBox = clipTo(d.clipBox);
         d.color   = d.color.modifyA(d.color.a * ROWA);
         if (!d.clipBox.empty() && d.color.a > 0.001F)
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(d));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(d));
     };
 
     // X13/X29/X86: menu frost -- shared chrome sample in overview, live on desktop.
@@ -842,7 +842,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         PHLWINDOW want;
         if (LIVE && !M.windowScope && !menuOpening(M) && M.hoverRow >= 0 && M.hoverRow < sc<int>(M.rows.size())) {
             const auto& R = M.rows[M.hoverRow];
-            if (const auto W = R.kind == ERow::Window ? R.window.lock() : PHLWINDOW{}; W && W->m_isMapped)
+            if (const auto W = R.kind == ERow::Window ? R.window.lock() : PHLWINDOW{}; W && W->mapped())
                 want = W;
         }
         M.peekWant = want;
@@ -1169,7 +1169,7 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         border.round         = sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE, VISH / 2.0)));
         border.roundingPower = 2.F;
         if (Stacks::drawableBox(border.box))
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(border));
     }
 
     // The row preview, beside the plate as it is now: one plate travelling

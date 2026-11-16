@@ -146,10 +146,10 @@ Hyprdrive::WorkspacePlan::SRow workspacePlanFor(const PHLMONITOR& monitor) {
     std::vector<WP::SWorkspace> facts;
     for (const auto& w : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = w.lock();
-        if (!valid(WORKSPACE) || WORKSPACE->m_isSpecialWorkspace || WORKSPACE->m_id <= 0)
+        if (!valid(WORKSPACE) || Hyprdrive::Compat::isSpecial(WORKSPACE) || Hyprdrive::Compat::id(WORKSPACE) <= 0)
             continue;
         const auto OWNER = WORKSPACE->m_monitor.lock();
-        facts.push_back({.id = WORKSPACE->m_id, .monitor = OWNER ? OWNER->m_id : -1, .windows = sc<size_t>(WORKSPACE->getWindowCount()), .held = isHeldPhantom(WORKSPACE)});
+        facts.push_back({.id = Hyprdrive::Compat::id(WORKSPACE), .monitor = OWNER ? OWNER->m_id : -1, .windows = sc<size_t>(WORKSPACE->getWindowCount()), .held = isHeldPhantom(WORKSPACE)});
     }
 
     // Rule 2: `create` quietly moves a rule-bound id to its bound output.
@@ -173,11 +173,11 @@ static PHLWORKSPACE createWorkspaceIfFree(WORKSPACEID id, const PHLMONITOR& moni
     if (!monitor || !Hyprdrive::Rows::of(monitor).contains(id))
         return nullptr;
     for (const auto& w : State::workspaceState()->workspaces()) {
-        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && WORKSPACE->m_id == id)
+        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && Hyprdrive::Compat::id(WORKSPACE) == id)
             return nullptr;
     }
 
-    const auto CREATED = State::workspaceState()->create(id, monitor->m_id, std::to_string(id));
+    const auto CREATED = State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(id)}, monitor);
     // And a rule that sent it elsewhere after all is not this monitor's to hold.
     if (CREATED && CREATED->m_monitor.lock() != monitor)
         return nullptr;
@@ -186,7 +186,7 @@ static PHLWORKSPACE createWorkspaceIfFree(WORKSPACEID id, const PHLMONITOR& moni
 
 static PHLWORKSPACE workspaceWithID(WORKSPACEID id) {
     for (const auto& w : State::workspaceState()->workspaces()) {
-        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && WORKSPACE->m_id == id && !WORKSPACE->m_isSpecialWorkspace)
+        if (const auto WORKSPACE = w.lock(); valid(WORKSPACE) && Hyprdrive::Compat::id(WORKSPACE) == id && !Hyprdrive::Compat::isSpecial(WORKSPACE))
             return WORKSPACE;
     }
     return nullptr;
@@ -211,7 +211,7 @@ void COverview::ensureTrailingWorkspace() {
         return;
     }
 
-    if (trailingWorkspace && (trailingWorkspace->m_id != *ROW.spare || trailingWorkspace->m_monitor.lock() != MONITOR))
+    if (trailingWorkspace && (Hyprdrive::Compat::id(trailingWorkspace) != *ROW.spare || trailingWorkspace->m_monitor.lock() != MONITOR))
         trailingWorkspace.reset();
 
     if (ROW.existing) {
@@ -289,7 +289,7 @@ void COverview::rebuildWorkspaceImages() {
 
     for (const auto& w : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = w.lock();
-        if (!valid(WORKSPACE) || WORKSPACE->m_monitor != pMonitor || WORKSPACE->m_isSpecialWorkspace)
+        if (!valid(WORKSPACE) || WORKSPACE->m_monitor != pMonitor || Hyprdrive::Compat::isSpecial(WORKSPACE))
             continue;
 
         if (WORKSPACE == REMOVEDWORKSPACE)
@@ -302,7 +302,7 @@ void COverview::rebuildWorkspaceImages() {
     // as Omarchy's bar lists its guests. (Blocks off: by number.)
     const Hyprdrive::Row ROW = Hyprdrive::Rows::of(pMonitor.lock());
     std::sort(images.begin(), images.end(), [&ROW](const auto& a, const auto& b) {
-        const WORKSPACEID A = a->pWorkspace->m_id, B = b->pWorkspace->m_id;
+        const WORKSPACEID A = Hyprdrive::Compat::id(a->pWorkspace), B = Hyprdrive::Compat::id(b->pWorkspace);
         const bool        INA = ROW.contains(A), INB = ROW.contains(B);
         if (INA != INB)
             return INA;
@@ -339,7 +339,7 @@ void COverview::seedRememberedSelections() {
         if (!img->pWorkspace)
             continue;
 
-        const auto WORKSPACEID = img->pWorkspace->m_id;
+        const auto WORKSPACEID = Hyprdrive::Compat::id(img->pWorkspace);
 
         if (const auto it = rememberedSelection.find(WORKSPACEID); it != rememberedSelection.end()) {
             const auto rememberedWindow = getOverviewWindowToShow(it->second.lock());
@@ -361,7 +361,7 @@ void COverview::rememberSelection(PHLWINDOW window) {
     if (!window || !window->m_workspace)
         return;
 
-    rememberedSelection[window->m_workspace->m_id] = window;
+    rememberedSelection[Hyprdrive::Compat::id(window->m_workspace)] = window;
 }
 
 void COverview::updateWorkspaceOverflow() {
@@ -392,7 +392,7 @@ void COverview::updateWorkspaceOverflow() {
 
         for (const auto& windowRef : img->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!shouldShowOverviewWindow(window) || window->m_isFloating)
+            if (!shouldShowOverviewWindow(window) || window->isFloating())
                 continue;
 
             const auto POS  = window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - MONITOR->m_position;

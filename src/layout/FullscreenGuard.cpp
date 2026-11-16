@@ -14,7 +14,8 @@
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/protocols/PointerConstraints.hpp>
@@ -44,17 +45,17 @@ namespace Hyprdrive::FullscreenGuard {
         // class); the class rule below stays the floor.
         if (Hyprdrive::AppIdentity::of(w).isGame)
             return true;
-        for (const auto& CLASS : {w->m_class, w->m_initialClass}) {
+        for (const auto& CLASS : {w->metadata().appID(), w->metadata().initialAppID()}) {
             if (startsWith(CLASS, "steam_app_") || CLASS == "gamescope")
                 return true;
-            if (w->m_isX11 && endsWithExe(CLASS))
+            if (w->backend().isX11() && endsWithExe(CLASS))
                 return true;
         }
         return false;
     }
 
     PHLWINDOW gameCover(const PHLWINDOW& target) {
-        if (!target || !target->m_isMapped || target->m_isFloating || !target->m_workspace)
+        if (!target || !target->mapped() || target->isFloating() || !target->m_workspace)
             return nullptr;
         // Mode 0: the fullscreen window keeps the focus, nothing leaves fullscreen.
         if (Config::getValue<int>("misc:on_focus_under_fullscreen") == 0)

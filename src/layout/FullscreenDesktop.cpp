@@ -13,8 +13,9 @@
 #include "IOverview.hpp"
 #include "FullscreenGuard.hpp"
 
-#include <hyprland/src/desktop/Workspace.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
@@ -23,7 +24,7 @@
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/event/EventBus.hpp>
-#include <hyprland/src/managers/EventManager.hpp>
+#include <hyprland/src/ipc/s2/S2.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/Compositor.hpp>
 
@@ -166,7 +167,7 @@ namespace Hyprdrive::FullscreenDesktop {
 
         PHLWORKSPACE byId(WORKSPACEID id) {
             for (const auto& REF : State::workspaceState()->workspaces())
-                if (const auto WS = REF.lock(); DesktopOrder::ordinary(WS) && WS->m_id == id)
+                if (const auto WS = REF.lock(); DesktopOrder::ordinary(WS) && Hyprdrive::Compat::id(WS) == id)
                     return WS;
             return nullptr;
         }
@@ -174,7 +175,7 @@ namespace Hyprdrive::FullscreenDesktop {
         int othersOn(const PHLWORKSPACE& ws, const PHLWINDOW& except) {
             int n = 0;
             for (const auto& W : Desktop::windowState()->windows())
-                if (W && W != except && W->m_isMapped && !W->isHidden() && W->m_workspace == ws)
+                if (W && W != except && W->mapped() && !W->isHidden() && W->m_workspace == ws)
                     ++n;
             return n;
         }
@@ -199,7 +200,7 @@ namespace Hyprdrive::FullscreenDesktop {
             const STrip* T  = tripOf(w);
             const auto   WS = w->m_workspace;
             const bool   WAIT = TripSizes::wait({
-                  .mapped      = w->m_isMapped,
+                  .mapped      = w->mapped(),
                   .carrying    = g_carrying.win.lock() == w,
                   .onTrip      = T != nullptr,
                   .onTripSpace = T && WS && T->space.lock() == WS,
@@ -223,11 +224,11 @@ namespace Hyprdrive::FullscreenDesktop {
             // itself (its insert transition): the strip would only slide what
             // is hidden under it.
             if (openScrollOverviewForMonitor(mon)) {
-                (void)::Config::Actions::changeWorkspace(std::to_string(ws->m_id));
+                (void)::Config::Actions::changeWorkspace(std::to_string(Hyprdrive::Compat::id(ws)));
                 return;
             }
-            if (!DesktopStrip::glideTo(mon, sc<int>(ws->m_id)))
-                (void)::Config::Actions::changeWorkspace(std::to_string(ws->m_id));
+            if (!DesktopStrip::glideTo(mon, sc<int>(Hyprdrive::Compat::id(ws))))
+                (void)::Config::Actions::changeWorkspace(std::to_string(Hyprdrive::Compat::id(ws)));
         }
 
         // Move `w` to `ws` without following it there, fullscreen kept.
@@ -237,9 +238,9 @@ namespace Hyprdrive::FullscreenDesktop {
             // Hyprland fades a window out of a desktop it leaves on screen, and
             // into one that is on screen; this one travels instead (travel()),
             // seen all the way.
-            w->alpha(Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE)->setValueAndWarp(1.F);
-            w->alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE)->setValueAndWarp(1.F);
-            w->m_monitorMovedFrom = -1;
+            w->presentation().alpha(Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE)->setValueAndWarp(1.F);
+            w->presentation().alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE)->setValueAndWarp(1.F);
+            w->presentation().resetMonitorMovedFrom();
             if (keepFullscreen && !fullscreen(w))
                 Fullscreen::controller()->setFullscreenMode(w, Fullscreen::FSMODE_FULLSCREEN, std::nullopt);
             --g_busy;
@@ -285,8 +286,8 @@ namespace Hyprdrive::FullscreenDesktop {
         // layout step -- a thin outline anchored top-left inside a window
         // coming home from fullscreen (MosaicDrive.cpp had the same).
         void followDecos(const PHLWINDOW& w) {
-            if (w && w->m_isMapped && !w->isHidden())
-                w->updateWindowDecos();
+            if (w && w->mapped() && !w->isHidden())
+                w->presentation().updateDecorations();
         }
 
         // THE WINDOW STAYS WHERE IT IS SEEN. Moved to another desktop, a window
@@ -328,7 +329,7 @@ namespace Hyprdrive::FullscreenDesktop {
         std::vector<std::tuple<PHLWINDOWREF, Vector2D, Vector2D>> others(const PHLWORKSPACE& ws, const PHLWINDOW& except) {
             std::vector<std::tuple<PHLWINDOWREF, Vector2D, Vector2D>> out;
             for (const auto& W : Desktop::windowState()->windows())
-                if (W && W != except && W->m_isMapped && !W->isHidden() && W->m_workspace == ws) {
+                if (W && W != except && W->mapped() && !W->isHidden() && W->m_workspace == ws) {
                     if (const auto* T = travelOf(W))
                         out.emplace_back(W, T->drawn->first - offsetOf(ws), T->drawn->second);
                     else
@@ -338,7 +339,7 @@ namespace Hyprdrive::FullscreenDesktop {
         }
         void travelOthers(const std::vector<std::tuple<PHLWINDOWREF, Vector2D, Vector2D>>& was, const PHLWORKSPACE& gauge) {
             for (const auto& [REF, POS, SIZE] : was)
-                if (const auto W = REF.lock(); W && W->m_isMapped)
+                if (const auto W = REF.lock(); W && W->mapped())
                     if (W->positionAnimation()->goal() != POS || W->sizeAnimation()->goal() != SIZE)
                         travel(W, POS, SIZE, gauge, false);
         }
@@ -356,7 +357,7 @@ namespace Hyprdrive::FullscreenDesktop {
         // shifts (moved).
         WORKSPACEID placeOf(const PHLWORKSPACEREF& ref, WORKSPACEID kept) {
             const auto S = ref.lock();
-            return FullscreenBook::placeOf(S && DesktopOrder::ordinary(S), S ? S->m_id : WORKSPACE_INVALID, kept);
+            return FullscreenBook::placeOf(S && DesktopOrder::ordinary(S), S ? Hyprdrive::Compat::id(S) : WORKSPACE_INVALID, kept);
         }
         template <class T>
         WORKSPACEID placeOf(const T& t) {
@@ -410,7 +411,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // The place after home along the monitor's row: a block's last
             // desktop is followed by its overflow, never by the next block.
             const Row  ROW  = Rows::of(MON);
-            const auto PLAN = FullscreenBook::start(MODE, ROW, HOME->m_id, othersOn(HOME, w), [&](WORKSPACEID id) { return freePlace(id, MON); });
+            const auto PLAN = FullscreenBook::start(MODE, ROW, Hyprdrive::Compat::id(HOME), othersOn(HOME, w), [&](WORKSPACEID id) { return freePlace(id, MON); });
             // (A home outside the row -- a visitor -- has no place after it:
             // it stays where it is, and nothing is ever taken outside a row.)
             if (PLAN.settle || !MON || !ROW.contains(PLAN.at)) {
@@ -442,19 +443,19 @@ namespace Hyprdrive::FullscreenDesktop {
                 }
             auto space = byId(at);
             if (!space)
-                space = State::workspaceState()->create(at, MON->m_id);
+                space = State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(at)}, MON);
             if (!space) {
                 // No desktop for it after all: it stays where it is, and room
                 // made for it is owed back at once (it was a silent +1).
                 if (owes)
-                    g_debts.push_back({.at = at, .mon = MON, .home = HOME, .cls = w->m_class, .pid = w->getPID()});
+                    g_debts.push_back({.at = at, .mon = MON, .home = HOME, .cls = w->metadata().appID(), .pid = w->backend().pid()});
                 g_settled.emplace_back(w);
                 return;
             }
-            g_trips.push_back({.win = w, .home = HOME, .space = space, .mon = MON, .at = space->m_id, .homeAt = HOME->m_id, .owes = owes});
+            g_trips.push_back({.win = w, .home = HOME, .space = space, .mon = MON, .at = Hyprdrive::Compat::id(space), .homeAt = Hyprdrive::Compat::id(HOME), .owes = owes});
             g_enteredSpace = space;
             g_enteredAt    = std::chrono::steady_clock::now();
-            trace(std::format("{} fullscreen on {}: to {}{}", w->m_class, HOME->m_id, at, owes ? " (owed back)" : ""));
+            trace(std::format("{} fullscreen on {}: to {}{}", w->metadata().appID(), Hyprdrive::Compat::id(HOME), at, owes ? " (owed back)" : ""));
             const auto [SEEN, SEENSIZE] = seenAt(w);
             const auto WAS              = others(HOME, w);
             // Its last good frame, while it is on screen as it was: drawn
@@ -481,7 +482,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // place -1").
             const auto S = t.space.lock();
             g_debts.push_back({.space = S, .at = placeOf(t), .mon = t.mon, .home = t.home,
-                               .cls = w ? w->m_class : std::string{}, .pid = w ? w->getPID() : 0});
+                               .cls = w ? w->metadata().appID() : std::string{}, .pid = w ? w->backend().pid() : 0});
         }
 
         // Where the view goes when a fullscreen app closes on its own desktop:
@@ -497,7 +498,7 @@ namespace Hyprdrive::FullscreenDesktop {
             PHLWORKSPACE best;
             for (const auto& REF : State::workspaceState()->workspaces())
                 if (const auto WS = REF.lock(); DesktopOrder::ordinary(WS) && WS != space && WS->m_monitor.lock() == mon && othersOn(WS, nullptr) > 0 &&
-                    (!best || std::abs(WS->m_id - homeAt) < std::abs(best->m_id - homeAt)))
+                    (!best || std::abs(Hyprdrive::Compat::id(WS) - homeAt) < std::abs(Hyprdrive::Compat::id(best) - homeAt)))
                     best = WS;
             return best;
         }
@@ -521,7 +522,7 @@ namespace Hyprdrive::FullscreenDesktop {
             for (auto it = g_origins.begin(); it != g_origins.end();) {
                 auto&      O = *it;
                 const auto W = O.win.lock();
-                if (W && W->m_isMapped) {
+                if (W && W->mapped()) {
                     O.unmappedAt.reset();
                     if (W->m_workspace && DesktopOrder::ordinary(W->m_workspace))
                         O.space = W->m_workspace;
@@ -534,7 +535,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     ++it;
                     continue;
                 }
-                if (W && !W->m_isMapped) {
+                if (W && !W->mapped()) {
                     if (!O.unmappedAt)
                         O.unmappedAt = NOW;
                     if (NOW - *O.unmappedAt < REMAP_GRACE) {
@@ -567,12 +568,12 @@ namespace Hyprdrive::FullscreenDesktop {
                 const auto HMON = MON ? MON : (SPACE ? SPACE->m_monitor.lock() : nullptr);
                 if (t.homeAt >= 1 && HMON) {
                     if (const auto E = byId(t.homeAt); !E)
-                        home = State::workspaceState()->create(t.homeAt, HMON->m_id);
+                        home = State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(t.homeAt)}, HMON);
                     else if (othersOn(E, nullptr) == 0 && !isTripSpace(E))
                         home = E;
                 }
                 if (!home) {
-                    trace(std::format("{} out of fullscreen: its home went and place {} is taken: it stays", w->m_class, t.homeAt));
+                    trace(std::format("{} out of fullscreen: its home went and place {} is taken: it stays", w->metadata().appID(), t.homeAt));
                     return;
                 }
                 // The others that came from that home come back to this one.
@@ -580,7 +581,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     if (!T.home.lock() && T.homeAt == t.homeAt)
                         T.home = home;
             }
-            trace(std::format("{} out of fullscreen: home to {}", w->m_class, home->m_id));
+            trace(std::format("{} out of fullscreen: home to {}", w->metadata().appID(), Hyprdrive::Compat::id(home)));
             const auto SEEN = seenAt(w);
             const auto WAS  = others(home, w);
             TripFrame::hold(w); // (TripFrame.hpp: its last good frame, before the view moves)
@@ -627,13 +628,13 @@ namespace Hyprdrive::FullscreenDesktop {
             bool own = false;
             if (E) {
                 const auto OWN = [&](const PHLWINDOW& W) {
-                    return (d.pid > 0 && W->getPID() == d.pid) || (!d.cls.empty() && W->m_class == d.cls) ||
+                    return (d.pid > 0 && W->backend().pid() == d.pid) || (!d.cls.empty() && W->metadata().appID() == d.cls) ||
                         std::ranges::any_of(d.wins, [&](const PHLWINDOWREF& r) { return r.lock() == W; }) ||
-                        (W->getPID() > 0 && std::ranges::find(d.pids, W->getPID()) != d.pids.end()) ||
-                        (!W->m_class.empty() && std::ranges::find(d.classes, W->m_class) != d.classes.end());
+                        (W->backend().pid() > 0 && std::ranges::find(d.pids, W->backend().pid()) != d.pids.end()) ||
+                        (!W->metadata().appID().empty() && std::ranges::find(d.classes, W->metadata().appID()) != d.classes.end());
                 };
                 for (const auto& W : Desktop::windowState()->windows())
-                    if (W && W->m_isMapped && W->m_workspace == E) {
+                    if (W && W->mapped() && W->m_workspace == E) {
                         facts.any = true;
                         (OWN(W) ? own : facts.foreign) = true;
                     }
@@ -664,7 +665,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 if (own)
                     if (const auto HOME = d.home.lock(); HOME && HOME != E)
                         for (const auto& W : Desktop::windowState()->windows())
-                            if (W && W->m_isMapped && W->m_workspace == E)
+                            if (W && W->mapped() && W->m_workspace == E)
                                 carry(W, HOME, false);
                 // The empty desktop in the place goes to the end of its row
                 // (Hyprland drops it once nothing holds it); the row's ones
@@ -710,15 +711,15 @@ namespace Hyprdrive::FullscreenDesktop {
 
         bool member(const SLink& l, const PHLWINDOW& w) {
             return std::ranges::any_of(l.wins, [&](const PHLWINDOWREF& r) { return r.lock() == w; }) ||
-                (w->getPID() > 0 && std::ranges::find(l.pids, w->getPID()) != l.pids.end()) ||
-                (!w->m_class.empty() && std::ranges::find(l.classes, w->m_class) != l.classes.end());
+                (w->backend().pid() > 0 && std::ranges::find(l.pids, w->backend().pid()) != l.pids.end()) ||
+                (!w->metadata().appID().empty() && std::ranges::find(l.classes, w->metadata().appID()) != l.classes.end());
         }
         void join(SLink& l, const PHLWINDOW& w) {
             l.wins.emplace_back(w);
-            if (w->getPID() > 0 && std::ranges::find(l.pids, w->getPID()) == l.pids.end())
-                l.pids.push_back(w->getPID());
-            if (!w->m_class.empty() && std::ranges::find(l.classes, w->m_class) == l.classes.end())
-                l.classes.push_back(w->m_class);
+            if (w->backend().pid() > 0 && std::ranges::find(l.pids, w->backend().pid()) == l.pids.end())
+                l.pids.push_back(w->backend().pid());
+            if (!w->metadata().appID().empty() && std::ranges::find(l.classes, w->metadata().appID()) == l.classes.end())
+                l.classes.push_back(w->metadata().appID());
         }
 
         // Any window -- tiled or floating, a dialog or not (Placement decided
@@ -752,7 +753,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 // ...and the room made for it is OWED BACK like a fullscreen
                 // app's. Paid once the link is over and that desktop is empty.
                 const Row         ROW  = Rows::of(MON);
-                const auto        PLAN = FullscreenBook::beside(ROW, WS->m_id, [&](WORKSPACEID id) { return freePlace(id, MON); });
+                const auto        PLAN = FullscreenBook::beside(ROW, Hyprdrive::Compat::id(WS), [&](WORKSPACEID id) { return freePlace(id, MON); });
                 const WORKSPACEID at   = PLAN.at;
                 bool              owes = false;
                 if (PLAN.settle || !ROW.contains(at))
@@ -772,7 +773,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 }
                 space = byId(at);
                 if (!space)
-                    space = State::workspaceState()->create(at, MON->m_id);
+                    space = State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(at)}, MON);
                 if (!space || space == WS) {
                     if (owes)
                         g_debts.push_back({.at = at, .mon = MON, .beside = true});
@@ -780,12 +781,12 @@ namespace Hyprdrive::FullscreenDesktop {
                     return nullptr;
                 }
                 std::erase_if(g_given, [&](const SDebt& g) { return g.space.lock() == space; });
-                g_links.push_back({.app = APP, .appSpace = WS, .space = space, .mon = MON, .at = space->m_id, .owes = owes});
+                g_links.push_back({.app = APP, .appSpace = WS, .space = space, .mon = MON, .at = Hyprdrive::Compat::id(space), .owes = owes});
                 link = &g_links.back();
             }
             join(*link, w);
             link->wanted |= prompted;
-            trace(std::format("{} opened over fullscreen {} on {}: to {}{}{}", w->m_class, APP->m_class, WS->m_id, space->m_id, link->owes ? " (owed back)" : "",
+            trace(std::format("{} opened over fullscreen {} on {}: to {}{}{}", w->metadata().appID(), APP->metadata().appID(), Hyprdrive::Compat::id(WS), Hyprdrive::Compat::id(space), link->owes ? " (owed back)" : "",
                               prompted ? "" : " (unasked: not shown)"));
             w->m_workspace = space;
             w->m_monitor   = MON;
@@ -796,13 +797,13 @@ namespace Hyprdrive::FullscreenDesktop {
                 // X11 dialog was left at -10,-10, 21x21: invisible on its
                 // desktop. Hyprland's own focus would switch at once (no
                 // glide); showBesides glides there and focuses it.
-                w->m_noInitialFocus = true;
+                w->m_state |= Desktop::View::WINDOW_STATE_NO_INITIAL_FOCUS;
                 g_asked.emplace_back(w);
             } else {
                 // UNASKED (owner: "not be focused"): it goes quietly, the view
                 // and the pointer stay on the app; the dock and the strip say
                 // it is there (urgent, once it is mapped: showBesides).
-                w->m_noInitialFocus = true;
+                w->m_state |= Desktop::View::WINDOW_STATE_NO_INITIAL_FOCUS;
                 g_unasked.emplace_back(w);
             }
             // SHOWN ON ITS DESKTOP (user, 2026-11-09: "it opens it in the next
@@ -824,25 +825,23 @@ namespace Hyprdrive::FullscreenDesktop {
         void showBesides() {
             for (const auto& REF : g_besides) {
                 const auto W = REF.lock();
-                if (!W || !W->m_isMapped || !W->m_workspace || Fullscreen::controller()->hasFullscreen(W->m_workspace))
+                if (!W || !W->mapped() || !W->m_workspace || Fullscreen::controller()->hasFullscreen(W->m_workspace))
                     continue;
-                W->m_allowedOverFullscreen = true;
+                W->fullscreenPolicy().setAllowedOverFullscreen(true);
                 W->updateFullscreenInputState();
-                W->alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN)->setValueAndWarp(1.F);
-                trace(std::format("{} shown on {}", W->m_class, W->m_workspace->m_id));
+                W->presentation().alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN)->setValueAndWarp(1.F);
+                trace(std::format("{} shown on {}", W->metadata().appID(), Hyprdrive::Compat::id(W->m_workspace)));
             }
             g_besides.clear();
             for (const auto& REF : std::exchange(g_asked, {}))
-                if (const auto W = REF.lock(); W && W->m_isMapped && W->m_workspace && DesktopOrder::ordinary(W->m_workspace))
+                if (const auto W = REF.lock(); W && W->mapped() && W->m_workspace && DesktopOrder::ordinary(W->m_workspace))
                     if (const auto MON = W->m_workspace->m_monitor.lock()) {
                         show(MON, W->m_workspace);
                         Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_OTHER);
                     }
             for (const auto& REF : std::exchange(g_unasked, {}))
-                if (const auto W = REF.lock(); W && W->m_isMapped && !W->m_isUrgent && Desktop::focusState()->window() != W) {
-                    W->m_isUrgent = true;
-                    g_pEventManager->postEvent(SHyprIPCEvent{.event = "urgent", .data = std::format("{:x}", rc<uintptr_t>(W.get()))});
-                    Event::bus()->m_events.window.urgent.emit(W);
+                if (const auto W = REF.lock(); W && W->mapped() && !Hyprdrive::Compat::urgent(W) && Desktop::focusState()->window() != W) {
+                    W->markUrgent();
                 }
         }
 
@@ -1001,10 +1000,11 @@ namespace Hyprdrive::FullscreenDesktop {
         bool            maximized(const PHLWINDOW& w) {
             return w && Fullscreen::controller()->getFullscreenModes(w).internal == Fullscreen::FSMODE_MAXIMIZED;
         }
+        constexpr uint64_t HOLD_FULLSCREEN = 1, HOLD_MAXIMIZE = 2;
         struct SHeldOut {
             PHLWINDOWREF    win;
             PHLWORKSPACEREF space;
-            uint64_t        flag = Desktop::View::SUPPRESS_FULLSCREEN;
+            uint64_t        flag = HOLD_FULLSCREEN;
         };
         std::vector<SHeldOut> g_heldOut;
         void releaseHeld(bool all) {
@@ -1012,17 +1012,24 @@ namespace Hyprdrive::FullscreenDesktop {
                 const auto W = h.win.lock();
                 if (!W)
                     return true;
-                const bool IN = h.flag == Desktop::View::SUPPRESS_MAXIMIZE ? maximized(W) : fullscreen(W);
-                if (!all && W->m_isMapped && W->m_workspace == h.space.lock() && !IN && othersOn(W->m_workspace, W) > 0)
+                const bool IN = h.flag == HOLD_MAXIMIZE ? maximized(W) : fullscreen(W);
+                if (!all && W->mapped() && W->m_workspace == h.space.lock() && !IN && othersOn(W->m_workspace, W) > 0)
                     return false;
-                W->m_suppressedEvents = sc<decltype(W->m_suppressedEvents)>(W->m_suppressedEvents & ~h.flag);
+                auto S = W->fullscreenPolicy().requestSuppression();
+                (h.flag == HOLD_MAXIMIZE ? S.maximize : S.fullscreen) = false;
+                W->fullscreenPolicy().setRequestSuppression(S);
                 return true;
             });
         }
-        void holdOut(const PHLWINDOW& w, uint64_t flag = Desktop::View::SUPPRESS_FULLSCREEN) {
-            if (!w || (w->m_suppressedEvents & flag))
+        void holdOut(const PHLWINDOW& w, uint64_t flag = HOLD_FULLSCREEN) {
+            if (!w)
+                return;
+            auto  S   = w->fullscreenPolicy().requestSuppression();
+            bool& bit = (flag == HOLD_MAXIMIZE) ? S.maximize : S.fullscreen;
+            if (bit)
                 return; // the user's own rule, or ours already
-            w->m_suppressedEvents = sc<decltype(w->m_suppressedEvents)>(w->m_suppressedEvents | flag);
+            bit = true;
+            w->fullscreenPolicy().setRequestSuppression(S);
             g_heldOut.push_back({w, w->m_workspace, flag});
         }
         // Un-maximized by a move, and when: a re-maximize soon after is the client's.
@@ -1040,13 +1047,13 @@ namespace Hyprdrive::FullscreenDesktop {
         void reasserted() {
             std::erase_if(g_unmaxed, [](const SUnmaxed& u) {
                 const auto W = u.win.lock();
-                if (!W || !W->m_isMapped || W->m_workspace != u.space.lock() || Config::realElapsedMs(u.at) > UNMAX_REASSERT_MS)
+                if (!W || !W->mapped() || W->m_workspace != u.space.lock() || Config::realElapsedMs(u.at) > UNMAX_REASSERT_MS)
                     return true;
                 if (!maximized(W))
                     return false;
-                trace(std::format("{} maximized itself again on {}: un-maximized, its requests ignored while it shares the desktop", W->m_class, W->m_workspace->m_id));
+                trace(std::format("{} maximized itself again on {}: un-maximized, its requests ignored while it shares the desktop", W->metadata().appID(), Hyprdrive::Compat::id(W->m_workspace)));
                 unmaximize(W);
-                holdOut(W, Desktop::View::SUPPRESS_MAXIMIZE);
+                holdOut(W, HOLD_MAXIMIZE);
                 return true;
             });
         }
@@ -1076,10 +1083,10 @@ namespace Hyprdrive::FullscreenDesktop {
         void arrivedOnFullscreen(const PHLWINDOW& w, const std::vector<std::pair<PHLWINDOWREF, bool>>& hosts) {
             for (const auto& [REF, WASFS] : hosts) {
                 const auto X = REF.lock();
-                if (!X || X == w || !X->m_isMapped || X->m_workspace != w->m_workspace)
+                if (!X || X == w || !X->mapped() || X->m_workspace != w->m_workspace)
                     continue;
                 if (!WASFS) {
-                    trace(std::format("{} moved onto {}: maximized {} un-maximized", w->m_class, w->m_workspace->m_id, X->m_class));
+                    trace(std::format("{} moved onto {}: maximized {} un-maximized", w->metadata().appID(), Hyprdrive::Compat::id(w->m_workspace), X->metadata().appID()));
                     if (maximized(X))
                         unmaximize(X);
                     std::erase_if(g_unmaxed, [&](const SUnmaxed& u) { return !u.win || u.win.lock() == X; });
@@ -1087,7 +1094,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     continue;
                 }
                 const bool TRIP = std::erase_if(g_trips, [&](const STrip& t) { return t.win.lock() == X; }) > 0;
-                trace(std::format("{} moved onto {}: fullscreen {} out of fullscreen{}", w->m_class, w->m_workspace->m_id, X->m_class,
+                trace(std::format("{} moved onto {}: fullscreen {} out of fullscreen{}", w->metadata().appID(), Hyprdrive::Compat::id(w->m_workspace), X->metadata().appID(),
                                   TRIP ? ", its trip ends here (nothing owed)" : ""));
                 std::erase_if(g_settled, [&](const PHLWINDOWREF& r) { return !r || r.lock() == X; });
                 if (fullscreen(X)) {
@@ -1104,12 +1111,12 @@ namespace Hyprdrive::FullscreenDesktop {
             reasserted();
             for (const auto& M : std::exchange(g_moved, {})) {
                 const auto W = M.win.lock();
-                if (!W || !W->m_isMapped || !DesktopOrder::ordinary(W->m_workspace) || othersOn(W->m_workspace, W) == 0)
+                if (!W || !W->mapped() || !DesktopOrder::ordinary(W->m_workspace) || othersOn(W->m_workspace, W) == 0)
                     continue;
                 if (M.arrived && !maximized(W) && !fullscreen(W))
                     arrivedOnFullscreen(W, M.hosts);
                 if (maximized(W)) {
-                    trace(std::format("{} moved onto {} with other windows: un-maximized", W->m_class, W->m_workspace->m_id));
+                    trace(std::format("{} moved onto {} with other windows: un-maximized", W->metadata().appID(), Hyprdrive::Compat::id(W->m_workspace)));
                     unmaximize(W);
                     std::erase_if(g_unmaxed, [&](const SUnmaxed& u) { return !u.win || u.win.lock() == W; });
                     g_unmaxed.push_back({W, W->m_workspace, Time::steadyNow()});
@@ -1117,7 +1124,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 }
                 if (tripOf(W) || !fullscreen(W))
                     continue;
-                trace(std::format("{} moved onto {} with other windows: out of fullscreen", W->m_class, W->m_workspace->m_id));
+                trace(std::format("{} moved onto {} with other windows: out of fullscreen", W->metadata().appID(), Hyprdrive::Compat::id(W->m_workspace)));
                 std::erase_if(g_settled, [&](const PHLWINDOWREF& r) { return !r || r.lock() == W; });
                 ++g_busy;
                 Fullscreen::controller()->setFullscreenMode(W, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
@@ -1158,15 +1165,15 @@ namespace Hyprdrive::FullscreenDesktop {
                 const auto APP   = L.app.lock();
                 const auto SPACE = L.space.lock();
                 const auto MON   = L.mon.lock();
-                FullscreenBook::SLinkFacts f{.appAlive = APP && APP->m_isMapped, .appFullscreen = APP && fullscreen(APP) && APP->m_workspace == L.appSpace.lock(),
+                FullscreenBook::SLinkFacts f{.appAlive = APP && APP->mapped(), .appFullscreen = APP && fullscreen(APP) && APP->m_workspace == L.appSpace.lock(),
                                              .spaceAlive = SPACE && DesktopOrder::ordinary(SPACE), .driving = anyDriving()};
                 std::string foreignOne;
                 if (f.spaceAlive)
                     for (const auto& W : Desktop::windowState()->windows())
-                        if (W && W->m_isMapped && !W->isHidden() && W->m_workspace == SPACE) {
+                        if (W && W->mapped() && !W->isHidden() && W->m_workspace == SPACE) {
                             (member(L, W) ? f.any : f.foreign) = true;
                             if (!member(L, W))
-                                foreignOne = std::format("{} {:x}", W->m_class, (uintptr_t)W.get());
+                                foreignOne = std::format("{} {:x}", W->metadata().appID(), (uintptr_t)W.get());
                         }
                 f.viewOn = MON && SPACE && MON->m_activeWorkspace == SPACE;
                 // He went there himself (the dock, the strip, the overview): wanted.
@@ -1174,7 +1181,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     L.wanted = true;
                     for (const auto& R : L.wins)
                         if (const auto W = R.lock())
-                            W->m_isUrgent = false;
+                            W->m_hints &= ~Desktop::View::WINDOW_HINT_URGENT;
                 }
                 f.wanted = L.wanted;
                 if (f.any)
@@ -1189,7 +1196,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     continue;
                 }
                 if (VERDICT == FullscreenBook::ELink::ReturnToApp && MON && APP) {
-                    trace(std::format("beside {} emptied: back to fullscreen {} on {}", placeOf(L), APP->m_class, APP->m_workspace->m_id));
+                    trace(std::format("beside {} emptied: back to fullscreen {} on {}", placeOf(L), APP->metadata().appID(), Hyprdrive::Compat::id(APP->m_workspace)));
                     show(MON, APP->m_workspace);
                     Desktop::focusState()->fullWindowFocus(APP, Desktop::FOCUS_REASON_OTHER);
                     if (FullscreenGuard::isGame(APP))
@@ -1215,13 +1222,13 @@ namespace Hyprdrive::FullscreenDesktop {
             showBesides();
             movedOntoOthers();
             origins();
-            std::erase_if(g_settled, [](const PHLWINDOWREF& r) { const auto W = r.lock(); return !W || !W->m_isMapped || !fullscreen(W); });
+            std::erase_if(g_settled, [](const PHLWINDOWREF& r) { const auto W = r.lock(); return !W || !W->mapped() || !fullscreen(W); });
             // Trips.
             for (auto it = g_trips.begin(); it != g_trips.end();) {
                 const STrip T     = *it;
                 const auto  W     = T.win.lock();
                 const auto  SPACE = T.space.lock();
-                if (W && W->m_isMapped && SPACE && W->m_workspace == SPACE && fullscreen(W)) {
+                if (W && W->mapped() && SPACE && W->m_workspace == SPACE && fullscreen(W)) {
                     it->unmappedAt.reset();
                     ++it; // where it belongs
                     continue;
@@ -1229,7 +1236,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 // UNMAPPED, NOT GONE: a Wine/XWayland game unmaps its window
                 // and maps it again (a mode change, a launcher handing over).
                 // That is no close -- the trip waits REMAP_GRACE for it.
-                if (W && !W->m_isMapped && SPACE && W->m_workspace == SPACE) {
+                if (W && !W->mapped() && SPACE && W->m_workspace == SPACE) {
                     const auto NOW = std::chrono::steady_clock::now();
                     if (!it->unmappedAt)
                         it->unmappedAt = NOW;
@@ -1241,7 +1248,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 it = g_trips.erase(it);
                 g_leftSpace = T.space;
                 g_leftAt    = std::chrono::steady_clock::now();
-                if (!W || !W->m_isMapped) {
+                if (!W || !W->mapped()) {
                     // CLOSED (user, 2026-11-11: "once I've closed an app that was
                     // sent to another desktop to fullscreen, it should remove
                     // that desktop and return me to its origin desktop"): still
@@ -1259,7 +1266,7 @@ namespace Hyprdrive::FullscreenDesktop {
                     // SENT ELSEWHERE (user, 2026-11-05: "that window should be
                     // exited from fullscreen and land in the desktop with
                     // windows that it was intended to go into"): it stays.
-                    trace(std::format("{} sent to {}: it stays there", W->m_class, W->m_workspace->m_id));
+                    trace(std::format("{} sent to {}: it stays there", W->metadata().appID(), Hyprdrive::Compat::id(W->m_workspace)));
                     ++g_busy;
                     if (fullscreen(W) && othersOn(W->m_workspace, W) > 0) {
                         Fullscreen::controller()->setFullscreenMode(W, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
@@ -1275,7 +1282,7 @@ namespace Hyprdrive::FullscreenDesktop {
             }
             // New fullscreen windows.
             for (const auto& W : Desktop::windowState()->windows())
-                if (W && W->m_isMapped && fullscreen(W) && DesktopOrder::ordinary(W->m_workspace) && W->m_workspace->m_monitor.lock() && !tripOf(W) &&
+                if (W && W->mapped() && fullscreen(W) && DesktopOrder::ordinary(W->m_workspace) && W->m_workspace->m_monitor.lock() && !tripOf(W) &&
                     std::ranges::none_of(g_settled, [&](const PHLWINDOWREF& r) { return r.lock() == W; }))
                     startTrip(W);
             // Beside links, before the debts they end in.
@@ -1314,7 +1321,7 @@ namespace Hyprdrive::FullscreenDesktop {
         for (auto it = g_travels.begin(); it != g_travels.end();) {
             const auto W = it->win.lock();
             const auto G = it->gauge.lock();
-            if (!W || !W->m_isMapped || !W->m_workspace || std::chrono::steady_clock::now() - it->at > std::chrono::seconds(3)) {
+            if (!W || !W->mapped() || !W->m_workspace || std::chrono::steady_clock::now() - it->at > std::chrono::seconds(3)) {
                 it = g_travels.erase(it);
                 continue;
             }
@@ -1381,7 +1388,7 @@ namespace Hyprdrive::FullscreenDesktop {
         if (!w || !DesktopOrder::ordinary(origin))
             return;
         std::erase_if(g_origins, [&](const SOrigin& o) { return !o.win || o.win.lock() == w; });
-        g_origins.push_back({.win = w, .origin = origin, .originAt = origin->m_id, .mon = origin->m_monitor});
+        g_origins.push_back({.win = w, .origin = origin, .originAt = Hyprdrive::Compat::id(origin), .mon = origin->m_monitor});
         arm(250);
     }
 
@@ -1403,7 +1410,7 @@ namespace Hyprdrive::FullscreenDesktop {
         for (auto& L : g_links)
             if (L.space.lock() == w->m_workspace) {
                 join(L, w);
-                trace(std::format("{} opened on beside {}: joins it", w->m_class, w->m_workspace->m_id));
+                trace(std::format("{} opened on beside {}: joins it", w->metadata().appID(), Hyprdrive::Compat::id(w->m_workspace)));
                 return;
             }
         // OPENED ON A DESKTOP STILL OWED FOR A FULLSCREEN APP (the race the
@@ -1421,22 +1428,22 @@ namespace Hyprdrive::FullscreenDesktop {
         // and makes a new one under that number for a window launched there.)
         for (auto it = g_debts.begin(); it != g_debts.end(); ++it) {
             const auto SPACE = it->space.lock();
-            if (!it->beside || (SPACE ? SPACE != WS : placeOf(*it) != WS->m_id))
+            if (!it->beside || (SPACE ? SPACE != WS : placeOf(*it) != Hyprdrive::Compat::id(WS)))
                 continue;
             const auto APP  = it->app.lock();
             const auto HOME = it->home.lock();
             const auto MON  = it->mon.lock();
             if (!FullscreenBook::relink({.besideDebt    = true,
-                                         .appFullscreen = APP && APP->m_isMapped && fullscreen(APP) && HOME && APP->m_workspace == HOME,
+                                         .appFullscreen = APP && APP->mapped() && fullscreen(APP) && HOME && APP->m_workspace == HOME,
                                          .sameMonitor   = MON && WS->m_monitor.lock() == MON}))
                 return;
-            SLink l{.app = APP, .appSpace = HOME, .space = WS, .mon = MON, .at = WS->m_id, .owes = true, .wanted = prompted,
+            SLink l{.app = APP, .appSpace = HOME, .space = WS, .mon = MON, .at = Hyprdrive::Compat::id(WS), .owes = true, .wanted = prompted,
                     .wins = it->wins, .pids = it->pids, .classes = it->classes};
             g_debts.erase(it);
             join(l, w);
             g_links.push_back(std::move(l));
-            trace(std::format("{} opened on owed beside {}: the link again{}", w->m_class, WS->m_id, prompted ? "" : " (unasked: not shown)"));
-            w->m_noInitialFocus = true;
+            trace(std::format("{} opened on owed beside {}: the link again{}", w->metadata().appID(), Hyprdrive::Compat::id(WS), prompted ? "" : " (unasked: not shown)"));
+            w->m_state |= Desktop::View::WINDOW_STATE_NO_INITIAL_FOCUS;
             (prompted ? g_asked : g_unasked).emplace_back(w);
             arm(1);
             return;
@@ -1577,7 +1584,7 @@ namespace Hyprdrive::FullscreenDesktop {
                 if (!tripOf(w)) {
                     SMoved m{.win = w, .arrived = ARRIVED};
                     for (const auto& X : Desktop::windowState()->windows())
-                        if (X && X != w && X->m_isMapped && X->m_workspace == w->m_workspace && (fullscreen(X) || maximized(X)))
+                        if (X && X != w && X->mapped() && X->m_workspace == w->m_workspace && (fullscreen(X) || maximized(X)))
                             m.hosts.emplace_back(X, fullscreen(X));
                     g_moved.push_back(std::move(m));
                 }

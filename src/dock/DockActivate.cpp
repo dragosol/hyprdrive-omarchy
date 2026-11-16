@@ -4,6 +4,7 @@
 // call launchApp/activateItem with default arguments.
 #include "DockParts.hpp"
 #include "IdentityLive.hpp"
+#include <hyprland/src/state/workspace/Resolver.hpp>
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -63,7 +64,7 @@ std::vector<PHLWINDOW> locationWindows(const SItem& item) {
         return {};
     std::vector<PHLWINDOW> out;
     for (const auto& WINDOW : Desktop::windowState()->windows())
-        if (WINDOW->m_isMapped && WINDOW->m_title == item.locationName)
+        if (WINDOW->mapped() && WINDOW->metadata().title() == item.locationName)
             out.emplace_back(WINDOW);
     return out;
 }
@@ -79,7 +80,7 @@ static std::vector<PHLWINDOW> rowWindows(const SItem& item, const SRow& row) {
     if (!row.oneWindow)
         return menuWindows(item);
     const auto WINDOW = row.window.lock();
-    return WINDOW && WINDOW->m_isMapped ? std::vector<PHLWINDOW>{WINDOW} : std::vector<PHLWINDOW>{};
+    return WINDOW && WINDOW->mapped() ? std::vector<PHLWINDOW>{WINDOW} : std::vector<PHLWINDOW>{};
 }
 
 std::vector<PHLWINDOW> itemWindows(const SItem& item) {
@@ -116,7 +117,7 @@ std::vector<PHLWINDOW> itemWindowsHere(const SItem& item, PHLMONITOR monitor) {
 
     std::vector<PHLWINDOW> out;
     for (const auto& WINDOW : all) {
-        if (OvInternal::overviewGridHomeWorkspace(WINDOW) == ACTIVE->m_id)
+        if (OvInternal::overviewGridHomeWorkspace(WINDOW) == Hyprdrive::Compat::id(ACTIVE))
             out.emplace_back(WINDOW);
     }
 
@@ -173,7 +174,7 @@ void restoreDockSeat() {
         return;
 
     const auto WINDOW = Desktop::focusState()->window();
-    if (!WINDOW || !WINDOW->m_isMapped)
+    if (!WINDOW || !WINDOW->mapped())
         return;
 
     SP<CWLSurfaceResource> surf;
@@ -246,7 +247,7 @@ void activateWindow(const PHLWINDOW& window) {
     if (const auto SCRATCH = Scratchpad::workspaceFor(window))
         Scratchpad::show(SCRATCH);
 
-    if (const auto WORKSPACE = window->m_workspace; WORKSPACE && !WORKSPACE->m_isSpecialWorkspace) {
+    if (const auto WORKSPACE = window->m_workspace; WORKSPACE && !Hyprdrive::Compat::isSpecial(WORKSPACE)) {
         if (const auto MONITOR = WORKSPACE->m_monitor.lock(); MONITOR && MONITOR->m_activeWorkspace != WORKSPACE)
             MONITOR->changeWorkspace(WORKSPACE, false, true, false);
     }
@@ -386,7 +387,7 @@ void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace =
     // window when it maps through a token in the child's environment. The NAME
     // rather than the id, because that is what a workspace rule matches on and
     // what a named desktop would need.
-    AppSearch::launchWithRule(*ENTRY, Config::getTerminal(), !execRule.empty() ? execRule : SILENT ? "workspace " + onWorkspace->m_name + " silent" : "");
+    AppSearch::launchWithRule(*ENTRY, Config::getTerminal(), !execRule.empty() ? execRule : SILENT ? "workspace " + onWorkspace->displayName() + " silent" : "");
 
     closeOverview();
 }
@@ -400,18 +401,20 @@ void launchApp(PHLMONITOR monitor, const SItem& item, PHLWORKSPACE onWorkspace =
 void launchInEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
     if (!monitor || item.stack || item.scratchpad)
         return;
-    const auto TARGET = getWorkspaceIDNameFromString("emptym");
+    const auto  TARGETRES = State::Workspace::resolver()->getWorkspaceTargetFromString("emptym", monitor);
+    const auto* NUM       = TARGETRES.valid() ? std::get_if<Workspace::SWorkspaceNumberedID>(&*TARGETRES.id) : nullptr;
+    const WORKSPACEID TARGETID = NUM ? sc<WORKSPACEID>(NUM->value) : WORKSPACE_INVALID;
     // A location (the Trash): its file manager window, opened on the empty
     // desktop -- it opens where the user is, so go there first.
     if (!item.uri.empty()) {
         if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
             OVERVIEW->close();
-        if (TARGET.id != WORKSPACE_INVALID && (!monitor->m_activeWorkspace || monitor->m_activeWorkspace->m_id != TARGET.id))
-            (void)::Config::Actions::changeWorkspace(std::to_string(TARGET.id));
+        if (TARGETID != WORKSPACE_INVALID && (!monitor->m_activeWorkspace || Hyprdrive::Compat::id(monitor->m_activeWorkspace) != TARGETID))
+            (void)::Config::Actions::changeWorkspace(std::to_string(TARGETID));
         Locations::activate(item.uri);
         return;
     }
-    if (TARGET.id == WORKSPACE_INVALID) {
+    if (TARGETID == WORKSPACE_INVALID) {
         launchApp(monitor, item, nullptr, true);
         return;
     }
@@ -419,9 +422,9 @@ void launchInEmptyWorkspace(PHLMONITOR monitor, const SItem& item) {
     // the user cannot see.
     if (const auto OVERVIEW = scrollOverviewForMonitor(monitor); OVERVIEW)
         OVERVIEW->close();
-    if (!monitor->m_activeWorkspace || monitor->m_activeWorkspace->m_id != TARGET.id)
-        (void)::Config::Actions::changeWorkspace(std::to_string(TARGET.id));
-    launchApp(monitor, item, nullptr, true, "workspace " + std::to_string(TARGET.id));
+    if (!monitor->m_activeWorkspace || Hyprdrive::Compat::id(monitor->m_activeWorkspace) != TARGETID)
+        (void)::Config::Actions::changeWorkspace(std::to_string(TARGETID));
+    launchApp(monitor, item, nullptr, true, "workspace " + std::to_string(TARGETID));
 }
 
 // OPEN IN SCRATCHPAD (user, 2026-10-13): a new window of the app, born on the
@@ -442,7 +445,7 @@ void launchInScratchpad(PHLMONITOR monitor, const SItem& item) {
         Locations::activate(item.uri);
         return;
     }
-    launchApp(monitor, item, nullptr, true, "workspace " + SCRATCH->m_name);
+    launchApp(monitor, item, nullptr, true, "workspace " + SCRATCH->displayName());
     Scratchpad::show(SCRATCH);
 }
 
@@ -455,7 +458,7 @@ void launchInScratchpad(PHLMONITOR monitor, const SItem& item) {
 WORKSPACEID nearestEmptyWorkspaceID(const PHLMONITOR& monitor, WORKSPACEID from) {
     const auto EMPTY = [&monitor](WORKSPACEID id) {
         for (const auto& CANDIDATE : State::workspaceState()->workspaces()) {
-            if (const auto WORKSPACE = CANDIDATE.lock(); WORKSPACE && WORKSPACE->m_id == id)
+            if (const auto WORKSPACE = CANDIDATE.lock(); WORKSPACE && Hyprdrive::Compat::id(WORKSPACE) == id)
                 return WORKSPACE->getWindowCount() == 0 && WORKSPACE->m_monitor.lock() == monitor;
         }
         return true;
@@ -482,7 +485,7 @@ void moveToThisWorkspace(PHLMONITOR monitor, const PHLWINDOW& WINDOW) {
     if (!monitor || !WINDOW)
         return;
     const auto TARGET = monitor->m_activeWorkspace;
-    if (!TARGET || TARGET->m_isSpecialWorkspace || WINDOW->m_workspace == TARGET)
+    if (!TARGET || Hyprdrive::Compat::isSpecial(TARGET) || WINDOW->m_workspace == TARGET)
         return;
     // Off the minimize stash first, for moveToEmptyWorkspace's reason.
     if (Minimize::isMinimized(WINDOW))
@@ -512,20 +515,20 @@ void moveToEmptyWorkspace(PHLMONITOR monitor, const PHLWINDOW& WINDOW) {
     // and what it is showing stand in, and a non-positive anchor degrades to
     // `emptym`'s lowest empty desktop.
     const auto  FROM      = WINDOW->m_workspace;
-    const bool  ONDESKTOP = FROM && !FROM->m_isSpecialWorkspace;
+    const bool  ONDESKTOP = FROM && !Hyprdrive::Compat::isSpecial(FROM);
     const auto  HOME      = ONDESKTOP ? FROM->m_monitor.lock() : PHLMONITOR{};
     const auto  MONITOR   = HOME ? HOME : monitor;
-    WORKSPACEID anchor    = ONDESKTOP ? FROM->m_id : MONITOR->m_activeWorkspace ? MONITOR->m_activeWorkspace->m_id : 0;
+    WORKSPACEID anchor    = ONDESKTOP ? Hyprdrive::Compat::id(FROM) : MONITOR->m_activeWorkspace ? Hyprdrive::Compat::id(MONITOR->m_activeWorkspace) : 0;
     anchor                = std::max<WORKSPACEID>(anchor, 0);
 
     const auto   ID = nearestEmptyWorkspaceID(MONITOR, anchor);
     PHLWORKSPACE target;
     for (const auto& CANDIDATE : State::workspaceState()->workspaces()) {
-        if (const auto WORKSPACE = CANDIDATE.lock(); WORKSPACE && WORKSPACE->m_id == ID)
+        if (const auto WORKSPACE = CANDIDATE.lock(); WORKSPACE && Hyprdrive::Compat::id(WORKSPACE) == ID)
             target = WORKSPACE;
     }
     if (!target)
-        target = State::workspaceState()->create(ID, MONITOR->m_id, std::to_string(ID));
+        target = State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(ID)}, MONITOR);
     if (!target)
         return;
 
@@ -628,11 +631,11 @@ void activateItem(PHLMONITOR monitor, const SItem& item, bool shift, bool ctrl =
     const bool ALLHERESTASHED = !here.empty() && std::ranges::all_of(here, [](const PHLWINDOW& w) { return Minimize::isMinimized(w); });
     {
         std::string st = "app click " + item.wmClass + " here=" + std::to_string(here.size()) + " allStashed=" + (ALLHERESTASHED ? "1" : "0") + " focus=" +
-            (Desktop::focusState()->window() ? Desktop::focusState()->window()->m_class : std::string("none")) + " intent=" +
-            (intentFocus() ? intentFocus()->m_class : std::string("none"));
+            (Desktop::focusState()->window() ? Desktop::focusState()->window()->metadata().appID() : std::string("none")) + " intent=" +
+            (intentFocus() ? intentFocus()->metadata().appID() : std::string("none"));
         for (const auto& W : here)
             st += std::format(" [{:x} min={} flight={} restoreFlight={} ws={}]", (uintptr_t)W.get(), Minimize::isMinimized(W) ? 1 : 0, Flight::hasFlight(W) ? 1 : 0,
-                              Flight::isRestoreFlight(W) ? 1 : 0, W->m_workspace ? W->m_workspace->m_name : "-");
+                              Flight::isRestoreFlight(W) ? 1 : 0, W->m_workspace ? W->m_workspace->displayName() : "-");
         Stacks::traceEvent(st);
     }
     if (const auto ALL = itemWindows(item); !ALL.empty() && !ALLHERESTASHED) {
@@ -884,7 +887,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         case ERow::Fullscreen: {
             // The window it was opened for -- which may have closed meanwhile.
             const auto WINDOW = row.window.lock();
-            if (!WINDOW || !WINDOW->m_isMapped)
+            if (!WINDOW || !WINDOW->mapped())
                 return;
             // Brought up first, as its own row's click would: the change is
             // made where the user can see it. Then the window pill's toggle,
@@ -918,7 +921,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
         // One window, asked to close (the overview's close-X makes the same
         // call). It may have closed already, or may ask its user first.
         case ERow::CloseWindow:
-            if (const auto WINDOW = row.window.lock(); WINDOW && WINDOW->m_isMapped)
+            if (const auto WINDOW = row.window.lock(); WINDOW && WINDOW->mapped())
                 WINDOW->sendClose();
             return;
 
@@ -976,7 +979,7 @@ void activateRow(PHLMONITOR monitor, const SItem& item, const SRow& row) {
             // whatever a client claims its pid is.
             std::unordered_set<pid_t> pids;
             for (const auto& WINDOW : itemWindows(item))
-                if (const pid_t PID = WINDOW->getPID(); PID > 1 && PID != getpid())
+                if (const pid_t PID = WINDOW->backend().pid(); PID > 1 && PID != getpid())
                     pids.insert(PID);
             for (const pid_t PID : pids)
                 kill(PID, SIGKILL);
@@ -1156,7 +1159,7 @@ bool debugMoveHere(PHLMONITOR monitor, const std::string& wmClass) {
     if (!monitor)
         return false;
     for (const auto& W : Desktop::windowState()->windows())
-        if (W && W->m_isMapped && W->m_class == wmClass) {
+        if (W && W->mapped() && W->metadata().appID() == wmClass) {
             moveToThisWorkspace(monitor, W);
             return true;
         }

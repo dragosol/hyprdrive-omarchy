@@ -791,7 +791,7 @@ void COverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
         const auto overviewWindow = getOverviewWindowToShow(window);
         const auto fullscreenWindow = overviewWindow && overviewWindow->m_workspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(overviewWindow->m_workspace)) : PHLWINDOW{};
 
-        if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == overviewWindow->m_workspace && overviewWindow->m_isFloating)
+        if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == overviewWindow->m_workspace && overviewWindow->isFloating())
             emitFullscreenVisibilityState(fullscreenWindow, true);
         else
             emitFullscreenVisibilityState(overviewWindow, true);
@@ -855,22 +855,22 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
 
         const auto KEYSYM = getOverviewKeysym(event);
         const auto MODS   = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
-        const bool SHIFT_PRESSED = (MODS & HL_MODIFIER_SHIFT) != 0;
+        const bool SHIFT_PRESSED = bool(MODS & HL_MODIFIER_SHIFT);
         const auto BASE_MODS     = MODS & ~HL_MODIFIER_SHIFT;
 
         if ((KEYSYM == XKB_KEY_Left || KEYSYM == XKB_KEY_KP_Left || KEYSYM == XKB_KEY_Right ||
              KEYSYM == XKB_KEY_KP_Right || KEYSYM == XKB_KEY_Up || KEYSYM == XKB_KEY_KP_Up || KEYSYM == XKB_KEY_Down || KEYSYM == XKB_KEY_KP_Down) &&
-            MODS != 0)
+            bool(MODS))
             return;
 
-        if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter) && BASE_MODS != 0)
+        if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter) && bool(BASE_MODS))
             return;
 
         // Tab is the pane cycle only as a plain key (Shift+Tab included). A
         // chord -- SUPER+TAB is the README's suggested overview toggle -- is the
         // user's bind (borrowed into the submap, see borrowGlobalPassthroughBinds and SubmapBorrow.hpp);
         // taking it as a plain Tab cycled panes instead of closing (O5).
-        if ((KEYSYM == XKB_KEY_Tab || KEYSYM == XKB_KEY_ISO_Left_Tab) && BASE_MODS != 0)
+        if ((KEYSYM == XKB_KEY_Tab || KEYSYM == XKB_KEY_ISO_Left_Tab) && bool(BASE_MODS))
             return;
 
         // SUPER+W CLOSES THE HIGHLIGHTED TILE (user, 2026-09-23).

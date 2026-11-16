@@ -45,7 +45,7 @@ namespace {
 
     bool populated(const PHLWORKSPACE& ws) {
         for (const auto& W : Desktop::windowState()->windows())
-            if (W && W->m_isMapped && W->m_workspace == ws)
+            if (W && W->mapped() && W->m_workspace == ws)
                 return true;
         return false;
     }
@@ -92,7 +92,7 @@ size_t COverview::stripRemovableEmpties() const {
     for (const auto& I : images) {
         if (!I || !Hyprdrive::DesktopOrder::ordinary(I->pWorkspace))
             continue;
-        desks.push_back({.slot = ROW.slot(I->pWorkspace->m_id), .populated = populated(I->pWorkspace), .shown = MON->m_activeWorkspace == I->pWorkspace});
+        desks.push_back({.slot = ROW.slot(Hyprdrive::Compat::id(I->pWorkspace)), .populated = populated(I->pWorkspace), .shown = MON->m_activeWorkspace == I->pWorkspace});
     }
     return SC::removable(desks);
 }
@@ -268,7 +268,7 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
         f.round         = RADIUS;
         f.roundingPower = 2.F;
         if (Hyprdrive::Stacks::drawableBox(f.box))
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(f));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(f));
     }
 
     // The row's content: glyph column, then the label; lifted on hover.
@@ -282,7 +282,7 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
         g.box          = CBox{std::round(TEXTX + (GLYPHCOLW - GW) / 2.F - GLYPHCOLW * 0.15F), std::round(TEXTY + (LH - GH) / 2.F), GW, GH};
         g.a            = A;
         if (g.a > 0.001F)
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(g));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(g));
     }
     {
         CTexPassElement::SRenderData t;
@@ -290,7 +290,7 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
         t.box = CBox{TEXTX + GLYPHCOLW, TEXTY - (LH * GROW - LH) / 2.F, LW * GROW, LH * GROW};
         t.a   = A;
         if (t.a > 0.001F)
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(t));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(t));
     }
 
     // The menu's outline: the theme accent at Hyprland's border weight.
@@ -303,7 +303,7 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
         b.round         = RADIUS;
         b.roundingPower = 2.F;
         if (Hyprdrive::Stacks::drawableBox(b.box) && b.a > 0.001F)
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(b));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(b));
     }
 }
 
@@ -356,13 +356,13 @@ bool COverview::stripCleanupClick() {
     long long         last = 0;
     for (const auto& I : images)
         if (I && Hyprdrive::DesktopOrder::ordinary(I->pWorkspace) && populated(I->pWorkspace))
-            last = std::max(last, ROW.slot(I->pWorkspace->m_id));
+            last = std::max(last, ROW.slot(Hyprdrive::Compat::id(I->pWorkspace)));
     std::vector<CBox> gone;
     for (size_t i = 0; i < images.size(); ++i) {
         const auto& I = images[i];
         if (!I || !Hyprdrive::DesktopOrder::ordinary(I->pWorkspace))
             continue;
-        const auto SLOT = ROW.slot(I->pWorkspace->m_id);
+        const auto SLOT = ROW.slot(Hyprdrive::Compat::id(I->pWorkspace));
         if (SLOT > 0 && SLOT < last && !populated(I->pWorkspace) && MON->m_activeWorkspace != I->pWorkspace)
             gone.push_back(stripCellLogicalBox(i));
     }

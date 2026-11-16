@@ -17,6 +17,7 @@
 #define private public
 #define protected public
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/Context.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/output/MonitorResources.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
@@ -95,11 +96,11 @@ COverviewBlurPassElement::COverviewBlurPassElement(const SData& data_) : data(da
     ;
 }
 
-std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
+std::vector<UP<IPassElement>> COverviewBlurPassElement::draw(Render::CRenderContext& ctx) {
     if (data.box.width < 1 || data.box.height < 1 || data.alpha <= 0.F)
         return {};
 
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
+    const auto MONITOR = ctx.m_data.pMonitor;
     if (!MONITOR)
         return {};
 
@@ -166,13 +167,13 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
     // Left alone deliberately.
     SP<Render::ITexture> blurred;
     if (data.hyprlandCache) {
-        if (const auto RES = MONITOR->resources(); RES && RES->m_blurFB)
-            blurred = RES->m_blurFB->getTexture();
+        blurred = g_pHyprRenderer->getBlurTexture(ctx);
     } else if (data.xray)
         blurred = OverviewRender::frameChromeBlur();
     if (!blurred || !blurred->ok()) {
         CRegion fullDamage{CBox{0, 0, MONSIZE.x, MONSIZE.y}};
-        blurred = g_pHyprRenderer->blurMainFramebuffer(1.F, &fullDamage);
+        if (const auto BLURFB = g_pHyprRenderer->blurMainFramebuffer(ctx, 1.F, fullDamage))
+            blurred = BLURFB->getTexture();
     }
 
     if (!blurred || !blurred->ok())
@@ -187,11 +188,8 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
     if (paintDamage.empty())
         return {};
 
-    g_pHyprRenderer->pushMonitorTransformEnabled(true);
-    auto restoreXform = Hyprutils::Utils::CScopeGuard([] { g_pHyprRenderer->popMonitorTransformEnabled(); });
-
     Render::GL::g_pHyprOpenGL->renderTexture(
-        blurred, BOX,
+        ctx, blurred, BOX,
         Render::GL::CHyprOpenGLImpl::STextureRenderData{
             .damage                      = &paintDamage,
             .a                           = data.alpha,
@@ -206,25 +204,25 @@ std::vector<UP<IPassElement>> COverviewBlurPassElement::draw() {
 }
 
 
-bool COverviewBlurPassElement::needsLiveBlur() {
+bool COverviewBlurPassElement::needsLiveBlur(Render::CRenderContext& ctx) {
     return !data.xray && !data.hyprlandCache && data.alpha > 0.F;
 }
 
-bool COverviewBlurPassElement::needsPrecomputeBlur() {
+bool COverviewBlurPassElement::needsPrecomputeBlur(Render::CRenderContext& ctx) {
     // X88: xray samples OverviewRender::frameChromeBlur(), not m_blurFB, so only
     // the hyprlandCache mode needs Hyprland to keep m_blurFB current.
     return data.hyprlandCache && data.alpha > 0.F;
 }
 
-std::optional<CBox> COverviewBlurPassElement::boundingBox() {
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
+std::optional<CBox> COverviewBlurPassElement::boundingBox(Render::CRenderContext& ctx) {
+    const auto MONITOR = ctx.m_data.pMonitor;
     if (!MONITOR)
         return std::nullopt;
 
     return data.box.copy().scale(1.F / MONITOR->m_scale).round();
 }
 
-CRegion COverviewBlurPassElement::opaqueRegion() {
+CRegion COverviewBlurPassElement::opaqueRegion(Render::CRenderContext& ctx) {
     return {};
 }
 
@@ -232,12 +230,12 @@ COverviewSplitBorderPassElement::COverviewSplitBorderPassElement(const SData& da
     ;
 }
 
-std::vector<UP<IPassElement>> COverviewSplitBorderPassElement::draw() {
+std::vector<UP<IPassElement>> COverviewSplitBorderPassElement::draw(Render::CRenderContext& ctx) {
     if (data.box.width < 1 || data.box.height < 1 || data.borderSize < 1 || data.a <= 0.F)
         return {};
 
-    auto stroke = [this](int round) {
-        Render::GL::g_pHyprOpenGL->renderBorder(data.box, data.color,
+    auto stroke = [this, &ctx](int round) {
+        Render::GL::g_pHyprOpenGL->renderBorder(ctx, data.box, data.color,
                                                 {
                                                     .round         = round,
                                                     .roundingPower = data.roundingPower,
@@ -259,8 +257,8 @@ std::vector<UP<IPassElement>> COverviewSplitBorderPassElement::draw() {
     // single-pass stroke measured 182 luminance while the split cell's whole span
     // sat at the fill's 94. clipBox is what the cell FILL splits with two screens
     // up, and it is the knob the scissor actually reads.
-    const auto SAVEDCLIP = g_pHyprRenderer->m_renderData.clipBox;
-    auto       restore   = Hyprutils::Utils::CScopeGuard([SAVEDCLIP] { g_pHyprRenderer->m_renderData.clipBox = SAVEDCLIP; });
+    const auto SAVEDCLIP = ctx.m_data.clipBox;
+    auto       restore   = Hyprutils::Utils::CScopeGuard([SAVEDCLIP, &ctx] { ctx.m_data.clipBox = SAVEDCLIP; });
 
     const double MID = std::round(data.box.x + data.box.width / 2.0);
 
@@ -280,30 +278,30 @@ std::vector<UP<IPassElement>> COverviewSplitBorderPassElement::draw() {
         if (clip.width < 1 || clip.height < 1)
             continue;
 
-        g_pHyprRenderer->m_renderData.clipBox = clip;
+        ctx.m_data.clipBox = clip;
         stroke(LEFT ? data.roundLeft : data.roundRight);
     }
 
     return {};
 }
 
-bool COverviewSplitBorderPassElement::needsLiveBlur() {
+bool COverviewSplitBorderPassElement::needsLiveBlur(Render::CRenderContext& ctx) {
     return false;
 }
 
-bool COverviewSplitBorderPassElement::needsPrecomputeBlur() {
+bool COverviewSplitBorderPassElement::needsPrecomputeBlur(Render::CRenderContext& ctx) {
     return false;
 }
 
-std::optional<CBox> COverviewSplitBorderPassElement::boundingBox() {
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
+std::optional<CBox> COverviewSplitBorderPassElement::boundingBox(Render::CRenderContext& ctx) {
+    const auto MONITOR = ctx.m_data.pMonitor;
     if (!MONITOR)
         return std::nullopt;
 
     return data.box.copy().expand(data.borderSize).scale(1.F / MONITOR->m_scale).round();
 }
 
-CRegion COverviewSplitBorderPassElement::opaqueRegion() {
+CRegion COverviewSplitBorderPassElement::opaqueRegion(Render::CRenderContext& ctx) {
     return {};
 }
 
@@ -317,26 +315,26 @@ COverviewShadowPassElement::COverviewShadowPassElement(const SData& data_) : dat
 // 2 is invisible" is an assumption rather than a fact -- and the rule for this
 // pass is that the output does not move. The `range <= 0` guard below is the
 // only one that is provably free.
-std::vector<UP<IPassElement>> COverviewShadowPassElement::draw() {
+std::vector<UP<IPassElement>> COverviewShadowPassElement::draw(Render::CRenderContext& ctx) {
     const auto MONITOR = data.monitor.lock();
     const bool HASVISIBLECOLOR = std::ranges::any_of(data.color.m_colors, [](const CHyprColor& color) { return color.a > 0.F; });
     if (!MONITOR || data.fullBox.width < 1 || data.fullBox.height < 1 || data.range <= 0 || !HASVISIBLECOLOR || data.alpha <= 0.F)
         return {};
 
-    CRegion shadowDamage = g_pHyprRenderer->m_renderData.damage.copy().intersect(data.fullBox);
+    CRegion shadowDamage = ctx.m_data.damage.copy().intersect(data.fullBox);
     if (data.ignoreWindow)
         shadowDamage.subtract(roundedRectRegion(data.cutoutBox, data.rounding + 1, data.roundingPower));
 
     if (shadowDamage.empty())
         return {};
 
-    const auto SAVEDDAMAGE       = g_pHyprRenderer->m_renderData.damage;
-    const auto SAVEDCURRENTWINDOW = g_pHyprRenderer->m_renderData.currentWindow;
-    g_pHyprRenderer->m_renderData.damage = shadowDamage;
-    g_pHyprRenderer->m_renderData.currentWindow.reset();
-    auto restoreRenderData = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE, SAVEDCURRENTWINDOW] {
-        g_pHyprRenderer->m_renderData.damage        = SAVEDDAMAGE;
-        g_pHyprRenderer->m_renderData.currentWindow = SAVEDCURRENTWINDOW;
+    const auto SAVEDDAMAGE       = ctx.m_data.damage;
+    const auto SAVEDCURRENTWINDOW = ctx.m_data.currentWindow;
+    ctx.m_data.damage = shadowDamage;
+    ctx.m_data.currentWindow.reset();
+    auto restoreRenderData = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE, SAVEDCURRENTWINDOW, &ctx] {
+        ctx.m_data.damage        = SAVEDDAMAGE;
+        ctx.m_data.currentWindow = SAVEDCURRENTWINDOW;
     });
 
     std::optional<int> previousRenderPower;
@@ -352,20 +350,21 @@ std::vector<UP<IPassElement>> COverviewShadowPassElement::draw() {
         Hyprdrive::Config::setValue("decoration:shadow:render_power", *previousRenderPower);
     });
 
-    Render::GL::g_pHyprOpenGL->renderRoundedShadow(data.fullBox, data.rounding, data.roundingPower, data.range, data.color, std::clamp(data.alpha, 0.F, 1.F));
+    Render::GL::g_pHyprOpenGL->renderRoundedShadow(ctx, data.fullBox, data.rounding, data.roundingPower, data.range, data.color, std::clamp(data.alpha, 0.F, 1.F),
+                                                   Render::SWindowRenderPresentation{});
 
     return {};
 }
 
-bool COverviewShadowPassElement::needsLiveBlur() {
+bool COverviewShadowPassElement::needsLiveBlur(Render::CRenderContext& ctx) {
     return false;
 }
 
-bool COverviewShadowPassElement::needsPrecomputeBlur() {
+bool COverviewShadowPassElement::needsPrecomputeBlur(Render::CRenderContext& ctx) {
     return false;
 }
 
-std::optional<CBox> COverviewShadowPassElement::boundingBox() {
+std::optional<CBox> COverviewShadowPassElement::boundingBox(Render::CRenderContext& ctx) {
     const auto MONITOR = data.monitor.lock();
     if (!MONITOR)
         return std::nullopt;
@@ -373,7 +372,7 @@ std::optional<CBox> COverviewShadowPassElement::boundingBox() {
     return data.fullBox.copy().scale(1.F / MONITOR->m_scale).round();
 }
 
-CRegion COverviewShadowPassElement::opaqueRegion() {
+CRegion COverviewShadowPassElement::opaqueRegion(Render::CRenderContext& ctx) {
     return {};
 }
 
@@ -381,11 +380,11 @@ CDockLivePreviewPassElement::CDockLivePreviewPassElement(SData&& data_) : data(s
     ;
 }
 
-std::vector<UP<IPassElement>> CDockLivePreviewPassElement::draw() {
+std::vector<UP<IPassElement>> CDockLivePreviewPassElement::draw(Render::CRenderContext& ctx) {
     if (!data.pass)
         return {};
 
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    const auto MONITOR = ctx.m_data.pMonitor.lock();
     if (!MONITOR)
         return {};
 
@@ -401,50 +400,39 @@ std::vector<UP<IPassElement>> CDockLivePreviewPassElement::draw() {
     // rendered: chunks of the real window going missing for exactly the frames
     // a preview was live (user, 2026-09-15: "the actual window is cutting out
     // when the preview is rendering").
-    const auto SAVEDCLIP   = g_pHyprRenderer->m_renderData.clipBox;
-    const auto SAVEDMODIF  = g_pHyprRenderer->m_renderData.renderModif;
-    const auto SAVEDDAMAGE = g_pHyprRenderer->m_renderData.damage;
-    const auto SAVEDFINAL  = g_pHyprRenderer->m_renderData.finalDamage;
-    const bool SAVEDBLURFB = MONITOR->m_blurFBShouldRender;
-    auto       restore     = Hyprutils::Utils::CScopeGuard([SAVEDCLIP, SAVEDMODIF, SAVEDDAMAGE, SAVEDFINAL, SAVEDBLURFB, MONITOR] {
-        g_pHyprRenderer->m_renderData.clipBox     = SAVEDCLIP;
-        g_pHyprRenderer->m_renderData.renderModif = SAVEDMODIF;
-        g_pHyprRenderer->m_renderData.damage      = SAVEDDAMAGE;
-        g_pHyprRenderer->m_renderData.finalDamage = SAVEDFINAL;
-        MONITOR->m_blurFBShouldRender             = SAVEDBLURFB;
-    });
+    auto restore = ctx.saveDrawState();
 
     if (data.box.width >= 1 && data.box.height >= 1)
-        g_pHyprRenderer->m_renderData.clipBox = data.box;
+        ctx.m_data.clipBox = data.box;
 
-    data.pass->render(CRegion{CBox{{}, MONITOR->m_transformedSize}});
+    data.pass->render(ctx, CRegion{CBox{{}, MONITOR->m_transformedSize}});
     return {};
 }
 
-bool CDockLivePreviewPassElement::needsLiveBlur() {
+bool CDockLivePreviewPassElement::needsLiveBlur(Render::CRenderContext& ctx) {
     return false;
 }
 
-bool CDockLivePreviewPassElement::needsPrecomputeBlur() {
+bool CDockLivePreviewPassElement::needsPrecomputeBlur(Render::CRenderContext& ctx) {
     return false;
 }
 
-std::optional<CBox> CDockLivePreviewPassElement::boundingBox() {
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+std::optional<CBox> CDockLivePreviewPassElement::boundingBox(Render::CRenderContext& ctx) {
+    const auto MONITOR = ctx.m_data.pMonitor.lock();
     if (!MONITOR)
         return std::nullopt;
 
     return data.box.copy().scale(1.F / MONITOR->m_scale).round();
 }
 
-CRegion CDockLivePreviewPassElement::opaqueRegion() {
+CRegion CDockLivePreviewPassElement::opaqueRegion(Render::CRenderContext& ctx) {
     return {};
 }
 
-bool CDockLivePreviewPassElement::disableSimplification() {
+bool CDockLivePreviewPassElement::disableSimplification(Render::CRenderContext& ctx) {
     return true;
 }
 
-bool CDockLivePreviewPassElement::undiscardable() {
+bool CDockLivePreviewPassElement::undiscardable(Render::CRenderContext& ctx) {
     return true;
 }

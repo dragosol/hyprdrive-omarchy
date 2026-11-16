@@ -28,7 +28,7 @@ namespace Hyprdrive::FunctionHooks {
             for (const auto& r : g_records) {
                 if (r.address != address)
                     continue;
-                Log::logger->log(Log::ERR, "[hyprdrive] {}: refusing a second hook on {} ({}): {} already hooks it", owner, name, address, r.owner);
+                Log::logger->log(Log::ERR, "hyprdrive", "{}: refusing a second hook on {} ({}): {} already hooks it", owner, name, address, r.owner);
                 return true;
             }
             return false;

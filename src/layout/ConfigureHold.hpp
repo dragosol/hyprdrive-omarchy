@@ -13,7 +13,7 @@
 // and is then tiled. None of those in-between sizes is ever drawn -- the flight
 // is -- so none needs to reach the client.
 //
-// While a hold is up, CWindow::sendWindowSize (hooked in main.cpp) only notes
+// While a hold is up, sendWindowSize (CWindowTarget's, hooked in main.cpp) only notes
 // the window. When the outermost hold ends, each noted window gets ONE send,
 // and Hyprland's own check drops it when the final size is what the client
 // already has -- which, for a window that went away and came back, is usual.

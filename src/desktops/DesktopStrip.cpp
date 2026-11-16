@@ -7,8 +7,10 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/shared/animation/AnimationTree.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/render/scene/SceneSelection.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
@@ -68,7 +70,7 @@ namespace Hyprdrive::DesktopStrip {
         PHLWORKSPACE desktop(const PHLMONITOR& mon, int id) {
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (WS && !WS->m_isSpecialWorkspace && WS->m_id == id && WS->m_monitor.lock() == mon)
+                if (WS && !Hyprdrive::Compat::isSpecial(WS) && Hyprdrive::Compat::id(WS) == id && WS->m_monitor.lock() == mon)
                     return WS;
             }
             return nullptr;
@@ -250,7 +252,7 @@ namespace Hyprdrive::DesktopStrip {
             const auto MON = g.mon.lock();
             if (!MON || !g_go || idx < 0 || idx >= sc<int>(g.row.size()))
                 return;
-            if (MON->m_activeWorkspace && MON->m_activeWorkspace->m_id == g.row[idx])
+            if (MON->m_activeWorkspace && Hyprdrive::Compat::id(MON->m_activeWorkspace) == g.row[idx])
                 return;
             ++g_switching;
             g_go(MON, g.row[idx]);
@@ -274,7 +276,7 @@ namespace Hyprdrive::DesktopStrip {
             }
             // Something else showed another desktop without telling the strip
             // (take()): it lets go, that one home.
-            if (g.row.empty() || MON->m_activeWorkspace->m_id != g.row[std::clamp(g.drive.target, 0, sc<int>(g.row.size()) - 1)]) {
+            if (g.row.empty() || Hyprdrive::Compat::id(MON->m_activeWorkspace) != g.row[std::clamp(g.drive.target, 0, sc<int>(g.row.size()) - 1)]) {
                 land();
                 return 0;
             }
@@ -327,7 +329,7 @@ namespace Hyprdrive::DesktopStrip {
             // row takes over from there.
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (WS && !WS->m_isSpecialWorkspace && WS->m_monitor.lock() == mon && WS->m_renderOffset && WS->m_renderOffset->isBeingAnimated())
+                if (WS && !Hyprdrive::Compat::isSpecial(WS) && WS->m_monitor.lock() == mon && WS->m_renderOffset && WS->m_renderOffset->isBeingAnimated())
                     WS->m_renderOffset->setValueAndWarp(WS->m_renderOffset->value());
             }
             g.on       = true;
@@ -376,7 +378,7 @@ namespace Hyprdrive::DesktopStrip {
     // away; a real switch has its destination on top from its first frame.
     namespace {
         CFunctionHook* g_stackHook = nullptr;
-        using origRenderWorkspaceWindows = void (*)(void*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&);
+        using origRenderWorkspaceWindows = void (*)(void*, Render::CRenderContext&, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, Render::eSceneMode);
 
         struct SStack {
             PHLMONITORREF                mon;
@@ -385,7 +387,7 @@ namespace Hyprdrive::DesktopStrip {
         std::vector<SStack> g_stacks;
 
         bool drawn(const PHLWORKSPACE& ws) {
-            return ws->isVisible() || ws->m_forceRendering || (ws->m_renderOffset && ws->m_renderOffset->isBeingAnimated()) ||
+            return ws->visible() || ws->m_forceRendering || (ws->m_renderOffset && ws->m_renderOffset->isBeingAnimated()) ||
                 (ws->m_alpha && ws->m_alpha->isBeingAnimated());
         }
 
@@ -401,10 +403,10 @@ namespace Hyprdrive::DesktopStrip {
             return D - Mosaic::slideOverhang(ws, mon, -1, XAX) < SIZE && D + SIZE + Mosaic::slideOverhang(ws, mon, +1, XAX) > 0;
         }
 
-        void hkRenderWorkspaceWindows(void* self, PHLMONITOR mon, PHLWORKSPACE ws, const Time::steady_tp& time) {
+        void hkRenderWorkspaceWindows(void* self, Render::CRenderContext& ctx, PHLMONITOR mon, PHLWORKSPACE ws, const Time::steady_tp& time, Render::eSceneMode mode) {
             const auto ORIGINAL = rc<origRenderWorkspaceWindows>(g_stackHook->m_original);
-            if (!mon || !ws || ws->m_isSpecialWorkspace) {
-                ORIGINAL(self, mon, ws, time);
+            if (!mon || !ws || Hyprdrive::Compat::isSpecial(ws) || mode != Render::eSceneMode::MONITOR) {
+                ORIGINAL(self, ctx, mon, ws, time, mode);
                 return;
             }
             std::erase_if(g_stacks, [](const SStack& s) { return !s.mon.lock(); });
@@ -415,7 +417,7 @@ namespace Hyprdrive::DesktopStrip {
             std::vector<PHLWORKSPACE> shown, visible;
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (!WS || WS->m_isSpecialWorkspace || WS->m_monitor.lock() != mon || !drawn(WS))
+                if (!WS || Hyprdrive::Compat::isSpecial(WS) || WS->m_monitor.lock() != mon || !drawn(WS))
                     continue;
                 shown.push_back(WS);
                 if (WS == ACTIVE || onScreen(WS, mon))
@@ -424,7 +426,7 @@ namespace Hyprdrive::DesktopStrip {
             if (shown.size() < 2) {
                 if (IT != g_stacks.end())
                     g_stacks.erase(IT); // one desktop again: the next switch starts afresh
-                ORIGINAL(self, mon, ws, time);
+                ORIGINAL(self, ctx, mon, ws, time, mode);
                 return;
             }
             if (IT == g_stacks.end())
@@ -459,7 +461,7 @@ namespace Hyprdrive::DesktopStrip {
                     ORDER.insert(ORDER.begin(), PHLWORKSPACEREF{WS});
             }
             if (ORDER.size() < 2) {
-                ORIGINAL(self, mon, ws, time);
+                ORIGINAL(self, ctx, mon, ws, time, mode);
                 return;
             }
 
@@ -475,7 +477,7 @@ namespace Hyprdrive::DesktopStrip {
             auto&      list  = const_cast<std::vector<PHLWINDOW>&>(Desktop::windowState()->windows());
             const auto SAVED = list;
             std::ranges::stable_sort(list, {}, RANK);
-            ORIGINAL(self, mon, ws, time);
+            ORIGINAL(self, ctx, mon, ws, time, mode);
             if (list.size() == SAVED.size())
                 list = SAVED;
         }
@@ -560,7 +562,7 @@ namespace Hyprdrive::DesktopStrip {
         const auto TREE = ::Config::animationTree()->getAnimationPropertyConfig("workspacesIn");
         for (const auto& REF : State::workspaceState()->workspaces()) {
             const auto WS = REF.lock();
-            if (!WS || WS->m_isSpecialWorkspace || !WS->m_renderOffset)
+            if (!WS || Hyprdrive::Compat::isSpecial(WS) || !WS->m_renderOffset)
                 continue;
             const auto CFG  = WS->m_renderOffset->getConfig().lock();
             const bool OURS = CFG && std::ranges::any_of(g_releaseCfgs, [&CFG](const auto& c) { return c == CFG; });
@@ -583,7 +585,7 @@ namespace Hyprdrive::DesktopStrip {
         double                    t = 0, T0 = 0;
         for (const auto& REF : State::workspaceState()->workspaces()) {
             const auto WS = REF.lock();
-            if (!WS || WS->m_isSpecialWorkspace || WS->m_monitor.lock() != mon || !WS->m_renderOffset || !WS->m_renderOffset->isBeingAnimated())
+            if (!WS || Hyprdrive::Compat::isSpecial(WS) || WS->m_monitor.lock() != mon || !WS->m_renderOffset || !WS->m_renderOffset->isBeingAnimated())
                 continue;
             const auto   BASE = WS->m_renderOffset->getConfig().lock();
             const auto   VALS = BASE && BASE->pValues ? BASE->pValues.lock() : BASE;
@@ -613,9 +615,11 @@ namespace Hyprdrive::DesktopStrip {
         g_row = std::move(row);
         g_go  = std::move(go);
         // Not fatal when missing: desktops then stack in Hyprland's order.
-        // The first match whose signature is renderWorkspaceWindows( -- not
-        // renderWorkspaceWindowsFullscreen.
-        g_stackHook = FunctionHooks::firstMatch("DesktopStrip", "renderWorkspaceWindows", rc<void*>(hkRenderWorkspaceWindows), "renderWorkspaceWindows(");
+        // 0.57: the overload with the scene mode -- the one renderAllClientsForWorkspace
+        // calls (the 4-argument one only forwards to it), not renderWorkspaceWindowsFullscreen.
+        g_stackHook = FunctionHooks::firstMatch("DesktopStrip",
+            "_ZN6Render13IHyprRenderer22renderWorkspaceWindowsERNS_14CRenderContextEN9Hyprutils6Memory14CSharedPointerIN7Monitor8CMonitorEEENS5_IN9Workspace12CHLWorkspaceEEERKNSt6chrono10time_pointINSC_3_V212steady_clockENSC_8durationIlSt5ratioILl1ELl1000000000EEEEEENS_10eSceneModeE",
+            rc<void*>(hkRenderWorkspaceWindows));
         if (g_stackHook && !g_stackHook->hook())
             g_stackHook = nullptr;
     }
@@ -667,7 +671,7 @@ namespace Hyprdrive::DesktopStrip {
         } g_instant;
 
         bool instantWheel(const PHLMONITOR& mon, int v120, SSettings settings) {
-            const int      CURRENT = sc<int>(mon->m_activeWorkspace->m_id);
+            const int      CURRENT = sc<int>(Hyprdrive::Compat::id(mon->m_activeWorkspace));
             const uint32_t NOW     = nowMs();
             auto&          I       = g_instant;
             // Smooth has nothing to follow without a slide: two notches a desktop.
@@ -705,7 +709,7 @@ namespace Hyprdrive::DesktopStrip {
         if (g.on && g.mon.lock() != mon)
             land();
         if (!g.on) {
-            const int CURRENT = sc<int>(mon->m_activeWorkspace->m_id);
+            const int CURRENT = sc<int>(Hyprdrive::Compat::id(mon->m_activeWorkspace));
             if (!start(mon, g_row(mon, CURRENT), CURRENT, std::nullopt))
                 return false;
         }
@@ -777,7 +781,7 @@ namespace Hyprdrive::DesktopStrip {
             return false;
         if (g.on && g.mon.lock() != mon)
             land();
-        const int CURRENT = sc<int>(mon->m_activeWorkspace->m_id);
+        const int CURRENT = sc<int>(Hyprdrive::Compat::id(mon->m_activeWorkspace));
         if (!g.on) {
             if (!available(mon) || CURRENT < 1)
                 return false;
@@ -807,7 +811,7 @@ namespace Hyprdrive::DesktopStrip {
     }
 
     bool drives(const PHLWORKSPACE& ws) {
-        return ws && !ws->m_isSpecialWorkspace && driving(ws->m_monitor.lock());
+        return ws && !Hyprdrive::Compat::isSpecial(ws) && driving(ws->m_monitor.lock());
     }
 
     bool switching() {

@@ -28,7 +28,8 @@
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/animation/AnimationManager.hpp>
 #include <hyprland/src/config/shared/animation/AnimationTree.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/protocols/XDGShell.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
@@ -44,7 +45,7 @@
 #include <limits>
 #include <optional>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
@@ -231,7 +232,7 @@ namespace Hyprdrive::Mosaic {
             return;
         const double CX     = (P.x + S.x / 2.0 - monitor->m_position.x) * SCALE;
         const double BOTTOM = (P.y + S.y - monitor->m_position.y - 14.0) * SCALE;
-        OverviewRender::labelPill(monitor, w->m_title.empty() ? w->m_class : w->m_title, CX, BOTTOM, alpha, SCALE);
+        OverviewRender::labelPill(monitor, w->metadata().title().empty() ? w->metadata().appID() : w->metadata().title(), CX, BOTTOM, alpha, SCALE);
     }
 
         // corner grab, Super gesture, canvas clock (MosaicGestures.cpp)
@@ -334,7 +335,7 @@ namespace Hyprdrive::Mosaic {
         PHLWINDOW      best;
         double         bestScore = 1e18;
         for (const auto& W : Desktop::windowState()->windows()) {
-            if (!W || W == from || !W->m_isMapped || W->isHidden() || W->m_workspace != from->m_workspace || !onMosaic(W))
+            if (!W || W == from || !W->mapped() || W->isHidden() || W->m_workspace != from->m_workspace || !onMosaic(W))
                 continue;
             const auto   V     = W->middle() - C0;
             const double ALONG = V.x * D.x + V.y * D.y;
@@ -404,7 +405,7 @@ namespace Hyprdrive::Mosaic {
     // while it slid made its windows lag behind the slide and vanish at its
     // end (user, 2026-11-01).
     static void zoomFollowsDesktop(const PHLWORKSPACE& ws) {
-        if (g_super != ESuper::ZOOMED || g_zoomPressing || !ws || ws->m_isSpecialWorkspace)
+        if (g_super != ESuper::ZOOMED || g_zoomPressing || !ws || Hyprdrive::Compat::isSpecial(ws))
             return;
         auto* A = canvasOf(ws);
         if (A)
@@ -437,18 +438,18 @@ namespace Hyprdrive::Mosaic {
     // its tiled algorithm's default one (no layout here, mosaic or dwindle,
     // has one of its own).
     static Fullscreen::IFullscreenHandler* tiledFsHandler(const PHLWORKSPACE& ws) {
-        if (!ws || !ws->m_space || !ws->m_space->algorithm() || !ws->m_space->algorithm()->tiledAlgo())
+        if (!ws || !ws->space() || !ws->space()->algorithm() || !ws->space()->algorithm()->tiledAlgo())
             return nullptr;
-        return ws->m_space->algorithm()->tiledAlgo()->Layout::IModeAlgorithm::getFSHandler().get();
+        return ws->space()->algorithm()->tiledAlgo()->Layout::IModeAlgorithm::getFSHandler().get();
     }
 
     // The desktop's floating algorithm's handler: never swapped by a layout
     // change, and read by Hyprland only for the DESKTOP's questions
     // (hasFullscreen, getFullscreenWindow), never for a tiled window's own.
     static Fullscreen::IFullscreenHandler* floatingFsHandler(const PHLWORKSPACE& ws) {
-        if (!ws || !ws->m_space || !ws->m_space->algorithm() || !ws->m_space->algorithm()->floatingAlgo())
+        if (!ws || !ws->space() || !ws->space()->algorithm() || !ws->space()->algorithm()->floatingAlgo())
             return nullptr;
-        return ws->m_space->algorithm()->floatingAlgo()->Layout::IModeAlgorithm::getFSHandler().get();
+        return ws->space()->algorithm()->floatingAlgo()->Layout::IModeAlgorithm::getFSHandler().get();
     }
 
     static FullscreenCarry::SMode modesNow(const PHLWINDOW& w) {
@@ -460,8 +461,8 @@ namespace Hyprdrive::Mosaic {
         if (!h || !w || !w->m_target || !FullscreenCarry::validMode(m.internal) || !FullscreenCarry::validMode(m.client))
             return;
         // The handler's own setters: its map only -- no event, no configure.
-        h->setTargetFullscreenModeInternal(w->m_target, Fullscreen::eFullscreenMode(m.internal));
-        h->setTargetFullscreenModeClient(w->m_target, Fullscreen::eFullscreenMode(m.client));
+        h->setTargetFullscreenModeInternal(w->layoutTarget(), Fullscreen::eFullscreenMode(m.internal));
+        h->setTargetFullscreenModeClient(w->layoutTarget(), Fullscreen::eFullscreenMode(m.client));
     }
 
     // Every tiled window that is fullscreen or maximized now.
@@ -470,11 +471,11 @@ namespace Hyprdrive::Mosaic {
         if (!Desktop::windowState())
             return out;
         for (const auto& W : Desktop::windowState()->windows()) {
-            if (!W || !W->m_isMapped || W->m_isFloating || !W->m_target || !W->m_workspace || !tiledFsHandler(W->m_workspace))
+            if (!W || !W->mapped() || W->isFloating() || !W->m_target || !W->m_workspace || !tiledFsHandler(W->m_workspace))
                 continue;
             const auto M = modesNow(W);
             if (FullscreenCarry::worth(M))
-                out.push_back({.win = carryAddr(W), .ws = W->m_workspace->m_id, .mode = M});
+                out.push_back({.win = carryAddr(W), .ws = Hyprdrive::Compat::id(W->m_workspace), .mode = M});
         }
         return out;
     }
@@ -485,7 +486,7 @@ namespace Hyprdrive::Mosaic {
         if (!Desktop::windowState())
             return nullptr;
         for (const auto& W : Desktop::windowState()->windows())
-            if (W && carryAddr(W) == c.win && W->m_target && W->m_workspace && W->m_workspace->m_id == c.ws && !W->m_isFloating)
+            if (W && carryAddr(W) == c.win && W->m_target && W->m_workspace && Hyprdrive::Compat::id(W->m_workspace) == c.ws && !W->isFloating())
                 return W;
         return nullptr;
     }
@@ -541,7 +542,7 @@ namespace Hyprdrive::Mosaic {
         if (!Desktop::windowState())
             return;
         for (const auto& W : Desktop::windowState()->windows()) {
-            if (!W || !W->m_isMapped || W->m_isFloating || !W->m_target || !W->m_workspace)
+            if (!W || !W->mapped() || W->isFloating() || !W->m_target || !W->m_workspace)
                 continue;
             const auto* R = FullscreenCarry::findHanded(h, carryAddr(W), reinterpret_cast<std::uintptr_t>(W->m_workspace.get()));
             if (!R || !FullscreenCarry::lostInGap(R->mode, modesNow(W)))
@@ -550,7 +551,7 @@ namespace Hyprdrive::Mosaic {
             if (Fullscreen::controller()->hasFullscreen(W->m_workspace))
                 continue;
             Fullscreen::controller()->setFullscreenMode(W, Fullscreen::eFullscreenMode(R->mode.internal), Fullscreen::eFullscreenMode(R->mode.client));
-            trace(std::format("load: {} on {} back to {}/{} (lost while unloaded)", appOf(W), W->m_workspace->m_id, R->mode.internal, R->mode.client));
+            trace(std::format("load: {} on {} back to {}/{} (lost while unloaded)", appOf(W), Hyprdrive::Compat::id(W->m_workspace), R->mode.internal, R->mode.client));
         }
     }
 
@@ -563,7 +564,7 @@ namespace Hyprdrive::Mosaic {
             const auto W = target->window();
             if (!W || !W->m_workspace || !W->m_target)
                 return;
-            const auto* C = FullscreenCarry::find(g_carry, carryAddr(W), W->m_workspace->m_id);
+            const auto* C = FullscreenCarry::find(g_carry, carryAddr(W), Hyprdrive::Compat::id(W->m_workspace));
             if (!C)
                 return;
             // The desktop's algorithm is swapped only once every window is in

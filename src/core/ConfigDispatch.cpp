@@ -246,7 +246,7 @@ int dispatcherFactoryLua(lua_State* L, std::string_view name) {
     if (!DISPATCHER->isArgValid(arg))
         return luaL_error(L, "%s: invalid argument '%s', %s", DISPATCHER->name.data(), arg, DISPATCHER->invalidArgError.data());
 
-    if (g_pKeybindManager && g_pKeybindManager->m_currentKeybind && g_pKeybindManager->m_currentKeybind->handler == "__lua") {
+    if (Config::Actions::state()->m_bindInvocationDepth > 0) {
         return runDispatcherNow(L, *DISPATCHER, arg);
     }
 
@@ -369,19 +369,25 @@ using namespace ConfigPart;
 void registerDispatcher(const std::string& name, TDispatcher dispatcher) {
     // Held as the plugin's own code (HoverActions::SOwnCall), as in
     // runDispatcherNow.
-    HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, std::string{Compat::NAME} + ":" + name, [dispatcher](std::string arg) {
+    const std::string FULL = std::string{Compat::NAME} + ":" + name;
+    const auto        OWN  = [dispatcher](std::string arg) {
         HoverActions::SOwnCall own;
         return dispatcher(std::move(arg));
-    });
+    };
+    HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, FULL, OWN);
+    // 0.57's addDispatcherV2 keeps no table: Compat::dispatchOwn looks names up here.
+    Compat::ownDispatchers()[FULL] = OWN;
 
     // ONE RELEASE. The old spelling dispatches into the very same handler; the
     // wrapper exists only to notice that it was used.
-    const std::string LEGACY = std::string{Compat::LEGACY_NAME} + ":" + name;
-    HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, LEGACY, [dispatcher, LEGACY](std::string arg) {
+    const std::string LEGACY    = std::string{Compat::LEGACY_NAME} + ":" + name;
+    const auto        OWNLEGACY = [dispatcher, LEGACY](std::string arg) {
         Compat::noteLegacyUse(Compat::ELegacy::DISPATCHER, LEGACY);
         HoverActions::SOwnCall own;
         return dispatcher(std::move(arg));
-    });
+    };
+    HyprlandAPI::addDispatcherV2(HYPRDRIVE_HANDLE, LEGACY, OWNLEGACY);
+    Compat::ownDispatchers()[LEGACY] = OWNLEGACY;
 
     if (::Config::mgr()->type() != ::Config::CONFIG_LUA)
         return;

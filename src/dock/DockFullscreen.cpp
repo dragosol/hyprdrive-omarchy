@@ -48,7 +48,7 @@ namespace {
         if (!WS)
             return nullptr;
         const auto W = ::Fullscreen::controller()->getFullscreenWindow(WS);
-        if (!W || !W->m_isMapped || Minimize::isMinimized(W) || !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
+        if (!W || !W->mapped() || Minimize::isMinimized(W) || !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
             return nullptr;
         return W;
     }
@@ -57,7 +57,7 @@ namespace {
         const auto W = fullscreenOn(monitor);
         if (!W)
             return {};
-        const bool SAVER = W->m_class == SCREENSAVER_CLASS || W->m_initialClass == SCREENSAVER_CLASS;
+        const bool SAVER = W->metadata().appID() == SCREENSAVER_CLASS || W->metadata().initialAppID() == SCREENSAVER_CLASS;
         const auto ID    = AppSearch::idForClass(Hyprdrive::AppIdentity::groupKey(W));
         return {.window = W, .game = SAVER || FullscreenGuard::isGame(W), .flagged = hidesDockInFullscreen(ID)};
     }
@@ -112,7 +112,7 @@ bool fullscreenKeepsDockAway(PHLMONITOR monitor) {
     // event that has not been settled yet must not keep the dock away from
     // a desktop that no longer has it.
     const auto W = IT->second.window.lock();
-    if (!W || !W->m_isMapped || W->m_workspace != monitor->m_activeWorkspace || !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
+    if (!W || !W->mapped() || W->m_workspace != monitor->m_activeWorkspace || !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
         return false;
     if (IT->second.flagged)
         return true;

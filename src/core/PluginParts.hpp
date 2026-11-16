@@ -26,8 +26,9 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -35,7 +36,7 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
 #include <xkbcommon/xkbcommon.h>
@@ -46,7 +47,7 @@
 #include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/CloseGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/CursorZoomGesture.hpp>
-#include <hyprland/src/managers/input/trackpad/gestures/DispatcherGesture.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/LuaFunctionGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/FloatGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/FullscreenGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/MoveGesture.hpp>
@@ -179,11 +180,10 @@ namespace PluginDetail {
     extern void setDockCursor(bool on);
     extern void hkSendWindowSize(void* thisptr, bool force);
     extern bool hkShouldRenderWindow(void* thisptr, PHLWINDOW window, PHLMONITOR monitor);
-    extern void hkOnAck(void* thisptr, uint32_t serial);
     extern void hkTargetPlace(void* thisptr, const Layout::STargetBox& box, uint8_t flags);
     extern void hkOnMouseMoved(void* thisptr, IPointer::SMotionEvent e);
     extern void hkScheduleFrame(void* thisptr, Aquamarine::IOutput::scheduleFrameReason reason);
-    extern void hkRenderWorkspace(void* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now, const CBox& geometry);
+    extern void hkRenderWorkspace(void* thisptr, Render::CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now, const CBox& geometry);
     extern void hkDamageSurface(void* thisptr, SP<CWLSurfaceResource> surface, double x, double y, double scale);
     extern void hkSendFrameEventsToWorkspace(void* thisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
     extern void hkSurfaceFrame(void* thisptr, const Time::steady_tp& now);

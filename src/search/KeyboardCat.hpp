@@ -47,7 +47,7 @@ namespace Hyprdrive::KeyboardCat {
     // Drawn over the search pill (monitor-local render px), from renderSearch.
     // `bandNow` is the band as animated this frame: the frame grows with it, so
     // the frame and the strip move as one.
-    void render(PHLMONITOR monitor, const CBox& pill, float scale, float fade, int rounding, float roundingPower, float bandNow);
+    void render(Render::CRenderContext& ctx, PHLMONITOR monitor, const CBox& pill, float scale, float fade, int rounding, float roundingPower, float bandNow);
 
     void stop();
     // PLUGIN_EXIT: the process killed, the reader joined, the texture dropped.

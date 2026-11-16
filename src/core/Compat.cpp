@@ -144,14 +144,15 @@ void pairKey(const char* modern, const char* legacy, const std::type_info* under
 
 void adoptLegacyValues() {
     for (const auto& PAIR : pairs()) {
-        if (!::Config::mgr()->getConfigValue(PAIR.legacy).setByUser)
+        // 0.57: setByUser is a `const bool*`; the pointer alone is always true.
+        if (const auto* SET = ::Config::mgr()->getConfigValue(PAIR.legacy).setByUser; !SET || !*SET)
             continue;
 
         noteLegacyUse(ELegacy::KEY, PAIR.legacy);
 
         // Both names set: the new one wins, silently. Copying the old over it
         // would make the deprecated spelling the authority, which is backwards.
-        if (::Config::mgr()->getConfigValue(PAIR.modern).setByUser)
+        if (const auto* SET = ::Config::mgr()->getConfigValue(PAIR.modern).setByUser; SET && *SET)
             continue;
 
         copyValue(PAIR);

@@ -67,7 +67,7 @@ namespace OverviewDetail {
 // (fullscreen) did nothing with the overview open here while native's worked
 // (user, 2026-11-06). Which binds qualify is SubmapBorrow.hpp's rule
 // (host-tested), the same file as native's.
-std::vector<WP<SKeybind>> g_passthroughBinds;
+std::vector<WP<Keybinds::CBind>> g_passthroughBinds;
 }
 
 PHLWINDOWREF OvInternal::g_focusAtOpen;

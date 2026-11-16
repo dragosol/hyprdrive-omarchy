@@ -56,9 +56,9 @@ void queueDockFrost(PHLMONITOR monitor, const CBox& box, int rounding, float alp
     blur.blurContrast   = Config::getValue<float>(KEY_BLUR_CONTR);
     blur.blurVibrancy   = Config::getValue<float>(KEY_BLUR_VIBR);
     if (currentPass)
-        g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(blur));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<COverviewBlurPassElement>(blur));
     else
-        g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewBlurPassElement>(blur));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<COverviewBlurPassElement>(blur));
 }
 
 // The staleness windows below read REAL milliseconds (Config::realElapsedMs),
@@ -90,7 +90,7 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
         static std::unordered_map<const void*, Time::steady_tp> LASTDRAWN;
         const auto IT   = LASTDRAWN.find(window.get());
         const float GAP = IT == LASTDRAWN.end() ? -1.F : Hyprdrive::Config::realElapsedMs(IT->second);
-        Membership::previewGap(window->m_class, GAP, !isPreviewing(window), window->m_suspended);
+        Membership::previewGap(window->metadata().appID(), GAP, !isPreviewing(window), window->m_suspended);
         LASTDRAWN[window.get()] = Time::steadyNow();
         if (LASTDRAWN.size() > 64)
             LASTDRAWN.clear();
@@ -120,7 +120,7 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
         forcePreviewVisible(window);
         ws = window->m_workspace;
         if (ws) {
-            wasWsVisible         = ws->m_visible;
+            wasWsVisible         = ws->visible();
             wasWsForce           = ws->m_forceRendering;
             ws->m_visible        = true;
             ws->m_forceRendering = true;
@@ -340,7 +340,7 @@ std::vector<PHLWINDOW> panelWindows(const std::string& wmClass, const std::strin
     } else
         return {};
 
-    std::erase_if(out, [](const auto& window) { return !window || !window->m_isMapped || !window->wlSurface() || !window->wlSurface()->resource(); });
+    std::erase_if(out, [](const auto& window) { return !window || !window->mapped() || !window->wlSurface() || !window->wlSurface()->resource(); });
     if (out.size() > PANEL_MAX)
         out.resize(PANEL_MAX);
 
@@ -543,7 +543,7 @@ static void organicPlate(PHLMONITOR monitor, const std::vector<SPanelBand>& band
     d.tex = g_organicPlate.tex;
     d.box = g_organicPlate.box;
     d.a   = TINT.a * alpha;
-    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(d));
 }
 
 CBox panelRiseOrigin(const SLayout& layout, const CBox& anchor) {
@@ -583,7 +583,7 @@ static void drawPreviewCell(PHLMONITOR monitor, const PHLWINDOW& WINDOW, const C
     // "Needs attention" in yellow (user, 2026-11-04): the dock icon jumps
     // for the app, and an app with several windows (Ghostty) leaves you
     // guessing which one it is. Urgency wins over the scratchpad label.
-    const bool URGENT = WINDOW->m_isUrgent;
+    const bool URGENT = Hyprdrive::Compat::urgent(WINDOW);
     const bool PARKED = parkedLabel && Scratchpad::holdsWindow(WINDOW);
     if (URGENT || PARKED) {
         const int DIMROUND = INNER;
@@ -593,7 +593,7 @@ static void drawPreviewCell(PHLMONITOR monitor, const PHLWINDOW& WINDOW, const C
         dim.color         = CHyprColor{0.F, 0.F, 0.F, PANEL_PARKED_DIM * ALPHA};
         dim.round         = DIMROUND;
         dim.roundingPower = ROUNDPWR;
-        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(dim));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(dim));
 
         // Deliberately NOT a theme colour, and that is the whole point of
         // the label: it is read over a DARKENED thumbnail, and a dark
@@ -615,7 +615,7 @@ static void drawPreviewCell(PHLMONITOR monitor, const PHLWINDOW& WINDOW, const C
                              std::round(sc<float>(cell.y) + (sc<float>(cell.height) - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x),
                              sc<float>(TEX->m_size.y)};
             label.a   = ALPHA;
-            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(label));
+            Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(label));
         }
     }
 
@@ -633,7 +633,7 @@ static void drawPreviewCell(PHLMONITOR monitor, const PHLWINDOW& WINDOW, const C
     border.borderSize    = BORDERSIZE;
     border.round         = ROUND;
     border.roundingPower = ROUNDPWR;
-    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(border));
 }
 
 // Pass an empty class when nothing is hovered; like the tooltip, the panel
@@ -917,7 +917,7 @@ void renderRowPeek(PHLMONITOR monitor, SMenu& menu, const CBox& plate, bool live
     };
 
     const auto WANT = live ? menu.peekWant.lock() : PHLWINDOW{};
-    const CBox WROW = WANT && WANT->m_isMapped ? ROWOF(WANT) : CBox{};
+    const CBox WROW = WANT && WANT->mapped() ? ROWOF(WANT) : CBox{};
     if (WANT && Stacks::drawableBox(WROW)) {
         const auto PL = PLACE(WANT, WROW, P && !P->out ? (P->left ? 1 : 0) : -1);
         const CBox TARGET{PL.box.x, PL.box.y, PL.box.w, PL.box.h};
@@ -945,7 +945,7 @@ void renderRowPeek(PHLMONITOR monitor, SMenu& menu, const CBox& plate, bool live
     if (!P)
         return;
     const auto W = P->window.lock();
-    if (!W || !W->m_isMapped || plateGone(*P)) {
+    if (!W || !W->mapped() || plateGone(*P)) {
         P.reset();
         return;
     }
@@ -1333,7 +1333,7 @@ PHLWINDOW previewUnderPointer() {
     const auto CELL     = SHOWN ? panelCellAt(monitor, LOCAL) : std::nullopt;
     const bool TEAROUT  = g_dockDrag.panel && g_dockDrag.panel->live;
     const auto WINDOW   = CELL ? CELL->second : PHLWINDOW{};
-    if (!Hyprdrive::HoverTarget::dockCellCounts(SHOWN, menuContains(monitor, LOCAL), TEAROUT, WINDOW && WINDOW->m_isMapped))
+    if (!Hyprdrive::HoverTarget::dockCellCounts(SHOWN, menuContains(monitor, LOCAL), TEAROUT, WINDOW && WINDOW->mapped()))
         return {};
     return WINDOW;
 }

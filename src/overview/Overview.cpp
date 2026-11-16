@@ -79,11 +79,11 @@ void CForcedVisibility::forceWindowSurfaces(PHLWINDOW window) {
 
     window->wlSurface()->resource()->breadthfirst([this](SP<CWLSurfaceResource> surface, const Vector2D&, void*) { forceSurface(surface); }, nullptr);
 
-    if (window->m_isX11 || !window->m_popupHead)
+    if (window->backend().isX11() || !window->m_popupHead)
         return;
 
     window->m_popupHead->breadthfirst([this](WP<Desktop::View::CPopup> popup, void*) {
-        if (!popup || !popup->aliveAndVisible() || !popup->wlSurface() || !popup->wlSurface()->resource())
+        if (!popup || !popup->mapped() || !popup->wlSurface() || !popup->wlSurface()->resource())
             return;
 
         popup->wlSurface()->resource()->breadthfirst([this](SP<CWLSurfaceResource> surface, const Vector2D&, void*) { forceSurface(surface); }, nullptr);
@@ -127,18 +127,18 @@ void CForcedVisibility::forceWindow(PHLWINDOW window) {
     // overview draws, fullscreen included, and it is above the alpha early-out
     // deliberately: a window already parked at alpha 1 still needs waking.
     if (Prof::enabled())
-        ++g_unsuspendCount[window->m_class].first;
+        ++g_unsuspendCount[window->metadata().appID()].first;
 
     if (window->m_suspended) {
         if (Prof::enabled())
-            ++g_unsuspendCount[window->m_class].second;
+            ++g_unsuspendCount[window->metadata().appID()].second;
         window->setSuspended(false);
     }
 
     // The same guard forceWorkspaceAlphaVisible uses. setValueAndWarp on an
     // animation that is already parked at 1 still writes through the animation
     // manager, and this runs for every forced window on every frame.
-    auto& alpha = window->alpha(FULLSCREENALPHA);
+    auto& alpha = window->presentation().alpha(FULLSCREENALPHA);
     if (alpha->value() == 1.F && alpha->goal() == 1.F && !alpha->isBeingAnimated())
         return;
 
@@ -164,10 +164,10 @@ void CForcedVisibility::forceLayersAboveFullscreen(PHLMONITOR monitor) {
 
 			auto& lsAlpha = ls->alpha()[Desktop::View::LS_ALPHA_FADE];
             if (!known)
-                m_layers.push_back({ls, ls->m_aboveFullscreen, lsAlpha->value()});
+                m_layers.push_back({ls, bool(ls->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN), lsAlpha->value()});
 
-            if (!ls->m_aboveFullscreen)
-                ls->m_aboveFullscreen = true;
+            if (!(ls->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN))
+                ls->m_flags |= Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
 
             if (lsAlpha->value() != 1.F || lsAlpha->goal() != 1.F || lsAlpha->isBeingAnimated())
                 lsAlpha->setValueAndWarp(1.F);
@@ -214,11 +214,11 @@ void CForcedVisibility::restoreWindows() {
 
         constexpr auto FULLSCREENALPHA = Desktop::View::WINDOW_ALPHA_FULLSCREEN;
         WINDOW->updateFullscreenInputState();
-        *WINDOW->alpha(FULLSCREENALPHA) = WINDOW->isBlockedByFullscreen() ? 0.F : 1.F;
+        *WINDOW->presentation().alpha(FULLSCREENALPHA) = WINDOW->isBlockedByFullscreen() ? 0.F : 1.F;
 
-        if (WINDOW->m_group) {
-            if (std::ranges::find(groupsToRefresh, WINDOW->m_group) == groupsToRefresh.end())
-                groupsToRefresh.emplace_back(WINDOW->m_group);
+        if (WINDOW->grouping().group()) {
+            if (std::ranges::find(groupsToRefresh, WINDOW->grouping().group()) == groupsToRefresh.end())
+                groupsToRefresh.emplace_back(WINDOW->grouping().group());
             continue;
         }
 
@@ -239,7 +239,10 @@ void CForcedVisibility::restoreLayers() {
         if (!entry.layer)
             continue;
 
-        entry.layer->m_aboveFullscreen = entry.aboveFullscreen;
+        if (entry.aboveFullscreen)
+            entry.layer->m_flags |= Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
+        else
+            entry.layer->m_flags &= ~Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
 
 		auto& entryLsAlpha = entry.layer->alpha()[Desktop::View::LS_ALPHA_FADE];
         const auto MONITOR = entry.layer->m_monitor.lock();
@@ -249,7 +252,7 @@ void CForcedVisibility::restoreLayers() {
         }
 
         const bool fullscreen = Fullscreen::controller()->hasFullscreen(MONITOR);
-        const bool visible    = !fullscreen || entry.layer->m_layer >= ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY || entry.layer->m_aboveFullscreen;
+        const bool visible    = !fullscreen || entry.layer->m_layer >= ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY || (entry.layer->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN);
         entryLsAlpha->setValueAndWarp(visible ? 1.F : 0.F);
     }
 
@@ -453,7 +456,7 @@ void COverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscr
         if (postedFullscreenState == sc<int>(fullscreen))
             return;
         postedFullscreenState = sc<int>(fullscreen);
-        g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = fullscreen ? "1" : "0"});
+        Hyprdrive::Compat::postEvent("fullscreen", fullscreen ? "1" : "0");
     };
 
     if (!validMapped(window) || !window->m_workspace || window->m_monitor != pMonitor) {
@@ -487,6 +490,7 @@ void COverview::render() {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return;
+    auto&      ctx     = g_pHyprRenderer->context();
 
     OpenProf::gpuMark("begin");
     noteFrame(MONITOR->m_id);
@@ -508,9 +512,9 @@ void COverview::render() {
     if (g_pointerGrabOverview && g_pointerGrabOverview != this && g_pointerGrabOverview->drag.activeWindow && isOverviewPointerOnMonitor(MONITOR))
         lastMousePosLocal = getOverviewMousePosLocal(MONITOR);
 
-    const bool PREVBLOCKSURFACEFEEDBACK       = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    g_pHyprRenderer->m_bBlockSurfaceFeedback  = true;
-    auto restoreSurfaceFeedback               = Hyprutils::Utils::CScopeGuard([PREVBLOCKSURFACEFEEDBACK] { g_pHyprRenderer->m_bBlockSurfaceFeedback = PREVBLOCKSURFACEFEEDBACK; });
+    const bool PREVBLOCKSURFACEFEEDBACK       = ctx.m_blockSurfaceFeedback;
+    ctx.m_blockSurfaceFeedback  = true;
+    auto restoreSurfaceFeedback               = Hyprutils::Utils::CScopeGuard([PREVBLOCKSURFACEFEEDBACK, &ctx] { ctx.m_blockSurfaceFeedback = PREVBLOCKSURFACEFEEDBACK; });
 
     const auto NOW       = Time::steadyNow();
     const auto ACTIVEIDX = activeWorkspaceIndex();
@@ -551,9 +555,9 @@ void COverview::render() {
     if ((WALLPAPERMODE == 0 || WALLPAPERMODE == 2) && !BACKDROPCOVERS)
         renderGlobalWallpaper(MONITOR, NOW);
     else
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, {});
+        g_pHyprRenderer->draw(ctx, CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, {});
 
-    Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_POST_WALLPAPER, .monitor = MONITOR, .context = ctx});
     OpenProf::gpuMark("wallpaper");
 
     // Commit the queued backdrop to the screen BEFORE the temp-FB work below:
@@ -594,7 +598,7 @@ void COverview::render() {
             CRectPassElement::SRectData scrim;
             scrim.box   = CBox{0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y};
             scrim.color = CHyprColor{0.F, 0.F, 0.F, DIM};
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(scrim));
+            ctx.m_pass.add(makeUnique<CRectPassElement>(scrim));
             OverviewRender::flushPass(MONITOR);
         }
     }
@@ -656,7 +660,7 @@ void COverview::render() {
     const bool NOPREBLURREADER        = TILEBLURSCALED && !Hyprdrive::Config::getValue<bool>("decoration:blur:xray");
     const bool NEEDS_PRECOMPUTED_BLUR = !NOPREBLURREADER && hasVisiblePrecomputedBlurWindow(MONITOR, ACTIVEIDX, PITCH, SCALE);
     if (NEEDS_PRECOMPUTED_BLUR && frost.overviewDirty)
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CPreBlurElement>());
+        ctx.m_pass.add(makeUnique<CPreBlurElement>());
     OpenProf::gpuMark("preblur");
 
     OverviewRender::flushPass(MONITOR);
@@ -762,7 +766,7 @@ void COverview::render() {
         // was the one window on screen with no Omarchy border --
         // while the very same window, previewed off the overview,
         // has one. Hyprland's own decorations are the border here.
-        g_pHyprRenderer->renderWindow(SUSHI, MONITOR, NOW, true, Render::RENDER_PASS_ALL, false, false);
+        g_pHyprRenderer->renderWindow(ctx, SUSHI, MONITOR, SUSHI->presentation().renderPresentation(), NOW, true, Render::RENDER_PASS_ALL, false, false);
     }
 
     // THE SCRATCHPAD, over the overview (overviewShownSpecialOn): the dim
@@ -776,14 +780,14 @@ void COverview::render() {
             CRectPassElement::SRectData dim;
             dim.box   = CBox{{}, MONITOR->m_transformedSize};
             dim.color = CHyprColor(0, 0, 0, DIM);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(dim));
+            ctx.m_pass.add(makeUnique<CRectPassElement>(dim));
         }
         for (const auto& W : Desktop::windowState()->windows())
-            if (onShownSpecial(W, MONITOR) && !W->m_isFloating)
-                g_pHyprRenderer->renderWindow(W, MONITOR, NOW, true, Render::RENDER_PASS_ALL, false, false);
+            if (onShownSpecial(W, MONITOR) && !W->isFloating())
+                g_pHyprRenderer->renderWindow(ctx, W, MONITOR, W->presentation().renderPresentation(), NOW, true, Render::RENDER_PASS_ALL, false, false);
         for (const auto& W : Desktop::windowState()->windows())
-            if (onShownSpecial(W, MONITOR) && W->m_isFloating)
-                g_pHyprRenderer->renderWindow(W, MONITOR, NOW, true, Render::RENDER_PASS_ALL, false, false);
+            if (onShownSpecial(W, MONITOR) && W->isFloating())
+                g_pHyprRenderer->renderWindow(ctx, W, MONITOR, W->presentation().renderPresentation(), NOW, true, Render::RENDER_PASS_ALL, false, false);
         OverviewRender::flushPass(MONITOR);
     }
 
@@ -794,13 +798,13 @@ void COverview::render() {
 
     // TOP layers (the bar) here, under the dock. OVERLAY waits until after the
     // dock and the captions -- see the end of this function.
-    const size_t FIRSTLAYERELEMENT = g_pHyprRenderer->m_renderPass.m_passElements.size();
+    const size_t FIRSTLAYERELEMENT = ctx.m_pass.m_passElements.size();
 
     for (auto const& ls : MONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP]) {
         if (!Desktop::View::validMapped(ls.lock()))
             continue;
 
-        g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW);
+        g_pHyprRenderer->renderLayer(ctx, ls.lock(), MONITOR, NOW);
     }
 
     blockOverviewLayerBlurOptimization(FIRSTLAYERELEMENT);
@@ -828,13 +832,13 @@ void COverview::render() {
     // toasts, menus, the polkit prompt -- and it is the one thing on screen that
     // must never be covered. Drawn beside TOP (above), the dock pill painted over
     // the OSD, which Omarchy anchors bottom-centre exactly where the pill sits.
-    const size_t FIRSTOVERLAYELEMENT = g_pHyprRenderer->m_renderPass.m_passElements.size();
+    const size_t FIRSTOVERLAYELEMENT = ctx.m_pass.m_passElements.size();
 
     for (auto const& ls : MONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY]) {
         if (!Desktop::View::validMapped(ls.lock()))
             continue;
 
-        g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW);
+        g_pHyprRenderer->renderLayer(ctx, ls.lock(), MONITOR, NOW);
     }
 
     // And the layers' POPUPS after all of them, as Hyprland's own pass does
@@ -846,7 +850,7 @@ void COverview::render() {
             if (!Desktop::View::validMapped(ls.lock()))
                 continue;
 
-            g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW, true);
+            g_pHyprRenderer->renderLayer(ctx, ls.lock(), MONITOR, NOW, true);
         }
     }
 
@@ -890,7 +894,7 @@ void COverview::render() {
             ghost.tex = TEX;
             ghost.box = CBox{lastMousePosLocal.x - D / 2.0, lastMousePosLocal.y - D / 2.0, D, D}.round();
             ghost.a   = 0.85F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(ghost));
+            ctx.m_pass.add(makeUnique<CTexPassElement>(ghost));
         }
     }
 

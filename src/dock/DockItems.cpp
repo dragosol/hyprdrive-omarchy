@@ -34,7 +34,7 @@ SInterestCfg interestCfg() {
 }
 
 bool interesting(const PHLWINDOW& window, const SInterestCfg& cfg) {
-    if (!window || !window->m_isMapped)
+    if (!window || !window->mapped())
         return false;
 
     if (!cfg.isolate)
@@ -43,7 +43,7 @@ bool interesting(const PHLWINDOW& window, const SInterestCfg& cfg) {
     if (Minimize::isMinimized(window))
         return true;
 
-    if (window->m_isUrgent && cfg.agnosticUrgent)
+    if (Hyprdrive::Compat::urgent(window) && cfg.agnosticUrgent)
         return true;
 
     return cfg.activeWorkspace && window->m_workspace == cfg.activeWorkspace;
@@ -60,7 +60,7 @@ std::vector<std::string> runningClasses() {
     const auto CFG = interestCfg();
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto& WINDOW = windowRef;
-        if (!interesting(WINDOW, CFG) || WINDOW->m_class.empty())
+        if (!interesting(WINDOW, CFG) || WINDOW->metadata().appID().empty())
             continue;
 
         const auto CLASS = Hyprdrive::AppIdentity::groupKey(WINDOW);
@@ -305,8 +305,8 @@ uint64_t windowDigest() {
         }
 
         mix(sc<uint64_t>(reinterpret_cast<uintptr_t>(WINDOW.get())));
-        mix((WINDOW->m_isMapped ? 1ULL : 0ULL) | (WINDOW->m_isUrgent ? 2ULL : 0ULL));
-        mix(WINDOW->m_workspace ? sc<uint64_t>(WINDOW->m_workspace->m_id) : 0ULL);
+        mix((WINDOW->mapped() ? 1ULL : 0ULL) | (Hyprdrive::Compat::urgent(WINDOW) ? 2ULL : 0ULL));
+        mix(WINDOW->m_workspace ? sc<uint64_t>(Hyprdrive::Compat::id(WINDOW->m_workspace)) : 0ULL);
     }
 
     return h;
@@ -343,7 +343,7 @@ SItemsKey itemsKey() {
     // switch for a dock that is deliberately workspace-agnostic.
     if (ISOLATE_WS) {
         if (const auto MONITOR = Desktop::focusState()->monitor(); MONITOR && MONITOR->m_activeWorkspace)
-            key.activeWs = MONITOR->m_activeWorkspace->m_id;
+            key.activeWs = Hyprdrive::Compat::id(MONITOR->m_activeWorkspace);
     }
 
     return key;
@@ -513,7 +513,7 @@ void forcePreviewVisible(const PHLWINDOW& window) {
     // visibility change, so this is re-checked each frame rather than set once.
     if (window->m_suspended)
         window->setSuspended(false);
-    window->alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN)->setValueAndWarp(1.F);
+    window->presentation().alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN)->setValueAndWarp(1.F);
 
     if (const auto WORKSPACE = window->m_workspace; WORKSPACE && WORKSPACE->m_alpha) {
         WORKSPACE->m_alpha->setValueAndWarp(1.F);
@@ -551,7 +551,7 @@ float elapsedMs(const Time::steady_tp& since) {
 // and the reference reads both.
 bool classUrgent(const std::string& wmClass) {
     for (const auto& WINDOW : Desktop::windowState()->windows()) {
-        if (WINDOW && WINDOW->m_isMapped && WINDOW->m_isUrgent && Hyprdrive::AppIdentity::groupKey(WINDOW) == wmClass)
+        if (WINDOW && WINDOW->mapped() && Hyprdrive::Compat::urgent(WINDOW) && Hyprdrive::AppIdentity::groupKey(WINDOW) == wmClass)
             return true;
     }
 
@@ -563,12 +563,12 @@ STally buildTally() {
 
     const auto CFG = interestCfg();
     for (const auto& WINDOW : Desktop::windowState()->windows()) {
-        if (!WINDOW || !WINDOW->m_isMapped)
+        if (!WINDOW || !WINDOW->mapped())
             continue;
 
         const auto CLASS = Hyprdrive::AppIdentity::groupKey(WINDOW);
 
-        if (WINDOW->m_isUrgent)
+        if (Hyprdrive::Compat::urgent(WINDOW))
             out.urgent.insert(CLASS);
 
         if (!interesting(WINDOW, CFG))

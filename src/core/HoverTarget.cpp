@@ -2,7 +2,8 @@
 #include "Dock.hpp"
 #include "IOverview.hpp"
 
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 
 namespace Hyprdrive::HoverTarget {
     namespace {
@@ -14,7 +15,7 @@ namespace Hyprdrive::HoverTarget {
             if (!OVERVIEW || !OVERVIEW->pMonitor || openScrollOverviewForMonitor(OVERVIEW->pMonitor.lock()) != OVERVIEW)
                 return {};
             const auto TILE = OVERVIEW->actionTile();
-            return TILE && TILE->m_isMapped ? TILE : PHLWINDOW{};
+            return TILE && TILE->mapped() ? TILE : PHLWINDOW{};
         }
     }
 

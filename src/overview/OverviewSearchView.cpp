@@ -134,8 +134,8 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     // monitor-local RENDERED px, hence the m_scale on the way in.
     if (const float DOCK = std::clamp(IN.dock, 0.F, 1.F); DOCK > 0.001F) {
         float dockTopL = overviewTopChromeBottomL(MONITOR);
-        if (const auto WS = MONITOR->m_activeWorkspace; WS && WS->m_space) {
-            if (const auto WA = WS->m_space->workArea(); WA.w > 1 && WA.h > 1)
+        if (const auto WS = MONITOR->m_activeWorkspace; WS && WS->space()) {
+            if (const auto WA = WS->space()->workArea(); WA.w > 1 && WA.h > 1)
                 dockTopL = std::max(dockTopL, sc<float>(WA.y)); // a bar that DOES reserve
         }
 
@@ -201,8 +201,8 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
     // under the bar, which is as high as the pill ever goes.
     {
         float dockTopL = overviewTopChromeBottomL(MONITOR);
-        if (const auto WS = MONITOR->m_activeWorkspace; WS && WS->m_space) {
-            if (const auto WA = WS->m_space->workArea(); WA.w > 1 && WA.h > 1)
+        if (const auto WS = MONITOR->m_activeWorkspace; WS && WS->space()) {
+            if (const auto WA = WS->space()->workArea(); WA.w > 1 && WA.h > 1)
                 dockTopL = std::max(dockTopL, sc<float>(WA.y));
         }
         const float CEIL = (dockTopL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL) * sc<float>(MONITOR->m_scale);
@@ -491,8 +491,8 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
                 out.inspector.subtitle = ROW.app->generic;
             if (LIVE) {
                 out.inspector.status = "Open";
-                if (!LIVE->m_title.empty())
-                    out.inspector.detail1 = LIVE->m_title;
+                if (!LIVE->metadata().title().empty())
+                    out.inspector.detail1 = LIVE->metadata().title();
                 if (LIVE->m_workspace)
                     out.inspector.detail2 = "Workspace " + Hyprdrive::Rows::label(LIVE->m_workspace);
                 out.inspector.shortcutHint  = "Enter  Switch to window";
@@ -521,7 +521,7 @@ static SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vect
 // The output being drawn: drawSearch is handed a layout, not a monitor, and its
 // border fades are per output (two monitors, two search pills).
 static uint64_t renderMonitorId() {
-    const auto MON = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    const auto MON = g_pHyprRenderer->context().m_data.pMonitor.lock();
     return MON ? sc<uint64_t>(MON->m_id) : 0xFFFF;
 }
 
@@ -615,7 +615,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
     badgeBg.round         = BADGEROUND;
     badgeBg.roundingPower = POWER;
     if (DRAWPILL)
-        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(badgeBg));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(badgeBg));
 
     float      texFade = FADE;
     const auto ADDTEX  = [&](const auto& tex, const CBox& box) {
@@ -623,7 +623,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         data.tex = tex;
         data.box = box;
         data.a   = texFade;
-        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(data));
     };
 
     const auto GLYPHTEX = OverviewRender::text("\uF002", Hyprdrive::Config::highlightForeground().modifyA(0.92F), std::max(1, sc<int>(std::round(OVERVIEW_PILL_GLYPHPX * SCALE))), false,
@@ -646,7 +646,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             CRectPassElement::SRectData div;
             div.box   = divBox;
             div.color = Hyprdrive::Config::themeForeground().modifyA(0.12F * FADE);
-            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(div));
+            Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(div));
         }
     }
 
@@ -703,7 +703,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
                 sel.color         = ACCENT.modifyA(0.22F * FADE * LIT);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
-                g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(sel));
+                Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(sel));
             }
 
             if (E.status) {
@@ -795,7 +795,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
                 sel.color          = SELFILL.modifyA(SELFILL.a * FADE * CARD.alpha * LIT);
                 sel.round         = roundFor(ROW);
                 sel.roundingPower = POWER;
-                g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(sel));
+                Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(sel));
             }
 
             const float ROWPAD     = std::round(6.F * SCALE);
@@ -871,7 +871,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
             data.box     = box;
             data.a       = texFade;
             data.clipBox = IBOX;
-            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
+            Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(data));
         };
 
         const auto ICONTEX = OverviewRender::appIcon(L.inspector.icon);
@@ -987,7 +987,7 @@ static void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, in
         data.box     = box;
         data.a       = texFade * a;
         data.clipBox = FIELD;
-        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(data));
     };
 
     // Nothing measured is nothing to fit: the placeholder keeps the rest width.
@@ -1480,7 +1480,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         } else
             drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
         // The easter egg (KeyboardCat.hpp) opens out of the pill, over it.
-        Hyprdrive::KeyboardCat::render(monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
+        Hyprdrive::KeyboardCat::render(g_pHyprRenderer->context(), monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
     }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor

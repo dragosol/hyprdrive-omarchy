@@ -60,7 +60,7 @@ namespace Hyprdrive::Mosaic {
         std::string appOf(const PHLWINDOW& w) {
             if (!w)
                 return {};
-            return !w->m_initialClass.empty() ? w->m_initialClass : w->m_class;
+            return !w->metadata().initialAppID().empty() ? w->metadata().initialAppID() : w->metadata().appID();
         }
 
 
@@ -96,7 +96,7 @@ namespace Hyprdrive::Mosaic {
         }
 
         void onFloating(const PHLWINDOW& w) {
-            if (!w || !w->m_isFloating)
+            if (!w || !w->isFloating())
                 return;
             // A Super+drag floats the window for the drag: that is not the
             // user floating it (user, 2026-10-15, fedora: dragging Steam --

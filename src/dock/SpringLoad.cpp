@@ -13,9 +13,10 @@
 #include <cmath>
 
 #include <hyprland/src/Compositor.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/desktop/state/FocusState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
@@ -126,15 +127,15 @@ namespace Hyprdrive::SpringLoad {
 
         void unpin() {
             if (const auto W = g_pinned.lock(); W)
-                W->m_pinned = false;
+                W->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
             g_pinned.reset();
         }
 
         void syncPin() {
             const auto WINDOW = draggedWindow();
             if (WINDOW && swipeInFlight()) {
-                if (!g_pinned && WINDOW->m_isFloating && !WINDOW->m_pinned) {
-                    WINDOW->m_pinned = true;
+                if (!g_pinned && WINDOW->isFloating() && !Hyprdrive::Compat::pinned(WINDOW)) {
+                    WINDOW->m_state |= Desktop::View::WINDOW_STATE_PINNED;
                     g_pinned         = WINDOW;
                 }
                 return;
@@ -173,7 +174,7 @@ namespace Hyprdrive::SpringLoad {
             const auto CURRENT = monitor->m_activeWorkspace;
             if (!CURRENT || monitor->m_activeSpecialWorkspace)
                 return false;
-            return dir > 0 || CURRENT->m_id > 1;
+            return dir > 0 || Hyprdrive::Compat::id(CURRENT) > 1;
         }
 
         // gestures:workspace_swipe_use_r for the length of the spring's swipe:
@@ -360,7 +361,7 @@ namespace Hyprdrive::SpringLoad {
             d.tex = TEX;
             d.box = box;
             d.a   = sc<float>(A * (0.55 + 0.45 * P));
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
         }
 
         void stopTick() {
@@ -478,8 +479,8 @@ namespace Hyprdrive::SpringLoad {
                 // The window was carried while its old desktop went hidden: the
                 // client may still be suspended (Ghostty then never draws its
                 // new size) or never have been told the size it was tiled to.
-                if (const auto W = g_releaseWindow.lock(); W && W->m_isMapped) {
-                    if (W->m_workspace && W->m_workspace->isVisible())
+                if (const auto W = g_releaseWindow.lock(); W && W->mapped()) {
+                    if (W->m_workspace && W->m_workspace->visible())
                         W->setSuspended(false);
                     W->sendWindowSize(true);
                 }
@@ -487,9 +488,9 @@ namespace Hyprdrive::SpringLoad {
             });
         });
 
-        g_render = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
-            if (stage == RENDER_LAST_MOMENT && g_edge.dir)
-                renderLine(g_pHyprRenderer->m_renderData.pMonitor.lock());
+        g_render = Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent e) {
+            if (e.stage == RENDER_LAST_MOMENT && g_edge.dir)
+                renderLine(e.monitor);
         });
     }
 

@@ -181,13 +181,13 @@ SP<CShader> shader() {
 // frame would have colour-managed the texture (HDR, an ICC profile), the
 // shader cannot follow Hyprland's CM path, so the icon is drawn flat and right
 // rather than tilted and in the wrong colours. Same test renderToFBInternal makes.
-bool needsColorManagement(const SP<Render::ITexture>& tex) {
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
+bool needsColorManagement(Render::CRenderContext& ctx, const SP<Render::ITexture>& tex) {
+    const auto MONITOR = ctx.m_data.pMonitor;
     if (!MONITOR || !Render::GL::g_pHyprOpenGL->m_cmSupported || !Hyprdrive::Config::getValue<bool>("render:cm_enabled") || MONITOR->doesNoShaderCM())
         return false;
 
     const auto SOURCE = tex->m_imageDescription ? tex->m_imageDescription : NColorManagement::getDefaultImageDescription();
-    auto       target = g_pHyprRenderer->m_renderData.currentFB ? g_pHyprRenderer->m_renderData.currentFB->imageDescription() : nullptr;
+    auto       target = ctx.m_data.currentFB ? ctx.m_data.currentFB->imageDescription() : nullptr;
     if (!target)
         target = MONITOR->workBufferImageDescription();
 
@@ -408,23 +408,24 @@ void queue(SP<Render::ITexture> tex, const CBox& box, float alpha, const SPose& 
         data.tex = tex;
         data.box = flatBox(box, pose);
         data.a   = alpha;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(data));
         return;
     }
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CDockTiltPassElement>(CDockTiltPassElement::SData{.tex = tex, .box = box, .alpha = alpha, .pose = pose}));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CDockTiltPassElement>(CDockTiltPassElement::SData{.tex = tex, .box = box, .alpha = alpha, .pose = pose}));
 }
 
 bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alpha, bool sum, const CBox* scissorBox) {
-    if (!tex || !tex->ok() || boxIn.width < 1 || boxIn.height < 1 || alpha <= 0.F || !g_pHyprRenderer->m_renderData.pMonitor)
+    auto& ctx = g_pHyprRenderer->context();
+    if (!tex || !tex->ok() || boxIn.width < 1 || boxIn.height < 1 || alpha <= 0.F || !ctx.m_data.pMonitor)
         return false;
-    const auto PROGRAM = tex->m_type == Render::TEXTURE_RGBA && tex->m_transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(tex) ? shader() : nullptr;
+    const auto PROGRAM = tex->m_type == Render::TEXTURE_RGBA && tex->m_transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(ctx, tex) ? shader() : nullptr;
     if (!PROGRAM)
         return false;
 
     CBox box = boxIn;
-    g_pHyprRenderer->m_renderData.renderModif.applyToBox(box);
-    const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(box, tex->m_transform);
+    ctx.m_data.renderModif.applyToBox(box);
+    const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(ctx, box, tex->m_transform);
 
     Render::GL::g_pHyprOpenGL->blend(true);
     if (sum)
@@ -448,9 +449,9 @@ bool drawAdditive(const SP<Render::ITexture>& tex, const CBox& boxIn, float alph
 
     glBindVertexArray(S->getUniformLocation(SHADER_SHADER_VAO));
     if (scissorBox)
-        Render::GL::g_pHyprOpenGL->scissor(*scissorBox);
+        Render::GL::g_pHyprOpenGL->scissor(ctx, *scissorBox, ctx.m_data.transformDamage);
     else
-        Render::GL::g_pHyprOpenGL->scissor(nullptr);
+        Render::GL::g_pHyprOpenGL->disableScissor();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     tex->unbind();
@@ -472,34 +473,32 @@ CDockTiltPassElement::CDockTiltPassElement(const SData& data_) : data(data_) {
     ;
 }
 
-std::vector<UP<IPassElement>> CDockTiltPassElement::draw() {
+std::vector<UP<IPassElement>> CDockTiltPassElement::draw(Render::CRenderContext& ctx) {
     const auto& TEX = data.tex;
-    if (!TEX || !TEX->ok() || data.box.width < 1 || data.box.height < 1 || data.alpha <= 0.F || !g_pHyprRenderer->m_renderData.pMonitor)
+    if (!TEX || !TEX->ok() || data.box.width < 1 || data.box.height < 1 || data.alpha <= 0.F || !ctx.m_data.pMonitor)
         return {};
 
     CBox box = data.box;
-    g_pHyprRenderer->m_renderData.renderModif.applyToBox(box);
+    ctx.m_data.renderModif.applyToBox(box);
 
-    auto transform = TEX->m_transform;
-    if (g_pHyprRenderer->monitorTransformEnabled())
-        transform = Math::composeTransform(Math::wlTransformToHyprutils(Math::invertTransform(g_pHyprRenderer->m_renderData.pMonitor->m_transform)), transform);
+    auto transform = TEX->m_transform; // 0.57: the pass buffer is always monitor-oriented
 
-    const auto PROGRAM = TEX->m_type == Render::TEXTURE_RGBA && transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(TEX) ? shader() : nullptr;
+    const auto PROGRAM = TEX->m_type == Render::TEXTURE_RGBA && transform == HYPRUTILS_TRANSFORM_NORMAL && !needsColorManagement(ctx, TEX) ? shader() : nullptr;
 
-    CRegion damage{g_pHyprRenderer->m_renderData.damage};
+    CRegion damage{ctx.m_data.damage};
     damage.intersect(projectedBounds(box, data.pose));
-    if (!g_pHyprRenderer->m_renderData.clipBox.empty())
-        damage.intersect(g_pHyprRenderer->m_renderData.clipBox);
+    if (!ctx.m_data.clipBox.empty())
+        damage.intersect(ctx.m_data.clipBox);
     if (damage.empty())
         return {};
 
     // Anything the shader cannot serve is still an icon: flat, at the pose's size.
     if (!PROGRAM) {
-        Render::GL::g_pHyprOpenGL->renderTexture(TEX, flatBox(data.box, data.pose), {.damage = &damage, .a = data.alpha});
+        Render::GL::g_pHyprOpenGL->renderTexture(ctx, TEX, flatBox(data.box, data.pose), {.damage = &damage, .a = data.alpha});
         return {};
     }
 
-    const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(box, transform).copy().multiply(homography(box, data.pose));
+    const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(ctx, box, transform).copy().multiply(homography(box, data.pose));
 
     Render::GL::g_pHyprOpenGL->blend(true);
 
@@ -518,34 +517,34 @@ std::vector<UP<IPassElement>> CDockTiltPassElement::draw() {
     glUniform1f(g_locSigma, GLARE_SIGMA);
 
     glBindVertexArray(S->getUniformLocation(SHADER_SHADER_VAO));
-    damage.forEachRect([](const auto& RECT) {
-        Render::GL::g_pHyprOpenGL->scissor(&RECT, g_pHyprRenderer->m_renderData.transformDamage);
+    damage.forEachRect([&ctx](const auto& RECT) {
+        Render::GL::g_pHyprOpenGL->scissor(ctx, &RECT, ctx.m_data.transformDamage);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     });
 
-    Render::GL::g_pHyprOpenGL->scissor(nullptr);
+    Render::GL::g_pHyprOpenGL->disableScissor();
     glBindVertexArray(0);
     TEX->unbind();
     return {};
 }
 
-bool CDockTiltPassElement::needsLiveBlur() {
+bool CDockTiltPassElement::needsLiveBlur(Render::CRenderContext&) {
     return false;
 }
 
-bool CDockTiltPassElement::needsPrecomputeBlur() {
+bool CDockTiltPassElement::needsPrecomputeBlur(Render::CRenderContext&) {
     return false;
 }
 
-std::optional<CBox> CDockTiltPassElement::boundingBox() {
-    const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
+std::optional<CBox> CDockTiltPassElement::boundingBox(Render::CRenderContext& ctx) {
+    const auto MONITOR = ctx.m_data.pMonitor;
     if (!MONITOR)
         return std::nullopt;
 
     return projectedBounds(data.box, data.pose).scale(1.F / MONITOR->m_scale).round();
 }
 
-CRegion CDockTiltPassElement::opaqueRegion() {
+CRegion CDockTiltPassElement::opaqueRegion(Render::CRenderContext&) {
     return {};
 }
 

@@ -12,8 +12,10 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/render/Context.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -122,14 +124,14 @@ struct SDeferredWindowGeometry {
         applied           = true;
         prevPos           = WINDOW->positionAnimation()->value();
         prevSize          = WINDOW->sizeAnimation()->value();
-        prevAnimatingIn   = WINDOW->m_animatingIn;
+        prevAnimatingIn   = WINDOW->presentation().animatingIn();
         prevPosAnimating  = WINDOW->positionAnimation()->isBeingAnimated();
         prevSizeAnimating = WINDOW->sizeAnimation()->isBeingAnimated();
         COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->positionAnimation().get(), true);
         COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->sizeAnimation().get(), true);
         WINDOW->positionAnimation()->value() = pos;
         WINDOW->sizeAnimation()->value()     = size;
-        WINDOW->m_animatingIn                = true;
+        WINDOW->presentation().setAnimatingIn(true);
         if (const auto WS = workspace.lock(); WS && zeroWorkspaceOffset) {
             prevOffset                = WS->m_renderOffset->value();
             WS->m_renderOffset->value() = {};
@@ -145,7 +147,7 @@ struct SDeferredWindowGeometry {
         applied                              = false;
         WINDOW->positionAnimation()->value() = prevPos;
         WINDOW->sizeAnimation()->value()     = prevSize;
-        WINDOW->m_animatingIn                = prevAnimatingIn;
+        WINDOW->presentation().setAnimatingIn(prevAnimatingIn);
         COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->positionAnimation().get(), prevPosAnimating);
         COverviewAnimatedVariableAccess::setBeingAnimated(WINDOW->sizeAnimation().get(), prevSizeAnimating);
         if (const auto WS = workspace.lock(); WS && zeroWorkspaceOffset)
@@ -162,15 +164,15 @@ class CDeferredWindowGeometryPassElement : public IPassElement {
             m_state->restore();
     }
 
-    std::vector<UP<IPassElement>> draw() override {
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext&) override {
         if (m_state)
             m_apply ? m_state->apply() : m_state->restore();
         return {};
     }
-    bool needsLiveBlur() override {
+    bool needsLiveBlur(Render::CRenderContext&) override {
         return false;
     }
-    bool needsPrecomputeBlur() override {
+    bool needsPrecomputeBlur(Render::CRenderContext&) override {
         return false;
     }
     const char* passName() override {
@@ -179,10 +181,10 @@ class CDeferredWindowGeometryPassElement : public IPassElement {
     ePassElementType type() override {
         return EK_CUSTOM;
     }
-    bool undiscardable() override {
+    bool undiscardable(Render::CRenderContext&) override {
         return true;
     }
-    bool disableSimplification() override {
+    bool disableSimplification(Render::CRenderContext&) override {
         return true;
     }
 
@@ -195,8 +197,8 @@ static PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
     if (!window)
         return nullptr;
 
-    if (window->m_group)
-        return window->m_group->current();
+    if (window->grouping().group())
+        return window->grouping().group()->current();
 
     return window;
 }
@@ -297,14 +299,15 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
 
     if (!window || !monitor || minify <= 0.0 || minify > MINIFY_THRESHOLD)
         return;
-    if (!g_pHyprRenderer->m_renderData.currentFB)
+    auto& ctx = g_pHyprRenderer->context();
+    if (!ctx.m_data.currentFB)
         return;
 
-    const auto FBFORMAT     = g_pHyprRenderer->m_renderData.currentFB->m_drmFormat;
+    const auto FBFORMAT     = ctx.m_data.currentFB->m_drmFormat;
     // currentPass(), not m_renderPass: the dock's hover previews are queued into
     // a REDIRECTED nested pass (CDockLivePreviewPassElement). For the overview
     // the two are the same pass.
-    auto&      passElements = g_pHyprRenderer->currentPass().m_passElements;
+    auto&      passElements = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements;
 
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         if (!passElements[i].element)
@@ -343,7 +346,7 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
         const int  FBW        = W >> SHIFT;
         const int  FBH        = H >> SHIFT;
         const auto SURFACE    = spe->m_data.surface;
-        const auto IMAGEDESC  = g_pHyprRenderer->m_renderData.currentFB ? g_pHyprRenderer->m_renderData.currentFB->imageDescription() : NColorManagement::PImageDescription{};
+        const auto IMAGEDESC  = ctx.m_data.currentFB ? ctx.m_data.currentFB->imageDescription() : NColorManagement::PImageDescription{};
         // A surface pass element always carries its surface; the texture is the
         // fallback key so a hypothetical one without it still gets a mipmap
         // (rebuilt every draw, exactly as the whole cache used to be).
@@ -416,7 +419,7 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
             if (!entry.fb->alloc(FBW, FBH, FBFORMAT))
                 continue;
         }
-        if (g_pHyprRenderer->m_renderData.currentFB)
+        if (ctx.m_data.currentFB)
             entry.fb->setImageDescription(IMAGEDESC);
 
         const auto MIPPED = entry.fb->getTexture();
@@ -428,7 +431,7 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
             const CRegion FULLDAMAGE{FULLBOX};
 
             {
-                auto bindPrefilter = g_pHyprRenderer->bindTempFB(entry.fb);
+                auto bindPrefilter = g_pHyprRenderer->bindTempFB(ctx, entry.fb);
 
                 // A plain texture copy into a buffer of the TEXTURE's size, so
                 // no monitor projection (2026-10-01): bindTempFB leaves the
@@ -438,7 +441,7 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
                 // strip mini drew as an empty outline (a half-rotated one while
                 // it flew). Same set-up Hyprland uses to scale a wallpaper into
                 // its own FB (Renderer.cpp, RPT_EXPORT).
-                auto&      RD           = g_pHyprRenderer->m_renderData;
+                auto&      RD           = ctx.m_data;
                 const auto OLDPROJ      = RD.projectionType;
                 const auto OLDFBSIZE    = RD.fbSize;
                 const auto OLDTRANSFDMG = RD.transformDamage;
@@ -446,17 +449,17 @@ static void prefilterOverviewWindowTextures(const PHLWINDOW& window, PHLMONITOR 
                 glGetIntegerv(GL_VIEWPORT, oldViewport);
                 RD.fbSize          = Vector2D{sc<double>(FBW), sc<double>(FBH)};
                 RD.transformDamage = false;
-                g_pHyprRenderer->setProjectionType(Render::RPT_EXPORT);
+                g_pHyprRenderer->setProjectionType(ctx, Render::RPT_EXPORT);
                 g_pHyprRenderer->setViewport(0, 0, FBW, FBH);
-                auto restoreTarget = Hyprutils::Utils::CScopeGuard([&RD, OLDPROJ, OLDFBSIZE, OLDTRANSFDMG, oldViewport] {
+                auto restoreTarget = Hyprutils::Utils::CScopeGuard([&ctx, &RD, OLDPROJ, OLDFBSIZE, OLDTRANSFDMG, oldViewport] {
                     RD.fbSize          = OLDFBSIZE;
                     RD.transformDamage = OLDTRANSFDMG;
-                    g_pHyprRenderer->setProjectionType(OLDPROJ);
+                    g_pHyprRenderer->setProjectionType(ctx, OLDPROJ);
                     g_pHyprRenderer->setViewport(oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3]);
                 });
 
-                g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, FULLDAMAGE);
-                g_pHyprRenderer->draw(CTexPassElement::SRenderData{.tex = SRC, .box = FULLBOX, .damage = FULLDAMAGE}, FULLDAMAGE);
+                g_pHyprRenderer->draw(ctx, CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, FULLDAMAGE);
+                g_pHyprRenderer->draw(ctx, CTexPassElement::SRenderData{.tex = SRC, .box = FULLBOX, .damage = FULLDAMAGE}, FULLDAMAGE);
             }
 
             glBindTexture(GL_TEXTURE_2D, MIPPED->m_texID);
@@ -493,13 +496,13 @@ static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITO
     if (roundingPx < 0 && Fullscreen::controller()->isFullscreen(window))
         return;
 
-    const int   rounding      = roundingPx >= 0 ? roundingPx : sc<int>(std::round(window->rounding() * monitor->m_scale * renderScale));
-    const float roundingPower = window->roundingPower();
+    const int   rounding      = roundingPx >= 0 ? roundingPx : sc<int>(std::round(window->presentation().rounding() * monitor->m_scale * renderScale));
+    const float roundingPower = window->presentation().roundingPower();
 
     if (rounding <= 0)
         return;
 
-    auto& passElements = g_pHyprRenderer->currentPass().m_passElements;
+    auto& passElements = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements;
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         const auto& passElement = passElements[i];
         if (!passElement.element)
@@ -551,7 +554,7 @@ static float getOverviewHyprbarLogicalHeight(const PHLWINDOW& window) {
     if (!window || !window->m_ruleApplicator->decorate().valueOrDefault())
         return 0.F;
 
-    for (const auto& deco : window->m_windowDecorations) {
+    for (const auto& deco : window->presentation().decorations()) {
         if (!isOverviewHyprbarDecoration(deco.get()))
             continue;
 
@@ -588,7 +591,7 @@ static void blockOverviewWindowBlurOptimization(const PHLWINDOW& window, size_t 
     if (!window)
         return;
 
-    auto& passElements = g_pHyprRenderer->currentPass().m_passElements;
+    auto& passElements = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements;
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         const auto& passElement = passElements[i];
         if (!passElement.element)
@@ -606,12 +609,12 @@ static void scaleOverviewSubsurfaceOffsets(const PHLWINDOW& window, const Vector
     if (!window)
         return;
 
-    const auto REPORTEDSIZE = window->getReportedSize();
+    const auto REPORTEDSIZE = window->backend().reportedSize();
     if (REPORTEDSIZE.x <= 0 || REPORTEDSIZE.y <= 0)
         return;
 
     const Vector2D SUBSURFACESCALE = targetSize / REPORTEDSIZE;
-    auto&          passElements    = g_pHyprRenderer->currentPass().m_passElements;
+    auto&          passElements    = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements;
 
     for (size_t i = firstElement; i < passElements.size(); ++i) {
         const auto& passElement = passElements[i];
@@ -639,11 +642,11 @@ static SOverviewWindowMetrics getOverviewWindowMetrics(PHLMONITOR monitor, const
         return metrics;
 
     metrics.pxScale                 = monitor->m_scale * renderScale;
-    metrics.borderSize              = window->getRealBorderSize();
+    metrics.borderSize              = window->presentation().borderSize();
     metrics.borderPx                = sc<int>(std::round(metrics.borderSize * monitor->m_scale));
     metrics.borderPxScaled          = metrics.borderSize * metrics.pxScale;
-    metrics.roundingBase            = window->rounding();
-    metrics.roundingPower           = window->roundingPower();
+    metrics.roundingBase            = window->presentation().rounding();
+    metrics.roundingPower           = window->presentation().roundingPower();
     metrics.correctionOffset        = metrics.borderSize * (M_SQRT2 - 1) * std::max(2.0 - metrics.roundingPower, 0.0);
     metrics.outerRound              = metrics.roundingBase > 0 ? (metrics.roundingBase + metrics.borderSize) - metrics.correctionOffset : 0.F;
     metrics.roundingPx              = sc<int>(std::round(metrics.roundingBase * metrics.pxScale));
@@ -666,7 +669,7 @@ static std::optional<SDecorationPositioningReply> getOverviewTopStickyDecoration
         return std::nullopt;
 
     const float HEIGHT  = std::max(0.F, sc<float>(INFO.desiredExtents.topLeft.y) * heightScale);
-    const float BORDER  = sc<float>(window->getRealBorderSize());
+    const float BORDER  = sc<float>(window->presentation().borderSize());
     const bool  PRECEDE = shouldOverviewBorderIncludeHyprbar(window);
     const float WIDTH   = PRECEDE ? window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x : window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x + BORDER * 2.F;
     const float YOFFSET = PRECEDE ? 0.F : BORDER;
@@ -719,14 +722,12 @@ static void renderOverviewHyprbarDecoration(SOverviewCustomDecorationRenderState
     const Vector2D previousWindowPos       = window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     const Vector2D previousWindowSize      = window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     const auto     WORKSPACE               = window->m_workspace;
-    const bool     OVERRIDEWORKSPACEOFFSET = WORKSPACE && !window->m_pinned;
+    const bool     OVERRIDEWORKSPACEOFFSET = WORKSPACE && !Hyprdrive::Compat::pinned(window);
     const Vector2D previousWorkspaceOffset = OVERRIDEWORKSPACEOFFSET ? WORKSPACE->m_renderOffset->value() : Vector2D{};
     const auto     previousReplyData       = g_pDecorationPositioner->getDataFor(decoration, window);
     const auto     previousReply           = previousReplyData ? previousReplyData->lastReply : SDecorationPositioningReply{};
     const auto     previousRounding        = window->m_ruleApplicator->rounding();
     const auto     previousBorderSize      = window->m_ruleApplicator->borderSize();
-    const bool     previousBorderCacheDirty = window->m_borderSizeCacheDirty;
-    const int      previousCachedBorderSize = window->m_cachedBorderSize;
 
     // ONE RESTORE, TWO EXITS. Every line below has to be put back whether the
     // positioning reply fails here and now or the frame ends normally later, and
@@ -736,14 +737,12 @@ static void renderOverviewHyprbarDecoration(SOverviewCustomDecorationRenderState
     // as the three copies of the dock's still-moving test; one lambda, two
     // callers. It re-reads the global state rather than closing over the pointer
     // above because the deferred caller runs a frame later.
-    const auto RESTOREBARS = [window, previousBarTextSize, previousButtonPadding, previousButtonSizes, previousRounding, previousBorderSize, previousBorderCacheDirty,
-                              previousCachedBorderSize] {
+    const auto RESTOREBARS = [window, previousBarTextSize, previousButtonPadding, previousButtonSizes, previousRounding, previousBorderSize] {
         Hyprdrive::Config::setValue("plugin:hyprbars:bar_text_size", previousBarTextSize);
         Hyprdrive::Config::setValue("plugin:hyprbars:bar_button_padding", previousButtonPadding);
         window->m_ruleApplicator->roundingOverride(previousRounding);
         window->m_ruleApplicator->borderSizeOverride(previousBorderSize);
-        window->m_borderSizeCacheDirty = previousBorderCacheDirty;
-        window->m_cachedBorderSize     = previousCachedBorderSize;
+        window->presentation().invalidateBorderSize();
         if (auto* const BARSTATE = getOverviewHyprbarGlobalState()) {
             for (size_t i = 0; i < previousButtonSizes.size() && i < BARSTATE->buttons.size(); ++i)
                 BARSTATE->buttons[i].size = previousButtonSizes[i];
@@ -751,12 +750,12 @@ static void renderOverviewHyprbarDecoration(SOverviewCustomDecorationRenderState
     };
 
     const auto scaledRounding   = std::max<Config::INTEGER>(0, sc<Config::INTEGER>(std::round(window->m_ruleApplicator->rounding().valueOrDefault() * metrics.renderScale)));
-    const auto scaledBorderSize = std::max<Config::INTEGER>(0, sc<Config::INTEGER>(std::round(window->getRealBorderSize() * metrics.renderScale)));
+    const auto scaledBorderSize = std::max<Config::INTEGER>(0, sc<Config::INTEGER>(std::round(window->presentation().borderSize() * metrics.renderScale)));
     window->m_ruleApplicator->rounding().set(scaledRounding, Desktop::Types::PRIORITY_SET_PROP);
     window->m_ruleApplicator->borderSize().set(scaledBorderSize, Desktop::Types::PRIORITY_SET_PROP);
-    window->m_borderSizeCacheDirty = true;
+    window->presentation().invalidateBorderSize();
 
-    window->positionAnimation()->value() = monitor->m_position + windowBox.pos() / monitor->m_scale - window->m_floatingOffset;
+    window->positionAnimation()->value() = monitor->m_position + windowBox.pos() / monitor->m_scale - window->presentation().floatingOffset();
     window->sizeAnimation()->value()     = windowBox.size() / monitor->m_scale;
 
     const auto REPLY = getOverviewTopStickyDecorationReply(decoration, window, metrics.renderScale);
@@ -774,7 +773,7 @@ static void renderOverviewHyprbarDecoration(SOverviewCustomDecorationRenderState
         previousReplyData->lastReply = *REPLY;
     decoration->onPositioningReply(*REPLY);
 
-    decoration->draw(monitor, PARTOFWINDOW ? 1.F : metrics.targetOpacity);
+    decoration->draw(g_pHyprRenderer->context(), monitor, PARTOFWINDOW ? 1.F : metrics.targetOpacity, window->presentation().renderPresentation());
 
     state.queuedAny = true;
     state.restoreFns.emplace_back([window, decoration, WORKSPACE, OVERRIDEWORKSPACEOFFSET, previousWindowPos, previousWindowSize, previousWorkspaceOffset, previousReply,
@@ -796,7 +795,7 @@ static void renderOverviewHyprbarDecoration(SOverviewCustomDecorationRenderState
 }
 
 static void renderOverviewWindowShadow(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, bool selected) {
-    if (!monitor || !window || (!window->m_isMapped))
+    if (!monitor || !window || (!window->mapped()))
         return;
 
     const auto PSHADOWS      = Hyprdrive::Config::getValue<int>("decoration:shadow:enabled");
@@ -807,7 +806,7 @@ static void renderOverviewWindowShadow(PHLMONITOR monitor, const PHLWINDOW& wind
     if (PSHADOWS != 1 || PSHADOWSIZE <= 0)
         return;
 
-    if (window->isX11OverrideRedirect() || window->m_X11DoesntWantBorders || !window->m_ruleApplicator->decorate().valueOrDefault() ||
+    if (window->backend().traits().overrideRedirect || window->backend().traits().suggestsNoBorder || !window->m_ruleApplicator->decorate().valueOrDefault() ||
         window->m_ruleApplicator->noShadow().valueOrDefault())
         return;
 
@@ -826,11 +825,14 @@ static void renderOverviewWindowShadow(PHLMONITOR monitor, const PHLWINDOW& wind
     if (shadowBox.width < 1 || shadowBox.height < 1)
         return;
 
-    const auto& shadowColor = window->m_realShadowColor;
+    const auto* const SHADOWGRADIENT = Hyprdrive::Priv::shadowGradient(window);
+    if (!SHADOWGRADIENT)
+        return;
+    const auto shadowColor = SHADOWGRADIENT->renderState().current;
     if (std::ranges::none_of(shadowColor.m_colors, [](const CHyprColor& color) { return color.a > 0.F; }))
         return;
 
-    g_pHyprRenderer->addPassElement(makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
+    g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
         .monitor       = monitor,
         .fullBox       = shadowBox,
         .cutoutBox     = cutoutBox.round(),
@@ -845,7 +847,7 @@ static void renderOverviewWindowShadow(PHLMONITOR monitor, const PHLWINDOW& wind
 }
 
 static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, bool selected) {
-    if (!monitor || !window || (!window->m_isMapped))
+    if (!monitor || !window || (!window->mapped()))
         return;
 
     // The ring fades between the window's own border and the highlight on
@@ -859,7 +861,9 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
     if (metrics.borderSize <= 0.F && MIX <= 0.F)
         return;
 
-    auto grad = window->m_realBorderColor;
+    const auto* const BORDERGRADIENT = Hyprdrive::Priv::borderGradient(window);
+    const auto        BORDERSTATE    = BORDERGRADIENT ? BORDERGRADIENT->renderState() : CAnimatedDecorationGradient::SRenderState{};
+    auto              grad           = BORDERSTATE.current;
 
     const CBox borderBox = getOverviewBorderBox(windowBox, metrics);
 
@@ -898,7 +902,7 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
         data.a            = 1.F;
         data.borderSize   = std::max(1.F, metrics.borderSize);
         data.hasGrad2     = false;
-        g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(data));
         return;
     }
 
@@ -915,22 +919,22 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
         data.lerp       = MIX;
         data.a          = metrics.borderSize <= 0.F ? MIX : metrics.targetOpacity + ((1.F - metrics.targetOpacity) * MIX);
         data.borderSize = std::max(1.F, metrics.borderSize);
-        g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(data));
         return;
     }
 
-    if (window->m_borderFadeAnimationProgress->isBeingAnimated()) {
+    if (BORDERSTATE.transitioning) {
         data.hasGrad2 = true;
-        data.grad1    = window->m_realBorderColorPrevious;
+        data.grad1    = BORDERSTATE.previous;
         data.grad2    = grad;
-        data.lerp     = window->m_borderFadeAnimationProgress->value();
+        data.lerp     = BORDERSTATE.progress;
     } else
         data.grad1 = grad;
-    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(data));
+    g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(data));
 }
 
 static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, float alpha) {
-    if (!monitor || !window || !window->m_group || window->m_group->size() < 1)
+    if (!monitor || !window || !window->grouping().group() || window->grouping().group()->size() < 1)
         return;
 
     const auto PINDICATORHEIGHT = Hyprdrive::Config::getValue<int>("group:groupbar:indicator_height");
@@ -947,8 +951,8 @@ static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW
     if (PINDICATORHEIGHT <= 0)
         return;
 
-    const bool  groupLocked  = window->m_group->locked() || g_pKeybindManager->m_groupsLocked;
-    const auto  groupWindows = window->m_group->windows();
+    const bool  groupLocked  = window->grouping().group()->locked() || Desktop::windowState()->groupsLocked();
+    const auto  groupWindows = window->grouping().group()->windows();
     const auto  focusedWindow = Desktop::focusState()->window();
     const float indicatorH   = sc<float>(PINDICATORHEIGHT) * metrics.pxScale;
     const float outerGap     = sc<float>(POUTERGAP) * metrics.pxScale;
@@ -998,12 +1002,12 @@ static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW
         data.color         = color;
         data.round         = rounding;
         data.roundingPower = PROUNDINGPOWER;
-        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(data));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(data));
     }
 }
 
 static void renderOverviewGroupTabTitles(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, float alpha) {
-    if (!monitor || !window || !window->m_group || window->m_group->size() < 1 || alpha <= 0.F)
+    if (!monitor || !window || !window->grouping().group() || window->grouping().group()->size() < 1 || alpha <= 0.F)
         return;
 
     const auto PRENDERTITLES            = Hyprdrive::Config::getValue<bool>("group:groupbar:render_titles");
@@ -1024,8 +1028,8 @@ static void renderOverviewGroupTabTitles(PHLMONITOR monitor, const PHLWINDOW& wi
     if (!PRENDERTITLES || PHEIGHT <= 0)
         return;
 
-    const bool  groupLocked  = window->m_group->locked() || g_pKeybindManager->m_groupsLocked;
-    const auto  groupWindows = window->m_group->windows();
+    const bool  groupLocked  = window->grouping().group()->locked() || Desktop::windowState()->groupsLocked();
+    const auto  groupWindows = window->grouping().group()->windows();
     const auto  focusedWindow = Desktop::focusState()->window();
     const float outerGap     = sc<float>(POUTERGAP) * metrics.pxScale;
     const float innerGap     = sc<float>(PINNERGAP) * metrics.pxScale;
@@ -1086,7 +1090,7 @@ static void renderOverviewGroupTabTitles(PHLMONITOR monitor, const PHLWINDOW& wi
 
         const int maxWidth = std::max(1, sc<int>(std::round(box.width - textPadding * 2.F)));
         auto      titleTex =
-            OverviewRender::text(member->m_title, textColor, fontSizePx, false, FONTFAMILY, maxWidth, isCurrent ? FONTWEIGHTACTIVE->m_value : FONTWEIGHTINACTIVE->m_value);
+            OverviewRender::text(member->metadata().title(), textColor, fontSizePx, false, FONTFAMILY, maxWidth, isCurrent ? FONTWEIGHTACTIVE->m_value : FONTWEIGHTINACTIVE->m_value);
         if (!titleTex || !titleTex->ok())
             continue;
 
@@ -1101,7 +1105,7 @@ static void renderOverviewGroupTabTitles(PHLMONITOR monitor, const PHLWINDOW& wi
         data.tex = titleTex;
         data.box = textBox;
         data.a   = 1.F;
-        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(data));
     }
 }
 
@@ -1112,14 +1116,14 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
     if (!monitor || !window)
         return state;
 
-    window->updateWindowDecos();
+    window->presentation().updateDecorations();
 
     Render::SRenderModifData modif;
     modif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, metrics.renderScale);
     modif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, workspaceBox.pos());
     bool        drewAny = false;
 
-    for (const auto& deco : window->m_windowDecorations) {
+    for (const auto& deco : window->presentation().decorations()) {
         if (!deco || deco->getDecorationType() != DECORATION_CUSTOM || deco->getDecorationLayer() != layer)
             continue;
 
@@ -1129,17 +1133,17 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
         }
 
         if (!drewAny) {
-            g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
+            g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
             drewAny = true;
         }
 
         deco->updateWindow(window);
-        deco->draw(monitor, metrics.targetOpacity);
+        deco->draw(g_pHyprRenderer->context(), monitor, metrics.targetOpacity, window->presentation().renderPresentation());
         state.queuedAny = true;
     }
 
     if (drewAny)
-        g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
 
     return state;
 }
@@ -1147,7 +1151,7 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
 } // namespace
 
 bool shouldBlurBackground(const PHLWINDOW& window) {
-    return window && g_pHyprRenderer && g_pHyprRenderer->shouldBlur(window);
+    return window && window->shouldBlur();
 }
 
 static bool overviewBoxContains(const CBox& outer, const CBox& inner) {
@@ -1172,7 +1176,7 @@ static bool overviewWorkspaceBoxReadyForPrecomputedBlur(PHLMONITOR monitor, cons
 }
 
 bool shouldUsePrecomputedBlur(const PHLWINDOW& window, PHLMONITOR monitor, const CBox* workspaceBox, const CBox* windowBox, bool dragged) {
-    return !dragged && Hyprdrive::Config::getValue<bool>("decoration:blur:new_optimizations") && overviewShowsWindow(window) && !window->m_isFloating && shouldBlurBackground(window) &&
+    return !dragged && Hyprdrive::Config::getValue<bool>("decoration:blur:new_optimizations") && overviewShowsWindow(window) && !window->isFloating() && shouldBlurBackground(window) &&
         overviewWindowFitsWorkspaceBox(workspaceBox, windowBox) && overviewWorkspaceBoxReadyForPrecomputedBlur(monitor, workspaceBox);
 }
 
@@ -1241,7 +1245,7 @@ void forceDecoRecalc(const PHLWINDOW& window) {
         return;
 
     g_pDecorationPositioner->forceRecalcFor(WINDOW);
-    WINDOW->updateWindowDecos();
+    WINDOW->presentation().updateDecorations();
 }
 
 void renderOverviewWindow(const SRenderParams& params) {
@@ -1305,29 +1309,29 @@ void renderOverviewWindow(const SRenderParams& params) {
             // corner, and that is what showed through. So the preview frosts its
             // own cell -- what is really under it -- ahead of the modifier, and
             // the window's own alpha goes on top, exactly as on the desktop.
-            if (g_pHyprRenderer->shouldBlur(WINDOW)) {
+            if (WINDOW->shouldBlur()) {
                 COverviewBlurPassElement::SData frost;
                 // The window's own letterboxed rect in the cell, not the cell.
                 frost.box           = CBox{sc<double>(OFFX + sc<float>(REALPX.x) * S), sc<double>(OFFY + sc<float>(REALPX.y) * S), sc<double>(SCALEDW), sc<double>(SCALEDH)}.round();
-                frost.rounding      = params.previewRoundingPx >= 0 ? params.previewRoundingPx : sc<int>(std::round(WINDOW->rounding() * MONITOR->m_scale * S));
-                frost.roundingPower = WINDOW->roundingPower();
+                frost.rounding      = params.previewRoundingPx >= 0 ? params.previewRoundingPx : sc<int>(std::round(WINDOW->presentation().rounding() * MONITOR->m_scale * S));
+                frost.roundingPower = WINDOW->presentation().roundingPower();
                 frost.alpha         = 1.F;
-                g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(frost));
+                g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<COverviewBlurPassElement>(frost));
             }
-            g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
+            g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
 
             // Z1 (a window whose workspace is parked off-screen by a switch
             // animation was drawn a monitor away and clipped to nothing) needed
             // the workspace's m_renderOffset zeroed around this call. With
             // ignorePosition renderWindow never reads the position the offset
             // is added to, so there is nothing left to neutralize.
-            auto&            passElements = g_pHyprRenderer->currentPass().m_passElements;
+            auto&            passElements = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements;
             const size_t     firstElement = passElements.size();
             // standalone: no decorate path side effects; content only. Rounding is
             // forced below so the cell still reads as a rounded thumbnail.
             {
                 Hyprdrive::FlightBlur::CSuspend noFlightBlur(WINDOW);
-                g_pHyprRenderer->renderWindow(WINDOW, MONITOR, params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
+                g_pHyprRenderer->renderWindow(g_pHyprRenderer->context(), WINDOW, MONITOR, WINDOW->presentation().renderPresentation(), params.now, false, Render::RENDER_PASS_MAIN, /*ignorePosition*/ true, true);
             }
             roundStandaloneWindowPassElements(WINDOW, MONITOR, S, firstElement, params.previewRoundingPx);
             // The overview's U2 mipmap prefilter, for the dock's thumbnails too
@@ -1343,7 +1347,7 @@ void renderOverviewWindow(const SRenderParams& params) {
                 surface->m_data.clipBox = params.windowBox;
             }
 
-            g_pHyprRenderer->addPassElement(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+            g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
         };
 
         if (params.ownsRenderPass) {
@@ -1357,10 +1361,10 @@ void renderOverviewWindow(const SRenderParams& params) {
         // draw (same untransformed box) so the window vanishes while hovered.
         auto nested = makeUnique<Render::CRenderPass>();
         {
-            auto restorePass = g_pHyprRenderer->redirectPass(nested.get());
+            auto restorePass = g_pHyprRenderer->redirectPass(g_pHyprRenderer->context(), nested.get());
             queuePreview();
         }
-        g_pHyprRenderer->addPassElement(makeUnique<CDockLivePreviewPassElement>(CDockLivePreviewPassElement::SData{
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CDockLivePreviewPassElement>(CDockLivePreviewPassElement::SData{
             .pass = std::move(nested),
             .box  = params.windowBox,
         }));
@@ -1396,11 +1400,11 @@ void renderOverviewWindow(const SRenderParams& params) {
 
     const Vector2D previousWindowPos       = params.window->m_realPosition->value();
     const Vector2D previousWindowSize      = params.window->m_realSize->value();
-    const bool     previousAnimatingIn     = params.window->m_animatingIn;
+    const bool     previousAnimatingIn     = params.window->presentation().animatingIn();
     const bool     previousSizeAnimating   = params.window->sizeAnimation()->isBeingAnimated();
     const bool     previousPosAnimating    = params.window->positionAnimation()->isBeingAnimated();
     const auto     WORKSPACE               = params.window->m_workspace;
-    const bool     OVERRIDEWORKSPACEOFFSET = WORKSPACE && !params.window->m_pinned;
+    const bool     OVERRIDEWORKSPACEOFFSET = WORKSPACE && !Hyprdrive::Compat::pinned(params.window);
     const Vector2D previousWorkspaceOffset = OVERRIDEWORKSPACEOFFSET ? WORKSPACE->m_renderOffset->value() : Vector2D{};
 
     // Mark BOTH animated before writing current. Writing position while the
@@ -1409,9 +1413,9 @@ void renderOverviewWindow(const SRenderParams& params) {
     // same leak on dock live previews, which no longer rewrite geometry).
     COverviewAnimatedVariableAccess::setBeingAnimated(params.window->positionAnimation().get(), true);
     COverviewAnimatedVariableAccess::setBeingAnimated(params.window->sizeAnimation().get(), true);
-    params.window->positionAnimation()->value() = params.monitor->m_position + params.windowBox.pos() / params.monitor->m_scale - params.window->m_floatingOffset;
+    params.window->positionAnimation()->value() = params.monitor->m_position + params.windowBox.pos() / params.monitor->m_scale - params.window->presentation().floatingOffset();
     params.window->sizeAnimation()->value()     = params.windowBox.size() / params.monitor->m_scale;
-    params.window->m_animatingIn                 = true;
+    params.window->presentation().setAnimatingIn(true);
     if (g_midDrawProbe)
         g_midDrawProbe(params.window);
     if (OVERRIDEWORKSPACEOFFSET)
@@ -1427,13 +1431,13 @@ void renderOverviewWindow(const SRenderParams& params) {
             .size                = params.window->sizeAnimation()->value(),
             .zeroWorkspaceOffset = OVERRIDEWORKSPACEOFFSET,
         });
-        g_pHyprRenderer->addPassElement(makeUnique<CDeferredWindowGeometryPassElement>(deferredGeometry, true));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CDeferredWindowGeometryPassElement>(deferredGeometry, true));
     }
 
     auto restoreWindowGeometry = Hyprutils::Utils::CScopeGuard([&] {
         params.window->positionAnimation()->value() = previousWindowPos;
         params.window->sizeAnimation()->value()     = previousWindowSize;
-        params.window->m_animatingIn                 = previousAnimatingIn;
+        params.window->presentation().setAnimatingIn(previousAnimatingIn);
         COverviewAnimatedVariableAccess::setBeingAnimated(params.window->positionAnimation().get(), previousPosAnimating);
         COverviewAnimatedVariableAccess::setBeingAnimated(params.window->sizeAnimation().get(), previousSizeAnimating);
         if (OVERRIDEWORKSPACEOFFSET && WORKSPACE)
@@ -1466,12 +1470,12 @@ void renderOverviewWindow(const SRenderParams& params) {
             params.monitor->m_blurFBDirty = true;
     });
 
-    const size_t firstWindowPassElement = g_pHyprRenderer->currentPass().m_passElements.size();
+    const size_t firstWindowPassElement = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements.size();
     // Never rebuild m_blurFB under a temporary blur size.
     const bool   usePrecomputedBlur     = !scaleBlur && shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
     {
         Hyprdrive::FlightBlur::CSuspend noFlightBlur(params.window);
-        g_pHyprRenderer->renderWindow(params.window, params.monitor, params.now, false, Render::RENDER_PASS_ALL, false, false);
+        g_pHyprRenderer->renderWindow(g_pHyprRenderer->context(), params.window, params.monitor, params.window->presentation().renderPresentation(), params.now, false, Render::RENDER_PASS_ALL, false, false);
     }
     scaleOverviewSubsurfaceOffsets(params.window, params.window->sizeAnimation()->value(), firstWindowPassElement);
     prefilterOverviewWindowTextures(params.window, params.monitor,
@@ -1484,7 +1488,7 @@ void renderOverviewWindow(const SRenderParams& params) {
     // a window's own fade in/out by, so this rides the existing plumbing rather
     // than adding a second notion of opacity.
     if (params.alpha < 1.F) {
-        auto& passElements = g_pHyprRenderer->currentPass().m_passElements;
+        auto& passElements = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements;
         for (size_t i = firstWindowPassElement; i < passElements.size(); ++i) {
             auto* surface = dc<CSurfacePassElement*>(passElements[i].element.get());
             if (surface && surface->m_data.pWindow == params.window)
@@ -1513,7 +1517,7 @@ void renderOverviewWindow(const SRenderParams& params) {
     if (params.ownsRenderPass)
         OverviewRender::flushPass(params.monitor);
     else if (deferredGeometry)
-        g_pHyprRenderer->addPassElement(makeUnique<CDeferredWindowGeometryPassElement>(deferredGeometry, false));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CDeferredWindowGeometryPassElement>(deferredGeometry, false));
 }
 
 } // namespace OverviewWindow

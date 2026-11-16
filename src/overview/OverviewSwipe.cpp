@@ -25,7 +25,7 @@ void COverview::moveViewportWorkspace(bool up) {
 
     closeOnWindow.reset();
 
-    if (const auto it = rememberedSelection.find(TARGETWORKSPACEIMAGE->pWorkspace->m_id); it != rememberedSelection.end()) {
+    if (const auto it = rememberedSelection.find(Hyprdrive::Compat::id(TARGETWORKSPACEIMAGE->pWorkspace)); it != rememberedSelection.end()) {
         const auto rememberedWindow = getOverviewWindowToShow(it->second.lock());
         if (rememberedWindow && rememberedWindow->m_workspace == TARGETWORKSPACEIMAGE->pWorkspace && shouldShowOverviewWindow(rememberedWindow))
             closeOnWindow = rememberedWindow;
@@ -35,7 +35,7 @@ void COverview::moveViewportWorkspace(bool up) {
         closeOnWindow = windowClosestToWorkspaceCenter(viewportCurrentWorkspace);
 
     if (pMonitor && pMonitor->m_activeWorkspace != TARGETWORKSPACEIMAGE->pWorkspace)
-        pMonitor->changeWorkspace(TARGETWORKSPACEIMAGE->pWorkspace, false, true, true);
+        pMonitor->changeWorkspace(TARGETWORKSPACEIMAGE->pWorkspace, false, true, !Hyprdrive::Compat::isSpecial(TARGETWORKSPACEIMAGE->pWorkspace));
 
     damage();
 }
@@ -226,7 +226,7 @@ void COverview::syncSelectionToViewport() {
         }
     }
 
-    if (const auto it = rememberedSelection.find(WSPACE->pWorkspace->m_id); it != rememberedSelection.end()) {
+    if (const auto it = rememberedSelection.find(Hyprdrive::Compat::id(WSPACE->pWorkspace)); it != rememberedSelection.end()) {
         const auto rememberedWindow = getOverviewWindowToShow(it->second.lock());
         if (rememberedWindow && rememberedWindow->m_workspace == WSPACE->pWorkspace && shouldShowOverviewWindow(rememberedWindow)) {
             for (const auto& windowRef : WSPACE->windows) {
@@ -277,7 +277,7 @@ void COverview::syncFocusedSelection() {
     // match lived in the scratchpad pulled the scratchpad open on the first
     // keystroke (user, 2026-09-30: "empty desktop, type 'm', it opens the
     // scratchpad"). It stays the selection; picking it (close()) focuses it.
-    if (window->m_workspace && window->m_workspace->m_isSpecialWorkspace)
+    if (window->m_workspace && Hyprdrive::Compat::isSpecial(window->m_workspace))
         return;
 
     const auto PREVIOUSWORKSPACE = pMonitor ? pMonitor->m_activeWorkspace : PHLWORKSPACE{};
@@ -285,7 +285,7 @@ void COverview::syncFocusedSelection() {
     Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_KEYBIND);
 
     if (window->m_workspace != PREVIOUSWORKSPACE && focusSyncedFromWorkspaceID == WORKSPACE_INVALID)
-        focusSyncedFromWorkspaceID = PREVIOUSWORKSPACE ? PREVIOUSWORKSPACE->m_id : WORKSPACE_INVALID;
+        focusSyncedFromWorkspaceID = PREVIOUSWORKSPACE ? Hyprdrive::Compat::id(PREVIOUSWORKSPACE) : WORKSPACE_INVALID;
 }
 
 size_t COverview::dragWorkspaceIndex(PHLWINDOW window) const {

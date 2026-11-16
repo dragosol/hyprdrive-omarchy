@@ -258,7 +258,7 @@ void COverview::refreshDragOriginalOverviewBoxes() {
 CBox COverview::resizedWindowBox() const {
     const auto WINDOW  = getOverviewWindowToShow(resize.activeWindow.lock());
     const auto MONITOR = pMonitor.lock();
-    if (!WINDOW || !MONITOR || resize.workspaceIdx >= images.size() || !WINDOW->m_isFloating)
+    if (!WINDOW || !MONITOR || resize.workspaceIdx >= images.size() || !WINDOW->isFloating())
         return {};
 
     const float SCALEFACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR->m_scale, 0.01F);
@@ -281,7 +281,7 @@ CBox COverview::resizedWindowBox() const {
 
     const auto WORKSPACEOFFSET = workspaceOverviewOffset(resize.workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
     const auto WORKSPACEBOX = getOverviewWorkspaceBox(MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
-    const auto BORDERMARGIN = WINDOW->getRealBorderSize() * MONITOR->m_scale * scale->value();
+    const auto BORDERMARGIN = WINDOW->presentation().borderSize() * MONITOR->m_scale * scale->value();
 
     return clampResizedOverviewBoxToWorkspace(box, WORKSPACEBOX, resize.corner, BORDERMARGIN);
 }
@@ -325,7 +325,7 @@ void COverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOrigin) {
     drag.originalTapeTranslation  = Vector2D{};
     drag.originalWorkspace         = WINDOW->m_workspace;
     drag.originalBox               = TARGET->position();
-    drag.originalVisualBox         = WINDOW->m_group ? TARGET->position() : WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    drag.originalVisualBox         = WINDOW->grouping().group() ? TARGET->position() : WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     drag.originalOverviewBox       = CBox{};
     drag.originalOverviewHitbox    = CBox{};
     drag.activeWindow              = WINDOW;
@@ -506,7 +506,7 @@ void COverview::updateWindowResize() {
 
     TARGET->damageEntire();
 
-    if (WINDOW->m_isFloating) {
+    if (WINDOW->isFloating()) {
         const auto RESIZEDBOX  = resizedWindowBox();
         const auto SCALEFACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR->m_scale, 0.01F);
         const auto GLOBALBOX   = CBox{overviewPointToGlobal(resize.workspaceIdx, RESIZEDBOX.pos()), RESIZEDBOX.size() * (1.F / SCALEFACTOR)};
@@ -587,7 +587,7 @@ namespace {
     // both: both tiled (their layout slots) or both floating (their spots).
     // Fullscreen, pinned and special-desktop (scratchpad) windows stay put.
     bool swappable(const PHLWINDOW& w) {
-        return w && Desktop::View::validMapped(w) && w->m_workspace && !w->m_workspace->m_isSpecialWorkspace && !w->m_pinned &&
+        return w && Desktop::View::validMapped(w) && w->m_workspace && !Hyprdrive::Compat::isSpecial(w->m_workspace) && !Hyprdrive::Compat::pinned(w) &&
             !Fullscreen::controller()->isFullscreen(w) && w->layoutTarget();
     }
 }
@@ -625,7 +625,7 @@ PHLWINDOW COverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
             for (const bool floating : {true, false}) {
                 for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend() && !hit; ++it) {
                     const auto W = getOverviewWindowToShow(it->lock());
-                    if (!shouldShowOverviewWindow(W) || W == DRAGGED || W->m_isFloating != floating)
+                    if (!shouldShowOverviewWindow(W) || W == DRAGGED || W->isFloating() != floating)
                         continue;
                     const auto BOX = getOverviewDragWindowBox(W, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout);
                     if (BOX.containsPoint(point)) {
@@ -639,7 +639,7 @@ PHLWINDOW COverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
         }
     }
 
-    if (!hit || hit == DRAGGED || !swappable(hit) || !swappable(DRAGGED) || hit->m_isFloating != DRAGGED->m_isFloating)
+    if (!hit || hit == DRAGGED || !swappable(hit) || !swappable(DRAGGED) || hit->isFloating() != DRAGGED->isFloating())
         return nullptr;
     if (targetBox)
         *targetBox = hitBox;
@@ -702,7 +702,7 @@ namespace {
         r.color         = Hyprdrive::Config::dockBackgroundColor().modifyA(SWAP_DIM_A * a);
         r.round         = round;
         r.roundingPower = Hyprdrive::Config::themeRoundingPower();
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(r));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(r));
     }
 }
 
@@ -758,7 +758,7 @@ void COverview::renderSwapLabel(PHLMONITOR monitor) {
         icon.box = CBox{std::round(LEFT), std::round(CY - ICONPX * K / 2.0), ICONPX * K, ICONPX * K};
         icon.a   = POSE.opacity;
         if (swapDrawable(icon.box))
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(icon)));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(std::move(icon)));
     }
 
     CTexPassElement::SRenderData label;
@@ -766,7 +766,7 @@ void COverview::renderSwapLabel(PHLMONITOR monitor) {
     label.box = CBox{std::round(LEFT + (ICONPX + GAP) * K), std::round(CY - TH * K / 2.0), TW * K, TH * K};
     label.a   = POSE.opacity;
     if (swapDrawable(label.box))
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(label)));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(std::move(label)));
 }
 
 bool COverview::commitSwap(const PHLWINDOW& a, const PHLWINDOW& b) {
@@ -794,7 +794,7 @@ bool COverview::commitSwap(const PHLWINDOW& a, const PHLWINDOW& b) {
     TA->damageEntire();
     TB->damageEntire();
 
-    if (!a->m_isFloating) {
+    if (!a->isFloating()) {
         if (WSA == WSB)
             g_layoutManager->switchTargets(TA, TB, true);
         else {
@@ -819,8 +819,8 @@ bool COverview::commitSwap(const PHLWINDOW& a, const PHLWINDOW& b) {
         }
         auto NEWA = CBox{BOXB.middle() - BOXA.size() / 2.0, BOXA.size()};
         auto NEWB = CBox{BOXA.middle() - BOXB.size() / 2.0, BOXB.size()};
-        NEWA      = clampBoxToWorkspace(NEWA, WSB, WSB->m_monitor.lock(), a->getRealBorderSize());
-        NEWB      = clampBoxToWorkspace(NEWB, WSA, WSA->m_monitor.lock(), b->getRealBorderSize());
+        NEWA      = clampBoxToWorkspace(NEWA, WSB, WSB->m_monitor.lock(), a->presentation().borderSize());
+        NEWB      = clampBoxToWorkspace(NEWB, WSA, WSA->m_monitor.lock(), b->presentation().borderSize());
         TA->setPositionGlobal(NEWA);
         TB->setPositionGlobal(NEWB);
     }
@@ -929,7 +929,7 @@ void COverview::focusMostVisibleScrollingWindow(const PHLWORKSPACE& workspace) {
         WORKSPACEBOX.translate(MONITOR->m_position);
 
     const auto preferredWindow = getOverviewWindowToShow(pan.initialWindow.lock());
-    if (shouldShowOverviewWindow(preferredWindow) && preferredWindow->m_workspace == workspace && !preferredWindow->m_isFloating && preferredWindow->layoutTarget()) {
+    if (shouldShowOverviewWindow(preferredWindow) && preferredWindow->m_workspace == workspace && !preferredWindow->isFloating() && preferredWindow->layoutTarget()) {
         const auto WINDOWBOX   = preferredWindow->layoutTarget()->position();
         const auto AREA        = overviewBoxArea(WINDOWBOX);
         const auto VISIBLEAREA = overviewBoxIntersectionArea(WINDOWBOX, WORKSPACEBOX);
@@ -943,7 +943,7 @@ void COverview::focusMostVisibleScrollingWindow(const PHLWORKSPACE& workspace) {
 
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_workspace != workspace || WINDOW->m_isFloating || !WINDOW->layoutTarget())
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_workspace != workspace || WINDOW->isFloating() || !WINDOW->layoutTarget())
             continue;
 
         const auto WINDOWBOX = WINDOW->layoutTarget()->position();
@@ -992,7 +992,7 @@ bool COverview::moveScrollingColumnSelection(bool next) {
     if (!ALGO || !ALGO->m_scrollingData || ALGO->m_scrollingData->columns.empty())
         return false;
 
-    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->m_isFloating)
+    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->isFloating())
         syncSelectionToViewport();
 
     const auto CURRENT = getOverviewWindowToShow(closeOnWindow.lock());
@@ -1011,7 +1011,7 @@ bool COverview::moveScrollingColumnSelection(bool next) {
 
             for (const auto& windowRef : WORKSPACEIMAGE->windows) {
                 const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-                if (shouldShowOverviewWindow(WINDOW) && !WINDOW->m_isFloating && WINDOW->layoutTarget() == targetData->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace)
+                if (shouldShowOverviewWindow(WINDOW) && !WINDOW->isFloating() && WINDOW->layoutTarget() == targetData->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace)
                     return WINDOW;
             }
         }
@@ -1140,7 +1140,7 @@ void COverview::gatherDropWorkspace(SOverviewDropSite& site) {
 void COverview::gatherDropAnchor(SOverviewDropSite& site) {
     site.sourceFullscreenWindow =
         site.originalWorkspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(site.originalWorkspace)) : PHLWINDOW{};
-    site.facts.restoreSourceFullscreenFocus = site.window && site.window->m_isFloating && site.facts.moveWorkspace &&
+    site.facts.restoreSourceFullscreenFocus = site.window && site.window->isFloating() && site.facts.moveWorkspace &&
         shouldShowOverviewWindow(site.sourceFullscreenWindow) && site.sourceFullscreenWindow != site.window &&
         site.sourceFullscreenWindow->m_workspace == site.originalWorkspace && Fullscreen::controller()->isFullscreen(site.sourceFullscreenWindow);
 
@@ -1308,7 +1308,7 @@ void COverview::commitDrop(const SOverviewDropSite& site, const Hyprdrive::Drop:
                 auto GLOBALBOX = DECISION.mapPointIntoCard ? CBox{dropOverview->overviewPointToGlobal(site.dropWorkspaceIdx, site.dragBox.pos()), GLOBALSIZE} :
                     DECISION.useOriginalBox                ? CBox{drag.originalBox.pos(), GLOBALSIZE} :
                                                              centerBoxInWorkspace(CBox{Vector2D{}, GLOBALSIZE}, DROPWORKSPACE, DROPMONITOR);
-                GLOBALBOX      = clampBoxToWorkspace(GLOBALBOX, DROPWORKSPACE, DROPMONITOR, WINDOW->getRealBorderSize());
+                GLOBALBOX      = clampBoxToWorkspace(GLOBALBOX, DROPWORKSPACE, DROPMONITOR, WINDOW->presentation().borderSize());
 
 
                 TARGET->setPositionGlobal(GLOBALBOX);
@@ -1418,7 +1418,7 @@ void COverview::endWindowResize() {
     const auto TARGET  = WINDOW ? WINDOW->layoutTarget() : nullptr;
     const auto MONITOR = pMonitor.lock();
 
-    if (WINDOW && TARGET && WINDOW->m_isFloating && resize.workspaceIdx < images.size()) {
+    if (WINDOW && TARGET && WINDOW->isFloating() && resize.workspaceIdx < images.size()) {
         const auto RESIZEDBOX  = resizedWindowBox();
         const auto SCALEFACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR ? MONITOR->m_scale : 1.F, 0.01F);
         auto       GLOBALBOX   = CBox{overviewPointToGlobal(resize.workspaceIdx, RESIZEDBOX.pos()), RESIZEDBOX.size() * (1.F / SCALEFACTOR)};

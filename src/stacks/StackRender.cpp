@@ -94,7 +94,7 @@ namespace Hyprdrive::Stacks {
         d.tex = g_arcBar.tex;
         d.box = g_arcBar.box;
         d.a   = alpha;
-        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(d));
     }
 
     void render(PHLMONITOR monitor, const Dock::SLayout& layout) {
@@ -161,7 +161,7 @@ namespace Hyprdrive::Stacks {
                 solid.round         = sc<int>(std::round(radius * SCALE));
                 solid.roundingPower = 2.F;
                 if (drawableBox(solid.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(solid));
+                    g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(solid));
             }
         };
 
@@ -195,7 +195,7 @@ namespace Hyprdrive::Stacks {
             d.box     = box;
             d.box.rot = rot;
             d.a       = alpha;
-            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+            Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(d));
         };
 
         // THE DRAG GHOST, and the threshold that promotes a press into a drag.
@@ -248,7 +248,7 @@ namespace Hyprdrive::Stacks {
                 border.round         = sc<int>(std::round(GRID_RADIUS * SCALE));
                 border.roundingPower = 2.F;
                 if (drawableBox(border.box))
-                    g_pHyprRenderer->addPassElement(makeUnique<CBorderPassElement>(border));
+                    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(border));
             }
 
             // HEADER: the stack's label, "12 of 340", and the sort on the right
@@ -287,7 +287,7 @@ namespace Hyprdrive::Stacks {
             caret.box   = CBox{caretX, P.fieldBox.y + P.fieldBox.height * 0.25, std::max(1.0, 1.5 * SCALE), P.fieldBox.height * 0.5}.round();
             caret.color = Dock::accentColor().modifyA(ALPHA);
             if (drawableBox(caret.box))
-                    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(caret));
+                    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(caret));
 
             // THE CELLS, clipped to the grid: icon, two-line name, and the
             // previewed / selected / hovered highlight.
@@ -311,7 +311,7 @@ namespace Hyprdrive::Stacks {
                     hl.round   = sc<int>(std::round(10.F * SCALE));
                     hl.clipBox = CLIP;
                     if (drawableBox(hl.box))
-                    g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(hl));
+                    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(hl));
                 }
                 const float ICON = GRID_ICON * SCALE * (PREV ? 1.15F : 1.F);
                 CBox        ib{std::round(cell.x + (cell.width - ICON) / 2.0), std::round(cell.y + 8.F * SCALE), std::round(ICON), std::round(ICON)};
@@ -323,7 +323,7 @@ namespace Hyprdrive::Stacks {
                     d.box     = ib;
                     d.a       = ALPHA;
                     d.clipBox = CLIP;
-                    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+                    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(d));
                 }
                 if (const auto T = OverviewRender::textWrapped(R.name, FG, sc<int>(std::round(11.F * SCALE)), sc<int>(cell.width - 8.F * SCALE), sc<int>(std::round(30.F * SCALE)),
                                                                false, "", 500);
@@ -333,7 +333,7 @@ namespace Hyprdrive::Stacks {
                     l.box     = CBox{cell.x + (cell.width - T->m_size.x) / 2.0, ib.y + ICON + 6.F * SCALE, T->m_size.x, T->m_size.y}.round();
                     l.a       = ALPHA;
                     l.clipBox = CLIP;
-                    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(l));
+                    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(l));
                 }
             }
 
@@ -705,7 +705,7 @@ namespace Hyprdrive::Stacks {
                     d.a       = FA * PL.opacity * ea;
                     d.clipBox = pillBox;
                     if (drawableBox(d.box))
-                        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+                        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(d));
                 }
             }
         }

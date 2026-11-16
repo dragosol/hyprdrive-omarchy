@@ -48,7 +48,7 @@ ifneq ($(words $(SRCS)),$(words $(sort $(notdir $(SRCS)))))
 $(error two source files share a name: $(filter-out $(sort $(notdir $(SRCS))),$(notdir $(SRCS))) -- objects are flat in .build/)
 endif
 
-CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build $(SRC_INC) --embed-dir=. \
+CXXFLAGS := -fPIC $(OPT) -g -std=c++2b -Wno-narrowing -I.build $(SRC_INC) -include src/core/HyprCompat.hpp --embed-dir=. \
             $(shell pkg-config --cflags $(PKGS))
 LDLIBS   := $(shell pkg-config --libs libsystemd gio-2.0 gio-unix-2.0 xcb xcb-res)
 

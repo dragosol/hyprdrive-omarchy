@@ -25,9 +25,9 @@
 // through dwindle one window at a time, the load re-adds it to mosaic one
 // window at a time and restores its size, all before the client has answered.
 //
-// So hyprdrive replaces CWindow::onAck (hooked in main.cpp) with the same code
-// minus the bug: the serial is copied before the erase. Drop this when Hyprland
-// fixes onAck.
+// Hyprdrive used to replace CWindow::onAck with a fixed copy. Hyprland 0.57
+// fixed it (CWindowConfigureAckTracker::acknowledge copies before erase_if), so
+// only the report below is left.
 
 #include <cstdint>
 #include <string>
@@ -37,9 +37,6 @@ namespace Desktop::View {
 }
 
 namespace Hyprdrive::SizeAck {
-    // CWindow::onAck, fixed. Replaces the original entirely.
-    void onAck(Desktop::View::CWindow* window, uint32_t serial);
-
     // `hyprdrive:debug windows`: every mapped window's rendered box against its
     // goal, its buffer, texture and committed geometry, the size it acked,
     // suspension.

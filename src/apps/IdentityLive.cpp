@@ -9,7 +9,8 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -65,17 +66,17 @@ namespace Hyprdrive::AppIdentity {
 
         WindowFacts factsOf(const PHLWINDOW& W) {
             WindowFacts f;
-            f.cls          = W->m_class;
-            f.initialClass = W->m_initialClass;
-            f.title        = W->m_title;
-            f.x11          = W->m_isX11;
+            f.cls          = W->metadata().appID();
+            f.initialClass = W->metadata().initialAppID();
+            f.title        = W->metadata().title();
+            f.x11          = W->backend().isX11();
             f.contentGame  = W->getContentType() == NContentType::CONTENT_TYPE_GAME;
-            f.pid          = W->getPID();
-            f.hasParent    = W->parent() != nullptr;
-            if (W->m_isX11) {
-                f.overrideRedirect = W->isX11OverrideRedirect();
-                f.hasParent        = f.hasParent || W->x11Parent() != nullptr;
-                if (const auto XS = W->m_xwaylandSurface.lock()) {
+            f.pid          = W->backend().pid();
+            f.hasParent    = W->backend().parent() != nullptr;
+            if (W->backend().isX11()) {
+                f.overrideRedirect = W->backend().traits().overrideRedirect;
+                f.hasParent        = f.hasParent || W->backend().parent() != nullptr;
+                if (const auto XS = Hyprdrive::Priv::xsurface(W)) {
                     f.xid = XS->m_xID;
                     f.w   = static_cast<int>(XS->m_geometry.width);
                     f.h   = static_cast<int>(XS->m_geometry.height);
@@ -235,7 +236,7 @@ namespace Hyprdrive::AppIdentity {
                     dirty = true;
                     // Late: the new app's "Always Open in", within 1.5 s of the map,
                     // when the old answer did not already carry it.
-                    if (OLDGROUP != s.group && NOW - s.mappedAt <= LATE_APPLY && LW->second->m_isMapped)
+                    if (OLDGROUP != s.group && NOW - s.mappedAt <= LATE_APPLY && LW->second->mapped())
                         Dock::onWindowOpen(LW->second);
                 }
                 if (dirty)
@@ -249,10 +250,10 @@ namespace Hyprdrive::AppIdentity {
             if (IT == g_slots.end())
                 return;
             SSlot& s      = IT->second;
-            s.facts.title = W->m_title;
+            s.facts.title = W->metadata().title();
             // Only the answers the title made: a quickshell panel, X11Props, a
             // nameless Wine program named after its title.
-            const bool FROMTITLE = s.facts.cls == "org.quickshell" || s.id.resolver == "X11Props" || (s.id.resolver == "Fallback" && s.id.displayName == W->m_title);
+            const bool FROMTITLE = s.facts.cls == "org.quickshell" || s.id.resolver == "X11Props" || (s.id.resolver == "Fallback" && s.id.displayName == W->metadata().title());
             if (!FROMTITLE)
                 return;
             const std::string OLD = s.group;
@@ -271,11 +272,11 @@ namespace Hyprdrive::AppIdentity {
             const auto IT = g_slots.find(W.get());
             if (IT != g_slots.end()) {
                 // A class the compositor changed without telling (or before init).
-                if (IT->second.facts.cls != W->m_class)
+                if (IT->second.facts.cls != W->metadata().appID())
                     return &open(W);
                 return &IT->second;
             }
-            if (!g_live || !W->m_isMapped)
+            if (!g_live || !W->mapped())
                 return nullptr;
             return &open(W);
         }
@@ -344,7 +345,7 @@ namespace Hyprdrive::AppIdentity {
         });
         g_title = Event::bus()->m_events.window.title.listen([](PHLWINDOW w) { titleChanged(w); });
         for (const auto& W : Desktop::windowState()->windows())
-            if (W && W->m_isMapped)
+            if (W && W->mapped())
                 open(W);
     }
 
@@ -379,7 +380,7 @@ namespace Hyprdrive::AppIdentity {
             return s->id;
         g_none = Identity{};
         if (w) {
-            g_none.key = g_none.displayName = w->m_class;
+            g_none.key = g_none.displayName = w->metadata().appID();
             g_none.resolver                 = "Fallback";
         }
         return g_none;
@@ -390,7 +391,7 @@ namespace Hyprdrive::AppIdentity {
             return "";
         if (SSlot* s = slotOf(w))
             return s->group;
-        return AppSearch::identityClass(w->m_class, w->m_title);
+        return AppSearch::identityClass(w->metadata().appID(), w->metadata().title());
     }
 
     const Identity* forKey(std::string_view key) {
@@ -436,7 +437,7 @@ namespace Hyprdrive::AppIdentity {
                                        IX.lutris ? std::format("{} games", IX.lutris->games.size()) : "not built yet");
         size_t n = 0;
         for (const auto& W : Desktop::windowState()->windows()) {
-            if (!W || !W->m_isMapped)
+            if (!W || !W->mapped())
                 continue;
             const SSlot* S = slotOf(W);
             if (!S)

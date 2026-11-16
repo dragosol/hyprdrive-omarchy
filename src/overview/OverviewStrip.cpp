@@ -473,7 +473,7 @@ void COverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Tim
                                sc<float>(NUMTEX->m_size.y)}
                               .round();
                 num.a = FADE;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(num));
+                g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(num));
             }
 
             // Drawn by THAT monitor's overview. It already forces these windows
@@ -497,13 +497,13 @@ void COverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Tim
                 (!DRAGGED || WIMG->pWorkspace != dragContext->drag.originalWorkspace.lock());
             // Tint and outline fade in and out on Hyprland's `border` animation,
             // as a window's border does when it takes focus (BorderFade.hpp).
-            const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 40) ^ (sc<uint64_t>(OTHERMON->m_id) << 32) ^ sc<uint64_t>(sc<uint32_t>(WIMG->pWorkspace->m_id));
+            const uint64_t CELLKEY = (sc<uint64_t>(monitor->m_id) << 40) ^ (sc<uint64_t>(OTHERMON->m_id) << 32) ^ sc<uint64_t>(sc<uint32_t>(Hyprdrive::Compat::id(WIMG->pWorkspace)));
             const float    HOTMIX  = Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-alt-hot", CELLKEY), HOT);
             if (HOTMIX > 0.F)
                 renderStripCellRect(CELL, Hyprdrive::Config::highlightColor().modifyA(0.22F * FADE * HOTMIX), ATLEFT, ATRIGHT, STYLE);
 
             // That monitor's active desktop, marked the way its own strip marks it.
-            const bool ACTIVE = OTHERMON->m_activeWorkspace && WIMG->pWorkspace->m_id == OTHERMON->m_activeWorkspace->m_id;
+            const bool ACTIVE = OTHERMON->m_activeWorkspace && Hyprdrive::Compat::id(WIMG->pWorkspace) == Hyprdrive::Compat::id(OTHERMON->m_activeWorkspace);
             renderStripCellBorder(monitor, CELL, ATLEFT, ATRIGHT, STYLE,
                                   Hyprdrive::BorderFade::mix(monitor, Hyprdrive::BorderFade::key("strip-alt-ring", CELLKEY), HOT || ACTIVE));
         }
@@ -567,7 +567,7 @@ void COverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale, cons
         label.box = CBox{std::round(sc<float>(CELL.x) + (sc<float>(CELL.width) - sc<float>(TEX->m_size.x)) / 2.F),
                          std::round(sc<float>(CELL.y) + (sc<float>(CELL.height) - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x), sc<float>(TEX->m_size.y)};
         label.a   = FADE;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(label));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(label));
     }
 
     // The parked windows, as live minis -- the same mapping, render scale and
@@ -976,7 +976,7 @@ void COverview::renderStripCellRect(const CBox& cell, const CHyprColor& color, b
         r.color         = color;
         r.round         = largeLeft ? STYLE.round : STYLE.innerRound;
         r.roundingPower = STYLE.power;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(r));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(r));
         return;
     }
 
@@ -992,7 +992,7 @@ void COverview::renderStripCellRect(const CBox& cell, const CHyprColor& color, b
         r.roundingPower = STYLE.power;
         r.clipBox       = LEFT ? CBox{sc<float>(cell.x), sc<float>(cell.y), MID - sc<float>(cell.x), sc<float>(cell.height)} :
                                  CBox{MID, sc<float>(cell.y), sc<float>(cell.x) + sc<float>(cell.width) - MID, sc<float>(cell.height)};
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(r));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(r));
     }
 }
 
@@ -1026,7 +1026,7 @@ void COverview::renderStripCellBorder(PHLMONITOR monitor, const CBox& cell, bool
     // no longer be concentric with the fill's.
     const CBox INNER = cell.copy().expand(-BORDER);
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewSplitBorderPassElement>(COverviewSplitBorderPassElement::SData{
+    g_pHyprRenderer->context().m_pass.add(makeUnique<COverviewSplitBorderPassElement>(COverviewSplitBorderPassElement::SData{
         .box           = INNER,
         .color         = ::Config::CGradientValueData{OUTLINE.modifyA(1.F)},
         .roundLeft     = std::max(0, (largeLeft ? STYLE.round : STYLE.innerRound) - BORDER),
@@ -1077,7 +1077,7 @@ void COverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, const C
         num.tex = NUMTEX;
         num.box = numBox.round();
         num.a   = FADE * NUMFADE;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(num));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(num));
     }
 
     const float MINIRENDERSCALE = renderScale * sc<float>(CELL.height) / std::max(1.F, sc<float>(monitor->m_size.y) * monitor->m_scale);
@@ -1129,7 +1129,7 @@ void COverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, const C
     // Follow the detent while one is running; it is the same index the card
     // ring and the badge use, so all three move together.
     const bool ISACTIVE = trackpadDetentActive ? workspaceIdx == trackpadDetentWorkspace :
-                                                 (monitor->m_activeWorkspace && wimg->pWorkspace->m_id == monitor->m_activeWorkspace->m_id);
+                                                 (monitor->m_activeWorkspace && Hyprdrive::Compat::id(wimg->pWorkspace) == Hyprdrive::Compat::id(monitor->m_activeWorkspace));
     // X3 delta 3: the reference borders the hovered cell as well as tinting
     // it. One outline for both: drawn after the tint and after the minis, so
     // the drop target reads as a target even over a cell full of previews.
@@ -1239,7 +1239,7 @@ void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
         return;
 
     // (a numeric name is the number: the row's place, Rows::label)
-    const auto NAME = wimg->pWorkspace->m_name.empty() || wimg->pWorkspace->m_name == std::to_string(wimg->pWorkspace->m_id) ? Hyprdrive::Rows::label(wimg->pWorkspace) : wimg->pWorkspace->m_name;
+    const auto NAME = wimg->pWorkspace->displayName().empty() || wimg->pWorkspace->displayName() == std::to_string(Hyprdrive::Compat::id(wimg->pWorkspace)) ? Hyprdrive::Rows::label(wimg->pWorkspace) : wimg->pWorkspace->displayName();
     const int  SIZE = std::max(1, sc<int>(std::round(sc<float>(CELL.height) * DETENT_BADGE_FRACTION)));
     const auto TEX  = OverviewRender::text(NAME, Hyprdrive::Config::themeForeground().modifyA(1.F), SIZE, false, "", 0, 700);
     if (!TEX || !TEX->ok())
@@ -1288,7 +1288,7 @@ void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
     label.discardMode           = DISCARD_ALPHA;
     label.discardOpacity        = 0.f;
     label.ignoreAlpha           = 0.f;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(label)));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(std::move(label)));
 
     // The pop is timestamped, not a PHLANIMVAR: if the finger stops mid-drag
     // the compositor has no reason to schedule the rest of it. Same pairing
@@ -1521,19 +1521,19 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
     size_t                   windows = 0;
     for (const auto& REF : images[idx]->windows) {
         const auto W = REF.lock();
-        if (!W || !W->m_isMapped)
+        if (!W || !W->mapped())
             continue;
         ++windows;
         auto NAME = AppSearch::appNameForClass(Hyprdrive::AppIdentity::groupKey(W));
         if (NAME.empty())
-            NAME = W->m_class;
+            NAME = W->metadata().appID();
         if (!NAME.empty() && std::ranges::find(names, NAME) == names.end())
             names.push_back(NAME);
     }
     if (windows == 0)
         return false;
 
-    std::string label = "Desktop " + images[idx]->pWorkspace->m_name;
+    std::string label = "Desktop " + images[idx]->pWorkspace->displayName();
     for (size_t i = 0; i < names.size() && i < 3; ++i)
         label += (i == 0 ? "  ·  " : ", ") + names[i];
     if (names.size() > 3)
@@ -1604,7 +1604,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
         pillNudgeWant          = std::clamp(RESTBOTTOM + G - LABELTOP, 0.F, PUB.pillMaxUp);
     }
 
-    keyOut    = std::to_string(images[idx]->pWorkspace->m_id);
+    keyOut    = std::to_string(Hyprdrive::Compat::id(images[idx]->pWorkspace));
     labelOut  = label;
     cxOut     = CX;
     bottomOut = bottom;

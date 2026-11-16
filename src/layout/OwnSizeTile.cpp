@@ -4,12 +4,16 @@
 #include "DebugPaths.hpp"
 
 #include <hyprland/src/config/ConfigValue.hpp>
+#include <hyprland/src/protocols/XDGShell.hpp>
+#include <hyprland/src/protocols/core/Compositor.hpp>
+#include <hyprland/src/protocols/types/SurfaceRole.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/desktop/rule/windowRule/WindowRuleApplicator.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/types/OverridableVar.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
@@ -33,8 +37,8 @@ namespace Hyprdrive::OwnSizeTile {
         constexpr const char* FLOAT_WINDOW =
             "_ZN6Config7Actions11floatWindowENS0_16eTogglableActionESt8optionalIN9Hyprutils6Memory14CSharedPointerIN7Desktop4View7CWindowEEEE";
 
-        constexpr const char* ON_X11_CONFIGURE = "_ZN7Desktop4View7CWindow21onX11ConfigureRequestEN9Hyprutils4Math4CBoxE";
-        using TOnX11Configure                  = void (*)(void*, CBox);
+        constexpr const char* ON_X11_CONFIGURE = "_ZN7Desktop4View7CWindow18onConfigureRequestERKN9Hyprutils4Math4CBoxE";
+        using TOnX11Configure                  = void (*)(void*, const CBox&);
 
         CFunctionHook*            g_hook          = nullptr;
         CFunctionHook*            g_configureHook = nullptr;
@@ -63,7 +67,7 @@ namespace Hyprdrive::OwnSizeTile {
             // As the window maps (Placement, window.openEarly) its decorations
             // are not positioned yet and reserve nothing: its border, then.
             if (R.topLeft == Vector2D{} && R.bottomRight == Vector2D{}) {
-                const double B = w->getRealBorderSize();
+                const double B = w->presentation().borderSize();
                 R.topLeft = R.bottomRight = Vector2D{B, B};
             }
             T->setPseudoSize(size + R.topLeft + R.bottomRight);
@@ -77,7 +81,7 @@ namespace Hyprdrive::OwnSizeTile {
             w->m_ruleApplicator->minSize().set(size, Desktop::Types::PRIORITY_SET_PROP);
             if (!owned(w))
                 g_owned.emplace_back(w);
-            trace(std::format("{} tiles at its own size {:.0f}x{:.0f}", w->m_class, size.x, size.y));
+            trace(std::format("{} tiles at its own size {:.0f}x{:.0f}", w->metadata().appID(), size.x, size.y));
         }
 
         // Floated again: nothing of ours stays on it.
@@ -87,7 +91,7 @@ namespace Hyprdrive::OwnSizeTile {
                 T->setPseudo(false);
             w->m_ruleApplicator->noMaxSize().unset(Desktop::Types::PRIORITY_SET_PROP);
             w->m_ruleApplicator->minSize().unset(Desktop::Types::PRIORITY_SET_PROP);
-            trace(std::format("{} floats again", w->m_class));
+            trace(std::format("{} floats again", w->metadata().appID()));
         }
 
         ActionResult hkFloatWindow(eTogglableAction action, std::optional<PHLWINDOW> w) {
@@ -101,7 +105,7 @@ namespace Hyprdrive::OwnSizeTile {
             bool            wantFloat = false;
             if (WINDOW) {
                 switch (action) {
-                    case ::Config::Actions::TOGGLE_ACTION_TOGGLE: wantFloat = !WINDOW->m_isFloating; break;
+                    case ::Config::Actions::TOGGLE_ACTION_TOGGLE: wantFloat = !WINDOW->isFloating(); break;
                     case ::Config::Actions::TOGGLE_ACTION_ENABLE: wantFloat = true; break;
                     case ::Config::Actions::TOGGLE_ACTION_DISABLE: wantFloat = false; break;
                 }
@@ -109,7 +113,7 @@ namespace Hyprdrive::OwnSizeTile {
             // A fixed-size window on its way into a tile is set up first, so the
             // layout places it at its own size from the first configure on.
             Vector2D size;
-            if (WINDOW && WINDOW->m_isMapped && WINDOW->m_isFloating && !wantFloat && fixedSize(WINDOW, size))
+            if (WINDOW && WINDOW->mapped() && WINDOW->isFloating() && !wantFloat && fixedSize(WINDOW, size))
                 own(WINDOW, size);
 
             const auto RESULT = [&] {
@@ -118,7 +122,7 @@ namespace Hyprdrive::OwnSizeTile {
             }();
 
             // Floated by this call -- or the tile turned it away after all.
-            if (WINDOW && WINDOW->m_isFloating && owned(WINDOW))
+            if (WINDOW && WINDOW->isFloating() && owned(WINDOW))
                 release(WINDOW);
             return RESULT;
         }
@@ -132,11 +136,11 @@ namespace Hyprdrive::OwnSizeTile {
         // is the program changing the size it fixes (a bigger board, a login
         // turning into its main window): the tile follows it, or lets go of it
         // when the window can be resized now.
-        void hkOnX11Configure(void* thisptr, CBox box) {
+        void hkOnX11Configure(void* thisptr, const CBox& box) {
             auto* const SELF = sc<Desktop::View::CWindow*>(thisptr);
             const auto  W    = SELF ? SELF->m_self.lock() : PHLWINDOW{};
-            if (W && W->m_isMapped && !W->m_isFloating && owned(W)) {
-                if (std::abs(box.w - W->m_reportedSize.x) < 1 && std::abs(box.h - W->m_reportedSize.y) < 1)
+            if (W && W->mapped() && !W->isFloating() && owned(W)) {
+                if (std::abs(box.w - W->backend().reportedSize().x) < 1 && std::abs(box.h - W->backend().reportedSize().y) < 1)
                     return;
                 Vector2D size;
                 if (fixedSize(W, size))
@@ -145,7 +149,7 @@ namespace Hyprdrive::OwnSizeTile {
                     release(W);
                 if (const auto T = W->layoutTarget(); T && T->space())
                     T->space()->recalculate();
-                trace(std::format("{} asked for {:.0f}x{:.0f}: the tile follows", W->m_class, box.w, box.h));
+                trace(std::format("{} asked for {:.0f}x{:.0f}: the tile follows", W->metadata().appID(), box.w, box.h));
             }
             rc<TOnX11Configure>(g_configureHook->m_original)(thisptr, box);
         }
@@ -198,20 +202,30 @@ namespace Hyprdrive::OwnSizeTile {
         }
     }
 
+    static SP<CXDGSurfaceResource> xdgOf(const PHLWINDOW& w) {
+        if (!w || w->backend().isX11())
+            return nullptr;
+        const auto S = w->backend().surface();
+        if (!S || !S->m_role || S->m_role->role() != SURFACE_ROLE_XDG_SHELL)
+            return nullptr;
+        return sc<CXDGSurfaceRole*>(S->m_role.get())->m_xdgSurface.lock();
+    }
+
     bool fixedSize(const PHLWINDOW& w, Vector2D& size) {
         if (!w)
             return false;
-        if (w->m_isX11) {
-            const auto XS = w->m_xwaylandSurface.lock();
+        if (w->backend().isX11()) {
+            const auto XS = Hyprdrive::Priv::xsurface(w);
             if (!XS || !XS->m_sizeHints)
                 return false;
             const auto& H = *XS->m_sizeHints;
             if (H.min_width < 1 || H.min_height < 1 || H.min_width != H.max_width || H.min_height != H.max_height)
                 return false;
-            size = w->xwaylandSizeToReal(Vector2D{sc<double>(H.min_width), sc<double>(H.min_height)});
+            size = w->backend().clientToLogical(CBox{0, 0, sc<double>(H.min_width), sc<double>(H.min_height)}, w->m_monitor.lock()).size();
             return true;
         }
-        if (!w->m_xdgSurface || !w->m_xdgSurface->m_toplevel)
+        const auto XDG = xdgOf(w);
+        if (!XDG || !XDG->m_toplevel)
             return false;
         // The sizes as the program gave them -- window geometry, the size of
         // the window Hyprland draws -- not layoutMinSize/layoutMaxSize, which
@@ -222,8 +236,8 @@ namespace Hyprdrive::OwnSizeTile {
         // around a box 20 px bigger (XPS, 2026-11-13: "two mismatched rounded
         // shapes"). Tiled, GTK drops the shadow and the offset is 0 again --
         // too late, the tile already had its size.
-        const Vector2D MIN = w->m_xdgSurface->m_toplevel->m_current.minSize;
-        const Vector2D MAX = w->m_xdgSurface->m_toplevel->m_current.maxSize;
+        const Vector2D MIN = XDG->m_toplevel->m_current.minSize;
+        const Vector2D MAX = XDG->m_toplevel->m_current.maxSize;
         if (MIN.x < 1 || MIN.y < 1 || std::abs(MAX.x - MIN.x) >= 1 || std::abs(MAX.y - MIN.y) >= 1)
             return false;
         size = MIN;
@@ -263,7 +277,7 @@ namespace Hyprdrive::OwnSizeTile {
             next(target, roomFor(T, W, box, T->pseudoSize()), flags);
         // The layout's own tile back (no updatePos): what it and Mosaic read.
         T->Layout::ITarget::setPositionGlobal(box, flags);
-        trace(std::format("{} placed at its own size in a {:.0f}x{:.0f} tile", W->m_class, box.logicalBox.w, box.logicalBox.h));
+        trace(std::format("{} placed at its own size in a {:.0f}x{:.0f} tile", W->metadata().appID(), box.logicalBox.w, box.logicalBox.h));
     }
 
     void init() {
@@ -292,7 +306,7 @@ namespace Hyprdrive::OwnSizeTile {
         // removes them at unload).
         std::vector<PHLWINDOW> tiled;
         for (const auto& r : g_owned)
-            if (const auto W = r.lock(); W && W->m_isMapped && !W->m_isFloating)
+            if (const auto W = r.lock(); W && W->mapped() && !W->isFloating())
                 tiled.push_back(W);
         for (const auto& W : tiled)
             (void)::Config::Actions::floatWindow(::Config::Actions::TOGGLE_ACTION_ENABLE, W);

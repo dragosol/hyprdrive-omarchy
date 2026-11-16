@@ -21,7 +21,7 @@ void COverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t workspaceId
         return;
 
     const auto workspace         = workspaceImage->pWorkspace;
-    const bool WASVISIBLE        = workspace->m_visible;
+    const bool WASVISIBLE        = workspace->visible();
     const bool WASFORCERENDERING = workspace->m_forceRendering;
     workspace->m_visible         = true;
     workspace->m_forceRendering  = true;
@@ -67,6 +67,7 @@ void COverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float render
         const CRegion DMG{BOXPX};
 
         g_pHyprRenderer->draw(
+            g_pHyprRenderer->context(),
             CTexPassElement::SRenderData{
                 .tex           = frost.cardWallpaperFB->getTexture(),
                 .box           = BOXPX,
@@ -74,7 +75,6 @@ void COverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float render
                 .damage        = DMG,
                 .round         = CARDROUND.rounding,
                 .roundingPower = CARDROUND.power,
-                .flipEndFrame  = true,
             },
             DMG);
     } else if (alpha > 0.001F)
@@ -105,7 +105,7 @@ void COverview::renderCardBody(PHLMONITOR monitor, const CBox& box, float render
         border.borderSize    = BORDERSIZE + sc<int>(std::ceil(FOCUS * sc<float>(BORDERSIZE)));
         border.round         = CARDROUND.rounding;
         border.roundingPower = CARDROUND.power;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(border));
         if (INORDER)
             OverviewRender::flushPass(monitor);
 
@@ -163,7 +163,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         return;
 
     const auto workspace         = workspaceImage->pWorkspace;
-    const bool WASVISIBLE        = workspace->m_visible;
+    const bool WASVISIBLE        = workspace->visible();
     const bool WASFORCERENDERING = workspace->m_forceRendering;
     workspace->m_visible         = true;
     workspace->m_forceRendering  = true;
@@ -252,17 +252,17 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         // INSTRUMENT (Membership::renderShadowEnabled). PAST the cull, so a line
         // here means a rectangle really was painted on this output.
         if (Membership::renderShadowEnabled()) {
-            const auto LIVEWS = window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID;
+            const auto LIVEWS = window->m_workspace ? Hyprdrive::Compat::id(window->m_workspace) : WORKSPACE_INVALID;
             const auto CENTRE = windowBox.middle();
             // Would the hit-test hand this tile back? Same walk windowAtOverviewPoint does.
             const auto HIT    = windowAtOverviewPoint(CENTRE);
             if (HIT != window)
-                Membership::renderDivergence("UNCLICK", workspace->m_id, LIVEWS, window->m_class,
-                                             window->m_title + std::format("  box={},{} {}x{}  hit={}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width,
-                                                                           (int)windowBox.height, HIT ? HIT->m_class : std::string{"(none)"}));
+                Membership::renderDivergence("UNCLICK", Hyprdrive::Compat::id(workspace), LIVEWS, window->metadata().appID(),
+                                             window->metadata().title() + std::format("  box={},{} {}x{}  hit={}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width,
+                                                                           (int)windowBox.height, HIT ? HIT->metadata().appID() : std::string{"(none)"}));
             if (PROMOTED && g_search.query.text.empty())
-                Membership::renderDivergence("PROMONOQ", workspace->m_id, LIVEWS, window->m_class,
-                                             window->m_title + std::format("  box={},{} {}x{}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width, (int)windowBox.height));
+                Membership::renderDivergence("PROMONOQ", Hyprdrive::Compat::id(workspace), LIVEWS, window->metadata().appID(),
+                                             window->metadata().title() + std::format("  box={},{} {}x{}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width, (int)windowBox.height));
         }
 
         // TILES MOVED BY THE SEARCH (user, 2026-09-30: "0.5 motion blur on
@@ -353,7 +353,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         OverviewRender::flushPass(monitor);
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!shouldShowOverviewWindow(window) || !window->m_isFloating || window == fullscreenWindow)
+            if (!shouldShowOverviewWindow(window) || !window->isFloating() || window == fullscreenWindow)
                 continue;
 
             renderOverviewWindow(window);
@@ -365,7 +365,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
     const auto renderWindowsByState = [&](bool floating) {
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!window || window->m_isFloating != floating)
+            if (!window || window->isFloating() != floating)
                 continue;
             if (window == HOVEREDTILE) {
                 hoveredHere = true; // drawn last, over its neighbours
@@ -443,7 +443,7 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
 
         if (!tile.captured) {
             // Still mapped: the close was asked for, not done. Wait for it.
-            if (WINDOW && WINDOW->m_isMapped)
+            if (WINDOW && WINDOW->mapped())
                 continue;
 
             // Gone. Find the snapshot Hyprland took of it -- the one whose box
@@ -490,6 +490,7 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
 
         CRegion damageRegion{TILE};
         g_pHyprRenderer->draw(
+            g_pHyprRenderer->context(),
             CTexPassElement::SRenderData{
                 .tex     = TEX,
                 .box     = DRAW,
@@ -508,7 +509,7 @@ void COverview::renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Tim
             const auto W = t.window.lock();
             // Refused close (still mapped past the wait), or unmapped with no
             // snapshot to borrow: let it go without an animation.
-            return (W && W->m_isMapped) ? SINCE >= WAITMS : !W || SINCE >= WAITMS;
+            return (W && W->mapped()) ? SINCE >= WAITMS : !W || SINCE >= WAITMS;
         }
         return SINCE >= DURMS || !t.fb || !t.fb->isAllocated();
     });
@@ -532,11 +533,11 @@ float COverview::workspaceScrollingSpanRatio(const PHLWORKSPACE& workspace, PHLM
         spanRatioMemo.clear();
         spanRatioFrame   = FRAME;
         spanRatioMonitor = monitor->m_id;
-    } else if (const auto IT = spanRatioMemo.find(workspace->m_id); IT != spanRatioMemo.end())
+    } else if (const auto IT = spanRatioMemo.find(Hyprdrive::Compat::id(workspace)); IT != spanRatioMemo.end())
         return IT->second;
 
     const float VALUE = workspaceScrollingSpanRatioLive(workspace, monitor);
-    spanRatioMemo[workspace->m_id] = VALUE;
+    spanRatioMemo[Hyprdrive::Compat::id(workspace)] = VALUE;
     return VALUE;
 }
 
@@ -569,7 +570,7 @@ float COverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, 
     if (wimgPtr && !wimgPtr->windows.empty()) {
         for (const auto& winRef : wimgPtr->windows) {
             const auto WINDOW = getOverviewWindowToShow(winRef.lock());
-            if (!WINDOW || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->m_isFloating)
+            if (!WINDOW || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->isFloating())
                 continue;
 
             const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -583,7 +584,7 @@ float COverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, 
     } else {
         for (const auto& w : Desktop::windowState()->windows()) {
             const auto WINDOW = getOverviewWindowToShow(w);
-            if (!WINDOW || WINDOW->m_workspace != workspace || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->m_isFloating)
+            if (!WINDOW || WINDOW->m_workspace != workspace || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->isFloating())
                 continue;
 
             const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -858,7 +859,7 @@ void COverview::renderListShadow() {
         if (!img || !img->pWorkspace)
             continue;
 
-        const auto CARDID = img->pWorkspace->m_id;
+        const auto CARDID = Hyprdrive::Compat::id(img->pWorkspace);
 
         std::vector<PHLWINDOW> snapshot;
         for (const auto& ref : img->windows) {
@@ -866,16 +867,16 @@ void COverview::renderListShadow() {
             if (!WINDOW || !shouldShowOverviewWindow(WINDOW))
                 continue;
 
-            const auto LIVEWS = WINDOW->m_workspace ? WINDOW->m_workspace->m_id : WORKSPACE_INVALID;
+            const auto LIVEWS = WINDOW->m_workspace ? Hyprdrive::Compat::id(WINDOW->m_workspace) : WORKSPACE_INVALID;
 
             if (std::ranges::find(snapshot, WINDOW) != snapshot.end()) {
-                Membership::renderDivergence("DUP", CARDID, LIVEWS, WINDOW->m_class, WINDOW->m_title);
+                Membership::renderDivergence("DUP", CARDID, LIVEWS, WINDOW->metadata().appID(), WINDOW->metadata().title());
                 continue;
             }
             snapshot.emplace_back(WINDOW);
 
             if (const auto IT = seenOnCard.find(WINDOW.get()); IT != seenOnCard.end())
-                Membership::renderDivergence("CROSS", CARDID, IT->second, WINDOW->m_class, WINDOW->m_title);
+                Membership::renderDivergence("CROSS", CARDID, IT->second, WINDOW->metadata().appID(), WINDOW->metadata().title());
             else
                 seenOnCard.emplace(WINDOW.get(), CARDID);
         }
@@ -884,12 +885,12 @@ void COverview::renderListShadow() {
 
         for (const auto& WINDOW : snapshot) {
             if (std::ranges::find(LIVE, WINDOW) == LIVE.end())
-                Membership::renderDivergence("STALE", CARDID, WINDOW->m_workspace ? WINDOW->m_workspace->m_id : WORKSPACE_INVALID, WINDOW->m_class, WINDOW->m_title);
+                Membership::renderDivergence("STALE", CARDID, WINDOW->m_workspace ? Hyprdrive::Compat::id(WINDOW->m_workspace) : WORKSPACE_INVALID, WINDOW->metadata().appID(), WINDOW->metadata().title());
         }
 
         for (const auto& WINDOW : LIVE) {
             if (std::ranges::find(snapshot, WINDOW) == snapshot.end())
-                Membership::renderDivergence("MISSING", CARDID, WINDOW->m_workspace ? WINDOW->m_workspace->m_id : WORKSPACE_INVALID, WINDOW->m_class, WINDOW->m_title);
+                Membership::renderDivergence("MISSING", CARDID, WINDOW->m_workspace ? Hyprdrive::Compat::id(WINDOW->m_workspace) : WORKSPACE_INVALID, WINDOW->metadata().appID(), WINDOW->metadata().title());
         }
     }
 
@@ -915,7 +916,7 @@ void COverview::redrawAll(bool forcelowres) {
 
     for (const auto& img : images) {
         if (img && img->pWorkspace)
-            imagesByWorkspace.emplace(img->pWorkspace->m_id, img);
+            imagesByWorkspace.emplace(Hyprdrive::Compat::id(img->pWorkspace), img);
     }
 
     std::vector<PHLWINDOW> addedWindows;
@@ -928,7 +929,7 @@ void COverview::redrawAll(bool forcelowres) {
     // fallback below hands a homeless promoted window to it.
     const auto MONITOR  = pMonitor.lock();
     const auto ACTIVEWS = MONITOR ? MONITOR->m_activeWorkspace : PHLWORKSPACE{};
-    const auto ACTIVEID = ACTIVEWS ? ACTIVEWS->m_id : WORKSPACE_INVALID;
+    const auto ACTIVEID = ACTIVEWS ? Hyprdrive::Compat::id(ACTIVEWS) : WORKSPACE_INVALID;
 
     const auto addOverviewWindow = [&](const PHLWINDOW& window) {
         const auto overviewWindow = getOverviewWindowToShow(window);
@@ -948,7 +949,7 @@ void COverview::redrawAll(bool forcelowres) {
         // first reading suggested.
         WORKSPACEID homeId = Hyprdrive::Minimize::originalWorkspace(overviewWindow);
         if (homeId == WORKSPACE_INVALID)
-            homeId = overviewWindow->m_workspace->m_id;
+            homeId = Hyprdrive::Compat::id(overviewWindow->m_workspace);
 
         auto imageIt = imagesByWorkspace.find(homeId);
 

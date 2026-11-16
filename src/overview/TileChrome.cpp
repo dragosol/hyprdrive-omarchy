@@ -21,7 +21,8 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 
 #define private public
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
@@ -239,7 +240,7 @@ void drawCaption(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBo
     const auto DOCK = Dock::layout(monitor).pill;
     if (!DOCK.empty() && plateBottom > sc<float>(DOCK.y))
         plateBottom = sc<float>(DOCK.y) - CAPTION_GAP * scale;
-    OverviewRender::labelPill(monitor, window->m_title, sc<float>(tileBox.x + tileBox.w / 2.0), plateBottom, A, scale);
+    OverviewRender::labelPill(monitor, window->metadata().title(), sc<float>(tileBox.x + tileBox.w / 2.0), plateBottom, A, scale);
 }
 
 }
@@ -490,7 +491,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
             icon.tex = TEX;
             icon.box = iconBox;
             icon.a   = FADE;
-            g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(icon));
+            g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(icon));
         }
     }
 
@@ -553,7 +554,7 @@ void render(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& tileBox, fl
         x.box = CBox{sc<float>(BUTTON.x + BUTTON.w / 2.0) - SIDE / 2.F, sc<float>(BUTTON.y + BUTTON.h / 2.0) - SIDE / 2.F, SIDE, SIDE};
         x.box.round();
         x.a = ALPHA;
-        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(x));
+        g_pHyprRenderer->addPassElement(g_pHyprRenderer->context(), makeUnique<CTexPassElement>(x));
     }
 }
 

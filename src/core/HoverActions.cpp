@@ -6,8 +6,9 @@
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 
 #include <optional>
@@ -29,7 +30,7 @@ namespace Hyprdrive::HoverActions {
         constexpr const char* PIN_WINDOW =
             "_ZN6Config7Actions9pinWindowENS0_16eTogglableActionESt8optionalIN9Hyprutils6Memory14CSharedPointerIN7Desktop4View7CWindowEEEE";
         constexpr const char* MOVE_TO_WORKSPACE =
-            "_ZN6Config7Actions15moveToWorkspaceEN9Hyprutils6Memory14CSharedPointerI10CWorkspaceEEbSt8optionalINS3_IN7Desktop4View7CWindowEEEE";
+            "_ZN6Config7Actions15moveToWorkspaceEN9Hyprutils6Memory14CSharedPointerIN9Workspace12CHLWorkspaceEEEbSt8optionalINS3_IN7Desktop4View7CWindowEEEE";
 
         CFunctionHook* g_modeHook  = nullptr;
         CFunctionHook* g_modesHook = nullptr;
@@ -78,7 +79,7 @@ namespace Hyprdrive::HoverActions {
             bool found = false;
             auto* hook = FunctionHooks::firstMatch("HoverActions", name, destination, {}, &found);
             if (!found)
-                Log::logger->log(Log::WARN, "[hyprdrive] {} not found: {} on a hovered tile or dock preview acts on the focused window", name, what);
+                Log::logger->log(Log::WARN, Log::logFnName(), "[hyprdrive] {} not found: {} on a hovered tile or dock preview acts on the focused window", name, what);
             if (hook && !hook->hook())
                 hook = nullptr;
             return hook;
@@ -102,7 +103,7 @@ namespace Hyprdrive::HoverActions {
         if (g_own > 0)
             return w;
         const auto FOCUSED = Desktop::focusState()->window();
-        const bool INBIND  = g_pKeybindManager && g_pKeybindManager->m_currentKeybind;
+        const bool INBIND  = !!Hyprdrive::Compat::currentBind();
         const bool NAMED   = w.has_value();
         if (NAMED && !(INBIND && *w && *w == FOCUSED))
             return w; // named, and not "the active window" from a bind: the caller's

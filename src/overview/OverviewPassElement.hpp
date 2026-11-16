@@ -40,14 +40,14 @@ class COverviewBlurPassElement : public IPassElement {
     COverviewBlurPassElement(const SData& data_);
     ~COverviewBlurPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur() override;
-    bool                          needsPrecomputeBlur() override;
-    std::optional<CBox>           boundingBox() override;
-    CRegion                       opaqueRegion() override;
+    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
+    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
 
     const char*                   passName() override {
         return "COverviewBlurPassElement";
@@ -79,14 +79,14 @@ class COverviewSplitBorderPassElement : public IPassElement {
     COverviewSplitBorderPassElement(const SData& data_);
     ~COverviewSplitBorderPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur() override;
-    bool                          needsPrecomputeBlur() override;
-    std::optional<CBox>           boundingBox() override;
-    CRegion                       opaqueRegion() override;
+    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
+    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
 
     const char*                   passName() override {
         return "COverviewSplitBorderPassElement";
@@ -114,14 +114,14 @@ class COverviewShadowPassElement : public IPassElement {
     COverviewShadowPassElement(const SData& data_);
     ~COverviewShadowPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur() override;
-    bool                          needsPrecomputeBlur() override;
-    std::optional<CBox>           boundingBox() override;
-    CRegion                       opaqueRegion() override;
+    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
+    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
 
     const char*                   passName() override {
         return "COverviewShadowPassElement";
@@ -147,16 +147,16 @@ class CDockLivePreviewPassElement : public IPassElement {
     CDockLivePreviewPassElement(SData&& data_);
     ~CDockLivePreviewPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur() override;
-    bool                          needsPrecomputeBlur() override;
-    std::optional<CBox>           boundingBox() override;
-    CRegion                       opaqueRegion() override;
-    bool                          disableSimplification() override;
-    bool                          undiscardable() override;
+    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
+    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
+    bool                          disableSimplification(Render::CRenderContext& ctx) override;
+    bool                          undiscardable(Render::CRenderContext& ctx) override;
 
     const char*                   passName() override {
         return "CDockLivePreviewPassElement";

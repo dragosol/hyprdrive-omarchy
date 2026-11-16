@@ -196,7 +196,7 @@ namespace OverviewDetail {
     extern bool g_pillHovered;
     extern SPillPress g_pillPress;
     extern SearchLetters::SAnimator g_placeholderLetters;
-    extern std::vector<WP<SKeybind>> g_passthroughBinds;
+    extern std::vector<WP<Keybinds::CBind>> g_passthroughBinds;
     extern uint64_t g_warpSeq;
     extern bool g_handoffShutdown;
     extern bool g_warpCentred;

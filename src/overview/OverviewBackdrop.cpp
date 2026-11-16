@@ -194,7 +194,7 @@ void COverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp&
     if (!monitor)
         return;
 
-    g_pHyprRenderer->renderBackground(monitor);
+    g_pHyprRenderer->renderBackground(g_pHyprRenderer->context(), monitor);
 
     for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
         if (LAYER == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM && !includeBottom)
@@ -203,7 +203,7 @@ void COverview::renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp&
             if (!Desktop::View::validMapped(ls.lock()))
                 continue;
 
-            g_pHyprRenderer->renderLayer(ls.lock(), monitor, now);
+            g_pHyprRenderer->renderLayer(g_pHyprRenderer->context(), ls.lock(), monitor, now);
         }
     }
 }
@@ -258,7 +258,7 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
     frostSigMix(h, sc<uint64_t>(monitor->m_transform));
     frostSigMixD(h, monitor->m_scale);
 
-    if (const auto& CURRENTFB = g_pHyprRenderer->m_renderData.currentFB; CURRENTFB) {
+    if (const auto& CURRENTFB = g_pHyprRenderer->context().m_data.currentFB; CURRENTFB) {
         frostSigMix(h, sc<uint64_t>(CURRENTFB->m_drmFormat));
         frostSigMixP(h, CURRENTFB->imageDescription().get());
     }
@@ -313,7 +313,7 @@ static uint64_t wallpaperCacheSignature(PHLMONITOR monitor, bool includeBottomLa
 // Y17: no longer re-rendered every frame -- see wallpaperCacheSignature above
 // for the two halves of the invalidation.
 void COverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp& now) {
-    if (!monitor || !g_pHyprRenderer->m_renderData.currentFB)
+    if (!monitor || !g_pHyprRenderer->context().m_data.currentFB)
         return;
 
     if (const auto SIG = wallpaperCacheSignature(monitor, /* includeBottomLayer */ true, /* includeBlurKnobs */ false); SIG != frost.lastCardWallpaperSig) {
@@ -323,7 +323,7 @@ void COverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp&
 
     const auto FBSIZE     = monitor->m_pixelSize;
     const auto RENDERSIZE = monitor->m_transformedSize;
-    const auto FBFORMAT   = g_pHyprRenderer->m_renderData.currentFB->m_drmFormat;
+    const auto FBFORMAT   = g_pHyprRenderer->context().m_data.currentFB->m_drmFormat;
     if (!frost.cardWallpaperFB)
         frost.cardWallpaperFB = g_pHyprRenderer->createFB("hyprdrive_card_wallpaper");
 
@@ -337,7 +337,7 @@ void COverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp&
         frost.cardWallpaperDirty = true;
     }
 
-    frost.cardWallpaperFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+    frost.cardWallpaperFB->setImageDescription(g_pHyprRenderer->context().m_data.currentFB->imageDescription());
 
     // Y17: everything below re-renders the whole wallpaper into the FB. The
     // cached pixels do not depend on the overview's scale or view offset -- the
@@ -349,27 +349,27 @@ void COverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp&
     const CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
 
     {
-        auto bindCard = g_pHyprRenderer->bindTempFB(frost.cardWallpaperFB);
+        auto bindCard = g_pHyprRenderer->bindTempFB(g_pHyprRenderer->context(), frost.cardWallpaperFB);
 
         // The frame damage can be tiny on an idle frame, and queued surface
         // elements are culled against it -- which left this FB black except the
         // clear. Same save/override/restore dance the shadow element does.
-        const auto SAVEDDAMAGE               = g_pHyprRenderer->m_renderData.damage;
-        g_pHyprRenderer->m_renderData.damage = fullDamage;
-        auto restoreDamage = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE] { g_pHyprRenderer->m_renderData.damage = SAVEDDAMAGE; });
+        const auto SAVEDDAMAGE               = g_pHyprRenderer->context().m_data.damage;
+        g_pHyprRenderer->context().m_data.damage = fullDamage;
+        auto restoreDamage = Hyprutils::Utils::CScopeGuard([SAVEDDAMAGE] { g_pHyprRenderer->context().m_data.damage = SAVEDDAMAGE; });
 
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
+        g_pHyprRenderer->draw(g_pHyprRenderer->context(), CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
         // Same sources as renderGlobalWallpaper: hyprpaper via renderBackground,
         // then BACKGROUND/BOTTOM layers (Omarchy's wallpaper is often a BOTTOM
         // layer). The card fill must be the undimmed wallpaper, or the dimmed
         // canvas shows through the floating workspace.
-        g_pHyprRenderer->renderBackground(monitor);
+        g_pHyprRenderer->renderBackground(g_pHyprRenderer->context(), monitor);
         for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
             for (auto const& ls : monitor->m_layerSurfaceLayers[LAYER]) {
                 if (!Desktop::View::validMapped(ls.lock()))
                     continue;
 
-                g_pHyprRenderer->renderLayer(ls.lock(), monitor, now);
+                g_pHyprRenderer->renderLayer(g_pHyprRenderer->context(), ls.lock(), monitor, now);
             }
         }
         OverviewRender::flushPass(monitor);
@@ -379,7 +379,7 @@ void COverview::updateCardWallpaperFB(PHLMONITOR monitor, const Time::steady_tp&
 }
 
 void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now) {
-    if (!monitor || wallpaperMode == 1 || !g_pHyprRenderer->m_renderData.currentFB)
+    if (!monitor || wallpaperMode == 1 || !g_pHyprRenderer->context().m_data.currentFB)
         return;
 
     // The backdrop mode is part of the key: switching it in the panel rebuilds.
@@ -413,7 +413,7 @@ void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, c
 
     const auto FBSIZE     = monitor->m_pixelSize;
     const auto RENDERSIZE = monitor->m_transformedSize;
-    const auto FBFORMAT   = g_pHyprRenderer->m_renderData.currentFB->m_drmFormat;
+    const auto FBFORMAT   = g_pHyprRenderer->context().m_data.currentFB->m_drmFormat;
     if (!frost.backdropFB)
         frost.backdropFB = g_pHyprRenderer->createFB("hyprdrive_backdrop_blur");
 
@@ -425,7 +425,7 @@ void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, c
         frost.backdropDirty = true;
     }
 
-    frost.backdropFB->setImageDescription(g_pHyprRenderer->m_renderData.currentFB->imageDescription());
+    frost.backdropFB->setImageDescription(g_pHyprRenderer->context().m_data.currentFB->imageDescription());
 
     // Y17 (GPU, 2026-09-14). THE early-out. backdropDirty was written at the
     // bottom of this function and never read, so every frame of every monitor
@@ -450,12 +450,12 @@ void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, c
     const CRegion fullDamage{CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}};
 
     {
-        auto bindBackdrop = g_pHyprRenderer->bindTempFB(frost.backdropFB);
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, fullDamage);
+        auto bindBackdrop = g_pHyprRenderer->bindTempFB(g_pHyprRenderer->context(), frost.backdropFB);
+        g_pHyprRenderer->draw(g_pHyprRenderer->context(), CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, fullDamage);
         renderGlobalWallpaper(monitor, now, BOTTOM);
         // OFF: the wallpaper darkened, no blur -- the same baked-in dim.
         if (MODE == EBackdrop::OFF)
-            g_pHyprRenderer->draw(CRectPassElement::SRectData{.box = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}, .color = CHyprColor{0.F, 0.F, 0.F, BACKDROP_DIM}},
+            g_pHyprRenderer->draw(g_pHyprRenderer->context(), CRectPassElement::SRectData{.box = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}, .color = CHyprColor{0.F, 0.F, 0.F, BACKDROP_DIM}},
                                   fullDamage);
         OverviewRender::flushPass(monitor);
     }
@@ -489,22 +489,17 @@ void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, c
     });
 
     auto       blurDamage = fullDamage;
-    const auto BLURREDTEX = g_pHyprRenderer->blurFramebuffer(frost.backdropFB, 1.F, &blurDamage);
+    const auto BLURREDFB  = g_pHyprRenderer->blurFramebuffer(g_pHyprRenderer->context(), frost.backdropFB, 1.F, blurDamage);
+    const auto BLURREDTEX = BLURREDFB ? BLURREDFB->getTexture() : nullptr;
     if (!BLURREDTEX || !BLURREDTEX->m_size.x || !BLURREDTEX->m_size.y)
         return;
 
     {
-        auto bindBackdrop = g_pHyprRenderer->bindTempFB(frost.backdropFB);
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
-
-        const auto SAVEDTRANSFORM = BLURREDTEX->m_transform;
-        BLURREDTEX->m_transform   = Math::wlTransformToHyprutils(Math::invertTransform(monitor->m_transform));
-        auto restoreTransform     = Hyprutils::Utils::CScopeGuard([BLURREDTEX, SAVEDTRANSFORM] { BLURREDTEX->m_transform = SAVEDTRANSFORM; });
-
-        g_pHyprRenderer->pushMonitorTransformEnabled(true);
-        auto restoreMonitorTransform = Hyprutils::Utils::CScopeGuard([] { g_pHyprRenderer->popMonitorTransformEnabled(); });
+        auto bindBackdrop = g_pHyprRenderer->bindTempFB(g_pHyprRenderer->context(), frost.backdropFB);
+        g_pHyprRenderer->draw(g_pHyprRenderer->context(), CClearPassElement::SClearData{CHyprColor{0.F, 0.F, 0.F, 0.F}}, fullDamage);
 
         g_pHyprRenderer->draw(
+            g_pHyprRenderer->context(),
             CTexPassElement::SRenderData{
                 .tex    = BLURREDTEX,
                 .box    = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y},
@@ -513,7 +508,7 @@ void COverview::updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, c
             fullDamage);
 
         // The overview's dim, baked in (see render()).
-        g_pHyprRenderer->draw(CRectPassElement::SRectData{.box = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}, .color = CHyprColor{0.F, 0.F, 0.F, BACKDROP_DIM}}, fullDamage);
+        g_pHyprRenderer->draw(g_pHyprRenderer->context(), CRectPassElement::SRectData{.box = CBox{0, 0, RENDERSIZE.x, RENDERSIZE.y}, .color = CHyprColor{0.F, 0.F, 0.F, BACKDROP_DIM}}, fullDamage);
     }
 
     frost.backdropDirty = false;
@@ -527,12 +522,12 @@ bool COverview::renderBackdropBlurCache(PHLMONITOR monitor, float alpha) {
     const CRegion fullDamage{CBox{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y}};
 
     g_pHyprRenderer->draw(
+            g_pHyprRenderer->context(),
         CTexPassElement::SRenderData{
             .tex          = TEX,
             .box          = CBox{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y},
             .a            = std::clamp(alpha, 0.F, 1.F),
             .damage       = fullDamage,
-            .flipEndFrame = true,
         },
         fullDamage);
     return true;

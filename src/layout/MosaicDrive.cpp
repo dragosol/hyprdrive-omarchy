@@ -11,7 +11,8 @@
 #define private public
 #define protected public
 #include <hyprutils/animation/AnimatedVariable.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #undef protected
 #undef private
 
@@ -33,12 +34,12 @@ namespace Hyprdrive::MosaicDrive {
         // nothing else moves them until release() warps them home.
         w->m_realPosition->m_bIsBeingAnimated = true;
         w->m_realSize->m_bIsBeingAnimated     = true;
-        w->m_animatingIn                      = true;
+        w->presentation().setAnimatingIn(true);
         // What Hyprland's own size callback does on every animated step: the
         // border and shadow follow the drawn box. Without it they stayed at
         // the size of the previous zoom step, an outline inside every window.
-        if (w->m_isMapped)
-            w->updateWindowDecos();
+        if (w->mapped())
+            w->presentation().updateDecorations();
     }
 
     CBox layoutBox(const PHLWINDOW& w) {
@@ -51,7 +52,7 @@ namespace Hyprdrive::MosaicDrive {
     void release(const PHLWINDOW& w) {
         if (!w || !w->m_realPosition || !w->m_realSize)
             return;
-        w->m_animatingIn                      = false;
+        w->presentation().setAnimatingIn(false);
         w->m_realPosition->m_bIsBeingAnimated = true;
         w->m_realSize->m_bIsBeingAnimated     = true;
         w->m_realPosition->warp();
@@ -65,12 +66,12 @@ namespace Hyprdrive::MosaicDrive {
         // with its size animating too (and sets m_animatingIn); centring it here
         // took its flight over (user, 2026-10-29: "you replaced my maximize from
         // dock animation").
-        if (!w->m_animatingIn || Hyprdrive::Flight::hasFlight(w))
+        if (!w->presentation().animatingIn() || Hyprdrive::Flight::hasFlight(w))
             return false;
         const auto GP = w->m_realPosition->goal(), GS = w->m_realSize->goal(), S = w->m_realSize->value();
         w->m_realPosition->setValue(GP + (GS - S) / 2.0);
-        if (w->m_isMapped)
-            w->updateWindowDecos();
+        if (w->mapped())
+            w->presentation().updateDecorations();
         return true;
     }
 }

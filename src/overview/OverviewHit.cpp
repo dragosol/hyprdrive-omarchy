@@ -28,7 +28,7 @@ PHLWINDOW COverview::windowAtOverviewPoint(const Vector2D& point, size_t* hovere
         if (fullscreenWindow) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto window = getOverviewWindowToShow(it->lock());
-                if (!overviewTileShown(window, MONITOR) || !window->m_isFloating)
+                if (!overviewTileShown(window, MONITOR) || !window->isFloating())
                     continue;
 
                 const auto texbox = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
@@ -48,7 +48,7 @@ PHLWINDOW COverview::windowAtOverviewPoint(const Vector2D& point, size_t* hovere
         for (const bool floating : {true, false}) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto window = getOverviewWindowToShow(it->lock());
-                if (!overviewTileShown(window, MONITOR) || window->m_isFloating != floating)
+                if (!overviewTileShown(window, MONITOR) || window->isFloating() != floating)
                     continue;
 
                 const auto texbox = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
@@ -81,7 +81,7 @@ CBox COverview::tileBox(const PHLWINDOW& window) const {
     const WORKSPACEID HOME         = overviewGridHomeWorkspace(window);
     size_t            workspaceIdx = images.size();
     for (size_t i = 0; i < images.size(); ++i) {
-        if (images[i] && images[i]->pWorkspace && images[i]->pWorkspace->m_id == HOME) {
+        if (images[i] && images[i]->pWorkspace && Hyprdrive::Compat::id(images[i]->pWorkspace) == HOME) {
             workspaceIdx = i;
             break;
         }
@@ -108,7 +108,7 @@ CBox COverview::overviewBoxForGlobal(WORKSPACEID workspaceId, const CBox& global
 
     size_t workspaceIdx = images.size();
     for (size_t i = 0; i < images.size(); ++i) {
-        if (images[i] && images[i]->pWorkspace && images[i]->pWorkspace->m_id == workspaceId) {
+        if (images[i] && images[i]->pWorkspace && Hyprdrive::Compat::id(images[i]->pWorkspace) == workspaceId) {
             workspaceIdx = i;
             break;
         }
@@ -321,7 +321,7 @@ PHLWINDOW COverview::windowClosestToWorkspaceCenter(size_t workspaceIdx) const {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
         if (!shouldShowOverviewWindow(WINDOW))
             continue;
-        if (HASFULLSCREENPATH && WINDOW != FULLSCREENWINDOW && !WINDOW->m_isFloating)
+        if (HASFULLSCREENPATH && WINDOW != FULLSCREENWINDOW && !WINDOW->isFloating())
             continue;
 
         const auto WINDOWBOX = getOverviewWindowBox(WINDOW, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
@@ -457,7 +457,7 @@ CDropIndicator::SDropAnchor COverview::dropAnchorAtOverviewCursorOnWorkspace(siz
     float bestDistanceSq = std::numeric_limits<float>::max();
     for (auto it = IMAGE->windows.rbegin(); it != IMAGE->windows.rend(); ++it) {
         const auto WINDOW = getOverviewWindowToShow(it->lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating())
             continue;
 
         const auto [BOX, LOGICALBOX] = boxesForWindow(WINDOW);
@@ -488,7 +488,7 @@ CDropIndicator::SDropAnchor COverview::dropAnchorAtOverviewCursorOnWorkspace(siz
 
     for (const auto& windowRef : IMAGE->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating())
             continue;
 
         const auto [BOX, LOGICALBOX] = boxesForWindow(WINDOW);
@@ -508,7 +508,7 @@ CDropIndicator::SDropAnchor COverview::dropAnchorAtOverviewCursorOnWorkspace(siz
 
     for (const auto& windowRef : IMAGE->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating())
             continue;
 
         const auto [BOX, LOGICALBOX] = boxesForWindow(WINDOW);
@@ -584,7 +584,7 @@ PHLWORKSPACE COverview::workspaceAtOverviewDropPoint(const Vector2D& point, size
         for (const bool floating : {true, false}) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto WINDOW = getOverviewWindowToShow(it->lock());
-                if (!shouldShowOverviewWindow(WINDOW) || WINDOW == draggedWindow || WINDOW->m_isFloating != floating)
+                if (!shouldShowOverviewWindow(WINDOW) || WINDOW == draggedWindow || WINDOW->isFloating() != floating)
                     continue;
 
                 const auto WINDOWBOX = getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
@@ -656,7 +656,7 @@ void COverview::focusOverviewWorkspace(const PHLWORKSPACE& workspace, size_t wor
 
     if (pMonitor && pMonitor->m_activeWorkspace != workspace) {
         if (focusSyncedFromWorkspaceID == WORKSPACE_INVALID)
-            focusSyncedFromWorkspaceID = pMonitor->m_activeWorkspace ? pMonitor->m_activeWorkspace->m_id : WORKSPACE_INVALID;
+            focusSyncedFromWorkspaceID = pMonitor->m_activeWorkspace ? Hyprdrive::Compat::id(pMonitor->m_activeWorkspace) : WORKSPACE_INVALID;
         pMonitor->changeWorkspace(workspace, false, true, true);
     }
 
@@ -751,8 +751,8 @@ PHLWINDOW COverview::actionTile() {
 }
 
 bool COverview::windowDispatcherAction(const std::string& action) {
-    const auto CURRENTKEYBIND = g_pKeybindManager ? g_pKeybindManager->m_currentKeybind : SP<SKeybind>{};
-    const bool FROMMOUSEBIND  = CURRENTKEYBIND && CURRENTKEYBIND->key.starts_with("mouse:");
+    const auto CURRENTKEYBIND = Hyprdrive::Compat::currentBind();
+    const bool FROMMOUSEBIND  = CURRENTKEYBIND && !CURRENTKEYBIND->keyNames().empty() && CURRENTKEYBIND->keyNames()[0].starts_with("mouse:");
 
     PHLWINDOW WINDOW;
     size_t    workspaceIdx = viewportCurrentWorkspace;

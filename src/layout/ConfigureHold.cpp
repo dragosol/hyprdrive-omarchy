@@ -1,7 +1,8 @@
 // See ConfigureHold.hpp.
 #include "ConfigureHold.hpp"
 
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -65,7 +66,7 @@ namespace Hyprdrive::ConfigureHold {
         if (!g_sender)
             return;
         for (const auto& h : due)
-            if (const auto WINDOW = h.window.lock(); WINDOW && WINDOW->m_isMapped) {
+            if (const auto WINDOW = h.window.lock(); WINDOW && WINDOW->mapped()) {
                 if (g_depth > 0)
                     note(g_held, WINDOW, h.force); // a CHold is up: its end sends it
                 else
@@ -86,7 +87,7 @@ namespace Hyprdrive::ConfigureHold {
             if (!g_sender)
                 return;
             for (const auto& h : held)
-                if (const auto WINDOW = h.window.lock(); WINDOW && WINDOW->m_isMapped)
+                if (const auto WINDOW = h.window.lock(); WINDOW && WINDOW->mapped())
                     g_sender(WINDOW.get(), h.force);
         }
     }

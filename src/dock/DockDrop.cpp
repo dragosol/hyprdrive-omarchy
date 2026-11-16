@@ -599,7 +599,7 @@ namespace Hyprdrive::DockDrop {
         d.tex = TEX;
         d.box = CBox{LOCAL.x - SZ / 2.0, LOCAL.y - SZ / 2.0, SZ, SZ}.round();
         d.a   = 0.85F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
     }
 
     bool offerIsFolders() {

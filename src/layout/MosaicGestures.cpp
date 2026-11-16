@@ -95,8 +95,8 @@ namespace Hyprdrive::Mosaic {
         // focused one first (floating windows overlap).
         std::pair<PHLWINDOW, Layout::eRectCorner> cornerTarget(const Vector2D& p, bool superHeld) {
             const auto TRY = [&](const PHLWINDOW& w) -> Layout::eRectCorner {
-                if (!w || !w->m_isMapped || w->isHidden() || !w->m_workspace || !w->m_workspace->isVisible() || Fullscreen::controller()->isFullscreen(w) ||
-                    (w->m_isX11 && w->isX11OverrideRedirect()) || !w->layoutTarget())
+                if (!w || !w->mapped() || w->isHidden() || !w->m_workspace || !w->m_workspace->visible() || Fullscreen::controller()->isFullscreen(w) ||
+                    (w->backend().isX11() && w->backend().traits().overrideRedirect) || !w->layoutTarget())
                     return Layout::CORNER_NONE;
                 // Without Super only a TILED window of a mosaic desktop has corners.
                 if (!superHeld && (w->layoutTarget()->floating() || !onMosaic(w)))
@@ -113,6 +113,7 @@ namespace Hyprdrive::Mosaic {
         }
 
         // Plain (no modifier) or Super alone; anything else is someone's chord.
+        constexpr int META_MASK = sc<int>(HL_MODIFIER_META);
         int modsNow() {
             return sc<int>(g_pInputManager->getModsFromAllKBs());
         }
@@ -353,7 +354,7 @@ namespace Hyprdrive::Mosaic {
             else if (SHOWN) {
                 const auto FS = Fullscreen::controller()->getFullscreenWindow(SHOWN);
                 for (const auto& W : Desktop::windowState()->windows()) {
-                    if (!W || !W->m_isMapped || W->isHidden() || W->m_workspace != SHOWN || (FS && W != FS && !W->m_isFloating))
+                    if (!W || !W->mapped() || W->isHidden() || W->m_workspace != SHOWN || (FS && W != FS && !W->isFloating()))
                         continue;
                     if (MODE == "hover" && W != HOVER)
                         continue;
@@ -380,7 +381,7 @@ namespace Hyprdrive::Mosaic {
 
         for (const auto& f : g_labelFades) {
             const auto W = f.window.lock();
-            if (W->m_monitor != monitor || !W->m_isMapped)
+            if (W->m_monitor != monitor || !W->mapped())
                 continue;
             // On the zoomed canvas under the zoom's own fade; elsewhere only a
             // window on the desktop shown, as it is.
@@ -517,9 +518,9 @@ namespace Hyprdrive::Mosaic {
         if (blocked || e.button != BTN_LEFT || !g_layoutManager || g_layoutManager->dragController()->target())
             return false;
         const int MODS = modsNow();
-        if (MODS != 0 && MODS != HL_MODIFIER_META)
+        if (MODS != 0 && MODS != META_MASK)
             return false;
-        const auto [W, CORNER] = cornerTarget(g_pInputManager->getMouseCoordsInternal(), MODS == HL_MODIFIER_META);
+        const auto [W, CORNER] = cornerTarget(g_pInputManager->getMouseCoordsInternal(), MODS == META_MASK);
         if (!W || CORNER == Layout::CORNER_NONE)
             return false;
         g_layoutManager->beginDragTarget(W->layoutTarget(), MBIND_RESIZE, CORNER);
@@ -791,12 +792,12 @@ namespace Hyprdrive::Mosaic {
             return;
         }
         const int MODS = modsNow();
-        if (!(MODS & HL_MODIFIER_META)) {
+        if (!(MODS & META_MASK)) {
             if (g_super != ESuper::IDLE)
                 superEnd(false);
             return;
         }
-        if (MODS != HL_MODIFIER_META) {
+        if (MODS != META_MASK) {
             // Another modifier joined: someone's chord, not this. Zoomed out,
             // the view stays until Super is let go: Super+Shift+S takes a
             // screenshot of the zoomed-out canvas, not of the view behind it.
@@ -917,21 +918,22 @@ namespace Hyprdrive::Mosaic {
     // screenshot. A screenshot bind is one whose description or command says
     // so; whatever keys the user gave it, they work.
     namespace {
-        bool isScreenshotBind(const SP<SKeybind>& k) {
-            std::string s = k->description + " " + k->arg;
+        bool isScreenshotBind(const Keybinds::PBind& k) {
+            std::string s = k->metadata().description.value_or("") + " " + k->metadata().argument;
             std::ranges::transform(s, s.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
             for (const char* W : {"screenshot", "hyprshot", "grimblast", "flameshot", "grim "})
                 if (s.find(W) != std::string::npos)
                     return true;
             return false;
         }
-        SP<SKeybind> bindFor(uint32_t mods, xkb_keysym_t sym) {
-            if (!g_pKeybindManager)
+        Keybinds::PBind bindFor(Input::ModifierMask mods, xkb_keysym_t sym) {
+            if (!Keybinds::mgr())
                 return nullptr;
-            for (const auto& K : g_pKeybindManager->m_keybinds) {
-                if (!K || !K->enabled || K->mouse || K->release || !K->submap.name.empty() || K->modmask != mods || K->key.empty())
+            for (const auto& K : Keybinds::mgr()->registry().binds()) {
+                if (!K || !K->enabled() || K->hasFlag(Keybinds::BIND_FLAG_MOUSE) || K->hasFlag(Keybinds::BIND_FLAG_RELEASE) || !K->metadata().submap.empty() ||
+                    K->modifierMask() != mods || K->keyNames().size() != 1)
                     continue;
-                if (xkb_keysym_from_name(K->key.c_str(), XKB_KEYSYM_CASE_INSENSITIVE) == sym)
+                if (xkb_keysym_from_name(K->keyNames()[0].c_str(), XKB_KEYSYM_CASE_INSENSITIVE) == sym)
                     return K;
             }
             return nullptr;
@@ -953,7 +955,7 @@ namespace Hyprdrive::Mosaic {
         if (!KB || !KB->m_xkbState)
             return false;
         const xkb_keysym_t SYM  = xkb_state_key_get_one_sym(KB->m_xkbState, keycode + 8);
-        const uint32_t     MODS = g_pInputManager->getModsFromAllKBs();
+        const Input::ModifierMask MODS = g_pInputManager->getModsFromAllKBs();
         if (SYM == XKB_KEY_NoSymbol || !(MODS & HL_MODIFIER_META))
             return false;
         // THE PICKER'S OWN KEYS (user, 2026-10-28: Escape out of the picker
@@ -965,13 +967,10 @@ namespace Hyprdrive::Mosaic {
             if (!bindFor(MODS, SYM))
                 return false; // no Super bind to steal it: Hyprland delivers it
             if (const auto PLAIN = bindFor(MODS & ~HL_MODIFIER_META, SYM)) {
-                const auto IT = g_pKeybindManager->m_dispatchers.find(PLAIN->handler);
-                if (IT != g_pKeybindManager->m_dispatchers.end()) {
-                    trace(std::format("zoomed picker key {} -> {} {}", PLAIN->key, PLAIN->handler, PLAIN->description));
-                    IT->second(PLAIN->arg);
-                    g_zoomKeysTaken.insert(keycode);
-                    return true;
-                }
+                trace(std::format("zoomed picker key {} -> {} {}", PLAIN->keyNames()[0], PLAIN->metadata().handler, PLAIN->metadata().description.value_or("")));
+                PLAIN->invoke();
+                g_zoomKeysTaken.insert(keycode);
+                return true;
             }
             trace(std::format("zoomed picker key {} -> the picker", keycode));
             g_pSeatManager->sendKeyboardKey(timeMs, keycode, WL_KEYBOARD_KEY_STATE_PRESSED);
@@ -983,11 +982,8 @@ namespace Hyprdrive::Mosaic {
         const auto PLAIN = bindFor(MODS & ~HL_MODIFIER_META, SYM);
         if (!PLAIN || !isScreenshotBind(PLAIN))
             return false;
-        const auto IT = g_pKeybindManager->m_dispatchers.find(PLAIN->handler);
-        if (IT == g_pKeybindManager->m_dispatchers.end())
-            return false;
-        trace(std::format("zoomed screenshot key {} -> {} {}", PLAIN->key, PLAIN->handler, PLAIN->description));
-        IT->second(PLAIN->arg);
+        trace(std::format("zoomed screenshot key {} -> {} {}", PLAIN->keyNames()[0], PLAIN->metadata().handler, PLAIN->metadata().description.value_or("")));
+        PLAIN->invoke();
         g_zoomKeysTaken.insert(keycode);
         return true;
     }
@@ -1018,7 +1014,7 @@ namespace Hyprdrive::Mosaic {
         if (!MON || !MON->m_activeWorkspace || MON->m_activeSpecialWorkspace)
             return;
         const auto W = Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
-        if (!W || !W->m_isMapped || W->isHidden() || W->m_workspace != MON->m_activeWorkspace || W == Desktop::focusState()->window())
+        if (!W || !W->mapped() || W->isHidden() || W->m_workspace != MON->m_activeWorkspace || W == Desktop::focusState()->window())
             return;
         Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
     }
@@ -1056,12 +1052,12 @@ namespace Hyprdrive::Mosaic {
         if (pointerOnChrome(P) || pointerInDockBand(P) || pointerAtOuterEdge(P))
             return false;
         const auto W = Desktop::viewState()->hitTest().windowAt(P, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
-        if (!W || !W->m_isMapped || W->isHidden() || W == Desktop::focusState()->window())
+        if (!W || !W->mapped() || W->isHidden() || W == Desktop::focusState()->window())
             return false;
         if (vetoHoverFocus(W))
             return false;
         g_hoverStale = false;
-        trace(std::format("hover refresh: {} under the pointer takes the focus", W->m_class));
+        trace(std::format("hover refresh: {} under the pointer takes the focus", W->metadata().appID()));
         Desktop::focusState()->fullWindowFocus(W, Desktop::FOCUS_REASON_FFM);
         return true;
     }
@@ -1087,8 +1083,8 @@ namespace Hyprdrive::Mosaic {
             corner = Z->zoomResizing() ? Z->zoomCorner() : Z->zoomCornerAt(g_pInputManager->getMouseCoordsInternal());
         } else if (!blocked && !DRAGGING) {
             const int MODS = modsNow();
-            if (MODS == 0 || MODS == HL_MODIFIER_META)
-                corner = cornerTarget(g_pInputManager->getMouseCoordsInternal(), MODS == HL_MODIFIER_META).second;
+            if (MODS == 0 || MODS == META_MASK)
+                corner = cornerTarget(g_pInputManager->getMouseCoordsInternal(), MODS == META_MASK).second;
         }
         if (corner != Layout::CORNER_NONE) {
             Pointer::Cursor::overrideController->setOverride(cursorFor(corner), Pointer::Cursor::CURSOR_OVERRIDE_WINDOW_EDGE);

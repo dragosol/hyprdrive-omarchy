@@ -6,7 +6,7 @@
 
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
-#include <hyprland/src/managers/EventManager.hpp>
+#include <hyprland/src/ipc/s2/S2.hpp>
 
 #include "Compat.hpp"
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
@@ -29,14 +29,14 @@ static SP<IOverview> g_lastRegistered;
 static void emitOverviewState() {
     static bool lastOpen = false;
     const bool  OPEN     = !g_scrollOverviews.empty();
-    if (OPEN == lastOpen || !g_pEventManager)
+    if (OPEN == lastOpen || !IPC::Socket2::sock())
         return;
     lastOpen = OPEN;
-    g_pEventManager->postEvent(SHyprIPCEvent{.event = Hyprdrive::Compat::NAME, .data = OPEN ? "1" : "0"});
+    Hyprdrive::Compat::postEvent(Hyprdrive::Compat::NAME, OPEN ? "1" : "0");
     // ONE RELEASE. A shell still listening for the pre-rename event name keeps
     // revealing itself; the plugin does not get to decide when the user's
     // quickshell config is updated.
-    g_pEventManager->postEvent(SHyprIPCEvent{.event = Hyprdrive::Compat::LEGACY_NAME, .data = OPEN ? "1" : "0"});
+    Hyprdrive::Compat::postEvent(Hyprdrive::Compat::LEGACY_NAME, OPEN ? "1" : "0");
 }
 
 const std::vector<SP<IOverview>>& scrollOverviews() {

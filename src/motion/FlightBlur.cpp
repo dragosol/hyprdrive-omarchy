@@ -42,7 +42,8 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/Pass.hpp>
@@ -53,7 +54,7 @@
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 
@@ -128,11 +129,15 @@ namespace Hyprdrive::FlightBlur {
 
         class CFlightBlurTransformer : public Render::IWindowTransformer {
           public:
-            SP<Render::IFramebuffer> transform(SP<Render::IFramebuffer> in) override {
+            Render::SWindowTransformBuffer transform(Render::CRenderContext& ctx, const Render::SWindowTransformBuffer& in, const Render::SWindowTransformContext& context) override {
                 return in;
             }
 
-            void amendTransformedRenderData(const CBox& currentBox, SMotionBlurData* data) override {
+            bool allocatesOutputBuffer() const override {
+                return false;
+            }
+
+            void amendTransformedRenderData(Render::CRenderContext& ctx, const CBox& currentBox, SMotionBlurData* data, const Render::SWindowRenderPresentation& presentation) override {
                 if (!data || !m_armed || m_samples < 2 || !valid(m_prev) || !valid(m_cur))
                     return;
                 *data = motionFor(currentBox, m_prev, m_cur, m_samples, m_scale, m_maxSamples);
@@ -244,11 +249,11 @@ namespace Hyprdrive::FlightBlur {
         bool justFlippedMode(const PHLWINDOW& window, Time::steady_tp now) {
             auto it = std::ranges::find_if(g_modeSeen, [&](const auto& e) { return e.window.lock() == window; });
             if (it == g_modeSeen.end()) {
-                g_modeSeen.push_back({window, window->m_isFloating, {}});
+                g_modeSeen.push_back({window, window->isFloating(), {}});
                 return false;
             }
-            if (it->floating != window->m_isFloating) {
-                it->floating  = window->m_isFloating;
+            if (it->floating != window->isFloating()) {
+                it->floating  = window->isFloating();
                 it->flippedAt = now;
             }
             return it->flippedAt.time_since_epoch().count() != 0 &&
@@ -264,10 +269,7 @@ namespace Hyprdrive::FlightBlur {
         // flick / swipe / scratchpad defaults in FlightBlur.hpp's SITES.)
 
         CFlightBlurTransformer* transformerOf(const PHLWINDOW& window) {
-            for (const auto& t : window->m_transformers)
-                if (auto* mine = dynamic_cast<CFlightBlurTransformer*>(t.get()))
-                    return mine;
-            return nullptr;
+            return window->effects().transformers()->get<CFlightBlurTransformer>();
         }
 
         // While our transformer is on a window, Hyprland renders it through its
@@ -289,16 +291,17 @@ namespace Hyprdrive::FlightBlur {
         }
 
         CFlightBlurTransformer* attach(const PHLWINDOW& window) {
-            window->m_transformers.emplace_back(makeUnique<CFlightBlurTransformer>());
+            auto* t = window->effects().transformers()->emplace<CFlightBlurTransformer>();
             holdHyprlandBlur(window, true);
-            return sc<CFlightBlurTransformer*>(window->m_transformers.back().get());
+            return t;
         }
 
         void detach(const PHLWINDOW& window) {
-            for (const auto& T : window->m_transformers)
+            auto& list = Hyprdrive::Priv::transformers(*window);
+            for (const auto& T : list)
                 if (auto* F = dynamic_cast<CFlightBlurTransformer*>(T.get()))
                     disarm(F);
-            std::erase_if(window->m_transformers, [](const auto& t) { return dynamic_cast<CFlightBlurTransformer*>(t.get()) != nullptr; });
+            std::erase_if(list, [](const auto& t) { return dynamic_cast<CFlightBlurTransformer*>(t.get()) != nullptr; });
             holdHyprlandBlur(window, false);
         }
 
@@ -307,7 +310,7 @@ namespace Hyprdrive::FlightBlur {
         // standing still, a live blur where hyprdrive blocks the cache (a
         // dragged or floating tile) or Hyprland would blur live -- so moving
         // and still look the same. box: monitor-local physical px.
-        void queueFrost(const PHLWINDOW& window, const CBox& box, int rounding, float roundingPower, float alpha, bool live) {
+        void queueFrost(Render::CRenderContext& ctx, const PHLWINDOW& window, const CBox& box, int rounding, float roundingPower, float alpha, bool live) {
             if (box.w < 2 || box.h < 2 || alpha <= 0.F)
                 return;
             COverviewBlurPassElement::SData frost;
@@ -316,8 +319,8 @@ namespace Hyprdrive::FlightBlur {
             frost.roundingPower = roundingPower;
             frost.alpha         = std::clamp(alpha, 0.F, 1.F);
             frost.xray          = false;
-            frost.hyprlandCache = !live && window && g_pHyprRenderer->shouldUseNewBlurOptimizations(nullptr, window);
-            g_pHyprRenderer->addPassElement(makeUnique<COverviewBlurPassElement>(frost));
+            frost.hyprlandCache = !live && window && g_pHyprRenderer->shouldUseNewBlurOptimizations(ctx, nullptr, window);
+            Render::IHyprRenderer::addPassElement(ctx, makeUnique<COverviewBlurPassElement>(frost));
         }
 
         // Windows already given their frost this frame. RENDER_PRE_WINDOW fires
@@ -326,9 +329,9 @@ namespace Hyprdrive::FlightBlur {
         std::vector<Desktop::View::CWindow*> g_frostedThisFrame;
         std::vector<CHyprSignalListener>     g_frostListeners;
 
-        void onPreWindow() {
-            const auto WINDOW  = g_pHyprRenderer->m_renderData.currentWindow.lock();
-            const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+        void onPreWindow(Render::CRenderContext& ctx) {
+            const auto WINDOW  = ctx.m_data.currentWindow.lock();
+            const auto MONITOR = ctx.m_data.pMonitor.lock();
             if (!WINDOW || !MONITOR || !transformerOf(WINDOW))
                 return;
             if (std::ranges::find(g_frostedThisFrame, WINDOW.get()) != g_frostedThisFrame.end())
@@ -337,21 +340,21 @@ namespace Hyprdrive::FlightBlur {
 
             // Would Hyprland have blurred it, our hold aside?
             holdHyprlandBlur(WINDOW, false);
-            const bool WANT = g_pHyprRenderer->shouldBlur(WINDOW);
+            const bool WANT = WINDOW->shouldBlur();
             holdHyprlandBlur(WINDOW, true);
             if (!WANT)
                 return;
 
             // renderWindow's own box and fade (Renderer.cpp, renderWindow).
             const auto WS     = WINDOW->m_workspace;
-            const auto OFFSET = WS && !WINDOW->m_pinned ? WS->m_renderOffset->value() : Vector2D{};
-            const auto POS    = WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + OFFSET + WINDOW->m_floatingOffset - MONITOR->m_position;
+            const auto OFFSET = WS && !Hyprdrive::Compat::pinned(WINDOW) ? WS->m_renderOffset->value() : Vector2D{};
+            const auto POS    = WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + OFFSET + WINDOW->presentation().floatingOffset() - MONITOR->m_position;
             CBox       box{POS, WINDOW->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
             box.scale(MONITOR->m_scale).round();
-            const float FADE  = WINDOW->alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * WINDOW->alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) *
-                WINDOW->alphaValue(Desktop::View::WINDOW_ALPHA_LAYOUT) * (WINDOW->m_pinned || !WS ? 1.F : WS->m_alpha->value());
-            const int ROUND = sc<int>(std::max(WINDOW->rounding() * MONITOR->m_scale - 1.F, 0.F));
-            queueFrost(WINDOW, box, ROUND, WINDOW->roundingPower(), FADE, false);
+            const float FADE  = WINDOW->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * WINDOW->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) *
+                WINDOW->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_LAYOUT) * (Hyprdrive::Compat::pinned(WINDOW) || !WS ? 1.F : WS->m_alpha->value());
+            const int ROUND = sc<int>(std::max(WINDOW->presentation().rounding() * MONITOR->m_scale - 1.F, 0.F));
+            queueFrost(ctx, WINDOW, box, ROUND, WINDOW->presentation().roundingPower(), FADE, false);
         }
     }
 
@@ -364,9 +367,10 @@ namespace Hyprdrive::FlightBlur {
         if (N < 2 || !monitor || !valid(prevBox) || !valid(box) || !moved(prevBox, box) || monitor->m_transform != WL_OUTPUT_TRANSFORM_NORMAL)
             return false;
 
-        auto nested = makeUnique<Render::CRenderPass>();
+        auto  nested = makeUnique<Render::CRenderPass>();
+        auto& ctx    = g_pHyprRenderer->context();
         {
-            auto restore = g_pHyprRenderer->redirectPass(nested.get());
+            auto restore = Render::IHyprRenderer::redirectPass(ctx, nested.get());
             draw();
         }
         if (nested->empty())
@@ -406,7 +410,7 @@ namespace Hyprdrive::FlightBlur {
                 }
                 surfaceBlur = true;
             } else if (dynamic_cast<COverviewBlurPassElement*>(EL)) {
-                g_pHyprRenderer->addPassElement(std::move(it->element));
+                Render::IHyprRenderer::addPassElement(ctx, std::move(it->element));
                 it = elements.erase(it);
                 continue;
             }
@@ -421,9 +425,9 @@ namespace Hyprdrive::FlightBlur {
         CBox        drawn = CUR.copy().expand(MARGIN);
 
         if (surfaceBlur)
-            queueFrost(window, box.copy().round(), blurRound, blurPower, blurA, blurLive);
+            queueFrost(ctx, window, box.copy().round(), blurRound, blurPower, blurA, blurLive);
 
-        g_pHyprRenderer->addPassElement(makeUnique<CTransformedWindowPassElement>(CTransformedWindowPassElement::SData{
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CTransformedWindowPassElement>(CTransformedWindowPassElement::SData{
             .pass       = std::move(nested),
             .window     = window,
             .currentBox = drawn,
@@ -474,7 +478,7 @@ namespace Hyprdrive::FlightBlur {
     void sweep(const std::function<bool(const PHLWINDOW&)>& stillFlying) {
         const auto NOW = Time::steadyNow();
         for (const auto& window : Desktop::windowState()->windows()) {
-            if (!window || window->m_transformers.empty())
+            if (!window || Hyprdrive::Priv::transformers(*window).empty())
                 continue;
             auto* T = transformerOf(window);
             if (!T || (stillFlying && stillFlying(window)))
@@ -661,7 +665,7 @@ namespace Hyprdrive::FlightBlur {
             const auto NOW        = Time::steadyNow();
 
             for (const auto& window : Desktop::windowState()->windows()) {
-                if (!window || !window->m_isMapped || window->isHidden() || window->m_monitor != monitor || !window->m_workspace)
+                if (!window || !window->mapped() || window->isHidden() || window->m_monitor != monitor || !window->m_workspace)
                     continue;
                 const auto& WS        = window->m_workspace;
                 // A special workspace hiding is still drawn while it fades or
@@ -669,27 +673,27 @@ namespace Hyprdrive::FlightBlur {
                 // A desktop switched AWAY from is drawn while its offset slides it
                 // out, as Hyprland's shouldRenderWindow has it: it is moving too
                 // (user, 2026-11-01: only the arriving desktop was smeared).
-                const bool  SHOWN     = WS->isVisible() || WS->m_forceRendering ||
-                    (!WS->m_isSpecialWorkspace && WS->m_monitor == monitor && WS->m_renderOffset->isBeingAnimated()) ||
-                    (WS->m_isSpecialWorkspace && WS->m_alpha->value() > 0.01F && (WS->m_alpha->isBeingAnimated() || WS->m_renderOffset->isBeingAnimated()));
+                const bool  SHOWN     = WS->visible() || WS->m_forceRendering ||
+                    (!Hyprdrive::Compat::isSpecial(WS) && WS->m_monitor == monitor && WS->m_renderOffset->isBeingAnimated()) ||
+                    (Hyprdrive::Compat::isSpecial(WS) && WS->m_alpha->value() > 0.01F && (WS->m_alpha->isBeingAnimated() || WS->m_renderOffset->isBeingAnimated()));
                 const auto  IT        = std::ranges::find_if(g_lastLayoutBox, [&](const auto& e) { return e.window.lock() == window; });
                 const auto& WSOFFSET  = WS->m_renderOffset;
                 // A SPECIAL workspace sliding in (the scratchpad) moves its
                 // windows by the workspace's render offset, not their geometry.
-                const bool  HANDMOVED = WS->m_isSpecialWorkspace && offsetMoved(WS); // asked every frame, so its last offset is never stale
-                const bool  SLIDING   = WS->m_isSpecialWorkspace && !window->m_pinned && (WSOFFSET->isBeingAnimated() || HANDMOVED);
+                const bool  HANDMOVED = Hyprdrive::Compat::isSpecial(WS) && offsetMoved(WS); // asked every frame, so its last offset is never stale
+                const bool  SLIDING   = Hyprdrive::Compat::isSpecial(WS) && !Hyprdrive::Compat::pinned(window) && (WSOFFSET->isBeingAnimated() || HANDMOVED);
                 // An ordinary workspace moved by a trackpad swipe, fingers down
                 // or on the release.
-                const bool  SWIPED    = !WS->m_isSpecialWorkspace && !window->m_pinned && (SWIPING || (SWIPEHOME && WSOFFSET->isBeingAnimated()));
+                const bool  SWIPED    = !Hyprdrive::Compat::isSpecial(WS) && !Hyprdrive::Compat::pinned(window) && (SWIPING || (SWIPEHOME && WSOFFSET->isBeingAnimated()));
                 // AN ORDINARY DESKTOP SWITCH (user, 2026-10-16): Hyprland's
                 // workspaces slide played by a bind, Super+scroll or a dock
                 // click -- the same offset a swipe moves, but on its clock.
                 // The desktop strip (DesktopStrip.hpp) sets the offsets by hand
                 // every frame, no clock at all: moved since last frame is moving.
-                const bool  STRIPPED  = !WS->m_isSpecialWorkspace && DesktopStrip::drives(WS) && offsetMoved(WS);
-                const bool  SWITCHED  = !WS->m_isSpecialWorkspace && !window->m_pinned && !SWIPED && (WSOFFSET->isBeingAnimated() || STRIPPED);
+                const bool  STRIPPED  = !Hyprdrive::Compat::isSpecial(WS) && DesktopStrip::drives(WS) && offsetMoved(WS);
+                const bool  SWITCHED  = !Hyprdrive::Compat::isSpecial(WS) && !Hyprdrive::Compat::pinned(window) && !SWIPED && (WSOFFSET->isBeingAnimated() || STRIPPED);
                 const bool  OFFSETS   = SLIDING || SWIPED || SWITCHED;
-                const auto* SPACE     = WS->m_space.get();
+                const auto* SPACE     = WS->space().get();
                 const bool  SCROLLING = SPACE && SPACE->algorithm() && dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(SPACE->algorithm()->m_tiled.get());
                 const bool  RESIZING  = window->sizeAnimation()->isBeingAnimated();
                 const bool  MOVING    = window->positionAnimation()->isBeingAnimated();
@@ -815,7 +819,7 @@ namespace Hyprdrive::FlightBlur {
     CSuspend::CSuspend(const PHLWINDOW& window) : m_window(window) {
         if (!window)
             return;
-        auto& list = window->m_transformers;
+        auto& list = Hyprdrive::Priv::transformers(*window);
         for (auto it = list.begin(); it != list.end();) {
             if (dynamic_cast<CFlightBlurTransformer*>(it->get())) {
                 m_held.emplace_back(std::move(*it));
@@ -833,17 +837,18 @@ namespace Hyprdrive::FlightBlur {
             return;
         if (const auto WINDOW = m_window.lock()) {
             for (auto& t : m_held)
-                WINDOW->m_transformers.emplace_back(std::move(t));
+                Hyprdrive::Priv::transformers(*WINDOW).emplace_back(std::move(t));
+            Hyprdrive::Priv::sortTransformers(*WINDOW);
             holdHyprlandBlur(WINDOW, true);
         }
     }
 
     void init() {
-        g_frostListeners.push_back(Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
-            if (stage == RENDER_BEGIN)
+        g_frostListeners.push_back(Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent e) {
+            if (e.stage == RENDER_BEGIN)
                 g_frostedThisFrame.clear();
-            else if (stage == RENDER_PRE_WINDOW)
-                onPreWindow();
+            else if (e.stage == RENDER_PRE_WINDOW && e.context)
+                onPreWindow(e.context->get());
         }));
     }
 
@@ -854,7 +859,7 @@ namespace Hyprdrive::FlightBlur {
 
     void detachAll() {
         for (const auto& window : Desktop::windowState()->windows())
-            if (window && !window->m_transformers.empty())
+            if (window && !Hyprdrive::Priv::transformers(*window).empty())
                 detach(window);
     }
 }

@@ -83,7 +83,7 @@ bool springUpdate(PHLMONITOR monitor, const Vector2D& local, bool folderDrag, in
         return true;
 
     g_spring.done = true;
-    if (const auto WINDOW = g_spring.window.lock(); WINDOW && WINDOW->m_isMapped)
+    if (const auto WINDOW = g_spring.window.lock(); WINDOW && WINDOW->mapped())
         activateWindow(WINDOW);
     springDamage();
     return false;

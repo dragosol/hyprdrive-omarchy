@@ -52,7 +52,7 @@ static inline void noteFrameGate(const PHLWINDOW& window, const char* reason) {
     if (!Prof::enabled() || !window)
         return;
 
-    g_frameGateReason[window->m_class] = reason;
+    g_frameGateReason[window->metadata().appID()] = reason;
 }
 
 // The mirror of noteFrameGate for the DAMAGE side. A client can be awake, be
@@ -62,7 +62,7 @@ static inline void noteDamageGate(const PHLWINDOW& window, const char* reason) {
     if (!Prof::enabled() || !window)
         return;
 
-    g_damageGateReason[window->m_class] = reason;
+    g_damageGateReason[window->metadata().appID()] = reason;
 }
 
 std::string COverview::frameDebugLine() const {
@@ -122,7 +122,7 @@ std::string COverview::frameDebugLine() const {
                 std::chrono::duration_cast<std::chrono::milliseconds>(NOW - STATE.lastChange).count();
             // Class alone is ambiguous -- several terminals, one of them the one
             // reading this output -- so carry a slice of the title too.
-            auto title = W->m_title.substr(0, 14);
+            auto title = W->metadata().title().substr(0, 14);
             // Truncating by BYTES can cut a multi-byte character in half; drop
             // any incomplete trailing sequence rather than emit a broken glyph.
             while (!title.empty() && (sc<unsigned char>(title.back()) & 0xC0) == 0x80)
@@ -130,7 +130,7 @@ std::string COverview::frameDebugLine() const {
             if (!title.empty() && (sc<unsigned char>(title.back()) & 0xC0) == 0xC0)
                 title.pop_back();
             std::ranges::replace(title, ' ', '_');
-            out += std::format(" {}/{}={}({}ms{}{})", W->m_class.empty() ? std::string("?") : W->m_class, title, MODE, SINCE,
+            out += std::format(" {}/{}={}({}ms{}{})", W->metadata().appID().empty() ? std::string("?") : W->metadata().appID(), title, MODE, SINCE,
                                W->m_suspended ? " SUSP" : "", W->isHidden() ? " HIDDEN" : "");
         }
 
@@ -276,7 +276,7 @@ bool COverview::previewWantsFrame(const PHLWINDOW& window, const Time::steady_tp
     // window it governs, so the workspace it was last seen on is a free place to
     // notice that it is now somewhere else -- no signal to subscribe to, and it
     // cannot miss a move that happened while the overview was closed.
-    const auto WORKSPACE = window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID;
+    const auto WORKSPACE = window->m_workspace ? Hyprdrive::Compat::id(window->m_workspace) : WORKSPACE_INVALID;
     if (STATE.lastSeenWorkspace != WORKSPACE) {
         STATE.lastSeenWorkspace = WORKSPACE;
         STATE.graceUntil        = now + OVERVIEW_PREVIEW_MOVE_GRACE;
@@ -604,7 +604,7 @@ bool COverview::shouldSuppressRenderDamage() const {
 
                 for (const auto& windowRef : workspaceImage->windows) {
                     const auto window = getOverviewWindowToShow(windowRef.lock());
-                    if (window && window->m_isFloating && isVisibleAnimatedWindow(window, WORKSPACEOFFSET))
+                    if (window && window->isFloating() && isVisibleAnimatedWindow(window, WORKSPACEOFFSET))
                         return false;
                 }
 
@@ -652,7 +652,7 @@ PHLWORKSPACE overviewShownSpecialOn(const PHLMONITOR& monitor) {
     if (!monitor)
         return nullptr;
     const auto SPECIAL = monitor->m_activeSpecialWorkspace;
-    if (SPECIAL && SPECIAL->m_name != "special:minimized") {
+    if (SPECIAL && SPECIAL->displayName() != "special:minimized") {
         s_last[monitor->m_id] = SPECIAL;
         return SPECIAL;
     }
@@ -678,7 +678,7 @@ PHLWINDOW overviewSushiWindowOn(const PHLMONITOR& monitor) {
         return nullptr;
 
     for (const auto& w : Desktop::windowState()->windows()) {
-        if (Desktop::View::validMapped(w) && SearchBackend::isOverviewSushiWindow(w->m_class, w->getPID()))
+        if (Desktop::View::validMapped(w) && SearchBackend::isOverviewSushiWindow(w->metadata().appID(), w->backend().pid()))
             return w->m_monitor == monitor ? w : nullptr;
     }
 
@@ -740,7 +740,7 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
             window->setSuspended(false);
 
         if (Prof::enabled())
-            ++g_frameSent[window->m_class].first;
+            ++g_frameSent[window->metadata().appID()].first;
 
         if (!realtime && !ISDRAGGED && !CANFRAMETHROTTLEDWINDOWS) {
             scheduleRealtimePreviewFrame();
@@ -748,7 +748,7 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
         }
 
         if (Prof::enabled())
-            ++g_frameSent[window->m_class].second;
+            ++g_frameSent[window->metadata().appID()].second;
 
         surfaceTreePresent(window->wlSurface() ? window->wlSurface()->resource() : nullptr, MONITOR, now);
         if (!realtime && !ISDRAGGED)
@@ -805,7 +805,7 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
                 frameWindow(fullscreenWindow, WORKSPACEOFFSET, REALTIME);
                 for (const auto& windowRef : workspaceImage->windows) {
                     const auto window = getOverviewWindowToShow(windowRef.lock());
-                    if (window && window->m_isFloating)
+                    if (window && window->isFloating())
                         frameWindow(window, WORKSPACEOFFSET, REALTIME);
                 }
                 continue;
@@ -996,7 +996,7 @@ bool COverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Ti
 
         sawCard = true;
         const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
-        if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->m_isFloating) {
+        if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->isFloating()) {
             noteFrameGate(window, "occluded-by-fullscreen");
             return false;
         }
@@ -1182,7 +1182,7 @@ bool COverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) {
             continue;
 
         const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
-        if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->m_isFloating) {
+        if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->isFloating()) {
             noteDamageGate(window, "occluded-by-fullscreen");
             return false;
         }

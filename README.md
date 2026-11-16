@@ -11,8 +11,10 @@ your Omarchy theme instead of shipping one of its own.
 [Demo film on YouTube](https://www.youtube.com/watch?v=RRkIViQvAOY) ·
 [Releases](https://github.com/dragosol/hyprdrive-omarchy/releases)
 
-> Built against Hyprland **0.56.2** (Omarchy 4). This branch (`new-release`) is
-> for Hyprland 0.56; for Hyprland 0.57 use the `hyprland-0.57` branch.
+> Built against Hyprland **0.57.2**. This branch (`hyprland-0.57`) is the port
+> to Hyprland 0.57; so far it has been tested only in a headless test rig (the
+> behaviour gates), not yet in a real session on real hardware. For Hyprland
+> 0.56 (Omarchy 4) use the `new-release` branch.
 
 ## What it does
 
@@ -232,8 +234,8 @@ hyprctl reload
 
 Enable the panel with `omarchy plugin enable dragos.hyprdrive` (or answer yes when
 `plugin add` asks). If `make install` stops because the checkout is for another
-Hyprland version, check out the branch it names (on Hyprland 0.57:
-`git fetch origin && git checkout hyprland-0.57`) and run it again. To update:
+Hyprland version, check out the branch it names (on Hyprland 0.56:
+`git fetch origin && git checkout new-release`) and run it again. To update:
 `omarchy plugin update dragos.hyprdrive`, then run `make clean && make install`
 in that folder again and log out and back in.
 
@@ -242,8 +244,8 @@ in that folder again and log out and back in.
 ```bash
 git clone https://github.com/dragosol/hyprdrive-omarchy.git ~/Projects/hyprdrive-omarchy
 cd ~/Projects/hyprdrive-omarchy
-git checkout "$(git tag --list 'v*' --sort=-v:refname | grep -v -- -hl57 | head -1)"   # the latest release for Hyprland 0.56
-# Hyprland 0.57: git checkout "$(git tag --list 'v*-hl57' --sort=-v:refname | head -1)"
+git checkout "$(git tag --list 'v*-hl57' --sort=-v:refname | head -1)"   # the latest release for Hyprland 0.57
+# Hyprland 0.56: git checkout "$(git tag --list 'v*' --sort=-v:refname | grep -v -- -hl57 | head -1)"
 make install
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl reload
@@ -267,8 +269,8 @@ By hand:
 ```bash
 cd ~/Projects/hyprdrive-omarchy
 git fetch --tags
-git checkout "$(git tag --list 'v*' --sort=-v:refname | grep -v -- -hl57 | head -1)"   # Hyprland 0.56
-# Hyprland 0.57: git checkout "$(git tag --list 'v*-hl57' --sort=-v:refname | head -1)"
+git checkout "$(git tag --list 'v*-hl57' --sort=-v:refname | head -1)"   # Hyprland 0.57
+# Hyprland 0.56: git checkout "$(git tag --list 'v*' --sort=-v:refname | grep -v -- -hl57 | head -1)"
 make clean && make install   # builds, checks and installs; the running plugin is untouched
 hyprctl plugin unload ~/.local/lib/hyprdrive/hyprdrive.so
 hyprctl plugin load ~/.local/lib/hyprdrive/hyprdrive.so

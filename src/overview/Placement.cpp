@@ -4,9 +4,10 @@
 #include <optional>
 
 #define private public
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
@@ -20,7 +21,7 @@ namespace {
 PHLWINDOWREF g_dragAnchor;
 
 bool tiledOn(const PHLWINDOW& window, const PHLWORKSPACE& workspace, const PHLWINDOW& except) {
-    return window && window != except && Desktop::View::validMapped(window) && !window->m_isFloating && window->m_workspace == workspace &&
+    return window && window != except && Desktop::View::validMapped(window) && !window->isFloating() && window->m_workspace == workspace &&
         window->layoutTarget();
 }
 
@@ -56,15 +57,15 @@ PHLWINDOW takeDragAnchor() {
 }
 
 void retileAsNew(const PHLWINDOW& window, const PHLWINDOW& preferredAnchor) {
-    if (!window || !Desktop::View::validMapped(window) || window->m_isFloating)
+    if (!window || !Desktop::View::validMapped(window) || window->isFloating())
         return;
 
     const auto WORKSPACE = window->m_workspace;
     const auto TARGET    = window->layoutTarget();
-    if (!WORKSPACE || WORKSPACE->m_isSpecialWorkspace || !TARGET || !WORKSPACE->m_space || !WORKSPACE->m_space->algorithm())
+    if (!WORKSPACE || Hyprdrive::Compat::isSpecial(WORKSPACE) || !TARGET || !WORKSPACE->space() || !WORKSPACE->space()->algorithm())
         return;
 
-    const auto ALGO = WORKSPACE->m_space->algorithm();
+    const auto ALGO = WORKSPACE->space()->algorithm();
 
     // A scrolling workspace has no dwindle to hand the decision to; its drop
     // placements (tape edge, next to the anchor along the tape) stay its own.
@@ -86,7 +87,7 @@ void retileAsNew(const PHLWINDOW& window, const PHLWINDOW& preferredAnchor) {
     // (no focal point) fills it -- nothing there for the cursor to influence.
     ALGO->removeTarget(TARGET);
     ALGO->moveTarget(TARGET, focal, false);
-    WORKSPACE->m_space->recalculate();
+    WORKSPACE->space()->recalculate();
 }
 
 }

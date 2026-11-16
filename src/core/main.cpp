@@ -3,6 +3,7 @@
 #include "WindowPlacement.hpp"
 #include "Workers.hpp"
 #include "TerminateLog.hpp"
+#include <hyprland/src/layout/target/WindowTarget.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 using namespace PluginDetail;
 
@@ -46,9 +47,6 @@ CFunctionHook* g_pSendWindowSizeHook = nullptr;
 // desktop slide.
 CFunctionHook* g_pShouldRenderWindowHook = nullptr;
 } // namespace PluginDetail
-
-// SizeAck.hpp: Hyprland's CWindow::onAck, minus its bug. Never calls the original.
-static CFunctionHook* g_pOnAckHook = nullptr;
 
 namespace PluginDetail {
 // DockRoom.hpp: tiled windows make room for a dock that does not hide.
@@ -182,7 +180,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     // Every worker thread is started through Workers (Workers.hpp). Accepting
     // again matters only to an image an earlier unload had to keep loaded.
-    Hyprdrive::Workers::setLog([](const std::string& line) { Log::logger->log(Log::ERR, "{}", line); });
+    Hyprdrive::Workers::setLog([](const std::string& line) { Log::logger->log(Log::ERR, Log::logFnName(), "{}", line); });
     Hyprdrive::Workers::reopen();
 
     // The debug logs older versions left in /tmp, readable by everyone at
@@ -200,7 +198,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         throw std::runtime_error("[he] Version mismatch");
     }
 
-    g_pScrollRenderWorkspaceHook = Hyprdrive::FunctionHooks::required("main", "renderWorkspace", {"CHyprRenderer::renderWorkspace(", "IHyprRenderer::renderWorkspace("}, rc<void*>(hkRenderWorkspace));
+    g_pScrollRenderWorkspaceHook = Hyprdrive::FunctionHooks::required("main", "renderWorkspace", {"IHyprRenderer::renderWorkspace(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>,"}, rc<void*>(hkRenderWorkspace));
 
     g_pScrollScheduleFrameHook = Hyprdrive::FunctionHooks::required("main", "_ZN7Monitor8CMonitor13scheduleFrameEN10Aquamarine7IOutput19scheduleFrameReasonE", {""}, rc<void*>(hkScheduleFrame));
 
@@ -220,7 +218,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pScrollMouseMovedHook = Hyprdrive::FunctionHooks::required("main", "onMouseMoved", {"CInputManager::onMouseMoved("}, rc<void*>(hkOnMouseMoved));
     g_pScrollMouseMovedHook->hook();
 
-    g_pSendWindowSizeHook = Hyprdrive::FunctionHooks::required("main", "sendWindowSize", {"CWindow::sendWindowSize("}, rc<void*>(hkSendWindowSize));
+    g_pSendWindowSizeHook = Hyprdrive::FunctionHooks::required("main", "sendWindowSize", {"Layout::CWindowTarget::sendWindowSize("}, rc<void*>(hkSendWindowSize));
     g_pSendWindowSizeHook->hook();
 
     // ONE hook that DockRoom and OwnSizeTile both ride (Hooks.cpp, hkTargetPlace).
@@ -228,12 +226,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pTargetPlaceHook->hook();
     Hyprdrive::ConfigureHold::setSender([](Desktop::View::CWindow* window, bool force) {
         if (g_pSendWindowSizeHook)
-            rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(window, force);
+            // The window's own target: layoutTarget() is the group's for a grouped window.
+            if (const auto TARGET = window->m_target)
+                rc<origSendWindowSize>(g_pSendWindowSizeHook->m_original)(TARGET.get(), force);
     });
-    g_pOnAckHook = Hyprdrive::FunctionHooks::required("main", "onAck", {"CWindow::onAck("}, rc<void*>(hkOnAck));
-    g_pOnAckHook->hook();
     g_pShouldRenderWindowHook = Hyprdrive::FunctionHooks::required("main", "shouldRenderWindow", {"shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)"}, rc<void*>(hkShouldRenderWindow));
     g_pShouldRenderWindowHook->hook();
+    Hyprdrive::Compat::hookInvokeBind();
 
     CursorShape::init();
     OpenProf::init();
@@ -275,7 +274,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             // scratchpad opening or closing over it) is drawn natively, through
             // the renderer the blur rides (user, 2026-09-30).
             Hyprdrive::FlightBlur::trackLayoutMotion(monitor, [&FLYING](const PHLWINDOW& w) {
-                return FLYING(w) || !w->m_workspace || !w->m_workspace->m_isSpecialWorkspace;
+                return FLYING(w) || !w->m_workspace || !Hyprdrive::Compat::isSpecial(w->m_workspace);
             });
         }
     });
@@ -613,11 +612,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             info.cancelled = true;
     });
 
-    g_pDockRenderHook = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
-        if (stage != RENDER_POST_WINDOWS)
+    g_pDockRenderHook = Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent e) {
+        if (e.stage != RENDER_POST_WINDOWS)
             return;
 
-        const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+        const auto MONITOR = e.monitor;
         if (scrollOverviewForMonitor(MONITOR))
             return;
 
@@ -657,10 +656,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // dock: it sits at the very top of the screen (user, 2026-09-24: "bump it
     // all the way to the top"), where the bar lives, and POST_WINDOWS is below
     // the top layer -- the bar would paint over it.
-    g_pScratchExitRenderHook = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
-        if (stage != RENDER_LAST_MOMENT)
+    g_pScratchExitRenderHook = Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent e) {
+        if (e.stage != RENDER_LAST_MOMENT)
             return;
-        const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+        const auto MONITOR = e.monitor;
         if (!MONITOR || scrollOverviewForMonitor(MONITOR))
             return;
         Hyprdrive::ScratchpadExit::render(MONITOR);
@@ -993,7 +992,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     if (g_pHyprRenderer) {
         for (const char* TYPE : {"COverviewBlurPassElement", "COverviewSplitBorderPassElement", "COverviewShadowPassElement", "CDockLivePreviewPassElement",
                                  "CDockTiltPassElement", "CStackBlurPassElement", Hyprdrive::Ripple::PASS_NAME})
-            g_pHyprRenderer->m_renderPass.removeAllOfType(TYPE);
+            g_pHyprRenderer->context().m_pass.removeAllOfType(TYPE);
     }
 
     // After the purge: nothing queued can reach the tilt shader any more, and

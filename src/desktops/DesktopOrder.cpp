@@ -4,12 +4,16 @@
 #include "DebugPaths.hpp"
 #include "Rows.hpp"
 
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/state/WorkspaceState.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/state/workspace/LifecyclePolicyAdapter.hpp>
+#include <hyprland/src/desktop/history/WorkspaceHistoryTracker.hpp>
+#include <hyprland/src/config/supplementary/propRefresher/PropRefresher.hpp>
 #include <hyprland/src/output/Monitor.hpp>
-#include <hyprland/src/managers/EventManager.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/ipc/s2/S2.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 
@@ -23,7 +27,7 @@
 
 namespace Hyprdrive::DesktopOrder {
     bool ordinary(const PHLWORKSPACE& ws) {
-        return ws && !ws->m_isSpecialWorkspace && ws->m_id >= 1;
+        return ws && !Hyprdrive::Compat::isSpecial(ws) && Hyprdrive::Compat::id(ws) >= 1;
     }
 
     namespace {
@@ -37,7 +41,7 @@ namespace Hyprdrive::DesktopOrder {
             if (line == last)
                 return;
             last = line;
-            Log::logger->log(Log::ERR, "[hyprdrive] desktops: {}", line);
+            Log::logger->log(Log::ERR, Log::logFnName(), "[hyprdrive] desktops: {}", line);
             if (FILE* const F = DebugPaths::openLog("hyprdrive-desktops.log")) {
                 std::fprintf(F, "%lld desktops %s\n",
                              (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -53,7 +57,7 @@ namespace Hyprdrive::DesktopOrder {
         int windowsOn(const PHLWORKSPACE& ws) {
             int n = 0;
             for (const auto& W : Desktop::windowState()->windows())
-                if (W && W->m_isMapped && W->m_workspace == ws)
+                if (W && W->mapped() && W->m_workspace == ws)
                     ++n;
             return n;
         }
@@ -70,13 +74,13 @@ namespace Hyprdrive::DesktopOrder {
             std::vector<DesktopPlan::Desk> out;
             out.reserve(all.size());
             for (const auto& WS : all)
-                out.push_back({keyOf(WS), WS->m_id, counted ? windowsOn(WS) : 0, Rows::ofWorkspace(WS)});
+                out.push_back({keyOf(WS), Hyprdrive::Compat::id(WS), counted ? windowsOn(WS) : 0, Rows::ofWorkspace(WS)});
             return out;
         }
         std::string describe(const std::vector<std::pair<PHLWORKSPACE, WORKSPACEID>>& moves) {
             std::string s;
             for (const auto& [WS, TO] : moves)
-                s += std::format("{}{}->{}", s.empty() ? "" : " ", WS ? WS->m_id : WORKSPACE_INVALID, TO);
+                s += std::format("{}{}->{}", s.empty() ? "" : " ", WS ? Hyprdrive::Compat::id(WS) : WORKSPACE_INVALID, TO);
             return s;
         }
     }
@@ -105,41 +109,57 @@ namespace Hyprdrive::DesktopOrder {
         };
         std::vector<SDone> done;
         for (const auto& [WS, TO] : moves)
-            if (WS->m_id != TO)
-                done.push_back({WS, WS->m_id, WS->m_name});
+            if (Hyprdrive::Compat::id(WS) != TO)
+                done.push_back({WS, Hyprdrive::Compat::id(WS), WS->displayName()});
         if (done.empty())
             return true;
         // (Omarchy's merged records under the numbers that change are
         // dropped by its own rule around it: Rows::renumbering.)
         Rows::renumbering(moves, [&] {
             for (const auto& [WS, TO] : moves) {
-                const WORKSPACEID FROM = WS->m_id;
+                const WORKSPACEID FROM = Hyprdrive::Compat::id(WS);
                 if (FROM == TO)
                     continue;
-                WS->m_id = TO;
+                const bool NUMERIC = WS->displayName() == std::to_string(FROM);
+                if (TO <= 0 || !WS->numberedID())
+                    continue;
+                // Not CHLWorkspace::changeID: on 0.57 it posts
+                // changeworkspaceid>>OLD,NEW per desktop, which Omarchy-style
+                // scripts (and the blocks gates) read as a workspace
+                // renumbering fight. 0.56 wrote the id in place and the bars
+                // got only the destroy/create/workspace burst below; keep that.
+                // Hyprland's own bookkeeping from changeID stays (lifecycle
+                // policy + history follow the number, ext-workspace renames).
+                const auto OLD_IDENTITY = State::Workspace::SWorkspaceIdentity{WS->m_id, WS->addressableName(), WS->type()};
+                WS->m_id              = Workspace::SWorkspaceNumberedID{sc<Workspace::WorkspaceIDContainer>(TO)};
+                WS->m_addressableName = std::to_string(TO);
                 // A numeric name is the number; a name the user gave stays.
-                if (WS->m_name == std::to_string(FROM))
+                if (!WS->m_wasRenamed || NUMERIC)
                     WS->m_name = std::to_string(TO);
+                Config::Supplementary::refresher()->scheduleRefresh(Config::Supplementary::REFRESH_ALL);
+                State::Workspace::workspaceIdentityChanged(OLD_IDENTITY, {WS->m_id, WS->addressableName(), WS->type()});
+                Desktop::History::workspaceTracker()->workspaceIdentityChanged(WS);
+                WS->m_events.idChanged.emit();
             }
         });
         // (Each monitor's "previous workspace" stack holds numbers too, but
         // Hyprland keeps it private: right after a move, "workspace previous"
         // can land on the neighbour of the desktop it meant.)
         // Bars: the old numbers went, the new ones came; then what each monitor shows.
-        if (g_pEventManager) {
+        {
             for (const auto& D : done) {
-                g_pEventManager->postEvent(SHyprIPCEvent{"destroyworkspace", D.oldName});
-                g_pEventManager->postEvent(SHyprIPCEvent{"destroyworkspacev2", std::format("{},{}", D.from, D.oldName)});
+                Hyprdrive::Compat::postEvent("destroyworkspace", D.oldName);
+                Hyprdrive::Compat::postEvent("destroyworkspacev2", std::format("{},{}", D.from, D.oldName));
             }
             for (const auto& D : done) {
-                g_pEventManager->postEvent(SHyprIPCEvent{"createworkspace", D.ws->m_name});
-                g_pEventManager->postEvent(SHyprIPCEvent{"createworkspacev2", std::format("{},{}", D.ws->m_id, D.ws->m_name)});
+                Hyprdrive::Compat::postEvent("createworkspace", D.ws->displayName());
+                Hyprdrive::Compat::postEvent("createworkspacev2", std::format("{},{}", Hyprdrive::Compat::id(D.ws), D.ws->displayName()));
             }
             for (const auto& MON : State::monitorState()->monitors())
                 if (MON && MON->m_activeWorkspace) {
                     const auto& WS = MON->m_activeWorkspace;
-                    g_pEventManager->postEvent(SHyprIPCEvent{"workspace", WS->m_name});
-                    g_pEventManager->postEvent(SHyprIPCEvent{"workspacev2", std::format("{},{}", WS->m_id, WS->m_name)});
+                    Hyprdrive::Compat::postEvent("workspace", WS->displayName());
+                    Hyprdrive::Compat::postEvent("workspacev2", std::format("{},{}", Hyprdrive::Compat::id(WS), WS->displayName()));
                 }
         }
         overviewDesktopsRenumbered();
@@ -181,7 +201,7 @@ namespace Hyprdrive::DesktopOrder {
             bool shown = false;
             for (const auto& MON : State::monitorState()->monitors())
                 shown |= MON && MON->m_activeWorkspace == WS;
-            rooms.push_back({keyOf(WS), WS->m_id, windowsOn(WS) > 0, shown});
+            rooms.push_back({keyOf(WS), Hyprdrive::Compat::id(WS), windowsOn(WS) > 0, shown});
             rowOf.push_back(Rows::ofWorkspace(WS));
         }
         // ONCE PER ROW: each row's members from its first place. Visitors
@@ -208,27 +228,27 @@ namespace Hyprdrive::DesktopOrder {
         std::vector<std::pair<WORKSPACEID, WORKSPACEID>>  row;
         std::string                                       before, after;
         for (size_t i = 0; i < ALL.size(); ++i) {
-            WORKSPACEID to = ALL[i]->m_id;
+            WORKSPACEID to = Hyprdrive::Compat::id(ALL[i]);
             for (const auto& M : PLAN)
                 if (M.key == rooms[i].key)
                     to = M.to;
-            if (to != ALL[i]->m_id)
+            if (to != Hyprdrive::Compat::id(ALL[i]))
                 moves.emplace_back(ALL[i], to);
             if (rooms[i].populated)
-                row.emplace_back(ALL[i]->m_id, to);
+                row.emplace_back(Hyprdrive::Compat::id(ALL[i]), to);
         }
         // (Listed in the old order, so before and after read side by side.)
         std::vector<size_t> byOld(ALL.size());
         for (size_t i = 0; i < byOld.size(); ++i)
             byOld[i] = i;
-        std::ranges::sort(byOld, [&](size_t a, size_t b) { return ALL[a]->m_id < ALL[b]->m_id; });
+        std::ranges::sort(byOld, [&](size_t a, size_t b) { return Hyprdrive::Compat::id(ALL[a]) < Hyprdrive::Compat::id(ALL[b]); });
         for (const size_t I : byOld) {
-            WORKSPACEID to = ALL[I]->m_id;
+            WORKSPACEID to = Hyprdrive::Compat::id(ALL[I]);
             for (const auto& [WS, TO] : moves)
                 if (WS == ALL[I])
                     to = TO;
             const char* tag = rooms[I].populated ? "" : rooms[I].shown ? "(shown, empty)" : "(empty)";
-            before += std::format("{}{}{}", before.empty() ? "" : " ", ALL[I]->m_id, tag);
+            before += std::format("{}{}{}", before.empty() ? "" : " ", Hyprdrive::Compat::id(ALL[I]), tag);
             after += std::format("{}{}{}", after.empty() ? "" : " ", to, tag);
         }
         note(std::format("{}: no empty desktops between: {} -> {}", why, before, after));

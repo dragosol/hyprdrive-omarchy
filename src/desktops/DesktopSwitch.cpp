@@ -13,10 +13,12 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/event/EventBus.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
+#include <hyprland/src/keybinds/Resolver.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -109,10 +111,10 @@ namespace Hyprdrive::DesktopSwitch {
             }
         };
 
-        uint32_t scrollMods() {
-            if (!g_pKeybindManager)
-                return 0;
-            return g_pKeybindManager->stringToModMask(Hyprdrive::Config::getValue<std::string>(KEY_SCROLL_MODS));
+        Input::ModifierMask scrollMods() {
+            if (!Keybinds::mgr())
+                return Input::HL_MODIFIER_NONE;
+            return Keybinds::modMaskFromString(Hyprdrive::Config::getValue<std::string>(KEY_SCROLL_MODS));
         }
 
         // THE ROW the wheel walks on `monitor` (DesktopRowModel.hpp), `current`
@@ -131,9 +133,9 @@ namespace Hyprdrive::DesktopSwitch {
                 f.current = current;
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (!WS || WS->m_isSpecialWorkspace || WS->m_id < DesktopRow::FIRST || !ROW.contains(WS->m_id))
+                if (!WS || Hyprdrive::Compat::isSpecial(WS) || Hyprdrive::Compat::id(WS) < DesktopRow::FIRST || !ROW.contains(Hyprdrive::Compat::id(WS)))
                     continue;
-                const int PLACE = sc<int>(ROW.slot(WS->m_id));
+                const int PLACE = sc<int>(ROW.slot(Hyprdrive::Compat::id(WS)));
                 if (WS->m_monitor.lock() != monitor) {
                     f.elsewhere.push_back(PLACE);
                     continue;
@@ -175,7 +177,7 @@ namespace Hyprdrive::DesktopSwitch {
                 return {.success = false, .error = "no active desktop"};
 
 
-            const int CURRENT = sc<int>(ACTIVE->m_id);
+            const int CURRENT = sc<int>(Hyprdrive::Compat::id(ACTIVE));
             const int TARGET  = DesktopRow::neighbour(rowOn(monitor, CURRENT), CURRENT, dir);
             if (TARGET == CURRENT)
                 return {};
@@ -220,9 +222,9 @@ namespace Hyprdrive::DesktopSwitch {
                 return;
             if (!Hyprdrive::Config::getValue<bool>(KEY_SCROLL) || (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked()))
                 return; // off, or locked: the wheel switches nothing at the lock screen
-            const uint32_t MODS = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
-            const uint32_t WANT = scrollMods();
-            if (WANT == 0 || MODS != WANT)
+            const auto MODS = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
+            const auto WANT = scrollMods();
+            if (WANT == Input::HL_MODIFIER_NONE || MODS != WANT)
                 return;
             // The overview's wheel is its own (it steps its cards per notch,
             // throttled by input:scroll_event_delay) and it swallows the event.
@@ -265,7 +267,7 @@ namespace Hyprdrive::DesktopSwitch {
             PHLWORKSPACE out;
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (!WS || WS == in || WS->m_isSpecialWorkspace || WS->m_monitor != monitor || !WS->m_renderOffset || !WS->m_renderOffset->isBeingAnimated())
+                if (!WS || WS == in || Hyprdrive::Compat::isSpecial(WS) || WS->m_monitor != monitor || !WS->m_renderOffset || !WS->m_renderOffset->isBeingAnimated())
                     continue;
                 const Vector2D GOAL = WS->m_renderOffset->goal();
                 if (std::abs(GOAL.x + START.x) > 1.0 || std::abs(GOAL.y + START.y) > 1.0)
@@ -286,7 +288,7 @@ namespace Hyprdrive::DesktopSwitch {
         void warpSlides(const PHLMONITOR& monitor) {
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (!WS || WS->m_isSpecialWorkspace || WS->m_monitor != monitor)
+                if (!WS || Hyprdrive::Compat::isSpecial(WS) || WS->m_monitor != monitor)
                     continue;
                 if (WS->m_renderOffset && WS->m_renderOffset->isBeingAnimated())
                     WS->m_renderOffset->warp();
@@ -308,7 +310,7 @@ namespace Hyprdrive::DesktopSwitch {
         PHLWORKSPACE desktopOn(const PHLMONITOR& monitor, int id) {
             for (const auto& REF : State::workspaceState()->workspaces()) {
                 const auto WS = REF.lock();
-                if (WS && !WS->m_isSpecialWorkspace && WS->m_id == id && WS->m_monitor == monitor)
+                if (WS && !Hyprdrive::Compat::isSpecial(WS) && Hyprdrive::Compat::id(WS) == id && WS->m_monitor == monitor)
                     return WS;
             }
             return nullptr;
@@ -321,12 +323,12 @@ namespace Hyprdrive::DesktopSwitch {
         //   * a cause whose animation switch is off: it lands now;
         //   * otherwise Hyprland's, continued from where things are.
         void onActive(PHLWORKSPACE workspace) {
-            if (!workspace || workspace->m_isSpecialWorkspace)
+            if (!workspace || Hyprdrive::Compat::isSpecial(workspace))
                 return;
             const auto MONITOR = workspace->m_monitor.lock();
             if (!MONITOR)
                 return;
-            const int TO   = sc<int>(workspace->m_id);
+            const int TO   = sc<int>(Hyprdrive::Compat::id(workspace));
             const int FROM = remember(MONITOR, TO);
             if (scrollOverviewForMonitor(MONITOR))
                 return;
@@ -336,7 +338,7 @@ namespace Hyprdrive::DesktopSwitch {
                 return;
             }
 
-            const auto CAUSE = classify(g_ownDispatch > 0, g_pKeybindManager && g_pKeybindManager->m_currentKeybind, g_focusDepth > 0);
+            const auto CAUSE = classify(g_ownDispatch > 0, Hyprdrive::Compat::currentBind() != nullptr, g_focusDepth > 0);
             if (snaps(CAUSE, Hyprdrive::Config::getValue<bool>(KEY_ANIM_KEYS), Hyprdrive::Config::getValue<bool>(KEY_ANIM_FOCUS))) {
                 DesktopStrip::finishNow();
                 warpSlides(MONITOR);

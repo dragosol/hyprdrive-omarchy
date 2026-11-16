@@ -6,7 +6,8 @@
 #include "DebugPaths.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -123,7 +124,7 @@ namespace Hyprdrive::Intent {
             return out;
         }
         bool sameApp(const SGrant& g, const PHLWINDOW& w, const std::vector<pid_t>& procs) {
-            if (!g.cls.empty() && g.cls == w->m_class && !w->m_class.empty())
+            if (!g.cls.empty() && g.cls == w->metadata().appID() && !w->metadata().appID().empty())
                 return true;
             for (const pid_t P : procs)
                 if (std::ranges::find(g.procs, P) != g.procs.end())
@@ -134,7 +135,7 @@ namespace Hyprdrive::Intent {
         // Did the user ask for `w`? See Intent.hpp.
         const char* askedWhy(const PHLWINDOW& w) {
             std::erase_if(g_grants, [](const SGrant& g) { return g.cls.empty() ? since(g.at) > GRANT_S : since(g.taken) > APP_S; });
-            const auto PROCS = lineage(w->getPID());
+            const auto PROCS = lineage(w->backend().pid());
             // A launch not yet answered: this window is its answer. Taken first,
             // so each launch is used up by a window of its own.
             // ...unless it is a further window of an app a launch already went
@@ -150,19 +151,19 @@ namespace Hyprdrive::Intent {
                 }
             for (auto& g : g_grants)
                 if (g.cls.empty()) {
-                    g.cls   = w->m_class.empty() ? std::string{"?"} : w->m_class;
+                    g.cls   = w->metadata().appID().empty() ? std::string{"?"} : w->metadata().appID();
                     g.procs = PROCS;
                     g.taken = clock::now();
                     return "a launch";
                 }
             const auto F = Desktop::focusState()->window();
-            if (!F || F == w || !F->m_isMapped)
+            if (!F || F == w || !F->mapped())
                 return "nothing focused"; // nothing to keep focused
             if (since(g_lastPress) < INPUT_S)
                 return "a click or Enter just before";
-            if (w->parent() && w->parent() == F)
+            if (w->backend().parent() && w->backend().parent() == F)
                 return "a dialog of the focused window";
-            const bool SAMEAPP = (w->getPID() > 0 && w->getPID() == F->getPID()) || (!w->m_class.empty() && w->m_class == F->m_class);
+            const bool SAMEAPP = (w->backend().pid() > 0 && w->backend().pid() == F->backend().pid()) || (!w->metadata().appID().empty() && w->metadata().appID() == F->metadata().appID());
             return SAMEAPP && since(g_lastPress) < SAMEAPP_S ? "the focused app, after a click or Enter" : nullptr;
         }
 
@@ -175,16 +176,16 @@ namespace Hyprdrive::Intent {
         std::vector<SVerdict> g_verdicts;
 
         void quietMosaic(const PHLWINDOW& w) {
-            std::erase_if(g_quiet, [](const PHLWINDOWREF& r) { return !r || !r->m_isMapped; });
+            std::erase_if(g_quiet, [](const PHLWINDOWREF& r) { return !r || !r->mapped(); });
             if (!w || !on() || !Mosaic::isMosaicWorkspace(w->m_workspace))
                 return;
             if (const char* WHY = judge(w)) {
-                trace(std::format("{} opened: asked for ({})", w->m_class, WHY));
+                trace(std::format("{} opened: asked for ({})", w->metadata().appID(), WHY));
                 return;
             }
-            w->m_noInitialFocus = true;
+            w->m_state |= Desktop::View::WINDOW_STATE_NO_INITIAL_FOCUS;
             g_quiet.emplace_back(w);
-            trace(std::format("{} opened UNASKED: no focus, the pointer stays", w->m_class));
+            trace(std::format("{} opened UNASKED: no focus, the pointer stays", w->metadata().appID()));
             // The pointer rides the window it is on, if the hand is not moving it.
             const auto     F = Desktop::focusState()->window();
             const Vector2D P = g_pInputManager->getMouseCoordsInternal();
@@ -228,7 +229,7 @@ namespace Hyprdrive::Intent {
             return;
         const auto W = g_ride->win.lock();
         // The hand took over, the window went, or it has had its time.
-        if (!W || !W->m_isMapped || since(g_ride->from) > RIDE_S || g_lastUserMove > g_ride->from || g_pInputManager->isConstrained()) {
+        if (!W || !W->mapped() || since(g_ride->from) > RIDE_S || g_lastUserMove > g_ride->from || g_pInputManager->isConstrained()) {
             g_ride.reset();
             return;
         }

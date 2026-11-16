@@ -3,6 +3,7 @@
 #include "OverviewParts.hpp"
 #include "Rows.hpp"
 #include "Ripple.hpp"
+#include <hyprland/src/workspace/RegularWorkspace.hpp>
 
 using namespace OverviewDetail;
 
@@ -69,9 +70,10 @@ COverview::~COverview() {
 // Is the bind running right now a mouse WHEEL bind (Super+scroll and the
 // like: Hyprland names the wheel's notches mouse_up / _down / _left / _right)?
 static bool currentBindIsWheel() {
-    if (!g_pKeybindManager || !g_pKeybindManager->m_currentKeybind)
+    const auto CURRENT = Hyprdrive::Compat::currentBind();
+    if (!CURRENT || CURRENT->keyNames().size() != 1)
         return false;
-    const auto& KEY = g_pKeybindManager->m_currentKeybind->key;
+    const auto& KEY = CURRENT->keyNames()[0];
     return KEY == "mouse_up" || KEY == "mouse_down" || KEY == "mouse_left" || KEY == "mouse_right";
 }
 
@@ -94,10 +96,11 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     // notification toasts). A consuming bind ate that press even so (the
     // dispatcher closed the overview, the toast never saw it). Normal clicks
     // never reach the bind: onMouseButton cancels them and dispatches itself.
-    if (g_pKeybindManager) {
-        for (const auto& keybind : g_pKeybindManager->m_keybinds) {
-            if (keybind && isOverviewSubmapName(keybind->submap.name) && (keybind->mouse || keybind->key.starts_with("mouse")))
-                keybind->nonConsuming = true;
+    if (Keybinds::mgr()) {
+        for (const auto& keybind : Keybinds::mgr()->registry().binds()) {
+            if (keybind && isOverviewSubmapName(keybind->metadata().submap) &&
+                (keybind->hasFlag(Keybinds::BIND_FLAG_MOUSE) || (keybind->keyNames().size() == 1 && keybind->keyNames()[0].starts_with("mouse"))))
+                Hyprdrive::Priv::setBindFlag(*keybind, Keybinds::BIND_FLAG_NON_CONSUMING, true);
         }
     }
 
@@ -251,7 +254,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     windowMoveHook      = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW a0, PHLWORKSPACE a1) { onWindowMove(a0, a1); });
     windowActiveHook    = Event::bus()->m_events.window.active.listen([this](PHLWINDOW a0, Desktop::eFocusReason a1) { onWindowActive(a0, a1); });
     windowFullscreenHook = Event::bus()->m_events.window.fullscreen.listen([this](PHLWINDOW a0) { onWindowFullscreen(a0); });
-    workspaceCreatedHook = Event::bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF a0) { onWorkspaceLifecycle(a0); });
+    workspaceCreatedHook = Event::bus()->m_events.workspace.createdEarly.listen([this](PHLWORKSPACEREF a0) { onWorkspaceLifecycle(a0); });
     workspaceRemovedHook = Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF a0) { onWorkspaceLifecycle(a0); });
     // KEYBOARD DESKTOP SWITCH, ANY KEY (user, 2026-10-15: "motion blur isn't
     // working at all for some of the intended purposes ... in native only").
@@ -263,7 +266,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     // so the bind is still current here; onWorkspaceChange pans the cards on
     // the next frame and KEYPAN reads this.
     workspaceActiveHook = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE workspace) {
-        if (workspace && !workspace->m_isSpecialWorkspace && workspace->m_monitor == pMonitor && g_pKeybindManager && g_pKeybindManager->m_currentKeybind)
+        if (workspace && !Hyprdrive::Compat::isSpecial(workspace) && workspace->m_monitor == pMonitor && Hyprdrive::Compat::currentBind())
             (currentBindIsWheel() ? wheelPanAt : keyPanAt) = Time::steadyNow();
     });
     activateSubmapIfConfigured();
@@ -286,7 +289,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     if (scrollOverviews().size() <= 1)
         OvInternal::g_focusAtOpen = Desktop::focusState()->window();
     Hyprdrive::Stacks::traceEvent(std::format("locks: open on {} (overviews={}) focusAtOpen={}", pMonitor ? pMonitor->m_name : "?", scrollOverviews().size(),
-                                                   OvInternal::g_focusAtOpen.lock() ? OvInternal::g_focusAtOpen->m_class : "-"));
+                                                   OvInternal::g_focusAtOpen.lock() ? OvInternal::g_focusAtOpen->metadata().appID() : "-"));
     rememberSelection(Desktop::focusState()->window());
     viewportCurrentWorkspace = activeWorkspaceIndex();
     syncSelectionToViewport();
@@ -448,7 +451,7 @@ void COverview::close() {
             if (!images[workspaceIdx] || !images[workspaceIdx]->pWorkspace)
                 continue;
 
-            if (images[workspaceIdx]->pWorkspace->m_id == focusSyncedFromWorkspaceID)
+            if (Hyprdrive::Compat::id(images[workspaceIdx]->pWorkspace) == focusSyncedFromWorkspaceID)
                 sourceIdx = workspaceIdx;
             if (images[workspaceIdx]->pWorkspace == FINALWORKSPACE)
                 targetIdx = workspaceIdx;
@@ -513,7 +516,7 @@ void COverview::close() {
             const auto FINALPITCH = getWorkspaceLogicalPitch(pMonitor.lock(), 1.F, layout);
 
             for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
-                if (!images[workspaceIdx] || !images[workspaceIdx]->pWorkspace || images[workspaceIdx]->pWorkspace->m_id != focusSyncedFromWorkspaceID)
+                if (!images[workspaceIdx] || !images[workspaceIdx]->pWorkspace || Hyprdrive::Compat::id(images[workspaceIdx]->pWorkspace) != focusSyncedFromWorkspaceID)
                     continue;
 
                 viewOffset->setValueAndWarp(axisOffsetVector(workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH), layout));
@@ -754,8 +757,8 @@ void COverview::onWorkspaceChange() {
     const bool PREVIOUSISOURS = previousStartedOn &&
         (previousStartedOn == trailingWorkspace ||
          std::find(gapWorkspaces.begin(), gapWorkspaces.end(), previousStartedOn) != gapWorkspaces.end());
-    const bool LEFTEMPTY = previousStartedOn && previousStartedOn != NEWWORKSPACE && !PREVIOUSISOURS && !previousStartedOn->m_isSpecialWorkspace &&
-        !previousStartedOn->isPersistent() && previousStartedOn->getWindowCount() == 0;
+    const bool LEFTEMPTY = previousStartedOn && previousStartedOn != NEWWORKSPACE && !PREVIOUSISOURS && !Hyprdrive::Compat::isSpecial(previousStartedOn) &&
+        !(dynamicPointerCast<Workspace::CRegularWorkspace>(previousStartedOn) && dynamicPointerCast<Workspace::CRegularWorkspace>(previousStartedOn)->isPersistent()) && previousStartedOn->getWindowCount() == 0;
     // THE EMPTY DESKTOP YOU LEFT IS THE SPARE ANYWAY (user, 2026-11-03: swiping
     // off it, the top strip "glitches for a frame"). The empty desktop at the
     // end of the strip is exactly the one E2 keeps as its trailing spare: removing
@@ -766,7 +769,7 @@ void COverview::onWorkspaceChange() {
     bool keptAsSpare = false;
     if (LEFTEMPTY && pMonitor) {
         const auto ROW = workspacePlanFor(pMonitor.lock());
-        if (ROW.spare && ROW.existing && *ROW.spare == previousStartedOn->m_id && previousStartedOn->m_monitor.lock() == pMonitor.lock()) {
+        if (ROW.spare && ROW.existing && *ROW.spare == Hyprdrive::Compat::id(previousStartedOn) && previousStartedOn->m_monitor.lock() == pMonitor.lock()) {
             trailingWorkspace = previousStartedOn;
             keptAsSpare       = true;
         }
@@ -1082,19 +1085,22 @@ void COverview::reopen() {
     damage();
 }
 
-static_assert(Hyprdrive::SubmapBorrow::MOD_SHIFT == HL_MODIFIER_SHIFT && Hyprdrive::SubmapBorrow::MOD_CTRL == HL_MODIFIER_CTRL &&
-              Hyprdrive::SubmapBorrow::MOD_ALT == HL_MODIFIER_ALT && Hyprdrive::SubmapBorrow::MOD_META == HL_MODIFIER_META);
+static_assert(Hyprdrive::SubmapBorrow::MOD_SHIFT == static_cast<uint32_t>(Input::ModifierMask{HL_MODIFIER_SHIFT}) &&
+              Hyprdrive::SubmapBorrow::MOD_CTRL == static_cast<uint32_t>(Input::ModifierMask{HL_MODIFIER_CTRL}) &&
+              Hyprdrive::SubmapBorrow::MOD_ALT == static_cast<uint32_t>(Input::ModifierMask{HL_MODIFIER_ALT}) &&
+              Hyprdrive::SubmapBorrow::MOD_META == static_cast<uint32_t>(Input::ModifierMask{HL_MODIFIER_META}));
 
 static void borrowGlobalPassthroughBinds(const std::string& fromSubmap) {
-    if (!g_pKeybindManager)
+    if (!Keybinds::mgr())
         return;
 
-    for (const auto& keybind : g_pKeybindManager->m_keybinds) {
-        if (!keybind || keybind->submapUniversal || keybind->submap.name != fromSubmap ||
-            !Hyprdrive::SubmapBorrow::borrows(keybind->key, keybind->modmask, keybind->mouse, keybind->catchAll))
+    for (const auto& keybind : Keybinds::mgr()->registry().binds()) {
+        if (!keybind || keybind->hasFlag(Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL) || keybind->metadata().submap != fromSubmap ||
+            !Hyprdrive::SubmapBorrow::borrows(keybind->keyNames().size() == 1 ? keybind->keyNames()[0] : std::string{}, static_cast<uint32_t>(keybind->modifierMask()),
+                                              keybind->hasFlag(Keybinds::BIND_FLAG_MOUSE), keybind->hasFlag(Keybinds::BIND_FLAG_CATCH_ALL)))
             continue;
 
-        keybind->submapUniversal = true;
+        Hyprdrive::Priv::setBindFlag(*keybind, Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL, true);
         g_passthroughBinds.emplace_back(keybind);
     }
 }
@@ -1102,16 +1108,16 @@ static void borrowGlobalPassthroughBinds(const std::string& fromSubmap) {
 static void returnGlobalPassthroughBinds() {
     for (const auto& ref : g_passthroughBinds) {
         if (const auto keybind = ref.lock())
-            keybind->submapUniversal = false;
+            Hyprdrive::Priv::setBindFlag(*keybind, Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL, false);
     }
     g_passthroughBinds.clear();
 }
 
 void COverview::activateSubmapIfConfigured() {
-    if (!sharedStateOwner || !usesSubmapKeybinds || !g_pKeybindManager)
+    if (!sharedStateOwner || !usesSubmapKeybinds || !Keybinds::mgr())
         return;
 
-    previousSubmapName = g_pKeybindManager->getCurrentSubmap().name;
+    previousSubmapName = std::string{Keybinds::mgr()->currentSubmap()};
     // NEVER return INTO the overview's own submap (user, 2026-09-30: the whole
     // bar stopped taking clicks and every Omarchy shortcut died). Opened while a
     // stale overview submap was still current -- a plugin reload mid-overview
@@ -1139,17 +1145,17 @@ void COverview::activateSubmapIfConfigured() {
 // is dead and its click binds eat the pointer. Called at plugin load, on
 // every config reload, and after an overview's teardown.
 void healStuckOverviewSubmap() {
-    if (!g_pKeybindManager || !scrollOverviews().empty())
+    if (!Keybinds::mgr() || !scrollOverviews().empty())
         return;
-    if (isOverviewSubmapName(g_pKeybindManager->getCurrentSubmap().name))
+    if (isOverviewSubmapName(std::string{Keybinds::mgr()->currentSubmap()}))
         (void)Config::Actions::setSubmap("reset");
 }
 
 void COverview::restoreSubmapIfActive() {
-    if (!submapActive || !g_pKeybindManager)
+    if (!submapActive || !Keybinds::mgr())
         return;
 
-    const auto CURRENT = g_pKeybindManager->getCurrentSubmap().name;
+    const std::string CURRENT{Keybinds::mgr()->currentSubmap()};
     if (isOverviewSubmapName(CURRENT)) {
         (void)Config::Actions::setSubmap(previousSubmapName.empty() ? "reset" : previousSubmapName);
     }
@@ -1159,36 +1165,24 @@ void COverview::restoreSubmapIfActive() {
 }
 
 bool COverview::dispatchSubmapMouseClick(uint32_t button) {
-    if (!usesSubmapKeybinds || !isOverviewSubmapActive() || !g_pKeybindManager || !g_pInputManager)
+    if (!usesSubmapKeybinds || !isOverviewSubmapActive() || !Keybinds::mgr() || !g_pInputManager)
         return false;
 
     const auto KEYNAME = "mouse:" + std::to_string(button);
     const auto MODS    = g_pInputManager->getModsFromAllKBs();
 
-    const auto KEYBIND = std::ranges::find_if(g_pKeybindManager->m_keybinds, [&](const auto& keybind) {
-        return keybind && keybind->enabled && !keybind->shadowed && keybind->key == KEYNAME && isOverviewSubmapName(keybind->submap.name) &&
-            (keybind->modmask == MODS || keybind->ignoreMods);
+    const auto BINDS   = Keybinds::mgr()->registry().binds();
+    const auto KEYBIND = std::ranges::find_if(BINDS, [&](const auto& keybind) {
+        return keybind && keybind->enabled() && !Keybinds::mgr()->m_shadowed.contains(WP<Keybinds::CBind>{keybind}) && keybind->keyNames().size() == 1 &&
+            keybind->keyNames()[0] == KEYNAME && isOverviewSubmapName(keybind->metadata().submap) &&
+            (keybind->modifierMask() == MODS || keybind->hasFlag(Keybinds::BIND_FLAG_IGNORE_MODS));
     });
 
-    if (KEYBIND == g_pKeybindManager->m_keybinds.end())
+    if (KEYBIND == BINDS.end())
         return false;
 
-    const auto INDEX = Hyprutils::String::strToNumber<int>((*KEYBIND)->arg);
-    const auto MGR   = Config::Lua::mgr();
-    if (!INDEX || !MGR)
-        return false;
-
-    const auto PREVIOUSKEYBIND = g_pKeybindManager->m_currentKeybind;
-    g_pKeybindManager->m_currentKeybind = *KEYBIND;
-    auto restoreKeybind = Hyprutils::Utils::CScopeGuard([PREVIOUSKEYBIND] { g_pKeybindManager->m_currentKeybind = PREVIOUSKEYBIND; });
-
-    const int PREVIOUSPASSPRESSED = Config::Actions::state()->m_passPressed;
-    Config::Actions::state()->m_passPressed = 0;
-    auto restorePassPressed = Hyprutils::Utils::CScopeGuard([PREVIOUSPASSPRESSED] { Config::Actions::state()->m_passPressed = PREVIOUSPASSPRESSED; });
-
-    // ponytail: 0.56.1 has void callLuaFn(int); callLuaFnBind + .success is 0.57+.
-    // No success signal available here, so assume dispatched.
-    MGR->callLuaFn(*INDEX);
+    // pressed=false: invokeBind sets m_passPressed to 0, as the old manual save/zero/restore did.
+    Keybinds::mgr()->invokeBind(*KEYBIND, false);
     return true;
 }
 
@@ -1257,11 +1251,11 @@ void COverview::superChanged() {
 bool COverview::deskMovable(size_t idx) const {
     if (idx >= images.size() || !images[idx] || !Hyprdrive::DesktopOrder::ordinary(images[idx]->pWorkspace))
         return false;
-    if (!Hyprdrive::Rows::of(pMonitor.lock()).contains(images[idx]->pWorkspace->m_id))
+    if (!Hyprdrive::Rows::of(pMonitor.lock()).contains(Hyprdrive::Compat::id(images[idx]->pWorkspace)))
         return false; // a visitor: outside this monitor's row
     return std::ranges::any_of(images[idx]->windows, [](const PHLWINDOWREF& r) {
         const auto W = r.lock();
-        return W && W->m_isMapped;
+        return W && W->mapped();
     });
 }
 
@@ -1281,10 +1275,10 @@ bool COverview::moveDesktop(size_t from, size_t to) {
     for (const auto& I : images) {
         if (!I || !Hyprdrive::DesktopOrder::ordinary(I->pWorkspace))
             return false;
-        if (!ROW.contains(I->pWorkspace->m_id))
+        if (!ROW.contains(Hyprdrive::Compat::id(I->pWorkspace)))
             continue;
         order.push_back(I->pWorkspace);
-        ids.push_back(I->pWorkspace->m_id);
+        ids.push_back(Hyprdrive::Compat::id(I->pWorkspace));
     }
     if (from >= order.size())
         return false;
@@ -1415,7 +1409,7 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
     // overview over a game) gives it the lock back.
     if (const auto HLSURF = surface ? Desktop::View::CWLSurface::fromResource(surface) : nullptr; HLSURF && HLSURF->constraint()) {
         HLSURF->constraint()->activate();
-        Hyprdrive::Stacks::traceEvent(std::format("locks: handed back to {} active={}", window->m_class, HLSURF->constraint()->isActive() ? 1 : 0));
+        Hyprdrive::Stacks::traceEvent(std::format("locks: handed back to {} active={}", window->metadata().appID(), HLSURF->constraint()->isActive() ? 1 : 0));
         return;
     }
 
@@ -1437,13 +1431,13 @@ void OvInternal::handPointerTo(const PHLWINDOW& window, const SP<CWLSurfaceResou
         const CBox BOX{FINAL->m_realPosition->goal(), FINAL->m_realSize->goal()};
         if (BOX.width < 1 || BOX.height < 1 || (!CENTRE && BOX.containsPoint(g_pInputManager->getMouseCoordsInternal())))
             return;
-        Hyprdrive::Stacks::traceEvent(std::format("locks: warp into {}", FINAL->m_class));
+        Hyprdrive::Stacks::traceEvent(std::format("locks: warp into {}", FINAL->metadata().appID()));
         Pointer::pointerController()->warpTo(BOX.middle(), true);
     });
 }
 
 void OvInternal::traceHandback(const char* who, const PHLWINDOW& asked, const PHLWINDOW& target, const PHLWINDOW& before) {
-    const auto NAME = [](const PHLWINDOW& w) { return w ? w->m_class : std::string{"-"}; };
+    const auto NAME = [](const PHLWINDOW& w) { return w ? w->metadata().appID() : std::string{"-"}; };
     Hyprdrive::Stacks::traceEvent(std::format("locks: handback {} asked={} target={} before={} after={}", who, NAME(asked), NAME(target), NAME(before),
                                                    NAME(Desktop::focusState()->window())));
 }

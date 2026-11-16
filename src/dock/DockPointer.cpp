@@ -230,11 +230,11 @@ bool scroll(PHLMONITOR monitor, const Vector2D& point, bool up) {
         if (!ACTIVE)
             return true;
 
-        const WORKSPACEID WANTED = ACTIVE->m_id + (up ? -1 : 1);
+        const WORKSPACEID WANTED = Hyprdrive::Compat::id(ACTIVE) + (up ? -1 : 1);
         for (const auto& CANDIDATE : State::workspaceState()->workspaces()) {
             const auto TARGET = CANDIDATE.lock();
-            if (TARGET && TARGET->m_id == WANTED && TARGET != ACTIVE) {
-                monitor->changeWorkspace(TARGET, false, true, true);
+            if (TARGET && Hyprdrive::Compat::id(TARGET) == WANTED && TARGET != ACTIVE) {
+                monitor->changeWorkspace(TARGET, false, true, !Hyprdrive::Compat::isSpecial(TARGET));
                 break;
             }
         }
@@ -389,8 +389,8 @@ static bool clickImpl(PHLMONITOR monitor, const Vector2D& point, bool shift, boo
     // SUPER / ALT / CTRL held: "open it in an empty workspace" when it is not
     // running. Read HERE, not in activateItem -- SUPER+number hotkeys go
     // through activateItem too, with SUPER held by definition.
-    const uint32_t MODS  = g_pInputManager ? g_pInputManager->getModsFromAllKBs() : 0;
-    const bool     EMPTY = ctrl || (MODS & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL)) != 0;
+    const Input::ModifierMask MODS = g_pInputManager ? g_pInputManager->getModsFromAllKBs() : Input::ModifierMask{HL_MODIFIER_NONE};
+    const bool     EMPTY = ctrl || static_cast<bool>(MODS & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL));
     // A folder: the fan (or grid) and the file manager are its two opens, and
     // Super picks the one its view does not (View in Files: click = the file
     // manager, Super+click = the fan; the other views the other way round).
@@ -399,7 +399,7 @@ static bool clickImpl(PHLMONITOR monitor, const Vector2D& point, bool shift, boo
         for (const auto& S : Stacks::all())
             if (S.path == ITEM->stackPath)
                 files = S.view == StackModel::EView::Files;
-        if (((MODS & HL_MODIFIER_META) != 0) != files) {
+        if (static_cast<bool>(MODS & HL_MODIFIER_META) != files) {
             Locations::activate(ITEM->uri);
             return true;
         }
@@ -865,7 +865,7 @@ std::string debugMenuReport(PHLMONITOR monitor) {
         out += std::format(" pane {}{}", BOX(g_hover.drawn), g_hover.panel->out ? " (out)" : "");
         for (const auto& [B, W] : g_hover.cells)
             if (const auto L = W.lock())
-                out += std::format("\n cell \"{}\" {}", L->m_title, BOX(B));
+                out += std::format("\n cell \"{}\" {}", L->metadata().title(), BOX(B));
     } else
         out += " no pane";
     if (!g_menu || g_menu->monitor != monitor->m_id)
@@ -885,7 +885,7 @@ std::string debugMenuReport(PHLMONITOR monitor) {
     // state (shown / waiting out the grace / leaving).
     if (const auto& P = g_menu->rowPeek; P)
         if (const auto W = P->window.lock())
-            out += std::format("\n peek \"{}\" {} {}{}", W->m_title, BOX(P->drawn), P->left ? "left" : "right", P->out ? " (out)" : P->leaving ? " (grace)" : "");
+            out += std::format("\n peek \"{}\" {} {}{}", W->metadata().title(), BOX(P->drawn), P->left ? "left" : "right", P->out ? " (out)" : P->leaving ? " (grace)" : "");
     return out + icons;
 }
 
@@ -1018,7 +1018,7 @@ bool menuClick(PHLMONITOR monitor, const Vector2D& point) {
             const auto MINE   = ROW->window.lock();
             const bool OTHERS = std::ranges::any_of(g_menu->rows, [&](const SRow& r) {
                 const auto W = r.kind == ERow::Window ? r.window.lock() : PHLWINDOW{};
-                return W && W != MINE && W->m_isMapped;
+                return W && W != MINE && W->mapped();
             });
             if (OTHERS) {
                 g_menu->guarded    = true;

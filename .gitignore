@@ -10,3 +10,10 @@ __pycache__/
 # gate run artifacts
 tests/gates/*/last.log
 tests/gates/*/slate.log
+
+# local helpers of the 0.57 port (machine-specific paths)
+/b057.sh
+/env057.sh
+/build.log
+docs/port057/errors.txt
+docs/port057/open.md

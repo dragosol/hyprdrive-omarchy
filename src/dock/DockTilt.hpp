@@ -103,14 +103,14 @@ class CDockTiltPassElement : public IPassElement {
     CDockTiltPassElement(const SData& data_);
     ~CDockTiltPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                needsLiveBlur() override;
-    bool                needsPrecomputeBlur() override;
-    std::optional<CBox> boundingBox() override;
-    CRegion             opaqueRegion() override;
+    bool                needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox> boundingBox(Render::CRenderContext& ctx) override;
+    CRegion             opaqueRegion(Render::CRenderContext& ctx) override;
 
     const char*         passName() override {
         return "CDockTiltPassElement";

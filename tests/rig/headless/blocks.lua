@@ -17,7 +17,9 @@
 -- survive the config reload every plugin unload/load makes).
 hl.monitor({ output = "HEADLESS-1", mode = "1920x1080@60", position = "0x0", scale = 1 })
 hl.monitor({ output = "HEADLESS-2", mode = "1920x1080@60", position = "1920x0", scale = 1 })
-hl.monitor({ output = "WL-1", mode = "1920x1080@60", position = "-1920x0", scale = 1 })
+-- the nested window is never a monitor (see hl.sh write_config)
+hl.monitor({ output = "WL-1", disabled = true })
+hl.monitor({ output = "WAYLAND-1", disabled = true })
 
 hl.config({
     general = { gaps_in = 5, gaps_out = 10, border_size = 2, layout = "dwindle" },

@@ -31,7 +31,7 @@ namespace Hyprdrive::StackBlur {
     void queue(std::vector<SSample> samples, const CBox& bounds) {
         if (samples.empty() || bounds.width < 2 || bounds.height < 2)
             return;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CStackBlurPassElement>(std::move(samples), bounds));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CStackBlurPassElement>(std::move(samples), bounds));
     }
 
     void shutdown() {
@@ -47,16 +47,16 @@ namespace Hyprdrive::StackBlur {
 
     CStackBlurPassElement::CStackBlurPassElement(std::vector<SSample> samples, const CBox& bounds) : m_samples(std::move(samples)), m_bounds(bounds) {}
 
-    std::optional<CBox> CStackBlurPassElement::boundingBox() {
-        const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor;
+    std::optional<CBox> CStackBlurPassElement::boundingBox(Render::CRenderContext& ctx) {
+        const auto MONITOR = ctx.m_data.pMonitor;
         if (!MONITOR)
             return std::nullopt;
         return m_bounds.copy().scale(1.F / MONITOR->m_scale).round();
     }
 
-    std::vector<UP<IPassElement>> CStackBlurPassElement::draw() {
-        const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
-        const auto PREV    = g_pHyprRenderer->m_renderData.currentFB;
+    std::vector<UP<IPassElement>> CStackBlurPassElement::draw(Render::CRenderContext& ctx) {
+        const auto MONITOR = ctx.m_data.pMonitor.lock();
+        const auto PREV    = ctx.m_data.currentFB;
         if (!MONITOR || !PREV || !usable(MONITOR))
             return {};
 
@@ -77,7 +77,7 @@ namespace Hyprdrive::StackBlur {
 
         // Sum the samples offscreen...
         g_fb->bind();
-        Render::GL::g_pHyprOpenGL->scissor(nullptr);
+        Render::GL::g_pHyprOpenGL->disableScissor();
         glClearColor(0.F, 0.F, 0.F, 0.F);
         glClear(GL_COLOR_BUFFER_BIT);
         // Per instant: composite its pieces (text OVER its pill -- summing them
@@ -101,7 +101,7 @@ namespace Hyprdrive::StackBlur {
         const CBox  CLIP   = m_bounds.copy().round();
         for (int g = 0; g < groups; ++g) {
             g_tmp->bind();
-            Render::GL::g_pHyprOpenGL->scissor(CLIP);
+            Render::GL::g_pHyprOpenGL->scissor(ctx, CLIP);
             glClearColor(0.F, 0.F, 0.F, 0.F);
             glClear(GL_COLOR_BUFFER_BIT);
             for (const auto& S : m_samples)
@@ -111,14 +111,14 @@ namespace Hyprdrive::StackBlur {
             if (const auto TEX = g_tmp->getTexture(); TEX && TEX->ok())
                 DockTilt::drawAdditive(TEX, CBox{0, 0, SIZE.x, SIZE.y}, WEIGHT, true, &CLIP);
         }
-        Render::GL::g_pHyprOpenGL->scissor(nullptr);
+        Render::GL::g_pHyprOpenGL->disableScissor();
 
         // ...then lay the average over the scene, where the fan is.
         PREV->bind();
-        CRegion damage{g_pHyprRenderer->m_renderData.damage};
+        CRegion damage{ctx.m_data.damage};
         damage.intersect(m_bounds);
         if (!damage.empty() && g_fb->getTexture() && g_fb->getTexture()->ok())
-            Render::GL::g_pHyprOpenGL->renderTexture(g_fb->getTexture(), CBox{0, 0, SIZE.x, SIZE.y}, {.damage = &damage, .a = 1.F});
+            Render::GL::g_pHyprOpenGL->renderTexture(ctx, g_fb->getTexture(), CBox{0, 0, SIZE.x, SIZE.y}, {.damage = &damage, .a = 1.F});
 
         if (logPath()) {
             glFinish();

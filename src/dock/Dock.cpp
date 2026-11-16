@@ -136,7 +136,7 @@ void renderRunningDot(PHLMONITOR monitor, const SLayout& layout, const SItem& it
             // circle into a diamond (seen on screen 2026-08-03).
             dot.round         = sc<int>(SIZE / 2.F);
             dot.roundingPower = 2.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(dot));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(dot));
         }
     };
 
@@ -203,13 +203,13 @@ void renderBadge(PHLMONITOR monitor, const SItem& item, bool badgesOn) {
     // shape is a capsule, and H/2 is the number that stays one at any count.
     bg.round         = sc<int>(std::round(H / 2.F));
     bg.roundingPower = 2.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(bg));
 
     CTexPassElement::SRenderData text;
     text.tex = TEX;
     text.box = CBox{std::round(X + PADX), std::round(Y + PADY), sc<float>(TEX->m_size.x), sc<float>(TEX->m_size.y)};
     text.a   = 1.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(text));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(text));
 }
 
 // X34. The Hot-Key visual aid. `_updateNumberOverlay` numbers the icons 1..9,
@@ -248,7 +248,7 @@ void renderNumberOverlay(PHLMONITOR monitor, const SItem& item, int index) {
     // over half the box collapses the circle into a diamond.
     bg.round         = sc<int>(SIZE / 2.F);
     bg.roundingPower = 2.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(bg));
 
     // `text-align: center`, and vertically too -- the label fills the bin.
     CTexPassElement::SRenderData text;
@@ -256,7 +256,7 @@ void renderNumberOverlay(PHLMONITOR monitor, const SItem& item, int index) {
     text.box = CBox{std::round(X + (SIZE - sc<float>(TEX->m_size.x)) / 2.F), std::round(Y + (SIZE - sc<float>(TEX->m_size.y)) / 2.F), sc<float>(TEX->m_size.x),
                     sc<float>(TEX->m_size.y)};
     text.a   = 1.F;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(text));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(text));
 }
 
 // X32. A pinned favourite that is not running has no window class, so the class
@@ -300,7 +300,7 @@ std::vector<PHLWINDOW> peekWindowsOn(PHLMONITOR monitor, const std::vector<PHLWI
     if (!monitor)
         return out;
     for (const auto& WINDOW : windows) {
-        if (!WINDOW || !WINDOW->m_isMapped || WINDOW->m_monitor != monitor || !WINDOW->m_workspace)
+        if (!WINDOW || !WINDOW->mapped() || WINDOW->m_monitor != monitor || !WINDOW->m_workspace)
             continue;
         // A window in flight keeps its label: it rides the flight.
         if (Flight::hasFlight(WINDOW)) {
@@ -328,7 +328,7 @@ void renderWindowPeek(PHLMONITOR monitor, float alpha) {
         // A flight armed but not drawn yet has no box to ride; its window's real
         // box is where it is NOT (a restore parks it at alpha 0).
         const bool ARMED  = WINDOW && !FLIGHT && Flight::hasFlight(WINDOW);
-        if (!WINDOW || !WINDOW->m_isMapped || ARMED || (!FLIGHT && Minimize::isMinimized(WINDOW)) || WINDOW->m_monitor != monitor) {
+        if (!WINDOW || !WINDOW->mapped() || ARMED || (!FLIGHT && Minimize::isMinimized(WINDOW)) || WINDOW->m_monitor != monitor) {
             if (WINDOW)
                 s_lastFlyingPlate.erase(WINDOW.get());
             continue;
@@ -336,8 +336,8 @@ void renderWindowPeek(PHLMONITOR monitor, float alpha) {
 
         std::string app = AppSearch::appNameForClass(Hyprdrive::AppIdentity::groupKey(WINDOW));
         if (app.empty())
-            app = WINDOW->m_class;
-        std::string title = WINDOW->m_title;
+            app = WINDOW->metadata().appID();
+        std::string title = WINDOW->metadata().title();
         if (title.size() > PEEK_TITLE_MAX) {
             size_t cut = PEEK_TITLE_MAX - 1;
             while (cut > 0 && (sc<unsigned char>(title[cut]) & 0xC0) == 0x80)
@@ -812,9 +812,9 @@ void frostedPlate(PHLMONITOR monitor, const CBox& box, int rounding, float alpha
     bg.roundingPower = roundingPower;
     bg.clipBox       = clip;
     if (currentPass)
-        g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(bg));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(bg));
     else
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bg));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(bg));
 }
 
 void minimizeWithFlight(PHLMONITOR monitor, PHLWINDOW window, bool bounceOnLand, std::optional<CBox> startBox) {
@@ -849,13 +849,13 @@ void onWindowOpen(const PHLWINDOW& window) {
     if (!window)
         return;
     const auto ID      = AppSearch::idForClass(Hyprdrive::AppIdentity::groupKey(window));
-    const bool SPECIAL = !window->m_workspace || window->m_workspace->m_isSpecialWorkspace;
+    const bool SPECIAL = !window->m_workspace || Hyprdrive::Compat::isSpecial(window->m_workspace);
     const bool MAIN    = Hyprdrive::WindowPlacement::mainWindow(window); // (as Placement placed it)
     const bool EMPTY   = MAIN && opensInEmptyDesktop(ID);
     const bool FULL    = MenuModel::shouldOpenFullscreen({.listed   = opensInFullscreen(ID),
-                                                          .floating = window->m_isFloating,
-                                                          .child    = window->parent() != nullptr,
-                                                          .modal    = window->isModal(),
+                                                          .floating = window->isFloating(),
+                                                          .child    = window->backend().parent() != nullptr,
+                                                          .modal    = window->backend().traits().modal,
                                                           .special  = SPECIAL,
                                                           .applied  = std::ranges::any_of(s_sentFullscreen, [&](const PHLWINDOWREF& r) { return r.lock() == window; })});
     if (!EMPTY && !FULL)
@@ -865,11 +865,11 @@ void onWindowOpen(const PHLWINDOW& window) {
     // Next turn of the loop: not from inside the window's own map.
     g_pEventLoopManager->doLater([REF = PHLWINDOWREF{window}, EMPTY, FULL] {
         const auto W = REF.lock();
-        if (!W || !W->m_isMapped || !W->m_workspace || W->m_workspace->m_isSpecialWorkspace)
+        if (!W || !W->mapped() || !W->m_workspace || Hyprdrive::Compat::isSpecial(W->m_workspace))
             return;
         if (EMPTY) {
             const bool ALONE = std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& O) {
-                return O && O != W && O->m_isMapped && !O->isHidden() && O->m_workspace == W->m_workspace;
+                return O && O != W && O->mapped() && !O->isHidden() && O->m_workspace == W->m_workspace;
             });
             if (!ALONE)
                 if (const auto MONITOR = W->m_workspace->m_monitor.lock()) {
@@ -879,7 +879,7 @@ void onWindowOpen(const PHLWINDOW& window) {
                     moveToEmptyWorkspace(MONITOR, W);
                 }
         }
-        if (FULL && W->m_isMapped && !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
+        if (FULL && W->mapped() && !::Fullscreen::controller()->isFullscreen(W, ::Fullscreen::FSMODE_FULLSCREEN))
             (void)::Config::Actions::fullscreenWindow(::Fullscreen::FSMODE_FULLSCREEN, true, W);
     });
 }
@@ -1053,7 +1053,7 @@ void renderUrgentHop(PHLMONITOR monitor) {
         d.tex = TEX;
         d.box = CBox{IB.x, EDGE - UP, IB.width, IB.height};
         d.a   = 1.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
     }
 }
 
@@ -1089,7 +1089,7 @@ bool renderStackPeek(PHLMONITOR monitor) {
                 CTexPassElement::SRenderData d;
                 d.tex = TEX;
                 d.box = AT;
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+                g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
             }
     }
     return running;
@@ -1193,7 +1193,7 @@ void render(PHLMONITOR monitor) {
             ring.color         = ACCENT.modifyA(GLOW * DRAG_GLOW_ALPHA / sc<float>(i * i));
             ring.round         = LAYOUT.rounding + sc<int>(std::round(SPREAD));
             ring.roundingPower = 2.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(ring));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(ring));
         }
     }
 
@@ -1220,7 +1220,7 @@ void render(PHLMONITOR monitor) {
         border.borderSize    = BORDERSIZE;
         border.round         = LAYOUT.rounding;
         border.roundingPower = 2.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(border));
     }
 
     // (user, 2026-08-03): GNOME lights the hovered app cell with a translucent
@@ -1241,7 +1241,7 @@ void render(PHLMONITOR monitor) {
         fill.color         = ACCENT.modifyA(0.22F);
         fill.round         = std::max(0, LAYOUT.rounding - sc<int>(std::round(hoverInset() * monitor->m_scale)));
         fill.roundingPower = 2.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(fill));
     }
 
     // X32/G12. Where the dragged app would land. Drawn under the icons so a
@@ -1252,7 +1252,7 @@ void render(PHLMONITOR monitor) {
         caret.color         = CHyprColor{1.F, 1.F, 1.F, 0.90F};
         caret.round         = sc<int>(std::round(CARET.width / 2.F));
         caret.roundingPower = 2.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(caret));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(caret));
     }
 
     // ONE walk of the window list for the whole icon row, and one read of each
@@ -1289,7 +1289,7 @@ void render(PHLMONITOR monitor) {
             if (ITEM.placeholder) {
                 data.a = 0.45F * std::clamp(ITEM.appear, 0.F, 1.F);
                 if (Stacks::drawableBox(data.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+                    g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(data));
                 continue;
             }
 
@@ -1309,7 +1309,7 @@ void render(PHLMONITOR monitor) {
                 ring.round      = sc<int>(std::round(ring.box.width * 0.22));
                 ring.borderSize = std::max(1, sc<int>(std::round(2.0 * monitor->m_scale)));
                 if (Stacks::drawableBox(ring.box))
-                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(ring));
+                    g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(ring));
             }
 
             // Dock stacks: the Trash hops when something lands in it.
@@ -1379,7 +1379,7 @@ void render(PHLMONITOR monitor) {
             data.tex = TEX;
             data.box = scaledAboutCentre(EXIT.item.iconBox, 0.2F + 0.8F * U * U).translate({0.0, DY}).round();
             data.a   = U * U;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(data));
         }
     }
 
@@ -1414,7 +1414,7 @@ void render(PHLMONITOR monitor) {
         data.tex = TEX;
         data.box = ghostBoxAt(monitor, g_dockDrag.drag->home, g_dockDrag.drag->grab, g_dockDrag.drag->at);
         data.a   = DRAG_GHOST_ALPHA;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(data));
     }
 
     if (g_dockDrag.ghostHome && g_dockDrag.ghostHome->monitor == monitor->m_id) {
@@ -1427,7 +1427,7 @@ void render(PHLMONITOR monitor) {
             // Fades as it arrives, so the clone and the real icon underneath it
             // are never two solid icons in one cell for a frame.
             data.a = DRAG_GHOST_ALPHA * (1.F - E);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(data));
         }
     }
 
@@ -1468,7 +1468,7 @@ void render(PHLMONITOR monitor) {
         data.tex = TEX;
         data.box = CBox{std::round(x), std::round(y), std::round(W), std::round(H)};
         data.a   = 1.F - E;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(data));
     }
 
     // Above the pill by construction (MENU_GAP), so the previews below cannot
@@ -1518,7 +1518,7 @@ void render(PHLMONITOR monitor) {
     if (g_menu || Stacks::isOpen())
         renderTooltip(monitor, LAYOUT, CBox{}, "");
     else if (CELL)
-        renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->m_title, sc<float>(g_hover.drawn.y), tooltipSubject(CELL->second),
+        renderTooltip(monitor, LAYOUT, CELL->first, CELL->second->metadata().title(), sc<float>(g_hover.drawn.y), tooltipSubject(CELL->second),
                       peekWindowsOn(monitor, {CELL->second}));
     else if (HASHOVER) {
         const float ABOVE = (panelOn(monitor) && g_hover.drawn.height >= 1) ? sc<float>(g_hover.drawn.y) : 0.F;

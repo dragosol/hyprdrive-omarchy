@@ -942,7 +942,8 @@ int getShadowRenderPower() {
 const ::Config::CGradientValueData* getShadowColor() {
     constexpr auto NAME = "plugin:hyprdrive:shadow:color";
 
-    if (!::Config::mgr()->getConfigValue(NAME).setByUser)
+    // 0.57: setByUser is a `const bool*`; the pointer alone is always true.
+    if (const auto* SET = ::Config::mgr()->getConfigValue(NAME).setByUser; !SET || !*SET)
         return nullptr;
 
     static auto& VAL = valueRef<::Config::IComplexConfigValue>(NAME);

@@ -166,10 +166,10 @@ namespace Hyprdrive::Mosaic {
     }
 
     bool hideDuringSlide(const PHLWINDOW& w, const PHLMONITOR& monitor) {
-        if (!w || !monitor || w->m_isFloating || w->m_pinned)
+        if (!w || !monitor || w->isFloating() || Hyprdrive::Compat::pinned(w))
             return false;
         const auto WS = w->m_workspace;
-        if (!WS || WS->m_isSpecialWorkspace || !WS->m_renderOffset)
+        if (!WS || Hyprdrive::Compat::isSpecial(WS) || !WS->m_renderOffset)
             return false;
         const auto OFF  = WS->m_renderOffset->value();
         const bool ANIM = WS->m_renderOffset->isBeingAnimated();
@@ -307,7 +307,7 @@ namespace Hyprdrive::Mosaic {
             return;
         for (auto* A : g_instances) {
             const auto WS = A->workspace();
-            if (!WS || WS->m_isSpecialWorkspace || !WS->m_renderOffset || WS->m_monitor.lock() != monitor || !A->m_slide.swipeScaled)
+            if (!WS || Hyprdrive::Compat::isSpecial(WS) || !WS->m_renderOffset || WS->m_monitor.lock() != monitor || !A->m_slide.swipeScaled)
                 continue;
             A->m_slide.swipeScaled = false;
             auto& OFFV             = WS->m_renderOffset;
@@ -363,7 +363,7 @@ namespace Hyprdrive::Mosaic {
             return;
         for (auto* A : g_instances) {
             const auto WS = A->workspace();
-            if (WS && !WS->m_isSpecialWorkspace && WS->m_renderOffset && WS->m_monitor.lock() == monitor)
+            if (WS && !Hyprdrive::Compat::isSpecial(WS) && WS->m_renderOffset && WS->m_monitor.lock() == monitor)
                 arrivalFrame(A, WS, monitor);
         }
     }

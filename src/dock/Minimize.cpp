@@ -7,15 +7,17 @@
 #include <string>
 
 #define private public
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 #undef private
 
 namespace Hyprdrive::Minimize {
@@ -26,6 +28,8 @@ struct SEntry {
     PHLWINDOWREF window;
     WORKSPACEID  workspace = WORKSPACE_INVALID;
     std::string  workspaceName;
+    std::string  workspaceAddress; // 0.57: what a named or special workspace is found and made by
+    bool         special = false;
     MONITORID    monitor = MONITOR_INVALID;
     CBox         box;
     bool         floating = false;
@@ -48,7 +52,7 @@ PHLWORKSPACE stash(PHLMONITOR monitor) {
 
     for (const auto& w : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = w.lock();
-        if (WORKSPACE && WORKSPACE->m_name == STASH_NAME) {
+        if (WORKSPACE && WORKSPACE->displayName() == STASH_NAME) {
             g_stash = WORKSPACE;
             return g_stash;
         }
@@ -57,14 +61,14 @@ PHLWORKSPACE stash(PHLMONITOR monitor) {
     if (!monitor)
         return nullptr;
 
-    g_stash = State::workspaceState()->create(State::workspaceState()->newSpecialID(), monitor->m_id, STASH_NAME);
+    g_stash = State::workspaceState()->createSpecial(STASH_NAME, monitor);
     return g_stash;
 }
 
 PHLWORKSPACE workspaceByID(WORKSPACEID id) {
     for (const auto& w : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = w.lock();
-        if (WORKSPACE && WORKSPACE->m_id == id)
+        if (WORKSPACE && Hyprdrive::Compat::id(WORKSPACE) == id)
             return WORKSPACE;
     }
 
@@ -82,14 +86,14 @@ void dropDeadEntries() {
 }
 
 bool isStash(const PHLWORKSPACE& workspace) {
-    return workspace && workspace->m_name == STASH_NAME;
+    return workspace && workspace->displayName() == STASH_NAME;
 }
 
 void adoptStashedWindows() {
     dropDeadEntries();
 
     for (const auto& WINDOW : Desktop::windowState()->windows()) {
-        if (!WINDOW || !WINDOW->m_isMapped || !isStash(WINDOW->m_workspace) || entryFor(WINDOW) != g_entries.end())
+        if (!WINDOW || !WINDOW->mapped() || !isStash(WINDOW->m_workspace) || entryFor(WINDOW) != g_entries.end())
             continue;
 
         // What it was minimized FROM died with the old ledger, so there is no
@@ -99,11 +103,11 @@ void adoptStashedWindows() {
         // where restore reads it.
         const auto MONITOR = WINDOW->m_monitor.lock();
         const auto HOME    = MONITOR ? MONITOR->m_activeWorkspace : nullptr;
-        if (!HOME || HOME->m_isSpecialWorkspace)
+        if (!HOME || Hyprdrive::Compat::isSpecial(HOME))
             continue;
 
         const auto TARGET = WINDOW->layoutTarget();
-        g_entries.emplace_back(SEntry{WINDOW, HOME->m_id, HOME->m_name, MONITOR->m_id, TARGET ? TARGET->position() : CBox{}, false});
+        g_entries.emplace_back(SEntry{WINDOW, Hyprdrive::Compat::id(HOME), HOME->displayName(), HOME->addressableName(), Hyprdrive::Compat::isSpecial(HOME), MONITOR->m_id, TARGET ? TARGET->position() : CBox{}, false});
     }
 }
 
@@ -163,7 +167,7 @@ CRestoreSlots::~CRestoreSlots() {
         bool swapped = false;
         for (const auto& [ref, slot] : m_slots) {
             const auto W = ref.lock();
-            if (!W || isMinimized(W) || !W->layoutTarget() || W->m_isFloating)
+            if (!W || isMinimized(W) || !W->layoutTarget() || W->isFloating())
                 continue;
             const auto WANT = slot.middle();
             if (goalBox(W).middle().distance(WANT) < 24.0)
@@ -175,7 +179,7 @@ CRestoreSlots::~CRestoreSlots() {
             for (const auto& [otherRef, otherSlot] : m_slots) {
                 (void)otherSlot;
                 const auto X = otherRef.lock();
-                if (!X || X == W || isMinimized(X) || !X->layoutTarget() || X->m_isFloating || X->m_workspace != W->m_workspace)
+                if (!X || X == W || isMinimized(X) || !X->layoutTarget() || X->isFloating() || X->m_workspace != W->m_workspace)
                     continue;
                 const double D = goalBox(X).middle().distance(WANT);
                 if (D < best) {
@@ -207,7 +211,7 @@ CGestureBoxes::CGestureBoxes(const std::vector<PHLWINDOW>& windows) {
         // every cycle (measured). A float's target box is its box.
         if (TARGET && !isMinimized(window))
             g_gestureBoxes.emplace_back(window,
-                                        window->m_isFloating ? TARGET->position() :
+                                        window->isFloating() ? TARGET->position() :
                                                                CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL)});
     }
 }
@@ -230,7 +234,7 @@ bool minimize(PHLWINDOW window, bool handoffFocus) {
 
     const auto WORKSPACE = window->m_workspace;
     const auto TARGET    = window->layoutTarget();
-    if (!WORKSPACE || !TARGET || WORKSPACE->m_isSpecialWorkspace)
+    if (!WORKSPACE || !TARGET || Hyprdrive::Compat::isSpecial(WORKSPACE))
         return false;
 
     const auto STASHWS = stash(window->m_monitor.lock());
@@ -246,13 +250,13 @@ bool minimize(PHLWINDOW window, bool handoffFocus) {
     // the window had, and the one its client was last told.
     const auto GESTUREBOX = gestureBoxFor(window);
     const CBox SEEN       = GESTUREBOX       ? *GESTUREBOX :
-              window->m_isFloating ? TARGET->position() :
+              window->isFloating() ? TARGET->position() :
                                      CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT), window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
 
     // X41/X42: a workspace move is exactly where geometry gets destroyed
     // silently, so capture the real box first and put it back on restore.
-    g_entries.emplace_back(SEntry{window, WORKSPACE->m_id, WORKSPACE->m_name, WORKSPACE->m_monitor ? WORKSPACE->m_monitor->m_id : MONITOR_INVALID, SEEN,
-                                  window->m_isFloating});
+    g_entries.emplace_back(SEntry{window, Hyprdrive::Compat::id(WORKSPACE), WORKSPACE->displayName(), WORKSPACE->addressableName(), Hyprdrive::Compat::isSpecial(WORKSPACE), WORKSPACE->m_monitor ? WORKSPACE->m_monitor->m_id : MONITOR_INVALID, SEEN,
+                                  window->isFloating()});
 
     const CBox STASHBOX = SEEN;
 
@@ -315,7 +319,7 @@ bool minimize(PHLWINDOW window, bool handoffFocus) {
     if (handoffFocus && Desktop::focusState()->isWindowActive(window)) {
         PHLWINDOW next;
         for (const auto& CANDIDATE : Desktop::windowState()->windows()) {
-            if (CANDIDATE != window && CANDIDATE->m_isMapped && CANDIDATE->m_workspace == WORKSPACE)
+            if (CANDIDATE != window && CANDIDATE->mapped() && CANDIDATE->m_workspace == WORKSPACE)
                 next = CANDIDATE;
         }
 
@@ -339,7 +343,7 @@ void handoffMinimizedFocus(PHLWINDOW window) {
     PHLWINDOW  next;
     if (ORIGIN != WORKSPACE_INVALID) {
         for (const auto& CANDIDATE : Desktop::windowState()->windows()) {
-            if (CANDIDATE != window && CANDIDATE->m_isMapped && CANDIDATE->m_workspace && CANDIDATE->m_workspace->m_id == ORIGIN)
+            if (CANDIDATE != window && CANDIDATE->mapped() && CANDIDATE->m_workspace && Hyprdrive::Compat::id(CANDIDATE->m_workspace) == ORIGIN)
                 next = CANDIDATE;
         }
     }
@@ -355,6 +359,18 @@ CBox originalBox(PHLWINDOW window) {
     return IT == g_entries.end() ? CBox{} : IT->box;
 }
 
+// 0.57 has no id+name create(): numbered entries and special ones are made differently.
+PHLWORKSPACE recreate(const SEntry& entry) {
+    const auto MON = State::monitorState()->query().id(entry.monitor).run();
+    if (!MON)
+        return nullptr;
+    if (entry.special)
+        return State::workspaceState()->createSpecial(entry.workspaceAddress, MON);
+    if (entry.workspace > 0)
+        return State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(entry.workspace)}, MON, entry.workspaceName);
+    return State::workspaceState()->createNamed(entry.workspaceAddress, MON, entry.workspaceName);
+}
+
 bool showOriginalWorkspace(PHLWINDOW window) {
     const auto IT = entryFor(window);
     if (IT == g_entries.end())
@@ -362,12 +378,12 @@ bool showOriginalWorkspace(PHLWINDOW window) {
 
     auto WORKSPACE = workspaceByID(IT->workspace);
     if (!WORKSPACE)
-        WORKSPACE = State::workspaceState()->create(IT->workspace, IT->monitor, IT->workspaceName);
+        WORKSPACE = recreate(*IT);
     if (!WORKSPACE)
         return false;
 
     if (const auto MONITOR = WORKSPACE->m_monitor.lock(); MONITOR && MONITOR->m_activeWorkspace != WORKSPACE)
-        MONITOR->changeWorkspace(WORKSPACE, false, true, true);
+        MONITOR->changeWorkspace(WORKSPACE, false, true, !Hyprdrive::Compat::isSpecial(WORKSPACE)); // 0.56 always focused a special workspace
 
     return true;
 }
@@ -393,7 +409,7 @@ bool restore(PHLWINDOW window) {
     // the stash with no way back. Measured: leave the workspace and it is gone.
     auto WORKSPACE = workspaceByID(ENTRY.workspace);
     if (!WORKSPACE)
-        WORKSPACE = State::workspaceState()->create(ENTRY.workspace, ENTRY.monitor, ENTRY.workspaceName);
+        WORKSPACE = recreate(ENTRY);
 
     if (!WORKSPACE)
         return false;
@@ -436,7 +452,7 @@ bool restore(PHLWINDOW window) {
     }
 
     if (const auto MONITOR = WORKSPACE->m_monitor.lock(); MONITOR && MONITOR->m_activeWorkspace != WORKSPACE)
-        MONITOR->changeWorkspace(WORKSPACE, false, true, true);
+        MONITOR->changeWorkspace(WORKSPACE, false, true, !Hyprdrive::Compat::isSpecial(WORKSPACE)); // 0.56 always focused a special workspace
 
     // X43: focus and stacking are two different things. A restored window that
     // is merely focused can come back underneath whatever was on top of it.

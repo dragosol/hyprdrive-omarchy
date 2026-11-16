@@ -177,7 +177,7 @@ namespace Hyprdrive::Stacks {
         track.color = CHyprColor{0.F, 0.F, 0.F, 0.55F * alpha};
         track.round = ROUND;
         if (drawableBox(track.box))
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(track));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(track));
 
         CBox fill = TRACK;
         fill.expand(-std::max(1.0, std::round(sc<double>(monitor->m_scale))));
@@ -199,7 +199,7 @@ namespace Hyprdrive::Stacks {
         bar.color = Config::highlightColor().modifyA(alpha);
         bar.round = std::max(1, ROUND - 1);
         if (drawableBox(bar.box))
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(bar));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(bar));
     }
 
     static bool drawCellBody(PHLMONITOR monitor, const Dock::SItem& item, const CBox& iconBox, float alpha, const DockTilt::SPose& pose);
@@ -265,7 +265,7 @@ namespace Hyprdrive::Stacks {
             border.round      = sc<int>(std::round(outline.width * 0.18));
             border.borderSize = std::max(1, sc<int>(std::round(1.5F * SC)));
             if (drawableBox(border.box))
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+                g_pHyprRenderer->context().m_pass.add(makeUnique<CBorderPassElement>(border));
             return true;
         }
 

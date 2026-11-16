@@ -1,4 +1,5 @@
 #include "PluginParts.hpp"
+#include <hyprland/src/keybinds/Resolver.hpp>
 #include "HoverTarget.hpp"
 using namespace PluginDetail;
 
@@ -77,7 +78,7 @@ SDispatchResult onGestureDispatcher(std::string arg) {
     while (!data[idx].empty()) {
         const auto TOK = std::string{data[idx]};
         if (TOK.starts_with("mod:")) {
-            modMask = g_pKeybindManager->stringToModMask(TOK.substr(4));
+            modMask = static_cast<uint32_t>(Keybinds::modMaskFromString(TOK.substr(4)));
             idx++;
             continue;
         }
@@ -174,7 +175,7 @@ SDispatchResult onMinimizeDispatcher(std::string arg) {
         return {};
     const auto MINIMIZED = Hyprdrive::Minimize::minimized();
     for (auto it = MINIMIZED.rbegin(); it != MINIMIZED.rend(); ++it)
-        if (*it && Hyprdrive::Minimize::originalWorkspace(*it) == HERE->m_id) {
+        if (*it && Hyprdrive::Minimize::originalWorkspace(*it) == Hyprdrive::Compat::id(HERE)) {
             Hyprdrive::Dock::restoreWithFlight(MONITOR, *it);
             return {};
         }

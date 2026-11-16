@@ -313,7 +313,7 @@ namespace Hyprdrive::KeyboardCat {
         return g_phase == EPhase::Open ? std::max(0.F, VIDEO_HL + 2.F * MARGIN_L - OVERVIEW_PILL_HL) : 0.F;
     }
 
-    void render(PHLMONITOR monitor, const CBox& pill, float scale, float fade, int rounding, float roundingPower, float bandNow) {
+    void render(Render::CRenderContext& ctx, PHLMONITOR monitor, const CBox& pill, float scale, float fade, int rounding, float roundingPower, float bandNow) {
         if (g_phase == EPhase::Idle || !monitor)
             return;
         g_lastRender = clock::now();
@@ -370,7 +370,7 @@ namespace Hyprdrive::KeyboardCat {
             black.box   = inner;
             black.color = CHyprColor{0.F, 0.F, 0.F, PICA};
             black.round = std::max(0, RND - sc<int>(M));
-            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(black));
+            Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(black));
             return;
         }
         CTexPassElement::SRenderData d;
@@ -378,7 +378,7 @@ namespace Hyprdrive::KeyboardCat {
         d.box   = inner;
         d.a     = PICA;
         d.round = std::max(0, RND - sc<int>(M));
-        g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(d));
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CTexPassElement>(d));
     }
 
     void stop() {

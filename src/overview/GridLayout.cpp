@@ -119,7 +119,7 @@ namespace OvInternal {
         if (const auto HOME = Hyprdrive::Minimize::originalWorkspace(window); HOME != WORKSPACE_INVALID)
             return HOME;
 
-        return window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID;
+        return window->m_workspace ? Hyprdrive::Compat::id(window->m_workspace) : WORKSPACE_INVALID;
     }
 
     namespace {
@@ -174,9 +174,9 @@ namespace OvInternal {
         // recent walks last used first.
         std::tuple<bool, uint64_t, uint64_t> orderKey(const PHLWINDOW& window) {
             if (orderSnapshot().mode != Hyprdrive::Config::ETileOrder::RECENT)
-                return {false, 0, window->m_stableID};
+                return {false, 0, window->metadata().stableID()};
             const auto* ENTRY = orderEntry(window);
-            return Hyprdrive::GridSolve::recentKey(ENTRY != nullptr, ENTRY ? ENTRY->rank : 0, window->m_stableID);
+            return Hyprdrive::GridSolve::recentKey(ENTRY != nullptr, ENTRY ? ENTRY->rank : 0, window->metadata().stableID());
         }
     }
 
@@ -242,7 +242,7 @@ namespace OvInternal {
             // minimized windows: they are in the grid now whether a query is typed
             // or not, and the query filters them like anything else.
             if (const auto HOME = Hyprdrive::Minimize::originalWorkspace(window); HOME != WORKSPACE_INVALID) {
-                if (HOME != workspace->m_id)
+                if (HOME != Hyprdrive::Compat::id(workspace))
                     continue;
             } else if (window->m_workspace != workspace)
                 continue;
@@ -294,7 +294,7 @@ namespace OvInternal {
             return false;
 
         const auto HOME = overviewGridHomeWorkspace(window);
-        return HOME != WORKSPACE_INVALID && HOME != ctx.active->m_id && shouldShowOverviewWindow(window);
+        return HOME != WORKSPACE_INVALID && HOME != Hyprdrive::Compat::id(ctx.active) && shouldShowOverviewWindow(window);
     }
 
     bool overviewGridPromotable(const PHLWINDOW& window, PHLMONITOR monitor) {
@@ -468,7 +468,7 @@ namespace OvInternal {
         bool           waiting = false;
 
         for (const auto& window : Desktop::windowState()->windows()) {
-            if (!window || !window->m_isMapped || window->m_monitor != monitor)
+            if (!window || !window->mapped() || window->m_monitor != monitor)
                 continue;
 
             auto&      entry = G.sizes[window.get()];
@@ -492,20 +492,20 @@ namespace OvInternal {
             if (gridTraceOn()) {
                 if (RESULT != ESize::STEADY && RESULT != ESize::FIRST && RESULT != ESize::FOLLOWING) {
                     const char* WHAT = RESULT == ESize::PENDING ? "pending" : RESULT == ESize::ADOPTED ? "adopted" : "rejected";
-                    gridTrace(std::format("size {} {} {:.1f}x{:.1f} goal {:.1f}x{:.1f} (since {:.0f} ms) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y, GOAL.x,
+                    gridTrace(std::format("size {} {} {:.1f}x{:.1f} goal {:.1f}x{:.1f} (since {:.0f} ms) frame {} mon {}", WHAT, window->metadata().appID(), OLD.x, OLD.y, GOAL.x,
                                           GOAL.y, REAL(entry.track.since), FRAME, monitor->m_name));
                 }
                 if (FOLLOWED && (!entry.track.following || RESULT == ESize::ADOPTED)) {
                     const auto  WHY  = entry.track.following ? EFollowEnd::DIVERTED : entry.track.followEnd;
                     const char* WHAT = WHY == EFollowEnd::LANDED ? "landed" : WHY == EFollowEnd::CAPPED ? "capped" : "diverted";
-                    gridTrace(std::format("size follow-end {} {} holds {:.1f}x{:.1f} after {:.0f} ms (cap {:.0f}) frame {} mon {}", WHAT, window->m_class, OLD.x, OLD.y,
+                    gridTrace(std::format("size follow-end {} {} holds {:.1f}x{:.1f} after {:.0f} ms (cap {:.0f}) frame {} mon {}", WHAT, window->metadata().appID(), OLD.x, OLD.y,
                                           REAL(FOLLOWT0), FOLLOWCAP, FRAME, monitor->m_name));
                 }
                 if (entry.track.following && (!FOLLOWED || RESULT == ESize::ADOPTED))
-                    gridTrace(std::format("size follow-start {} toward {:.1f}x{:.1f} value {:.1f}x{:.1f} cap {:.0f} ms frame {} mon {}", window->m_class, GOAL.x, GOAL.y, VALUE.x,
+                    gridTrace(std::format("size follow-start {} toward {:.1f}x{:.1f} value {:.1f}x{:.1f} cap {:.0f} ms frame {} mon {}", window->metadata().appID(), GOAL.x, GOAL.y, VALUE.x,
                                           VALUE.y, FOLLOWCAP, FRAME, monitor->m_name));
                 if (KNOWN && LATCHED != entry.track.latched)
-                    gridTrace(std::format("size {} {} {:.1f}x{:.1f} frame {} mon {}", entry.track.latched ? "latch-on" : "latch-off", window->m_class, entry.track.adopted.x,
+                    gridTrace(std::format("size {} {} {:.1f}x{:.1f} frame {} mon {}", entry.track.latched ? "latch-on" : "latch-off", window->metadata().appID(), entry.track.adopted.x,
                                           entry.track.adopted.y, FRAME, monitor->m_name));
             }
         }
@@ -602,18 +602,18 @@ namespace OvInternal {
     // order. A closed window simply is no member any more.
     static void positionDeal(const PHLWORKSPACE& workspace, std::vector<PHLWINDOW>& windows, const CBox& usable, float gap) {
         auto& DEALT = orderSnapshot().dealt;
-        auto  IT    = DEALT.find(workspace->m_id);
+        auto  IT    = DEALT.find(Hyprdrive::Compat::id(workspace));
         if (IT == DEALT.end()) {
             std::vector<Vector2D>                sizes;
             std::vector<std::optional<Vector2D>> centres;
             for (const auto& WINDOW : windows) {
                 const auto* ENTRY = orderEntry(WINDOW);
                 sizes.emplace_back(overviewGridWindowSize(WINDOW));
-                centres.emplace_back(ENTRY && overviewGridHomeWorkspace(WINDOW) == workspace->m_id ? ENTRY->centre : std::nullopt);
+                centres.emplace_back(ENTRY && overviewGridHomeWorkspace(WINDOW) == Hyprdrive::Compat::id(workspace) ? ENTRY->centre : std::nullopt);
             }
             std::vector<size_t> perm;
             Hyprdrive::GridSolve::positionOrder(sizes, centres, usable, gap, perm);
-            IT = DEALT.emplace(workspace->m_id, std::unordered_map<const Desktop::View::CWindow*, std::pair<PHLWINDOWREF, size_t>>{}).first;
+            IT = DEALT.emplace(Hyprdrive::Compat::id(workspace), std::unordered_map<const Desktop::View::CWindow*, std::pair<PHLWINDOWREF, size_t>>{}).first;
             for (size_t k = 0; k < perm.size(); ++k)
                 if (centres[perm[k]])
                     IT->second[windows[perm[k]].get()] = {windows[perm[k]], k};
@@ -658,16 +658,16 @@ namespace OvInternal {
             for (size_t i = 0; i < WINDOWS.size(); ++i)
                 for (size_t j = i + 1; j < WINDOWS.size(); ++j)
                     if (WINDOWS[i] == WINDOWS[j])
-                        Membership::renderDivergence("GRIDDUP", workspace->m_id, WINDOWS[i]->m_workspace ? WINDOWS[i]->m_workspace->m_id : WORKSPACE_INVALID,
-                                                     WINDOWS[i]->m_class, WINDOWS[i]->m_title);
+                        Membership::renderDivergence("GRIDDUP", Hyprdrive::Compat::id(workspace), WINDOWS[i]->m_workspace ? Hyprdrive::Compat::id(WINDOWS[i]->m_workspace) : WORKSPACE_INVALID,
+                                                     WINDOWS[i]->metadata().appID(), WINDOWS[i]->metadata().title());
         }
 
         if (std::ranges::find(WINDOWS, target) == WINDOWS.end())
             return false;
 
         CBox usable = {monitor->m_position, monitor->m_size};
-        if (workspace->m_space) {
-            if (const auto WORKAREA = workspace->m_space->workArea(); WORKAREA.w > 1 && WORKAREA.h > 1)
+        if (workspace->space()) {
+            if (const auto WORKAREA = workspace->space()->workArea(); WORKAREA.w > 1 && WORKAREA.h > 1)
                 usable = WORKAREA;
         }
 
@@ -738,7 +738,7 @@ namespace OvInternal {
         auto&      MEMOS = gridMemos();
         SGridMemo* hit   = nullptr;
         for (auto& memo : MEMOS) {
-            if (memo.ws != workspace->m_id || memo.mon != monitor->m_id || memo.excluded != EXCLUDED || memo.keepExcluded != KEEPEXCLUDED || memo.gap != GAP)
+            if (memo.ws != Hyprdrive::Compat::id(workspace) || memo.mon != monitor->m_id || memo.excluded != EXCLUDED || memo.keepExcluded != KEEPEXCLUDED || memo.gap != GAP)
                 continue;
             if (memo.membersGen != MEMBERSGEN)
                 continue;
@@ -761,7 +761,7 @@ namespace OvInternal {
 
             MEMOS.emplace_back();
             hit               = &MEMOS.back();
-            hit->ws           = workspace->m_id;
+            hit->ws           = Hyprdrive::Compat::id(workspace);
             hit->mon          = monitor->m_id;
             hit->query        = g_search.query.text;
             hit->membersGen   = MEMBERSGEN;
@@ -808,7 +808,7 @@ namespace OvInternal {
         // by the caller: overviewGridPromoted arms the release map, and
         // getOverviewWindowBox was asking it twice per box for a value that
         // cannot differ between the two calls.
-        if (overviewGridHomeWorkspace(window) != ACTIVE->m_id) {
+        if (overviewGridHomeWorkspace(window) != Hyprdrive::Compat::id(ACTIVE)) {
             if (!overviewGridPromoted(window, monitor))
                 return false;
 
@@ -884,7 +884,7 @@ namespace OvInternal {
                 gridSetReflowActive(monitor);
 
             if (RESULT == EStep::RETARGETED && gridTraceOn())
-                gridTrace(std::format("retarget {} {} -> {} from {} frame {} mon {}", window->m_class, traceBox(WAS), traceBox(slot), traceBox(out), ASK.frame, monitor->m_name));
+                gridTrace(std::format("retarget {} {} -> {} from {} frame {} mon {}", window->metadata().appID(), traceBox(WAS), traceBox(slot), traceBox(out), ASK.frame, monitor->m_name));
 
             return out;
         }

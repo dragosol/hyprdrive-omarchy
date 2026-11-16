@@ -11,6 +11,7 @@
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/render/Context.hpp>
 #include <hyprland/src/render/Framebuffer.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -144,12 +145,10 @@ void main() {
         }
 
         // One full-output quad through the shader, scissored to `clip`.
-        void drawQuad(const SP<CShader>& program, const SP<Render::ITexture>& tex, const CBox& full, const CRegion& clip, int mode, const SRipple& r, float scale,
+        void drawQuad(Render::CRenderContext& ctx, const SP<CShader>& program, const SP<Render::ITexture>& tex, const CBox& full, const CRegion& clip, int mode, const SRipple& r, float scale,
                       const Vector2D& res) {
             auto transform = tex->m_transform;
-            if (g_pHyprRenderer->monitorTransformEnabled())
-                transform = Math::composeTransform(Math::wlTransformToHyprutils(Math::invertTransform(g_pHyprRenderer->m_renderData.pMonitor->m_transform)), transform);
-            const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(full, transform);
+            const auto MATRIX = g_pHyprRenderer->projectBoxToTarget(ctx, full, transform);
 
             glActiveTexture(GL_TEXTURE0);
             tex->bind();
@@ -170,11 +169,11 @@ void main() {
             glUniform1f(g_locFade, FADE_S);
 
             glBindVertexArray(S->getUniformLocation(SHADER_SHADER_VAO));
-            clip.forEachRect([](const auto& RECT) {
-                Render::GL::g_pHyprOpenGL->scissor(&RECT, g_pHyprRenderer->m_renderData.transformDamage);
+            clip.forEachRect([&ctx](const auto& RECT) {
+                Render::GL::g_pHyprOpenGL->scissor(ctx, &RECT, ctx.m_data.transformDamage);
                 glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
             });
-            Render::GL::g_pHyprOpenGL->scissor(nullptr);
+            Render::GL::g_pHyprOpenGL->disableScissor();
             glBindVertexArray(0);
             tex->unbind();
         }
@@ -183,9 +182,9 @@ void main() {
           public:
             explicit CRipplePassElement(const SRipple& r) : m_ripple(r) {}
 
-            std::vector<UP<IPassElement>> draw() override {
-                const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
-                const auto CUR     = g_pHyprRenderer->m_renderData.currentFB;
+            std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
+                const auto MONITOR = ctx.m_data.pMonitor.lock();
+                const auto CUR     = ctx.m_data.currentFB;
                 const auto PROGRAM = shader();
                 if (!MONITOR || !CUR || !PROGRAM)
                     return {};
@@ -193,7 +192,7 @@ void main() {
                 if (!CURTEX || !CURTEX->ok())
                     return {};
 
-                const Vector2D RES   = MONITOR->m_pixelSize;
+                const Vector2D RES   = MONITOR->m_transformedSize;
                 const float    SCALE = std::max(0.25F, sc<float>(MONITOR->m_scale));
                 if (RES.x < 2 || RES.y < 2)
                     return {};
@@ -202,7 +201,7 @@ void main() {
                 if (!finiteBox(BAND))
                     return {};
 
-                CRegion clip{g_pHyprRenderer->m_renderData.damage};
+                CRegion clip{ctx.m_data.damage};
                 clip.intersect(BAND);
                 if (clip.empty())
                     return {};
@@ -222,12 +221,12 @@ void main() {
                 {
                     // Copy the band (sampling the frame being drawn would be a
                     // feedback loop). The guard rebinds the frame's own target.
-                    const auto GUARD = g_pHyprRenderer->bindTempFB(g_copy);
-                    drawQuad(PROGRAM, CURTEX, FULL, CRegion{BAND}, 0, m_ripple, SCALE, RES);
+                    const auto GUARD = g_pHyprRenderer->bindTempFB(ctx, g_copy);
+                    drawQuad(ctx, PROGRAM, CURTEX, FULL, CRegion{BAND}, 0, m_ripple, SCALE, RES);
                 }
                 const auto COPYTEX = g_copy->getTexture();
                 if (COPYTEX && COPYTEX->ok())
-                    drawQuad(PROGRAM, COPYTEX, FULL, clip, 1, m_ripple, SCALE, RES);
+                    drawQuad(ctx, PROGRAM, COPYTEX, FULL, clip, 1, m_ripple, SCALE, RES);
                 Render::GL::g_pHyprOpenGL->blend(true);
                 glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // Hyprland's premultiplied default
                 return {};
@@ -236,23 +235,23 @@ void main() {
             ePassElementType type() override {
                 return EK_CUSTOM;
             }
-            bool needsLiveBlur() override {
+            bool needsLiveBlur(Render::CRenderContext&) override {
                 return false;
             }
-            bool needsPrecomputeBlur() override {
+            bool needsPrecomputeBlur(Render::CRenderContext&) override {
                 return false;
             }
-            std::optional<CBox> boundingBox() override {
-                const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+            std::optional<CBox> boundingBox(Render::CRenderContext& ctx) override {
+                const auto MONITOR = ctx.m_data.pMonitor.lock();
                 if (!MONITOR)
                     return std::nullopt;
                 const float SCALE = std::max(0.25F, sc<float>(MONITOR->m_scale));
-                const CBox  BAND  = bandBox(m_ripple, MONITOR->m_pixelSize, SCALE);
+                const CBox  BAND  = bandBox(m_ripple, MONITOR->m_transformedSize, SCALE);
                 if (!finiteBox(BAND))
                     return std::nullopt;
                 return BAND.copy().scale(1.F / SCALE).round();
             }
-            CRegion opaqueRegion() override {
+            CRegion opaqueRegion(Render::CRenderContext&) override {
                 return {};
             }
             const char* passName() override {
@@ -263,8 +262,8 @@ void main() {
             SRipple m_ripple;
         };
 
-        void onLastMoment() {
-            const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock();
+        void onLastMoment(Render::CRenderContext& ctx) {
+            const auto MONITOR = ctx.m_data.pMonitor.lock();
             if (!MONITOR || g_ripples.empty())
                 return;
             const auto IT = std::ranges::find_if(g_ripples, [&](const SRipple& r) { return r.monitor == MONITOR->m_id; });
@@ -276,7 +275,7 @@ void main() {
                 g_ripples.erase(IT);
                 return;
             }
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRipplePassElement>(*IT));
+            ctx.m_pass.add(makeUnique<CRipplePassElement>(*IT));
             // Every pixel again next frame (a partial redraw would bend what this
             // frame already bent): asked by the pumps through activeOn, which
             // request the whole output -- not from here, inside the pass.
@@ -284,9 +283,9 @@ void main() {
     }
 
     void init() {
-        g_render = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
-            if (stage == RENDER_LAST_MOMENT)
-                onLastMoment();
+        g_render = Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent e) {
+            if (e.stage == RENDER_LAST_MOMENT && e.context)
+                onLastMoment(e.context->get());
         });
     }
 

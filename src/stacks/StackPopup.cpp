@@ -241,7 +241,7 @@ namespace StacksDetail {
         if (g_sushiOpen)
             return;
         g_sushiOpen = Event::bus()->m_events.window.openLate.listen([](PHLWINDOW w) {
-            if (!w || w->m_class != "org.gnome.NautilusPreviewer")
+            if (!w || w->metadata().appID() != "org.gnome.NautilusPreviewer")
                 return;
             placeSushi(w);
             g_sushiResize = w->m_events.resize.listen([weak = PHLWINDOWREF{w}]() {

@@ -22,7 +22,9 @@
 #include <cstdlib>
 #include <optional>
 #include <unordered_map>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
+#include <hyprland/src/keybinds/Resolver.hpp>
 #include <ranges>
 #include <string_view>
 #include <vector>
@@ -32,7 +34,7 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
@@ -526,11 +528,9 @@ uint32_t resolvedPadFingers() {
 // tryFireClick; the trackpad gestures themselves are wrapped at registration
 // (CLockedOutGesture, GestureBinds.cpp).
 void dispatchNamed(const std::string& name, const std::string& arg) {
-    if (!g_pKeybindManager || hyprdriveSessionLocked())
+    if (hyprdriveSessionLocked())
         return;
-    const auto IT = g_pKeybindManager->m_dispatchers.find(name);
-    if (IT != g_pKeybindManager->m_dispatchers.end())
-        IT->second(arg);
+    Hyprdrive::Compat::dispatchNamed(name, arg);
 }
 
 std::string trimCopy(std::string s) {
@@ -601,34 +601,31 @@ uint32_t resolveXkbKeycode(const std::string& key) {
 
 // Run compositor binds that match this chord (Print → screenshot __lua, etc).
 bool fireMatchingKeybind(uint32_t modmask, const std::string& key) {
-    if (!g_pKeybindManager || hyprdriveSessionLocked())
+    if (!Keybinds::mgr() || hyprdriveSessionLocked())
         return false;
     const xkb_keysym_t WANT = xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
     if (WANT == XKB_KEY_NoSymbol)
         return false;
 
     bool fired = false;
-    for (const auto& k : g_pKeybindManager->m_keybinds) {
-        if (!k || !k->enabled || k->mouse || k->release)
+    for (const auto& k : Keybinds::mgr()->registry().binds()) {
+        if (!k || !k->enabled() || k->hasFlag(Keybinds::BIND_FLAG_MOUSE) || k->hasFlag(Keybinds::BIND_FLAG_RELEASE))
             continue;
-        if (!k->submap.name.empty())
+        if (!k->metadata().submap.empty())
             continue;
-        if (k->modmask != modmask)
+        if (k->modifierMask() != Input::ModifierMask{modmask})
             continue;
 
         xkb_keysym_t bindSym = XKB_KEY_NoSymbol;
-        if (!k->key.empty())
-            bindSym = xkb_keysym_from_name(k->key.c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
+        if (k->keyNames().size() == 1)
+            bindSym = xkb_keysym_from_name(k->keyNames()[0].c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
         if (bindSym != WANT)
             continue;
 
-        const auto IT = g_pKeybindManager->m_dispatchers.find(k->handler);
-        if (IT == g_pKeybindManager->m_dispatchers.end())
-            continue;
-        clickLog("bind %s mods=%u handler=%s arg=%s\n", key.c_str(), modmask, k->handler.c_str(), k->arg.c_str());
-        IT->second(k->arg);
+        clickLog("bind %s mods=%u handler=%s arg=%s\n", key.c_str(), modmask, k->metadata().handler.c_str(), k->metadata().argument.c_str());
+        k->invoke();
         fired = true;
-        if (!k->nonConsuming)
+        if (!k->hasFlag(Keybinds::BIND_FLAG_NON_CONSUMING))
             break;
     }
     return fired;
@@ -667,7 +664,7 @@ void fireClickAction(const SClickGesture& g) {
     if (A == "dispatcher" || A == "dispatch") {
         std::string name = g.arg;
         std::string data;
-        const auto  SEP = g.arg.find_first_of(", ");
+        const auto  SEP = Hyprdrive::Compat::isLuaDispatch(g.arg) ? std::string::npos : g.arg.find_first_of(", ");
         if (SEP != std::string::npos) {
             name = g.arg.substr(0, SEP);
             data = g.arg.substr(SEP + 1);
@@ -687,7 +684,7 @@ void fireClickAction(const SClickGesture& g) {
 bool tryFireClick(uint32_t fingers, uint32_t eatButton) {
     if (fingers < 2 || g_clickGestures.empty() || hyprdriveSessionLocked())
         return false;
-    const uint32_t mods = g_pInputManager ? g_pInputManager->getModsFromAllKBs() : 0;
+    const uint32_t mods = g_pInputManager ? sc<uint32_t>(g_pInputManager->getModsFromAllKBs()) : 0;
     for (const auto& g : g_clickGestures) {
         if (g.fingers != fingers)
             continue;
@@ -757,9 +754,9 @@ void sendGestureChord(const std::string& chord) {
     parts.pop_back();
 
     uint32_t modmask = 0;
-    if (g_pKeybindManager) {
+    if (Keybinds::mgr()) {
         for (auto& p : parts)
-            modmask |= g_pKeybindManager->stringToModMask(p);
+            modmask |= sc<uint32_t>(Keybinds::modMaskFromString(p));
     }
 
     clickLog("chord '%s' key=%s mods=%u\n", chord.c_str(), key.c_str(), modmask);
@@ -775,7 +772,7 @@ void sendGestureChord(const std::string& chord) {
         return;
     }
     clickLog("pass mods=%u keycode=%u\n", modmask, keycode);
-    const auto passResult = Config::Actions::pass(modmask, keycode, std::nullopt);
+    const auto passResult = Config::Actions::pass(Input::ModifierMask{modmask}, keycode, std::nullopt);
     if (!passResult)
         clickLog("pass failed: %s\n", passResult.error().message.c_str());
 }
@@ -988,7 +985,7 @@ void CScratchpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e)
     const auto MONITOR = Desktop::focusState()->monitor();
     if (!m_show && MONITOR) {
         if (const auto SHOWN = Hyprdrive::Scratchpad::shownOn(MONITOR); SHOWN && SHOWN->m_monitor) {
-            if (const auto IT = g_closedLook.find(SHOWN->m_name); IT != g_closedLook.end()) {
+            if (const auto IT = g_closedLook.find(SHOWN->displayName()); IT != g_closedLook.end()) {
                 const auto  MON = SHOWN->m_monitor.lock();
                 const auto& C   = IT->second;
                 giveBackBegun(MON->m_specialFade, C.fade);
@@ -1008,7 +1005,7 @@ void CScratchpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e)
     if (m_show && m_native && MONITOR)
         if (const auto WS = Hyprdrive::Scratchpad::shownOn(MONITOR); WS && WS->m_monitor) {
             const auto MON         = WS->m_monitor.lock();
-            g_closedLook[WS->m_name] = SClosedLook{
+            g_closedLook[WS->displayName()] = SClosedLook{
                 .fade   = MON->m_specialFade->begun(),
                 .dim    = MON->m_specialDim->begun(),
                 .blur   = MON->m_specialBlur->begun(),
@@ -1029,7 +1026,7 @@ ITrackpadGesture* CScratchpadGesture::pick() {
         return nullptr;
 
     // The native gesture looks the workspace up as "special:" + name.
-    std::string name = TARGET->m_name;
+    std::string name = TARGET->displayName();
     if (name.starts_with("special:"))
         name = name.substr(8);
     m_native = std::make_unique<CSpecialWorkspaceGesture>(name);

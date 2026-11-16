@@ -27,8 +27,9 @@
 #include "DebugPaths.hpp"
 #include "IOverview.hpp"
 #include <hyprland/src/Compositor.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include "HyprCompat.hpp"
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -125,7 +126,7 @@ namespace Hyprdrive::ShowDesktop {
         // plus that much of its way out.
         void place(const SWin& e, double x) {
             const auto W = e.window.lock();
-            if (!W || !W->m_isMapped || !W->m_realPosition)
+            if (!W || !W->mapped() || !W->m_realPosition)
                 return;
             W->m_realPosition->m_Value = W->m_realPosition->goal() + e.out * x;
         }
@@ -140,7 +141,7 @@ namespace Hyprdrive::ShowDesktop {
             const auto MON = s.monitor.lock();
             if (!F || !WS || !MON || MON->m_activeWorkspace != WS)
                 return;
-            if (F->m_isMapped && !F->isHidden() && F->m_workspace == WS && !Desktop::focusState()->window())
+            if (F->mapped() && !F->isHidden() && F->m_workspace == WS && !Desktop::focusState()->window())
                 Desktop::focusState()->fullWindowFocus(F, Desktop::FOCUS_REASON_OTHER);
         }
 
@@ -175,7 +176,7 @@ namespace Hyprdrive::ShowDesktop {
             const auto FOCUSED = Desktop::focusState()->window();
             for (auto& E : S.wins) {
                 const auto W = E.window.lock();
-                if (!W || E.hidden || !W->m_isMapped)
+                if (!W || E.hidden || !W->mapped())
                     continue;
                 W->setHidden(true);
                 E.hidden = true;
@@ -220,7 +221,7 @@ namespace Hyprdrive::ShowDesktop {
             for (const auto& W : Desktop::windowState()->windows()) {
                 // A pinned window is on every desktop on purpose; a hidden one
                 // (a group's other tabs) is not on view to begin with.
-                if (!W || !W->m_isMapped || W->isHidden() || W->m_pinned || W->m_workspace != WS || !W->m_realPosition)
+                if (!W || !W->mapped() || W->isHidden() || Hyprdrive::Compat::pinned(W) || W->m_workspace != WS || !W->m_realPosition)
                     continue;
                 // Its whole drawn box (border, decorations), at its place.
                 const CBox     B     = W->getFullWindowBoundingBox();
@@ -240,7 +241,7 @@ namespace Hyprdrive::ShowDesktop {
             g_state     = std::move(s);
             damage();
             armTick();
-            trace(std::format("showing the desktop of {}: {} windows", WS->m_name, g_state->wins.size()));
+            trace(std::format("showing the desktop of {}: {} windows", WS->displayName(), g_state->wins.size()));
         }
 
         // Focus that is somebody's choice brings the windows back; focus that

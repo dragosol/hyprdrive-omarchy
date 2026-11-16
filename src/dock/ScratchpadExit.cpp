@@ -416,7 +416,7 @@ namespace Hyprdrive::ScratchpadExit {
             d.tex = STRIPES;
             d.box = BAR;
             d.a   = IN * (BAR_ALPHA + (1.F - BAR_ALPHA) * DWELL);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
         }
 
         // The words: after the left cluster, in the theme's text colour.
@@ -438,7 +438,7 @@ namespace Hyprdrive::ScratchpadExit {
                 d.tex = TEX;
                 d.box = CBox{std::round(x), std::round((BAR.height - TH) / 2.0), TW, TH};
                 d.a   = IN * (0.55F + 0.45F * DWELL);
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+                g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
             }
         }
 
@@ -497,7 +497,7 @@ namespace Hyprdrive::ScratchpadExit {
             d.a             = ALPHA;
             d.round         = ROUND;
             d.roundingPower = 2.F;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
+            g_pHyprRenderer->context().m_pass.add(makeUnique<CTexPassElement>(d));
         }
 
         // The label on its own plate, centred on the band.
