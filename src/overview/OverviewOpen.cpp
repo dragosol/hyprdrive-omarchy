@@ -152,7 +152,7 @@ bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
     S.nav.selectFirstPending = false;
     S.nav.intent             = ESearchIntent::Typing;
     S.nav.hoverIndex         = -1;
-    afterQueryEdit();
+    afterQueryEdit(S);
     // After the edit, which clears it. With no results there is nothing for
     // the search zone to hold: the keyboard starts on the tiles.
     S.query.windowsOnly      = !query.empty();
@@ -167,8 +167,8 @@ bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
     return true;
 }
 
-void OvInternal::overviewQueryEdited() {
-    afterQueryEdit();
+void OvInternal::overviewQueryEdited(Search::CSession& S) {
+    afterQueryEdit(S);
     for (const auto& overview : scrollOverviews())
         if (overview)
             overview->damage();
@@ -185,7 +185,7 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
     S.query.active  = false;
     S.nav.zone      = EOverviewNavZone::Tile;
     S.nav.selection = -1;
-    afterQueryEdit();
+    afterQueryEdit(S);
     for (const auto& overview : scrollOverviews())
         if (overview)
             overview->damage();

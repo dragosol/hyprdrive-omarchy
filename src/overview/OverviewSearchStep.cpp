@@ -105,10 +105,10 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // ---- ANIMATE: re-aim the search animations from this frame's results.
     // Results exist once there is query text, or while browsing an Omarchy
     // submenu after Enter (query is cleared so children are listed).
-    const bool QUERIED = overviewSearchPaneUp(); // a query, a submenu, or the root browse (search:browse_on_click)
+    const bool QUERIED = overviewSearchPaneUp(SESSION); // a query, a submenu, or the root browse (search:browse_on_click)
 
     const size_t MATCHES = !SESSION.query.text.empty() ? matchingWindowCount() : 0;
-    const auto   RESULTS = QUERIED ? overviewSearchRows() : std::vector<SSearchRow>{};
+    const auto   RESULTS = QUERIED ? overviewSearchRows(SESSION) : std::vector<SSearchRow>{};
 
     // An app hit is a hit: "no matches" must not contradict a listed result.
     const bool EMPTYRESULT = QUERIED && !SESSION.query.text.empty() && MATCHES == 0 && RESULTS.empty();
@@ -212,6 +212,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         .emptyResult = EMPTYRESULT,
         .selection   = SESSION.nav.selection,
         .fieldWL     = FIELDMOTION.drawWidthL,
+        .zone        = SESSION.nav.zone,
     };
 
     SSearchLayout LAYOUT = layoutSearch(IN, RESULTS, SECTIONS);
@@ -312,7 +313,7 @@ static const std::string* searchPreviewPath(const std::vector<SSearchRow>& resul
 
 bool overviewToggleSushiForSelection() {
     auto& S = searchSession();
-    const auto        RESULTS = overviewSearchRows();
+    const auto        RESULTS = overviewSearchRows(S);
     const std::string* PATH   = searchPreviewPath(RESULTS, S.nav.selection);
     if (!PATH)
         return false;
@@ -322,7 +323,7 @@ bool overviewToggleSushiForSelection() {
 
 bool overviewHandleSearchSpace() {
     auto& S = searchSession();
-    const auto RESULTS = overviewSearchRows();
+    const auto RESULTS = overviewSearchRows(S);
     const std::string* HOVER = searchPreviewPath(RESULTS, S.nav.hoverIndex);
     const std::string* SEL   = searchPreviewPath(RESULTS, S.nav.selection);
     if (!overviewSpacePreviews(S.nav.intent, HOVER != nullptr, SEL != nullptr, S.nav.explicitSelection)) {
@@ -343,7 +344,7 @@ bool overviewHandleShiftTap() {
     if (S.query.text.empty())
         return false;
 
-    const auto RESULTS = overviewSearchRows();
+    const auto RESULTS = overviewSearchRows(S);
     int        idx     = S.nav.selection;
     if (idx < 0 || idx >= sc<int>(RESULTS.size()))
         idx = overviewFirstAppIndex(RESULTS);
@@ -365,7 +366,7 @@ bool overviewHandleShiftTap() {
 // highlight would sit on whichever agent slid into the old slot.
 bool overviewHandleCtrlTap() {
     auto& S = searchSession();
-    const auto RESULTS = overviewSearchRows();
+    const auto RESULTS = overviewSearchRows(S);
 
     const auto agentAt = [&](int idx) -> std::optional<SearchBackend::SSearchItem> {
         if (idx < 0 || idx >= sc<int>(RESULTS.size()) || !RESULTS[sc<size_t>(idx)].omarchy)
@@ -380,7 +381,7 @@ bool overviewHandleCtrlTap() {
     if (!item || !SearchBackend::setDefaultAgent(*item))
         return false;
 
-    const auto REORDERED = overviewSearchRows();
+    const auto REORDERED = overviewSearchRows(S);
     for (size_t i = 0; i < REORDERED.size(); ++i) {
         if (REORDERED[i].omarchy && REORDERED[i].omarchy->id == item->id) {
             S.nav.selection = sc<int>(i);

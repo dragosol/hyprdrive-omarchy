@@ -53,7 +53,7 @@ struct SSearchRow {
 
 inline PHLWINDOW overviewWindowForApp(const AppSearch::SEntry& entry);
 
-inline std::vector<SSearchRow> overviewSearchRowsLive();
+inline std::vector<SSearchRow> overviewSearchRowsLive(Search::CSession& S);
 
 // MEMOISED GLOBALLY, not per overview: both outputs show the SAME query, so a
 // two-monitor session was building this twice per frame -- and once is already
@@ -71,8 +71,7 @@ inline std::vector<SSearchRow> overviewSearchRowsLive();
 // generation of its own to key on. So that one answer is memoised too, but for
 // a second at most: a folder made or removed while the browse is up shows
 // within that, and the stats are paid once a second instead of once per frame.
-inline std::vector<SSearchRow> overviewSearchRows() {
-    auto& S = searchSession();
+inline std::vector<SSearchRow> overviewSearchRows(Search::CSession& S) {
     if (S.query.windowsOnly)
         return {};
 
@@ -112,7 +111,7 @@ inline std::vector<SSearchRow> overviewSearchRows() {
     MEMO.inputs  = INPUTS;
     MEMO.members = MEMBERS;
     MEMO.apps    = APPS;
-    MEMO.rows    = overviewSearchRowsLive();
+    MEMO.rows    = overviewSearchRowsLive(S);
     MEMO.builtAt = NOW;
     MEMO.filled  = true;
 
@@ -182,8 +181,7 @@ inline std::vector<SSearchRow> overviewToolRows(const ToolSearch::SQuery& TQ) {
     return rows;
 }
 
-inline std::vector<SSearchRow> overviewSearchRowsLive() {
-    auto& S = searchSession();
+inline std::vector<SSearchRow> overviewSearchRowsLive(Search::CSession& S) {
     std::vector<SSearchRow> rows;
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 

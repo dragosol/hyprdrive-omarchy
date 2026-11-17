@@ -249,7 +249,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         S.query.active = !Q.empty();
         S.nav.zone     = EOverviewNavZone::Search;
         S.nav.intent   = ESearchIntent::Typing;
-        afterQueryEdit();
+        afterQueryEdit(S);
         for (const auto& overview : scrollOverviews())
             if (overview)
                 overview->damage();

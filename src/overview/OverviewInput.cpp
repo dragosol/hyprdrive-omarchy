@@ -425,7 +425,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
                 // on that selection would; released anywhere else it is the
                 // user changing their mind, which is a no-op. G12's hold stays
                 // the drag gate -- a click is simply what happens without it.
-                if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index)) {
+                if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(S, ROW->index)) {
                     if (const auto W = S.nav.pendingFocus.lock()) {
                         closeOnWindow = W;
                         S.nav.pendingFocus.reset();
@@ -923,7 +923,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // results from anywhere, including mid-grid, which is the same
                 // "an arrow left the pane" the Tile walk above no longer does.
                 if (S.nav.zone != EOverviewNavZone::Result && S.nav.zone != EOverviewNavZone::Tile && S.nav.zone != EOverviewNavZone::Desktop &&
-                    overviewSearchPaneUp()) {
+                    overviewSearchPaneUp(S)) {
                     if (!searchLayoutHere().hits.empty()) {
                         S.nav.zone              = EOverviewNavZone::Result;
                         S.nav.selection         = searchLayoutHere().hits[0].index;
@@ -932,7 +932,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                         damage();
                         break;
                     } else {
-                        const auto RESULTS = overviewSearchRows();
+                        const auto RESULTS = overviewSearchRows(S);
                         if (!RESULTS.empty()) {
                             S.nav.zone              = EOverviewNavZone::Result;
                             S.nav.selection         = 0;
@@ -976,8 +976,8 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 }
 
                 if (S.nav.zone == EOverviewNavZone::Desktop) {
-                    const auto RESULTS = overviewSearchRows();
-                    if (overviewSearchPaneUp() && !RESULTS.empty()) {
+                    const auto RESULTS = overviewSearchRows(S);
+                    if (overviewSearchPaneUp(S) && !RESULTS.empty()) {
                         S.nav.zone              = EOverviewNavZone::Result;
                         S.nav.explicitSelection = true;
                         S.nav.intent            = ESearchIntent::Browsing;
@@ -1012,8 +1012,8 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                             closeOnWindow = FIRST;
                     }
                     TileChrome::setHovered(closeOnWindow.lock(), false);
-                } else if (overviewSearchPaneUp()) {
-                    const auto RESULTS = overviewSearchRows();
+                } else if (overviewSearchPaneUp(S)) {
+                    const auto RESULTS = overviewSearchRows(S);
                     if (!RESULTS.empty()) {
                         S.nav.zone              = EOverviewNavZone::Result;
                         S.nav.explicitSelection = true;
@@ -1034,9 +1034,9 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // keyboard walked onto: Enter in the bare pill still means "back
                 // to the window", never "run the first menu row" (Lock, Shut Down).
                 const bool PICKABLE = !S.query.text.empty() || SearchBackend::canNavigateMenuBack() ||
-                    (overviewSearchPaneUp() && S.nav.zone == EOverviewNavZone::Result);
+                    (overviewSearchPaneUp(S) && S.nav.zone == EOverviewNavZone::Result);
                 if (PICKABLE && S.nav.zone != EOverviewNavZone::Tile && S.nav.zone != EOverviewNavZone::Desktop) {
-                    const auto RESULTS = overviewSearchRows();
+                    const auto RESULTS = overviewSearchRows(S);
 
                     int launchIdx = -1;
                     if (S.nav.zone == EOverviewNavZone::Result && S.nav.selection >= 0 && S.nav.selection < sc<int>(RESULTS.size()))
@@ -1045,7 +1045,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                         launchIdx = 0;
 
                     const std::string QUERY_BEFORE = S.query.text;
-                    if (launchIdx >= 0 && activateSearchResult(launchIdx, SHIFT_PRESSED)) {
+                    if (launchIdx >= 0 && activateSearchResult(S, launchIdx, SHIFT_PRESSED)) {
                         if (const auto W = S.nav.pendingFocus.lock()) {
                             closeOnWindow = W;
                             S.nav.pendingFocus.reset();
