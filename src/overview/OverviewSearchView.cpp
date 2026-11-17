@@ -1579,3 +1579,98 @@ bool overviewHandleCtrlTap() {
     }
     return true;
 }
+
+// `hyprdrive:debug search` (tests/gates/search*.sh). READ-ONLY: it reads the
+// session, the layouts the last frames published (find, never layoutOn/fieldOn,
+// which would create a slot) and the ranked rows the render step memoises --
+// asked for only while the pane is up, the same condition the render step asks
+// them under, so the memo it reads is the one the frame built.
+namespace {
+    const char* searchZoneName(EOverviewNavZone zone) {
+        switch (zone) {
+            case EOverviewNavZone::Tile: return "tile";
+            case EOverviewNavZone::Result: return "result";
+            case EOverviewNavZone::Desktop: return "desktop";
+            case EOverviewNavZone::Search: return "search";
+        }
+        return "?";
+    }
+    const char* searchIntentName(ESearchIntent intent) {
+        switch (intent) {
+            case ESearchIntent::Typing: return "typing";
+            case ESearchIntent::Browsing: return "browsing";
+            case ESearchIntent::Hovering: return "hovering";
+        }
+        return "?";
+    }
+    std::string searchQuoted(std::string_view s) {
+        std::string out = "\"";
+        for (const char C : s)
+            out += C == '"' ? std::string{"\\\""} : C == '\n' ? std::string{"\\n"} : std::string(1, C);
+        return out + "\"";
+    }
+    std::string searchRowKind(const SSearchRow& row) {
+        if (row.tool)
+            return row.toolStatus ? "toolstatus" : "tool";
+        if (row.app)
+            return overviewWindowForApp(*row.app) ? "app-running" : "app";
+        if (row.omarchy) {
+            switch (row.omarchy->kind) {
+                case SearchBackend::EItemKind::App: return "item-app";
+                case SearchBackend::EItemKind::Action: return "action";
+                case SearchBackend::EItemKind::Menu: return "menu";
+                case SearchBackend::EItemKind::Back: return "back";
+                case SearchBackend::EItemKind::Agent: return "agent";
+                case SearchBackend::EItemKind::Calculator: return "calc";
+                case SearchBackend::EItemKind::File: return "file";
+                case SearchBackend::EItemKind::Provider: return "provider";
+            }
+        }
+        return "provider";
+    }
+}
+
+std::string COverview::searchReport() const {
+    const auto  MON  = pMonitor.lock();
+    std::string out  = std::format("mon {} closing={} keys={} tile={} matches={} band={:.1f}>{:.1f} width={:.1f} dock={:.2f}>{:.2f} pillNudgeWant={:.1f}",
+                                   MON ? MON->m_name : std::string{"?"}, isClosing() ? 1 : 0, activeScrollOverview().get() == this ? 1 : 0,
+                                   closeOnWindow.lock() ? closeOnWindow.lock()->m_class : std::string{"-"}, matchingWindowCount(),
+                                   resultsBand ? resultsBand->value() : 0.F, resultsBand ? resultsBand->goal() : 0.F, resultsWidth ? resultsWidth->value() : 0.F,
+                                   searchDock ? searchDock->value() : 0.F, searchDock ? searchDock->goal() : 0.F, pillNudgeWant);
+    const auto IT = g_search.layouts.find(searchMonitorId());
+    if (IT == g_search.layouts.end())
+        return out + " layout=none";
+    const auto& L = IT->second;
+    out += std::format(" drawable={} queried={} empty={} placeholder={} label={} rowL={:.1f} bandH={:.1f} pill={:.0f},{:.0f},{:.0f},{:.0f} fieldW={:.1f} "
+                       "container={:.0f},{:.0f},{:.0f},{:.0f} gridTiles={} stripPlateL={:.1f} gridNudgeL={:.1f} gridShiftL={:.1f} sel={} hits={} cards={} tool={} inspector={}",
+                       L.drawable ? 1 : 0, L.queried ? 1 : 0, L.emptyResult ? 1 : 0, L.placeholder ? 1 : 0, searchQuoted(L.label), L.rowL, L.bandH, L.pill.x, L.pill.y,
+                       L.pill.width, L.pill.height, L.fieldW, L.containerBox.x, L.containerBox.y, L.containerBox.width, L.containerBox.height, L.gridTiles,
+                       L.stripPlateL, L.gridNudgeL, L.gridShiftL, L.selection, L.hits.size(), L.cards.size(), L.tool.active ? 1 : 0, L.inspector.visible ? 1 : 0);
+    if (const auto F = g_search.fields.find(searchMonitorId()); F != g_search.fields.end())
+        out += std::format(" field={:.1f} moving={}", F->second.drawWidthL, F->second.moving ? 1 : 0);
+    for (size_t i = 0; i < L.hits.size() && i < 16; ++i) {
+        const auto& H = L.hits[i];
+        out += std::format("\n    hit {} col {} row {} box {:.0f},{:.0f},{:.0f},{:.0f}", H.index, H.column, H.rowInCol, H.box.x, H.box.y, H.box.width, H.box.height);
+    }
+    return out;
+}
+
+std::string overviewSearchReport() {
+    const auto& Q    = g_search.query;
+    const auto& N    = g_search.nav;
+    const bool  PANE = overviewSearchPaneUp();
+    const auto  ROWS = PANE ? overviewSearchRows() : std::vector<SSearchRow>{};
+    std::string out  = std::format("hyprdrive search: overviews={} q={} active={} windowsOnly={} pane={} menuBack={} zone={} sel={} explicit={} firstPending={} "
+                                   "intent={} hover={} kbTile={} drag={} rows={}",
+                                   scrollOverviews().size(), searchQuoted(Q.text), Q.active ? 1 : 0, Q.windowsOnly ? 1 : 0, PANE ? 1 : 0,
+                                   SearchBackend::canNavigateMenuBack() ? 1 : 0, searchZoneName(N.zone), N.selection, N.explicitSelection ? 1 : 0,
+                                   N.selectFirstPending ? 1 : 0, searchIntentName(N.intent), N.hoverIndex, N.keyboardTile ? 1 : 0, g_search.pointer.drag ? 1 : 0, ROWS.size());
+    if (N.selection >= 0 && N.selection < sc<int>(ROWS.size()))
+        out += " selRow=" + searchQuoted(ROWS[sc<size_t>(N.selection)].name);
+    for (size_t i = 0; i < ROWS.size() && i < 24; ++i)
+        out += std::format("\n  row {} c{} {} {}", i, ROWS[i].column, searchRowKind(ROWS[i]), searchQuoted(ROWS[i].name));
+    for (const auto& OV : scrollOverviews())
+        if (const auto* O = dynamic_cast<const COverview*>(OV.get()))
+            out += "\n  " + O->searchReport();
+    return out;
+}

@@ -803,6 +803,8 @@ class COverview : public IOverview {
     CBox                             stripPlateBox(PHLMONITOR monitor, float renderScale) const;
   public:
     std::string                      stripCleanupReport() const;
+    // `hyprdrive:debug search`: what this overview's last search frame published.
+    std::string                      searchReport() const;
   private:
     void                             renderClosingTiles(PHLMONITOR monitor, size_t cardIdx, const Time::steady_tp& now);
 

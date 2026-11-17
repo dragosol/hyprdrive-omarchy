@@ -238,6 +238,10 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         return {.success = false,
                 .error   = std::format("hyprdrive lockstate: locked={} overviews={} accepting={} qlen={}", hyprdriveSessionLocked() ? 1 : 0, scrollOverviews().size(),
                                        overviewAcceptsSearch() ? 1 : 0, g_search.query.text.size())};
+    // `search`: the search session and each overview's last published search
+    // frame -- query, zone, selection, rows, pill, band, hit boxes (read-only).
+    if (TOPIC == "search")
+        return {.success = false, .error = overviewSearchReport()};
     if (TOPIC == "type") {
         const std::string Q = data.size() > 1 ? std::string{data[1]} : std::string{};
         g_search.query.text   = Q;
@@ -269,7 +273,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
         return {};
     }
     if (TOPIC != "frames")
-        return {.success = false, .error = "hyprdrive:debug frames|mem|identity|activate <class>|movehere <class>|drawn <class>|probe_draw on|self|off|scratchpad|type [text]|press <keycode>"};
+        return {.success = false, .error = "hyprdrive:debug frames|mem|identity|activate <class>|movehere <class>|drawn <class>|probe_draw on|self|off|scratchpad|search|type [text]|press <keycode>"};
 
     std::string report = "hyprdrive frames:";
     for (const auto& monitor : State::monitorState()->monitors()) {

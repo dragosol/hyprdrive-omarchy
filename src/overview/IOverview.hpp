@@ -235,6 +235,10 @@ void overviewDesktopsRenumbered();
 // `hyprdrive:debug stripclean`: the strip's Clean Up button on `monitor`'s
 // overview (nullptr: every one) -- wanted, alpha, box, removable, bump.
 std::string overviewStripCleanupReport(PHLMONITOR monitor);
+// `hyprdrive:debug search`: the search session (query, zone, selection, the
+// ranked rows) and, per open overview, the layout its last frame published.
+// Read-only, for the search gates (tests/gates/search*.sh).
+std::string overviewSearchReport();
 // Super went down or up: the strip's "move this desktop" lift follows it.
 void overviewSuperChanged();
 // Super+Shift+Left/Right in an open overview: the desktop shown moves a place.
