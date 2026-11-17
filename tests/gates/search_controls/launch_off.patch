@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewInternal.hpp b/src/overview/OverviewInternal.hpp
+index 8daee97..a41d431 100644
+--- a/src/overview/OverviewInternal.hpp
++++ b/src/overview/OverviewInternal.hpp
+@@ -975,7 +975,7 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
+                 return true;
+             }
+         }
+-        AppSearch::launch(*ROW.app, Hyprdrive::Config::getTerminal());
++        // CONTROL launch_off: AppSearch::launch(*ROW.app, Hyprdrive::Config::getTerminal());
+         return true;
+     } else {
+         SearchProviders::activate(ROW.provider, g_search.query.text);

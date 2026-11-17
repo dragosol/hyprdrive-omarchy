@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewSearchView.cpp b/src/overview/OverviewSearchView.cpp
+index e7ebdb8..0387eaa 100644
+--- a/src/overview/OverviewSearchView.cpp
++++ b/src/overview/OverviewSearchView.cpp
+@@ -1343,7 +1343,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
+     // Typing arms first-app selection; results land over the next frames, so
+     // the spend lives here -- once, on the first frame that actually has an
+     // Omarchy/apps row. Not Browsing: auto-select is for Enter, not SPACE.
+-    if (g_search.nav.selectFirstPending) {
++    if (false && g_search.nav.selectFirstPending) { // CONTROL first_select
+         const int FIRST = overviewFirstAppIndex(RESULTS);
+         if (FIRST >= 0) {
+             g_search.nav.selection         = FIRST;
