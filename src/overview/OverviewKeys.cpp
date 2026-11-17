@@ -1,6 +1,7 @@
 // COverview: keyboard navigation.
 // Cut from Overview.cpp by pure code motion.
 #include "OverviewParts.hpp"
+#include "SearchKeys.hpp"
 
 using namespace OverviewDetail;
 
@@ -237,17 +238,7 @@ bool COverview::tabAcrossMonitors() {
         const auto RESULTS = overviewSearchRows(S);
         S.nav.keyboardTile = false;
         TileChrome::setHovered(PHLWINDOW{}, false);
-        if (overviewSearchPaneUp(S) && !RESULTS.empty()) {
-            S.nav.zone              = EOverviewNavZone::Result;
-            S.nav.explicitSelection = true;
-            S.nav.intent            = ESearchIntent::Browsing;
-            if (S.nav.selection < 0 || S.nav.selection >= sc<int>(RESULTS.size()))
-                S.nav.selection = 0;
-        } else {
-            S.nav.zone      = EOverviewNavZone::Search;
-            S.nav.selection = -1;
-            S.nav.intent    = ESearchIntent::Typing;
-        }
+        Search::tabEnterSearch(S, RESULTS);
         HANDOVER(FIRST);
     };
 
@@ -410,124 +401,10 @@ bool COverview::moveSelection(const std::string& direction) {
     if (!LEFT && !RIGHT && !UP && !DOWN)
         return false;
 
-    // 2D Navigation inside the Results zone
-    if (S.nav.zone == EOverviewNavZone::Result && !searchLayoutHere().hits.empty()) {
-        const SSearchRowHit* curHit = nullptr;
-        for (const auto& hit : searchLayoutHere().hits) {
-            if (hit.index == S.nav.selection) {
-                curHit = &hit;
-                break;
-            }
-        }
-
-        if (curHit) {
-            S.nav.explicitSelection = true;
-            S.nav.intent            = ESearchIntent::Browsing;
-
-            if (UP) {
-                if (curHit->rowInCol == 0) {
-                    // Return focus to search bar
-                    S.nav.zone              = EOverviewNavZone::Search;
-                    S.nav.selection         = -1;
-                    S.nav.explicitSelection = false;
-                    S.nav.intent            = ESearchIntent::Typing;
-                    damage();
-                    return true;
-                }
-                for (const auto& hit : searchLayoutHere().hits) {
-                    if (hit.column == curHit->column && hit.rowInCol == curHit->rowInCol - 1) {
-                        S.nav.selection = hit.index;
-                        damage();
-                        return true;
-                    }
-                }
-                return true;
-            }
-
-            if (DOWN) {
-                for (const auto& hit : searchLayoutHere().hits) {
-                    if (hit.column == curHit->column && hit.rowInCol == curHit->rowInCol + 1) {
-                        S.nav.selection = hit.index;
-                        damage();
-                        return true;
-                    }
-                }
-                return true;
-            }
-
-            if (RIGHT) {
-                int maxCol = 0;
-                for (const auto& hit : searchLayoutHere().hits)
-                    maxCol = std::max(maxCol, hit.column);
-
-                for (int targetCol = curHit->column + 1; targetCol <= maxCol; ++targetCol) {
-                    const SSearchRowHit* bestHit = nullptr;
-                    int bestDiff = 999;
-                    for (const auto& hit : searchLayoutHere().hits) {
-                        if (hit.column == targetCol) {
-                            int diff = std::abs(hit.rowInCol - curHit->rowInCol);
-                            if (diff < bestDiff) {
-                                bestDiff = diff;
-                                bestHit  = &hit;
-                            }
-                        }
-                    }
-                    if (bestHit) {
-                        S.nav.selection = bestHit->index;
-                        damage();
-                        return true;
-                    }
-                }
-                return true;
-            }
-
-            if (LEFT) {
-                if (curHit->column == 0) {
-                    if (SearchBackend::canNavigateMenuBack()) {
-                        SearchBackend::navigateMenuBack();
-                        S.nav.selection = 0;
-                        damage();
-                        return true;
-                    }
-                    return true;
-                }
-
-                for (int targetCol = curHit->column - 1; targetCol >= 0; --targetCol) {
-                    const SSearchRowHit* bestHit = nullptr;
-                    int bestDiff = 999;
-                    for (const auto& hit : searchLayoutHere().hits) {
-                        if (hit.column == targetCol) {
-                            int diff = std::abs(hit.rowInCol - curHit->rowInCol);
-                            if (diff < bestDiff) {
-                                bestDiff = diff;
-                                bestHit  = &hit;
-                            }
-                        }
-                    }
-                    if (bestHit) {
-                        S.nav.selection = bestHit->index;
-                        damage();
-                        return true;
-                    }
-                }
-                return true;
-            }
-        }
-    }
-
-    // Down drops into the results from the SEARCH FIELD only. `|| zone !=
-    // Result` also matched the window grid and the strip, so with a query up
-    // every Down in the grid jumped back to the results instead of walking to
-    // the next row of tiles (user, 2026-09-29).
-    if (S.nav.zone == EOverviewNavZone::Search && DOWN) {
-        if (!searchLayoutHere().hits.empty()) {
-            S.nav.zone              = EOverviewNavZone::Result;
-            S.nav.selection         = searchLayoutHere().hits[0].index;
-            S.nav.explicitSelection = true;
-            S.nav.intent            = ESearchIntent::Browsing;
+    if (const auto OUT = Search::onArrow(S, searchMonitorId(), LEFT, RIGHT, UP, DOWN); OUT.handled) {
+        if (OUT.damage)
             damage();
-            return true;
-        }
+        return true;
     }
 
     // A selected tile the filter has since hidden is not a place to walk FROM:

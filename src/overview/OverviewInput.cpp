@@ -1,4 +1,5 @@
 #include "OverviewInternal.hpp"
+#include "SearchKeys.hpp"
 #include "DockInput.hpp"
 #include "DockStacks.hpp"
 #include "HoverTarget.hpp"
@@ -922,26 +923,9 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // ...from the SEARCH FIELD only. Down used to drop into the
                 // results from anywhere, including mid-grid, which is the same
                 // "an arrow left the pane" the Tile walk above no longer does.
-                if (S.nav.zone != EOverviewNavZone::Result && S.nav.zone != EOverviewNavZone::Tile && S.nav.zone != EOverviewNavZone::Desktop &&
-                    overviewSearchPaneUp(S)) {
-                    if (!searchLayoutHere().hits.empty()) {
-                        S.nav.zone              = EOverviewNavZone::Result;
-                        S.nav.selection         = searchLayoutHere().hits[0].index;
-                        S.nav.explicitSelection = true;
-                        S.nav.intent            = ESearchIntent::Browsing;
-                        damage();
-                        break;
-                    } else {
-                        const auto RESULTS = overviewSearchRows(S);
-                        if (!RESULTS.empty()) {
-                            S.nav.zone              = EOverviewNavZone::Result;
-                            S.nav.selection         = 0;
-                            S.nav.explicitSelection = true;
-                            S.nav.intent            = ESearchIntent::Browsing;
-                            damage();
-                            break;
-                        }
-                    }
+                if (Search::downIntoResults(S, searchMonitorId())) {
+                    damage();
+                    break;
                 }
                 moveSelection("down");
                 break;
@@ -976,16 +960,9 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 }
 
                 if (S.nav.zone == EOverviewNavZone::Desktop) {
-                    const auto RESULTS = overviewSearchRows(S);
-                    if (overviewSearchPaneUp(S) && !RESULTS.empty()) {
-                        S.nav.zone              = EOverviewNavZone::Result;
-                        S.nav.explicitSelection = true;
-                        S.nav.intent            = ESearchIntent::Browsing;
-                        S.nav.keyboardTile      = false;
-                        if (S.nav.selection < 0 || S.nav.selection >= sc<int>(RESULTS.size()))
-                            S.nav.selection = 0;
+                    if (Search::tabIntoResults(S, true))
                         TileChrome::setHovered(PHLWINDOW{}, false);
-                    } else {
+                    else {
                         S.nav.zone         = EOverviewNavZone::Tile;
                         S.nav.selection    = -1;
                         S.nav.keyboardTile = true;
@@ -1012,18 +989,8 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                             closeOnWindow = FIRST;
                     }
                     TileChrome::setHovered(closeOnWindow.lock(), false);
-                } else if (overviewSearchPaneUp(S)) {
-                    const auto RESULTS = overviewSearchRows(S);
-                    if (!RESULTS.empty()) {
-                        S.nav.zone              = EOverviewNavZone::Result;
-                        S.nav.explicitSelection = true;
-                        S.nav.intent            = ESearchIntent::Browsing;
-                        S.nav.keyboardTile      = false;
-                        if (S.nav.selection < 0 || S.nav.selection >= sc<int>(RESULTS.size()))
-                            S.nav.selection = 0;
-                        TileChrome::setHovered(PHLWINDOW{}, false);
-                    }
-                }
+                } else if (Search::tabIntoResults(S, false))
+                    TileChrome::setHovered(PHLWINDOW{}, false);
 
                 damage();
                 break;
@@ -1033,17 +1000,8 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // The root browse (nothing typed, no submenu) runs only a row the
                 // keyboard walked onto: Enter in the bare pill still means "back
                 // to the window", never "run the first menu row" (Lock, Shut Down).
-                const bool PICKABLE = !S.query.text.empty() || SearchBackend::canNavigateMenuBack() ||
-                    (overviewSearchPaneUp(S) && S.nav.zone == EOverviewNavZone::Result);
-                if (PICKABLE && S.nav.zone != EOverviewNavZone::Tile && S.nav.zone != EOverviewNavZone::Desktop) {
-                    const auto RESULTS = overviewSearchRows(S);
-
-                    int launchIdx = -1;
-                    if (S.nav.zone == EOverviewNavZone::Result && S.nav.selection >= 0 && S.nav.selection < sc<int>(RESULTS.size()))
-                        launchIdx = S.nav.selection;
-                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || S.nav.zone == EOverviewNavZone::Search || SearchBackend::canNavigateMenuBack()))
-                        launchIdx = 0;
-
+                if (const auto PICK = Search::returnPick(S, [this] { return matchingWindowCount(); }); PICK.pickable) {
+                    const int         launchIdx    = PICK.index;
                     const std::string QUERY_BEFORE = S.query.text;
                     if (launchIdx >= 0 && activateSearchResult(S, launchIdx, SHIFT_PRESSED)) {
                         if (const auto W = S.nav.pendingFocus.lock()) {
