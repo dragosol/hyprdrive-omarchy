@@ -16,12 +16,14 @@ namespace OvInternal {
 // shortcuts, the agent help rows. Every "are there results to walk into"
 // question asks this one, so the pane and the keys cannot disagree.
 inline bool overviewSearchPaneUp() {
-    return !g_search.query.text.empty() || (g_search.query.active && Hyprdrive::Config::getSearchBrowseOnClick()) || SearchBackend::canNavigateMenuBack();
+    auto& S = searchSession();
+    return !S.query.text.empty() || (S.query.active && Hyprdrive::Config::getSearchBrowseOnClick()) || SearchBackend::canNavigateMenuBack();
 }
 
 void overviewQueryEdited(); // main.cpp
 
 inline bool activateSearchResult(int index, bool newInstance = false) {
+    auto& S = searchSession();
     const auto RESULTS = overviewSearchRows();
     if (index < 0 || index >= sc<int>(RESULTS.size()))
         return false;
@@ -31,14 +33,14 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
     // A tool row that rewrites the query (AI & Tools "Define" / "Translate"):
     // the panel turns into the tool, and the overview stays up to show it.
     if (ROW.omarchy && ROW.omarchy->kind == SearchBackend::EItemKind::Action && ROW.omarchy->actionCommand.starts_with(OVERVIEW_QUERY_REWRITE)) {
-        g_search.query.text             = ROW.omarchy->actionCommand.substr(OVERVIEW_QUERY_REWRITE.size());
-        g_search.query.active           = true;
-        g_search.nav.zone               = EOverviewNavZone::Search;
-        g_search.nav.selection          = -1;
-        g_search.nav.explicitSelection  = false;
-        g_search.nav.selectFirstPending = false;
-        g_search.nav.intent             = ESearchIntent::Typing;
-        g_search.nav.hoverIndex         = -1;
+        S.query.text             = ROW.omarchy->actionCommand.substr(OVERVIEW_QUERY_REWRITE.size());
+        S.query.active           = true;
+        S.nav.zone               = EOverviewNavZone::Search;
+        S.nav.selection          = -1;
+        S.nav.explicitSelection  = false;
+        S.nav.selectFirstPending = false;
+        S.nav.intent             = ESearchIntent::Typing;
+        S.nav.hoverIndex         = -1;
         // The rewritten query owes the same trailing work as a typed one --
         // without it no provider (and no lookup) ever saw `define <word>`.
         overviewQueryEdited();
@@ -54,13 +56,13 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
             const bool DRILL = ROW.omarchy->kind == SearchBackend::EItemKind::Menu;
             SearchBackend::activate(*ROW.omarchy);
             if (DRILL) {
-                g_search.query.text.clear();
-                g_search.query.active          = false;
-                g_search.nav.zone              = EOverviewNavZone::Result;
-                g_search.nav.explicitSelection = true;
-                g_search.nav.selectFirstPending = false;
-                g_search.nav.intent            = ESearchIntent::Browsing;
-                g_search.nav.hoverIndex        = -1;
+                S.query.text.clear();
+                S.query.active          = false;
+                S.nav.zone              = EOverviewNavZone::Result;
+                S.nav.explicitSelection = true;
+                S.nav.selectFirstPending = false;
+                S.nav.intent            = ESearchIntent::Browsing;
+                S.nav.hoverIndex        = -1;
             }
             // Skip the ‹ Back row so a second Enter launches the first child.
             const auto NEXT = overviewSearchRows();
@@ -73,21 +75,21 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
                 sel = i;
                 break;
             }
-            g_search.nav.selection = sel;
+            S.nav.selection = sel;
             return false;
         }
         return SearchBackend::activate(*ROW.omarchy);
     } else if (ROW.app) {
         if (!newInstance) {
             if (const auto W = overviewWindowForApp(*ROW.app)) {
-                g_search.nav.pendingFocus = W;
+                S.nav.pendingFocus = W;
                 return true;
             }
         }
         AppSearch::launch(*ROW.app, Hyprdrive::Config::getTerminal());
         return true;
     } else {
-        SearchProviders::activate(ROW.provider, g_search.query.text);
+        SearchProviders::activate(ROW.provider, S.query.text);
         return true;
     }
 }

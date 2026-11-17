@@ -84,6 +84,7 @@ static SSearchKey searchKeyFor(uint32_t keycode) {
 static constexpr int     LETTER_TICK_MS    = 8;
 
 static int letterTickCb(void*) {
+    auto& S = searchSession();
     const auto NOW     = SearchLetters::clock::now();
     // The easter egg is a video: it wants every frame while it plays, and the
     // tick stays up while it does -- with or without an overview, so its
@@ -103,7 +104,7 @@ static int letterTickCb(void*) {
 
         // The letters are one query shared by every view; the width and slide
         // springs are per monitor, so both questions get asked.
-        if (!LETTERS && !g_search.fieldOn(MONITOR->m_id).busy())
+        if (!LETTERS && !S.fieldOn(MONITOR->m_id).busy())
             continue;
 
         OVERVIEW->damage();
@@ -132,7 +133,8 @@ static void armLetterTick() {
 namespace PluginDetail {
 // The trailing work every edit to the query owes, whatever made the edit.
 void afterQueryEdit() {
-    g_search.query.windowsOnly = false;
+    auto& S = searchSession();
+    S.query.windowsOnly = false;
 
     // The gate reads the query twice -- "is it empty" for the Y9 minimized rule
     // and the text itself for the match -- so every edit changes its answer.
@@ -151,24 +153,24 @@ void afterQueryEdit() {
 
     // X20: every keystroke starts a new provider generation. Non-blocking, so
     // this costs the keystroke nothing; results land over the next frames.
-    SearchProviders::query(g_search.query.text);
-    SearchBackend::query(g_search.query.text);
-    if (!g_search.query.text.empty())
+    SearchProviders::query(S.query.text);
+    SearchBackend::query(S.query.text);
+    if (!S.query.text.empty())
         SearchBackend::resetMenuRoute();
     if (SearchBackend::isSushiActive())
         SearchBackend::closeSushi();
 
     // The ranking changes under any edit, so a held index would point at a
     // different app than the one the user saw highlighted.
-    g_search.nav.selection         = -1;
-    g_search.nav.explicitSelection = false;
-    g_search.nav.intent            = ESearchIntent::Typing;
-    g_search.nav.hoverIndex        = -1;
+    S.nav.selection         = -1;
+    S.nav.explicitSelection = false;
+    S.nav.intent            = ESearchIntent::Typing;
+    S.nav.hoverIndex        = -1;
 
     // Typing arms first-app selection (spent once results exist) and puts
     // SPACE back to "character". Auto-select is for Enter, not Quick Look.
-    g_search.nav.selectFirstPending = !g_search.query.text.empty();
-    g_search.nav.zone               = g_search.query.text.empty() ? EOverviewNavZone::Tile : EOverviewNavZone::Search;
+    S.nav.selectFirstPending = !S.query.text.empty();
+    S.nav.zone               = S.query.text.empty() ? EOverviewNavZone::Tile : EOverviewNavZone::Search;
 
     for (const auto& overview : scrollOverviews()) {
         if (!overview)
@@ -179,6 +181,7 @@ void afterQueryEdit() {
 }
 
 bool handleSearchPress(uint32_t keycode) {
+    auto& S = searchSession();
     if (!overviewAcceptsSearch())
         return false;
 
@@ -197,23 +200,23 @@ bool handleSearchPress(uint32_t keycode) {
         }
         resetCompose();
         // If in Result zone and in a subroute, ESC goes back up to parent
-        if (g_search.nav.zone == EOverviewNavZone::Result && SearchBackend::canNavigateMenuBack()) {
+        if (S.nav.zone == EOverviewNavZone::Result && SearchBackend::canNavigateMenuBack()) {
             SearchBackend::navigateMenuBack();
-            g_search.nav.selection = 0;
+            S.nav.selection = 0;
             afterQueryEdit();
             return true;
         }
         // X5, GNOME-style: the first ESC drops the filter, the next one leaves.
-        if (!g_search.query.active && g_search.query.text.empty()) {
+        if (!S.query.active && S.query.text.empty()) {
             for (const auto& overview : scrollOverviews())
                 if (overview)
                     overview->close();
             return true;
         }
-        g_search.query.text.clear();
-        g_search.query.active = false;
-        g_search.nav.zone = EOverviewNavZone::Tile;
-        g_search.nav.selection = -1;
+        S.query.text.clear();
+        S.query.active = false;
+        S.nav.zone = EOverviewNavZone::Tile;
+        S.nav.selection = -1;
         afterQueryEdit();
         return true;
     }
@@ -226,33 +229,33 @@ bool handleSearchPress(uint32_t keycode) {
                     overview->damage();
         }
         resetCompose();
-        if (g_search.query.windowsOnly) {
-            g_search.query.text.clear();
-            g_search.query.active = false;
+        if (S.query.windowsOnly) {
+            S.query.text.clear();
+            S.query.active = false;
             afterQueryEdit();
             return true;
         }
-        if (g_search.nav.zone == EOverviewNavZone::Result && g_search.query.text.empty()) {
+        if (S.nav.zone == EOverviewNavZone::Result && S.query.text.empty()) {
             if (SearchBackend::navigateMenuBack()) {
-                g_search.nav.selection = 0;
+                S.nav.selection = 0;
                 afterQueryEdit();
                 return true;
             }
         }
-        if (!g_search.query.active && g_search.query.text.empty())
+        if (!S.query.active && S.query.text.empty())
             return true;
-        if (g_search.nav.zone == EOverviewNavZone::Result) {
-            g_search.nav.zone              = EOverviewNavZone::Search;
-            g_search.nav.selection         = -1;
-            g_search.nav.explicitSelection = false;
+        if (S.nav.zone == EOverviewNavZone::Result) {
+            S.nav.zone              = EOverviewNavZone::Search;
+            S.nav.selection         = -1;
+            S.nav.explicitSelection = false;
         }
-        if (g_search.query.text.empty()) {
-            g_search.query.active = false;
+        if (S.query.text.empty()) {
+            S.query.active = false;
             return true;
         }
-        popCodepoint(g_search.query.text);
-        if (g_search.query.text.empty())
-            g_search.query.active = false;
+        popCodepoint(S.query.text);
+        if (S.query.text.empty())
+            S.query.active = false;
         afterQueryEdit();
         if (Hyprdrive::KeyboardCat::noteBackspace())
             armLetterTick(); // its frames start with the trigger
@@ -271,18 +274,18 @@ bool handleSearchPress(uint32_t keycode) {
     }
 
     // Typing any character while in Result zone shifts focus back to Search bar
-    if (g_search.nav.zone == EOverviewNavZone::Result) {
-        g_search.nav.zone              = EOverviewNavZone::Search;
-        g_search.nav.selection         = -1;
-        g_search.nav.explicitSelection = false;
+    if (S.nav.zone == EOverviewNavZone::Result) {
+        S.nav.zone              = EOverviewNavZone::Search;
+        S.nav.selection         = -1;
+        S.nav.explicitSelection = false;
     }
 
     if (KEY.starts)
-        g_search.query.active = true;
+        S.query.active = true;
 
-    if (g_search.query.windowsOnly)
-        g_search.query.text.clear();
-    g_search.query.text += KEY.text;
+    if (S.query.windowsOnly)
+        S.query.text.clear();
+    S.query.text += KEY.text;
     Hyprdrive::KeyboardCat::noteTyped();
     afterQueryEdit();
     return true;
@@ -296,12 +299,13 @@ void stopSearchRepeat() {
 } // namespace PluginDetail
 
 static int searchRepeatCb(void*) {
+    auto& S = searchSession();
     if (g_searchRepeatKey == ~0u || !overviewAcceptsSearch() || g_consumedPresses.count(g_searchRepeatKey) == 0) {
         stopSearchRepeat();
         return 0;
     }
     handleSearchPress(g_searchRepeatKey);
-    if (g_searchRepeatKey == EVDEV_KEY_BACKSPACE && g_search.query.text.empty()) {
+    if (g_searchRepeatKey == EVDEV_KEY_BACKSPACE && S.query.text.empty()) {
         stopSearchRepeat();
         return 0;
     }

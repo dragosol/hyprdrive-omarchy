@@ -206,6 +206,7 @@ bool COverview::shouldAllowRealtimePreviewFrame() const {
 }
 
 bool COverview::shouldAllowRealtimePreviewSchedule() {
+    auto& S = searchSession();
     if (inputFramePending) {
         inputFramePending = false;
         return true;
@@ -229,7 +230,7 @@ bool COverview::shouldAllowRealtimePreviewSchedule() {
     if (SearchLetters::g_searchLetters.busy(Time::steadyNow()))
         return true;
 
-    if (const auto MONITOR = pMonitor.lock(); MONITOR && g_search.fieldOn(MONITOR->m_id).busy())
+    if (const auto MONITOR = pMonitor.lock(); MONITOR && S.fieldOn(MONITOR->m_id).busy())
         return true;
 
     if (realtimePreviewFrameQueued) {
@@ -496,6 +497,7 @@ int COverview::realtimePreviewTimerCallback(void* data) {
 // chrome). If none of them is running, the pixels this frame would produce are
 // the pixels already on the screen.
 bool COverview::needsIdleRepaint() const {
+    auto& S = searchSession();
     if (closing || drag.activeWindow || resize.activeWindow || pan.pointerDown)
         return true;
 
@@ -535,7 +537,7 @@ bool COverview::needsIdleRepaint() const {
     if (SearchLetters::g_searchLetters.busy(Time::steadyNow()))
         return true;
 
-    if (const auto MONITOR = pMonitor.lock(); MONITOR && g_search.fieldOn(MONITOR->m_id).busy())
+    if (const auto MONITOR = pMonitor.lock(); MONITOR && S.fieldOn(MONITOR->m_id).busy())
         return true;
 
     if (WindowPill::animating() && isOverviewPointerOnMonitor(pMonitor.lock()))

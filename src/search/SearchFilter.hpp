@@ -22,7 +22,8 @@ namespace OvInternal {
 // the window class -- dropping the class would regress the F2 behaviour that
 // shipped long before X18.
 inline bool overviewSearchMatches(const PHLWINDOW& window) {
-    if (g_search.query.text.empty())
+    auto& S = searchSession();
+    if (S.query.text.empty())
         return true;
 
     Prof::Timer PROF{Prof::matchNs, Prof::matchCalls};
@@ -44,7 +45,7 @@ inline bool overviewSearchMatches(const PHLWINDOW& window) {
     // live with it now; the single-instance property is unchanged, and a header
     // that grows a second definition of this function can no longer grow a
     // second cache with it.
-    auto& CACHE = g_search.query;
+    auto& CACHE = S.query;
 
     if (CACHE.memoFrame != g_overviewFrame || CACHE.memoQuery != CACHE.text) {
         CACHE.memo.clear();

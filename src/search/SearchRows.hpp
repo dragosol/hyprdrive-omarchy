@@ -72,10 +72,11 @@ inline std::vector<SSearchRow> overviewSearchRowsLive();
 // a second at most: a folder made or removed while the browse is up shows
 // within that, and the stats are paid once a second instead of once per frame.
 inline std::vector<SSearchRow> overviewSearchRows() {
-    if (g_search.query.windowsOnly)
+    auto& S = searchSession();
+    if (S.query.windowsOnly)
         return {};
 
-    const std::string& Q           = g_search.query.text;
+    const std::string& Q           = S.query.text;
     const bool         MENU_BROWSE = SearchBackend::canNavigateMenuBack();
     const bool         ROOT_BROWSE = Q.empty() && !MENU_BROWSE;
 
@@ -182,10 +183,11 @@ inline std::vector<SSearchRow> overviewToolRows(const ToolSearch::SQuery& TQ) {
 }
 
 inline std::vector<SSearchRow> overviewSearchRowsLive() {
+    auto& S = searchSession();
     std::vector<SSearchRow> rows;
     Prof::Timer PROF{Prof::rowsNs, Prof::rowsCalls};
 
-    const std::string& Q           = g_search.query.text;
+    const std::string& Q           = S.query.text;
     const bool         MENU_BROWSE = SearchBackend::canNavigateMenuBack();
 
     // A `define` / `tr` query owns the whole panel (user, 2026-09-22: "turns the

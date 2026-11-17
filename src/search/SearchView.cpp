@@ -14,6 +14,7 @@ using namespace OverviewDetail;
 // lets the painter, the pointer hit-test and the keyboard walk all be handed
 // the same answer instead of each deriving its own.
 SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSearchRow>& RESULTS, const std::vector<SSearchSection>& SECTIONS) {
+    auto& S = searchSession();
     SSearchLayout out;
     out.bandH       = IN.band;
     out.rowL        = IN.rowLCarry;
@@ -210,7 +211,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
                 .text     = RESULTS[i].name,
                 .example  = RESULTS[i].toolExample,
                 .status   = RESULTS[i].toolStatus,
-                .selected = g_search.nav.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
+                .selected = S.nav.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
             });
             y += ROWHL + OVERVIEW_TOOL_GAPL;
         }
@@ -218,6 +219,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     }
 
     const auto ADDITEM = [&](const CBox& box, size_t I, int col, int rowInCol) {
+        auto& S = searchSession();
         out.hits.emplace_back(SSearchRowHit{
             .box       = box,
             .desktopId = RESULTS[I].app ? RESULTS[I].app->id : "",
@@ -232,7 +234,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
             .description = RESULTS[I].description,
             .icon        = RESULTS[I].icon,
             .iconFont    = RESULTS[I].iconFont,
-            .selected    = (g_search.nav.zone == EOverviewNavZone::Result && sc<int>(I) == out.selection),
+            .selected    = (S.nav.zone == EOverviewNavZone::Result && sc<int>(I) == out.selection),
         };
     };
 
@@ -494,6 +496,7 @@ bool searchHoverEasing() {
 }
 
 void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part) {
+    auto& S = searchSession();
     if (!L.drawable)
         return;
     {
@@ -915,7 +918,7 @@ void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part)
     };
 
     // Nothing measured is nothing to fit: the placeholder keeps the rest width.
-    auto& FIELDMOTION = g_search.fieldOn(L.monitorId);
+    auto& FIELDMOTION = S.fieldOn(L.monitorId);
     FIELDMOTION.contentL = 0.F;
     FIELDMOTION.measured = true;
 
@@ -1230,14 +1233,15 @@ namespace {
 }
 
 std::string COverview::searchReport() const {
+    auto& S = searchSession();
     const auto  MON  = pMonitor.lock();
     std::string out  = std::format("mon {} closing={} keys={} tile={} matches={} band={:.1f}>{:.1f} width={:.1f} dock={:.2f}>{:.2f} pillNudgeWant={:.1f}",
                                    MON ? MON->m_name : std::string{"?"}, isClosing() ? 1 : 0, activeScrollOverview().get() == this ? 1 : 0,
                                    closeOnWindow.lock() ? closeOnWindow.lock()->m_class : std::string{"-"}, matchingWindowCount(),
                                    resultsBand ? resultsBand->value() : 0.F, resultsBand ? resultsBand->goal() : 0.F, resultsWidth ? resultsWidth->value() : 0.F,
                                    searchDock ? searchDock->value() : 0.F, searchDock ? searchDock->goal() : 0.F, pillNudgeWant);
-    const auto IT = g_search.layouts.find(searchMonitorId());
-    if (IT == g_search.layouts.end())
+    const auto IT = S.layouts.find(searchMonitorId());
+    if (IT == S.layouts.end())
         return out + " layout=none";
     const auto& L = IT->second;
     out += std::format(" drawable={} queried={} empty={} placeholder={} label={} rowL={:.1f} bandH={:.1f} pill={:.0f},{:.0f},{:.0f},{:.0f} fieldW={:.1f} "
@@ -1245,7 +1249,7 @@ std::string COverview::searchReport() const {
                        L.drawable ? 1 : 0, L.queried ? 1 : 0, L.emptyResult ? 1 : 0, L.placeholder ? 1 : 0, searchQuoted(L.label), L.rowL, L.bandH, L.pill.x, L.pill.y,
                        L.pill.width, L.pill.height, L.fieldW, L.containerBox.x, L.containerBox.y, L.containerBox.width, L.containerBox.height, L.gridTiles,
                        L.stripPlateL, L.gridNudgeL, L.gridShiftL, L.selection, L.hits.size(), L.cards.size(), L.tool.active ? 1 : 0, L.inspector.visible ? 1 : 0);
-    if (const auto F = g_search.fields.find(searchMonitorId()); F != g_search.fields.end())
+    if (const auto F = S.fields.find(searchMonitorId()); F != S.fields.end())
         out += std::format(" field={:.1f} moving={}", F->second.drawWidthL, F->second.moving ? 1 : 0);
     for (size_t i = 0; i < L.hits.size() && i < 16; ++i) {
         const auto& H = L.hits[i];
@@ -1255,15 +1259,16 @@ std::string COverview::searchReport() const {
 }
 
 std::string overviewSearchReport() {
-    const auto& Q    = g_search.query;
-    const auto& N    = g_search.nav;
+    auto& S = searchSession();
+    const auto& Q    = S.query;
+    const auto& N    = S.nav;
     const bool  PANE = overviewSearchPaneUp();
     const auto  ROWS = PANE ? overviewSearchRows() : std::vector<SSearchRow>{};
     std::string out  = std::format("hyprdrive search: overviews={} q={} active={} windowsOnly={} pane={} menuBack={} zone={} sel={} explicit={} firstPending={} "
                                    "intent={} hover={} kbTile={} drag={} rows={}",
                                    scrollOverviews().size(), searchQuoted(Q.text), Q.active ? 1 : 0, Q.windowsOnly ? 1 : 0, PANE ? 1 : 0,
                                    SearchBackend::canNavigateMenuBack() ? 1 : 0, searchZoneName(N.zone), N.selection, N.explicitSelection ? 1 : 0,
-                                   N.selectFirstPending ? 1 : 0, searchIntentName(N.intent), N.hoverIndex, N.keyboardTile ? 1 : 0, g_search.pointer.drag ? 1 : 0, ROWS.size());
+                                   N.selectFirstPending ? 1 : 0, searchIntentName(N.intent), N.hoverIndex, N.keyboardTile ? 1 : 0, S.pointer.drag ? 1 : 0, ROWS.size());
     if (N.selection >= 0 && N.selection < sc<int>(ROWS.size()))
         out += " selRow=" + searchQuoted(ROWS[sc<size_t>(N.selection)].name);
     for (size_t i = 0; i < ROWS.size() && i < 24; ++i)

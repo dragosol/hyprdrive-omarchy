@@ -19,6 +19,7 @@ namespace OvInternal {
 // ---------------------------------------------------------------------------
 
 void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
+        auto& S = searchSession();
         const auto INPUTOVERVIEW = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
         if (INPUTOVERVIEW) {
             const auto INPUTMONITOR = INPUTOVERVIEW->pMonitor.lock();
@@ -47,25 +48,25 @@ void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // Search hover is motion-only: results appearing under a parked cursor
         // must not steal SPACE from the query. Moving onto the pill puts SPACE
         // back to typing even if a file is still highlighted for Enter.
-        if (!drag.activeWindow && !resize.activeWindow && !(g_search.pointer.drag && g_search.pointer.drag->live)) {
+        if (!drag.activeWindow && !resize.activeWindow && !(S.pointer.drag && S.pointer.drag->live)) {
             if (searchLayoutHere().pill.containsPoint(lastMousePosLocal)) {
-                if (g_search.nav.hoverIndex != -1 || g_search.nav.intent == ESearchIntent::Hovering) {
-                    g_search.nav.hoverIndex = -1;
-                    g_search.nav.intent     = ESearchIntent::Typing;
+                if (S.nav.hoverIndex != -1 || S.nav.intent == ESearchIntent::Hovering) {
+                    S.nav.hoverIndex = -1;
+                    S.nav.intent     = ESearchIntent::Typing;
                     damage();
                 }
             } else if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
-                if (g_search.nav.hoverIndex != ROW->index) {
-                    g_search.nav.hoverIndex = ROW->index;
-                    g_search.nav.selection  = ROW->index;
-                    g_search.nav.zone       = EOverviewNavZone::Result;
-                    g_search.nav.intent     = ESearchIntent::Hovering;
+                if (S.nav.hoverIndex != ROW->index) {
+                    S.nav.hoverIndex = ROW->index;
+                    S.nav.selection  = ROW->index;
+                    S.nav.zone       = EOverviewNavZone::Result;
+                    S.nav.intent     = ESearchIntent::Hovering;
                     damage();
                 }
-            } else if (g_search.nav.hoverIndex != -1) {
-                g_search.nav.hoverIndex = -1;
-                if (g_search.nav.intent == ESearchIntent::Hovering)
-                    g_search.nav.intent = g_search.nav.explicitSelection ? ESearchIntent::Browsing : ESearchIntent::Typing;
+            } else if (S.nav.hoverIndex != -1) {
+                S.nav.hoverIndex = -1;
+                if (S.nav.intent == ESearchIntent::Hovering)
+                    S.nav.intent = S.nav.explicitSelection ? ESearchIntent::Browsing : ESearchIntent::Typing;
                 damage();
             }
         }
@@ -90,14 +91,14 @@ void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         }
 
         // G12. The hold has to pass BEFORE the distance is even looked at.
-        if (g_search.pointer.drag && !g_search.pointer.drag->desktopId.empty()) {
-            if (!g_search.pointer.drag->live) {
-                const float HELDMS = Hyprdrive::Config::realElapsedMs(g_search.pointer.drag->startedAt);
-                if (HELDMS >= G12_HOLD_MS && g_search.pointer.drag->start.distanceSq(lastMousePosLocal) > DRAGTHRESHOLDSQ)
-                    g_search.pointer.drag->live = true;
+        if (S.pointer.drag && !S.pointer.drag->desktopId.empty()) {
+            if (!S.pointer.drag->live) {
+                const float HELDMS = Hyprdrive::Config::realElapsedMs(S.pointer.drag->startedAt);
+                if (HELDMS >= G12_HOLD_MS && S.pointer.drag->start.distanceSq(lastMousePosLocal) > DRAGTHRESHOLDSQ)
+                    S.pointer.drag->live = true;
             }
 
-            if (g_search.pointer.drag->live) {
+            if (S.pointer.drag->live) {
                 const auto MON = pMonitor.lock();
                 Hyprdrive::Dock::setForeignInsert(Hyprdrive::Dock::showAppsContains(MON, lastMousePosLocal) ? -1 : Hyprdrive::Dock::dropIndexAt(MON, lastMousePosLocal));
                 damage();
@@ -152,7 +153,7 @@ void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // Evaluated first so the signature is updated whichever way this goes.
         const bool HOVERMOVED = hoverSignatureChanged();
         if (HOVERMOVED || drag.pendingPrimary || drag.activeWindow || resize.pointerDown || resize.activeWindow || pan.pointerDown || submapMouseClickPending ||
-            (g_search.pointer.drag && g_search.pointer.drag->live))
+            (S.pointer.drag && S.pointer.drag->live))
             requestInputFrame();
 
         // D6: a drag that STARTS on a strip mini picks up that window, not
@@ -236,6 +237,7 @@ void COverview::onTouchMove(ITouch::SMotionEvent, Event::SCallbackInfo& info) {
 }
 
 void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
+        auto& S = searchSession();
         const auto INPUTOVERVIEW = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
         if (closing || (g_pointerGrabOverview && g_pointerGrabOverview != this) || (!g_pointerGrabOverview && INPUTOVERVIEW.get() != this))
             return;
@@ -400,9 +402,9 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
             // On the pill it pins, on Show Applications it unpins, and anywhere
             // else -- including on another result -- it is rejected outright,
             // which is what "must not create a folder or reorder anything" is.
-            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && g_search.pointer.drag) {
-                const auto DRAG = *g_search.pointer.drag;
-                g_search.pointer.drag.reset();
+            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && S.pointer.drag) {
+                const auto DRAG = *S.pointer.drag;
+                S.pointer.drag.reset();
                 Hyprdrive::Dock::setForeignInsert(-1);
                 damage();
                 requestInputFrame();
@@ -424,9 +426,9 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
                 // user changing their mind, which is a no-op. G12's hold stays
                 // the drag gate -- a click is simply what happens without it.
                 if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index)) {
-                    if (const auto W = g_search.nav.pendingFocus.lock()) {
+                    if (const auto W = S.nav.pendingFocus.lock()) {
                         closeOnWindow = W;
-                        g_search.nav.pendingFocus.reset();
+                        S.nav.pendingFocus.reset();
                     }
                     close();
                 }
@@ -434,7 +436,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
                 return;
             }
 
-            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && std::exchange(g_search.pointer.uiPress, false))
+            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && std::exchange(S.pointer.uiPress, false))
                 return;
 
             // The pill's own gestures: hover panel > pill drag/click > off-pill
@@ -458,25 +460,25 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
             // panel's to define.
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
                 if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
-                    g_search.nav.selection         = ROW->index;
-                    g_search.nav.zone              = EOverviewNavZone::Result;
-                    g_search.nav.intent            = ESearchIntent::Hovering;
-                    g_search.pointer.drag =
+                    S.nav.selection         = ROW->index;
+                    S.nav.zone              = EOverviewNavZone::Result;
+                    S.nav.intent            = ESearchIntent::Hovering;
+                    S.pointer.drag =
                         SResultDrag{.desktopId = ROW->desktopId, .icon = ROW->icon, .start = lastMousePosLocal, .startedAt = Time::steadyNow(), .index = ROW->index};
                     return;
                 }
                 if (searchLayoutHere().pill.containsPoint(lastMousePosLocal)) {
-                    g_search.query.active = true;
-                    g_search.nav.zone = EOverviewNavZone::Search;
-                    g_search.nav.selection = -1;
-                    g_search.pointer.uiPress = true;
+                    S.query.active = true;
+                    S.nav.zone = EOverviewNavZone::Search;
+                    S.nav.selection = -1;
+                    S.pointer.uiPress = true;
                     searchPillPress(true); // the playful swell (Overview.cpp, THE PILL PLAYS)
                     damage();
                     requestInputFrame();
                     return;
                 }
                 if (searchLayoutHere().containerBox.width > 1.F && searchLayoutHere().containerBox.containsPoint(lastMousePosLocal)) {
-                    g_search.pointer.uiPress = true;
+                    S.pointer.uiPress = true;
                     return;
                 }
             }
@@ -838,6 +840,7 @@ void COverview::onWorkspaceLifecycle(PHLWORKSPACEREF) {
 }
 
 void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
+        auto& S = searchSession();
         if (closing || event.state != WL_KEYBOARD_KEY_STATE_PRESSED || activeScrollOverview().get() != this)
             return;
 
@@ -919,22 +922,22 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // ...from the SEARCH FIELD only. Down used to drop into the
                 // results from anywhere, including mid-grid, which is the same
                 // "an arrow left the pane" the Tile walk above no longer does.
-                if (g_search.nav.zone != EOverviewNavZone::Result && g_search.nav.zone != EOverviewNavZone::Tile && g_search.nav.zone != EOverviewNavZone::Desktop &&
+                if (S.nav.zone != EOverviewNavZone::Result && S.nav.zone != EOverviewNavZone::Tile && S.nav.zone != EOverviewNavZone::Desktop &&
                     overviewSearchPaneUp()) {
                     if (!searchLayoutHere().hits.empty()) {
-                        g_search.nav.zone              = EOverviewNavZone::Result;
-                        g_search.nav.selection         = searchLayoutHere().hits[0].index;
-                        g_search.nav.explicitSelection = true;
-                        g_search.nav.intent            = ESearchIntent::Browsing;
+                        S.nav.zone              = EOverviewNavZone::Result;
+                        S.nav.selection         = searchLayoutHere().hits[0].index;
+                        S.nav.explicitSelection = true;
+                        S.nav.intent            = ESearchIntent::Browsing;
                         damage();
                         break;
                     } else {
                         const auto RESULTS = overviewSearchRows();
                         if (!RESULTS.empty()) {
-                            g_search.nav.zone              = EOverviewNavZone::Result;
-                            g_search.nav.selection         = 0;
-                            g_search.nav.explicitSelection = true;
-                            g_search.nav.intent            = ESearchIntent::Browsing;
+                            S.nav.zone              = EOverviewNavZone::Result;
+                            S.nav.selection         = 0;
+                            S.nav.explicitSelection = true;
+                            S.nav.intent            = ESearchIntent::Browsing;
                             damage();
                             break;
                         }
@@ -962,30 +965,30 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // A pane that is not there is skipped rather than being a dead
                 // stop: with no query there are no results, so the cycle is the
                 // two remaining panes.
-                if (g_search.nav.zone == EOverviewNavZone::Tile) {
-                    g_search.nav.zone              = EOverviewNavZone::Desktop;
-                    g_search.nav.selection         = -1;
-                    g_search.nav.keyboardTile      = false;
-                    g_search.nav.explicitSelection = true;
+                if (S.nav.zone == EOverviewNavZone::Tile) {
+                    S.nav.zone              = EOverviewNavZone::Desktop;
+                    S.nav.selection         = -1;
+                    S.nav.keyboardTile      = false;
+                    S.nav.explicitSelection = true;
                     TileChrome::setHovered(PHLWINDOW{}, false);
                     damage();
                     break;
                 }
 
-                if (g_search.nav.zone == EOverviewNavZone::Desktop) {
+                if (S.nav.zone == EOverviewNavZone::Desktop) {
                     const auto RESULTS = overviewSearchRows();
                     if (overviewSearchPaneUp() && !RESULTS.empty()) {
-                        g_search.nav.zone              = EOverviewNavZone::Result;
-                        g_search.nav.explicitSelection = true;
-                        g_search.nav.intent            = ESearchIntent::Browsing;
-                        g_search.nav.keyboardTile      = false;
-                        if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
-                            g_search.nav.selection = 0;
+                        S.nav.zone              = EOverviewNavZone::Result;
+                        S.nav.explicitSelection = true;
+                        S.nav.intent            = ESearchIntent::Browsing;
+                        S.nav.keyboardTile      = false;
+                        if (S.nav.selection < 0 || S.nav.selection >= sc<int>(RESULTS.size()))
+                            S.nav.selection = 0;
                         TileChrome::setHovered(PHLWINDOW{}, false);
                     } else {
-                        g_search.nav.zone         = EOverviewNavZone::Tile;
-                        g_search.nav.selection    = -1;
-                        g_search.nav.keyboardTile = true;
+                        S.nav.zone         = EOverviewNavZone::Tile;
+                        S.nav.selection    = -1;
+                        S.nav.keyboardTile = true;
                         if (!isNavTile(closeOnWindow.lock())) {
                             if (const auto FIRST = firstNavTile())
                                 closeOnWindow = FIRST;
@@ -996,9 +999,9 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                     break;
                 }
 
-                if (g_search.nav.zone == EOverviewNavZone::Result) {
-                    g_search.nav.zone         = EOverviewNavZone::Tile;
-                    g_search.nav.keyboardTile = true;
+                if (S.nav.zone == EOverviewNavZone::Result) {
+                    S.nav.zone         = EOverviewNavZone::Tile;
+                    S.nav.keyboardTile = true;
                     // The window the overview opened on is still `closeOnWindow`,
                     // and a query usually hides it -- kept, it made the walk
                     // start from a tile nobody can see. Keep it only if it is
@@ -1012,12 +1015,12 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 } else if (overviewSearchPaneUp()) {
                     const auto RESULTS = overviewSearchRows();
                     if (!RESULTS.empty()) {
-                        g_search.nav.zone              = EOverviewNavZone::Result;
-                        g_search.nav.explicitSelection = true;
-                        g_search.nav.intent            = ESearchIntent::Browsing;
-                        g_search.nav.keyboardTile      = false;
-                        if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
-                            g_search.nav.selection = 0;
+                        S.nav.zone              = EOverviewNavZone::Result;
+                        S.nav.explicitSelection = true;
+                        S.nav.intent            = ESearchIntent::Browsing;
+                        S.nav.keyboardTile      = false;
+                        if (S.nav.selection < 0 || S.nav.selection >= sc<int>(RESULTS.size()))
+                            S.nav.selection = 0;
                         TileChrome::setHovered(PHLWINDOW{}, false);
                     }
                 }
@@ -1030,22 +1033,22 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                 // The root browse (nothing typed, no submenu) runs only a row the
                 // keyboard walked onto: Enter in the bare pill still means "back
                 // to the window", never "run the first menu row" (Lock, Shut Down).
-                const bool PICKABLE = !g_search.query.text.empty() || SearchBackend::canNavigateMenuBack() ||
-                    (overviewSearchPaneUp() && g_search.nav.zone == EOverviewNavZone::Result);
-                if (PICKABLE && g_search.nav.zone != EOverviewNavZone::Tile && g_search.nav.zone != EOverviewNavZone::Desktop) {
+                const bool PICKABLE = !S.query.text.empty() || SearchBackend::canNavigateMenuBack() ||
+                    (overviewSearchPaneUp() && S.nav.zone == EOverviewNavZone::Result);
+                if (PICKABLE && S.nav.zone != EOverviewNavZone::Tile && S.nav.zone != EOverviewNavZone::Desktop) {
                     const auto RESULTS = overviewSearchRows();
 
                     int launchIdx = -1;
-                    if (g_search.nav.zone == EOverviewNavZone::Result && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size()))
-                        launchIdx = g_search.nav.selection;
-                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || g_search.nav.zone == EOverviewNavZone::Search || SearchBackend::canNavigateMenuBack()))
+                    if (S.nav.zone == EOverviewNavZone::Result && S.nav.selection >= 0 && S.nav.selection < sc<int>(RESULTS.size()))
+                        launchIdx = S.nav.selection;
+                    else if (!RESULTS.empty() && (matchingWindowCount() == 0 || S.nav.zone == EOverviewNavZone::Search || SearchBackend::canNavigateMenuBack()))
                         launchIdx = 0;
 
-                    const std::string QUERY_BEFORE = g_search.query.text;
+                    const std::string QUERY_BEFORE = S.query.text;
                     if (launchIdx >= 0 && activateSearchResult(launchIdx, SHIFT_PRESSED)) {
-                        if (const auto W = g_search.nav.pendingFocus.lock()) {
+                        if (const auto W = S.nav.pendingFocus.lock()) {
                             closeOnWindow = W;
-                            g_search.nav.pendingFocus.reset();
+                            S.nav.pendingFocus.reset();
                         }
                         if (!pickKeepsFocus())
                             for (const auto& overview : scrollOverviews()) {
@@ -1057,7 +1060,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
                     }
                     // A tool row (Define / Translate) rewrote the query: the
                     // panel turns into the dictionary, so the overview stays.
-                    if (g_search.nav.zone == EOverviewNavZone::Result || g_search.query.text != QUERY_BEFORE) {
+                    if (S.nav.zone == EOverviewNavZone::Result || S.query.text != QUERY_BEFORE) {
                         damage();
                         break;
                     }

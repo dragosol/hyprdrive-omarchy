@@ -13,7 +13,8 @@ using namespace OverviewDetail;
 // just the focused one: the strip shows matching minis from elsewhere, so "no
 // matches" has to agree with that.
 size_t COverview::matchingWindowCount() const {
-    if (g_search.query.text.empty())
+    auto& S = searchSession();
+    if (S.query.text.empty())
         return 0;
 
     // N walks of the whole window list, once per desktop, every frame on every
@@ -21,7 +22,7 @@ size_t COverview::matchingWindowCount() const {
     // joins, leaves, is minimized or is retitled, all of which bump the
     // membership generation this keys on.
     const uint64_t MEMBERS = Membership::generation();
-    if (matchCountFilled && matchCountQuery == g_search.query.text && matchCountMembers == MEMBERS && matchCountImages == images.size())
+    if (matchCountFilled && matchCountQuery == S.query.text && matchCountMembers == MEMBERS && matchCountImages == images.size())
         return matchCountValue;
 
     size_t matches = 0;
@@ -30,7 +31,7 @@ size_t COverview::matchingWindowCount() const {
             matches += overviewGridWindows(wimg->pWorkspace).size();
     }
 
-    matchCountQuery   = g_search.query.text;
+    matchCountQuery   = S.query.text;
     matchCountMembers = MEMBERS;
     matchCountImages  = images.size();
     matchCountValue   = matches;
@@ -79,10 +80,12 @@ MONITORID COverview::searchMonitorId() const {
 }
 
 SSearchLayout& COverview::searchLayoutHere() const {
-    return g_search.layoutOn(searchMonitorId());
+    auto& S = searchSession();
+    return S.layoutOn(searchMonitorId());
 }
 
 void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
+    auto& SESSION = searchSession();
     Prof::Timer PROF{Prof::srchNs, Prof::srchCalls};
     if (!monitor)
         return;
@@ -104,11 +107,11 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // submenu after Enter (query is cleared so children are listed).
     const bool QUERIED = overviewSearchPaneUp(); // a query, a submenu, or the root browse (search:browse_on_click)
 
-    const size_t MATCHES = !g_search.query.text.empty() ? matchingWindowCount() : 0;
+    const size_t MATCHES = !SESSION.query.text.empty() ? matchingWindowCount() : 0;
     const auto   RESULTS = QUERIED ? overviewSearchRows() : std::vector<SSearchRow>{};
 
     // An app hit is a hit: "no matches" must not contradict a listed result.
-    const bool EMPTYRESULT = QUERIED && !g_search.query.text.empty() && MATCHES == 0 && RESULTS.empty();
+    const bool EMPTYRESULT = QUERIED && !SESSION.query.text.empty() && MATCHES == 0 && RESULTS.empty();
 
     // How many previews the grid below is showing, which is what the row budget
     // is a ratio OF. Needed BEFORE the trim: the trim is what decides how many
@@ -121,13 +124,13 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // Typing arms first-app selection; results land over the next frames, so
     // the spend lives here -- once, on the first frame that actually has an
     // Omarchy/apps row. Not Browsing: auto-select is for Enter, not SPACE.
-    if (g_search.nav.selectFirstPending) {
+    if (SESSION.nav.selectFirstPending) {
         const int FIRST = overviewFirstAppIndex(RESULTS);
         if (FIRST >= 0) {
-            g_search.nav.selection         = FIRST;
-            g_search.nav.zone              = EOverviewNavZone::Result;
-            g_search.nav.selectFirstPending = false;
-            g_search.nav.explicitSelection = false;
+            SESSION.nav.selection         = FIRST;
+            SESSION.nav.zone              = EOverviewNavZone::Result;
+            SESSION.nav.selectFirstPending = false;
+            SESSION.nav.explicitSelection = false;
         }
     }
 
@@ -135,7 +138,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
 
     // Show Windows has no panel at all: no band to reserve between the pill and
     // the strip (user, 2026-09-24: "all this empty unused space").
-    const bool  PANEL  = QUERIED && !g_search.query.windowsOnly;
+    const bool  PANEL  = QUERIED && !SESSION.query.windowsOnly;
     const bool TOOLPANE = !RESULTS.empty() && RESULTS[0].tool != 0;
     float      toolRowsHL = -1.F;
     if (PANEL && TOOLPANE) {
@@ -177,7 +180,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // pass is the only place a glyph's width is known), which one frame behind
     // a spring cannot show. The field hugs the query from its rest width up to
     // the cap; whatever the query needs beyond the cap becomes scroll.
-    auto&       FIELDMOTION = g_search.fieldOn(monitor->m_id);
+    auto&       FIELDMOTION = SESSION.fieldOn(monitor->m_id);
     const float MAXFIELDL   = std::max(OVERVIEW_PILL_FIELDL, sc<float>(monitor->m_size.x) * OVERVIEW_PILL_MAXFRAC - OVERVIEW_PILL_WL(0.F));
     // Whole logical px: the measurement is a glyph run divided by a float scale,
     // and a target that wanders by a fraction of a pixel re-arms the spring --
@@ -187,7 +190,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // LANDS on its width: the glyphs are re-rasterised at each step of the
     // zoom, and a whole-px font size divided by a float scale wobbles a few
     // logical px -- an underdamped spring turned that into a visible bounce.
-    const bool  FIELDLANDS  = scale->isBeingAnimated() && !g_pillHovered && !g_pillPress.down && g_search.query.text.empty();
+    const bool  FIELDLANDS  = scale->isBeingAnimated() && !g_pillHovered && !g_pillPress.down && SESSION.query.text.empty();
     if (FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow(), FIELDLANDS))
         requestInputFrame();
 
@@ -204,10 +207,10 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         .colW        = {COL_TGT.col[0], COL_TGT.col[1], COL_TGT.col[2]},
         .inspectorW  = COL_TGT.inspector,
         .rowLCarry   = searchLayoutHere().rowL,
-        .query       = g_search.query.text,
+        .query       = SESSION.query.text,
         .queried     = QUERIED,
         .emptyResult = EMPTYRESULT,
-        .selection   = g_search.nav.selection,
+        .selection   = SESSION.nav.selection,
         .fieldWL     = FIELDMOTION.drawWidthL,
     };
 
@@ -227,27 +230,27 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     LAYOUT.gridNudgeL  = searchLayoutHere().gridNudgeL;
     LAYOUT.gridShiftL  = gridNudge->value();
 
-    g_search.nav.selection = LAYOUT.selection;
+    SESSION.nav.selection = LAYOUT.selection;
     searchLayoutHere()     = std::move(LAYOUT);
 
-    if (QUERIED && g_search.nav.selection >= 0 && g_search.nav.selection < sc<int>(RESULTS.size())) {
-        if (RESULTS[g_search.nav.selection].omarchy && !RESULTS[g_search.nav.selection].omarchy->filePath.empty()) {
-            SearchBackend::updateSushiIfActive(RESULTS[g_search.nav.selection].omarchy->filePath);
+    if (QUERIED && SESSION.nav.selection >= 0 && SESSION.nav.selection < sc<int>(RESULTS.size())) {
+        if (RESULTS[SESSION.nav.selection].omarchy && !RESULTS[SESSION.nav.selection].omarchy->filePath.empty()) {
+            SearchBackend::updateSushiIfActive(RESULTS[SESSION.nav.selection].omarchy->filePath);
         }
     }
 
     // ---- DRAW: out of the published object, so the painter, the pointer and
     // the keyboard are provably looking at the same boxes.
-    SearchLetters::g_searchLetters.sync(g_search.query.text, Time::steadyNow());
+    SearchLetters::g_searchLetters.sync(SESSION.query.text, Time::steadyNow());
     {
         const auto& SL   = searchLayoutHere();
         const bool  KEYS = activeScrollOverview().get() == this;
-        const bool PILLLIT = (KEYS && g_search.nav.zone == EOverviewNavZone::Search) || pointerOnChrome(SL.pill);
-        g_pillHovered      = KEYS && pointerOnChrome(SL.pill) && g_search.query.text.empty();
+        const bool PILLLIT = (KEYS && SESSION.nav.zone == EOverviewNavZone::Search) || pointerOnChrome(SL.pill);
+        g_pillHovered      = KEYS && pointerOnChrome(SL.pill) && SESSION.query.text.empty();
         g_pillPress.step(Time::steadyNow());
         if (pillPlaying())
             requestInputFrame();
-        const bool BODYLIT = (KEYS && g_search.nav.zone == EOverviewNavZone::Result) || pointerOnChrome(SL.containerBox);
+        const bool BODYLIT = (KEYS && SESSION.nav.zone == EOverviewNavZone::Result) || pointerOnChrome(SL.containerBox);
         // THE RESULTS PANE'S ENTRANCE AND EXIT, motion-blurred (user,
         // 2026-09-30: "0.5 motion blur on the search results pane appearing /
         // disappearing"): while its band or width animates, the body is drawn
@@ -308,8 +311,9 @@ static const std::string* searchPreviewPath(const std::vector<SSearchRow>& resul
 }
 
 bool overviewToggleSushiForSelection() {
+    auto& S = searchSession();
     const auto        RESULTS = overviewSearchRows();
-    const std::string* PATH   = searchPreviewPath(RESULTS, g_search.nav.selection);
+    const std::string* PATH   = searchPreviewPath(RESULTS, S.nav.selection);
     if (!PATH)
         return false;
     SearchBackend::toggleSushi(*PATH);
@@ -317,16 +321,17 @@ bool overviewToggleSushiForSelection() {
 }
 
 bool overviewHandleSearchSpace() {
+    auto& S = searchSession();
     const auto RESULTS = overviewSearchRows();
-    const std::string* HOVER = searchPreviewPath(RESULTS, g_search.nav.hoverIndex);
-    const std::string* SEL   = searchPreviewPath(RESULTS, g_search.nav.selection);
-    if (!overviewSpacePreviews(g_search.nav.intent, HOVER != nullptr, SEL != nullptr, g_search.nav.explicitSelection)) {
+    const std::string* HOVER = searchPreviewPath(RESULTS, S.nav.hoverIndex);
+    const std::string* SEL   = searchPreviewPath(RESULTS, S.nav.selection);
+    if (!overviewSpacePreviews(S.nav.intent, HOVER != nullptr, SEL != nullptr, S.nav.explicitSelection)) {
         if (SearchBackend::isSushiActive())
             SearchBackend::closeSushi();
         return false;
     }
 
-    const std::string* PATH = (g_search.nav.intent == ESearchIntent::Hovering && HOVER) ? HOVER : SEL;
+    const std::string* PATH = (S.nav.intent == ESearchIntent::Hovering && HOVER) ? HOVER : SEL;
     if (!PATH)
         return false;
     SearchBackend::toggleSushi(*PATH);
@@ -334,11 +339,12 @@ bool overviewHandleSearchSpace() {
 }
 
 bool overviewHandleShiftTap() {
-    if (g_search.query.text.empty())
+    auto& S = searchSession();
+    if (S.query.text.empty())
         return false;
 
     const auto RESULTS = overviewSearchRows();
-    int        idx     = g_search.nav.selection;
+    int        idx     = S.nav.selection;
     if (idx < 0 || idx >= sc<int>(RESULTS.size()))
         idx = overviewFirstAppIndex(RESULTS);
     if (idx < 0 || idx >= sc<int>(RESULTS.size()) || !RESULTS[sc<size_t>(idx)].app)
@@ -358,6 +364,7 @@ bool overviewHandleShiftTap() {
 // Tools column, and the selection follows it there -- left where it was, the
 // highlight would sit on whichever agent slid into the old slot.
 bool overviewHandleCtrlTap() {
+    auto& S = searchSession();
     const auto RESULTS = overviewSearchRows();
 
     const auto agentAt = [&](int idx) -> std::optional<SearchBackend::SSearchItem> {
@@ -367,16 +374,16 @@ bool overviewHandleCtrlTap() {
         return SearchBackend::canBeDefaultAgent(ITEM) ? std::optional{ITEM} : std::nullopt;
     };
 
-    auto item = g_search.nav.intent == ESearchIntent::Hovering ? agentAt(g_search.nav.hoverIndex) : std::nullopt;
+    auto item = S.nav.intent == ESearchIntent::Hovering ? agentAt(S.nav.hoverIndex) : std::nullopt;
     if (!item)
-        item = agentAt(g_search.nav.selection);
+        item = agentAt(S.nav.selection);
     if (!item || !SearchBackend::setDefaultAgent(*item))
         return false;
 
     const auto REORDERED = overviewSearchRows();
     for (size_t i = 0; i < REORDERED.size(); ++i) {
         if (REORDERED[i].omarchy && REORDERED[i].omarchy->id == item->id) {
-            g_search.nav.selection = sc<int>(i);
+            S.nav.selection = sc<int>(i);
             break;
         }
     }

@@ -45,9 +45,12 @@
 
 #include "SearchLayout.hpp"
 
-// THE search session. One instance, `g_search` below; there is exactly one
-// keyboard and one cursor, so this is per-session state and not per-monitor.
-struct SSearchSession {
+namespace Search {
+
+// THE search session. One instance (SearchSession.cpp, reached through
+// searchSession() below); there is exactly one keyboard and one cursor, so this
+// is per-session state and not per-monitor.
+struct CSession {
     // ---- the query, and everything derived from it ----------------------
     struct SQuery {
         // OVERVIEW_CPP_SPEC §5 F2 type-to-filter query. Written by the keyboard
@@ -185,12 +188,17 @@ struct SSearchSession {
     }
 };
 
-inline SSearchSession g_search;
+} // namespace Search
+
+// The one session, plugin-wide: both outputs' overviews share it, exactly as
+// they share the keyboard. Defined in SearchSession.cpp.
+Search::CSession& searchSession();
 
 // G12/X62. The result row under a point, or nullptr. The pointer's half of "one
 // hit list, two devices"; moveSelection() walks the same vector.
 inline const SSearchRowHit* searchRowAt(MONITORID monitor, const Vector2D& point) {
-    for (const auto& ROW : g_search.layoutOn(monitor).hits) {
+    auto& S = searchSession();
+    for (const auto& ROW : S.layoutOn(monitor).hits) {
         if (ROW.box.containsPoint(point))
             return &ROW;
     }
