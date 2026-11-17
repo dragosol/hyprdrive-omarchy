@@ -3,7 +3,7 @@
 # never run.
 #
 # The state comes from the plugin's read-only dump, `hyprdrive:debug search`
-# (overviewSearchReport, OverviewSearchView.cpp):
+# (overviewSearchReport, search/SearchView.cpp):
 #   hyprdrive search: overviews=N q="..." active= windowsOnly= pane= menuBack= zone= sel= explicit=
 #                     firstPending= intent= hover= kbTile= drag= rows=N [selRow="..."]
 #     row I cCOL KIND "NAME"                     (the ranked rows, while the pane is up)

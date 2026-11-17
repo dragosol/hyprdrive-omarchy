@@ -827,7 +827,7 @@ void COverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBo
         // The ring has three owners, and DRAGGED has to be one of them in its
         // own right. It used to ride the keyboard clause by accident -- a drag
         // leaves closeOnWindow on the window it picked up -- and X74 gating that
-        // clause behind g_search.nav.keyboardTile took the ring off the dragged
+        // clause behind the session's nav.keyboardTile took the ring off the dragged
         // window with it, because a drag is pointer input and clears the flag.
         //
         // It cannot come from hovered() either: updateTileHover drops the hover

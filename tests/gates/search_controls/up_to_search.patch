@@ -1,13 +1,13 @@
-diff --git a/src/overview/OverviewKeys.cpp b/src/overview/OverviewKeys.cpp
-index 6b59e8b..5d859f3 100644
---- a/src/overview/OverviewKeys.cpp
-+++ b/src/overview/OverviewKeys.cpp
-@@ -425,7 +425,7 @@ bool COverview::moveSelection(const std::string& direction) {
-                     g_search.nav.selection = sc<int>(SEC.rows[sc<size_t>(P)]);
+diff --git a/src/search/SearchKeys.cpp b/src/search/SearchKeys.cpp
+index f57dabd..0c83332 100644
+--- a/src/search/SearchKeys.cpp
++++ b/src/search/SearchKeys.cpp
+@@ -24,7 +24,7 @@ Search::SKeyOutcome Search::onArrow(CSession& S, MONITORID monitor, bool LEFT, b
+                     S.nav.selection = sc<int>(SEC.rows[sc<size_t>(P)]);
                  else if (UP) {
                      // Up off the top of the column returns focus to the search bar.
--                    g_search.nav.zone              = EOverviewNavZone::Search;
-+                    // CONTROL up_to_search: g_search.nav.zone = EOverviewNavZone::Search;
-                     g_search.nav.selection         = -1;
-                     g_search.nav.explicitSelection = false;
-                     g_search.nav.intent            = ESearchIntent::Typing;
+-                    S.nav.zone              = EOverviewNavZone::Search;
++                    // CONTROL up_to_search: S.nav.zone = EOverviewNavZone::Search;
+                     S.nav.selection         = -1;
+                     S.nav.explicitSelection = false;
+                     S.nav.intent            = ESearchIntent::Typing;

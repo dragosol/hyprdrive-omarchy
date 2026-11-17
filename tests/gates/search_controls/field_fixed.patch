@@ -1,13 +1,13 @@
-diff --git a/src/overview/OverviewSearchView.cpp b/src/overview/OverviewSearchView.cpp
-index e7ebdb8..ba5329c 100644
---- a/src/overview/OverviewSearchView.cpp
-+++ b/src/overview/OverviewSearchView.cpp
-@@ -1410,7 +1410,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
+diff --git a/src/search/SearchFrame.cpp b/src/search/SearchFrame.cpp
+index e8844c0..8b64a45 100644
+--- a/src/search/SearchFrame.cpp
++++ b/src/search/SearchFrame.cpp
+@@ -85,7 +85,7 @@ bool Search::stepField(CSession& S, PHLMONITOR monitor, bool zooming) {
      // zoom, and a whole-px font size divided by a float scale wobbles a few
      // logical px -- an underdamped spring turned that into a visible bounce.
-     const bool  FIELDLANDS  = scale->isBeingAnimated() && !g_pillHovered && !g_pillPress.down && g_search.query.text.empty();
--    if (FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow(), FIELDLANDS))
-+    if (FIELDMOTION.stepTo(OVERVIEW_PILL_FIELDL, 0.F, Time::steadyNow(), FIELDLANDS)) // CONTROL field_fixed
-         requestInputFrame();
+     const bool  FIELDLANDS  = zooming && !g_pillHovered && !g_pillPress.down && S.query.text.empty();
+-    return FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow(), FIELDLANDS);
++    return FIELDMOTION.stepTo(OVERVIEW_PILL_FIELDL, 0.F, Time::steadyNow(), FIELDLANDS); // CONTROL field_fixed
+ }
  
-     // ---- LAYOUT: the animated values are sampled once, right here.
+ void Search::publish(CSession& S, MONITORID view, SSearchLayout&& LAYOUT, size_t GRID_TILES, float gridShiftL, bool QUERIED, const std::vector<SSearchRow>& RESULTS) {

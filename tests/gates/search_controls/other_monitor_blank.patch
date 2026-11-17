@@ -1,8 +1,8 @@
-diff --git a/src/overview/OverviewSearchView.cpp b/src/overview/OverviewSearchView.cpp
-index e7ebdb8..94064aa 100644
---- a/src/overview/OverviewSearchView.cpp
-+++ b/src/overview/OverviewSearchView.cpp
-@@ -1312,6 +1312,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
+diff --git a/src/overview/OverviewSearchStep.cpp b/src/overview/OverviewSearchStep.cpp
+index 7388178..33a7973 100644
+--- a/src/overview/OverviewSearchStep.cpp
++++ b/src/overview/OverviewSearchStep.cpp
+@@ -95,6 +95,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
      // return below is a frame with no rows on it, and a stale box would hand
      // the next press a result that is no longer on screen.
      searchLayoutHere().hits.clear();
