@@ -6,6 +6,7 @@
 #include "Rows.hpp"
 #include "MotionCurves.hpp"
 #include "SearchView.hpp"
+#include "SearchFrame.hpp"
 
 using namespace OverviewDetail;
 
@@ -105,55 +106,21 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // ---- ANIMATE: re-aim the search animations from this frame's results.
     // Results exist once there is query text, or while browsing an Omarchy
     // submenu after Enter (query is cleared so children are listed).
-    const bool QUERIED = overviewSearchPaneUp(SESSION); // a query, a submenu, or the root browse (search:browse_on_click)
+    auto         FRAME       = Search::frameRows(SESSION, monitor, searchMonitorId(), [this] { return matchingWindowCount(); },
+                                                 [&] { return overviewMainGridWindows(monitor->m_activeWorkspace, monitor).size(); });
+    const bool   QUERIED     = FRAME.queried;
+    const bool   EMPTYRESULT = FRAME.emptyResult;
+    const auto&  RESULTS     = FRAME.results;
+    const auto&  SECTIONS    = FRAME.sections;
+    const size_t GRID_TILES  = FRAME.gridTiles;
 
-    const size_t MATCHES = !SESSION.query.text.empty() ? matchingWindowCount() : 0;
-    const auto   RESULTS = QUERIED ? overviewSearchRows(SESSION) : std::vector<SSearchRow>{};
-
-    // An app hit is a hit: "no matches" must not contradict a listed result.
-    const bool EMPTYRESULT = QUERIED && !SESSION.query.text.empty() && MATCHES == 0 && RESULTS.empty();
-
-    // How many previews the grid below is showing, which is what the row budget
-    // is a ratio OF. Needed BEFORE the trim: the trim is what decides how many
-    // rows exist, so a cap computed after it could never raise the ceiling.
-    const size_t GRID_TILES = QUERIED && monitor->m_activeWorkspace ? overviewMainGridWindows(monitor->m_activeWorkspace, monitor).size() : 0;
-
-    auto SECTIONS = overviewSearchSections(RESULTS);
-    overviewTrimSectionsToFit(SESSION, SECTIONS, monitor, GRID_TILES);
-
-    // Typing arms first-app selection; results land over the next frames, so
-    // the spend lives here -- once, on the first frame that actually has an
-    // Omarchy/apps row. Not Browsing: auto-select is for Enter, not SPACE.
-    if (SESSION.nav.selectFirstPending) {
-        const int FIRST = overviewFirstAppIndex(RESULTS);
-        if (FIRST >= 0) {
-            SESSION.nav.selection         = FIRST;
-            SESSION.nav.zone              = EOverviewNavZone::Result;
-            SESSION.nav.selectFirstPending = false;
-            SESSION.nav.explicitSelection = false;
-        }
-    }
-
-    searchLayoutHere().gridTiles = GRID_TILES;
-
-    // Show Windows has no panel at all: no band to reserve between the pill and
-    // the strip (user, 2026-09-24: "all this empty unused space").
-    const bool  PANEL  = QUERIED && !SESSION.query.windowsOnly;
-    const bool TOOLPANE = !RESULTS.empty() && RESULTS[0].tool != 0;
-    float      toolRowsHL = -1.F;
-    if (PANEL && TOOLPANE) {
-        const float SPAN = overviewResultsSpanW(monitor);
-        toolRowsHL       = 0.F;
-        for (const auto& ROW : RESULTS)
-            toolRowsHL += overviewToolRowHL(ROW, SPAN) + OVERVIEW_TOOL_GAPL;
-    }
     // The easter egg's frame takes the same band (KeyboardCat::bandL), so the
     // strip makes room for it the way it does for results.
-    const float TARGET = std::max(PANEL ? overviewResultsBandTarget(monitor, SECTIONS, GRID_TILES, TOOLPANE, toolRowsHL) : 0.F, Hyprdrive::KeyboardCat::bandL());
+    const float TARGET = Search::bandTarget(FRAME, monitor);
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 
-    const float WIDTH_TARGET = PANEL ? overviewResultsWidthTarget(monitor, SECTIONS) : 0.F;
+    const float WIDTH_TARGET = Search::widthTarget(FRAME, monitor);
     // Grow from the pill, not from 0: a 0→span ease spends its first frames
     // on an invisible sliver, then pops. Warp onto the pill width once.
     if (WIDTH_TARGET > 50.F && resultsWidth->value() < 50.F)
@@ -161,7 +128,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     if (std::abs(resultsWidth->goal() - WIDTH_TARGET) > 0.5F)
         *resultsWidth = WIDTH_TARGET;
 
-    if (const float DOCKGOAL = QUERIED && !EMPTYRESULT && !RESULTS.empty() ? 1.F : 0.F; std::abs(searchDock->goal() - DOCKGOAL) > 0.01F)
+    if (const float DOCKGOAL = Search::dockGoal(FRAME); std::abs(searchDock->goal() - DOCKGOAL) > 0.01F)
         *searchDock = DOCKGOAL;
 
     // The strip ran first this frame and said how far its label needs the pill
@@ -180,19 +147,9 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // pass is the only place a glyph's width is known), which one frame behind
     // a spring cannot show. The field hugs the query from its rest width up to
     // the cap; whatever the query needs beyond the cap becomes scroll.
-    auto&       FIELDMOTION = SESSION.fieldOn(monitor->m_id);
-    const float MAXFIELDL   = std::max(OVERVIEW_PILL_FIELDL, sc<float>(monitor->m_size.x) * OVERVIEW_PILL_MAXFRAC - OVERVIEW_PILL_WL(0.F));
-    // Whole logical px: the measurement is a glyph run divided by a float scale,
-    // and a target that wanders by a fraction of a pixel re-arms the spring --
-    // which snaps within its epsilon -- every frame it steps.
-    const float NEEDL       = FIELDMOTION.contentL > 0.F ? std::ceil(FIELDMOTION.contentL + OVERVIEW_PILL_ENDROOML) : 0.F;
-    // While the overview zooms in or out around a pill at rest, the field
-    // LANDS on its width: the glyphs are re-rasterised at each step of the
-    // zoom, and a whole-px font size divided by a float scale wobbles a few
-    // logical px -- an underdamped spring turned that into a visible bounce.
-    const bool  FIELDLANDS  = scale->isBeingAnimated() && !g_pillHovered && !g_pillPress.down && SESSION.query.text.empty();
-    if (FIELDMOTION.stepTo(std::clamp(NEEDL, OVERVIEW_PILL_FIELDL, MAXFIELDL), std::max(0.F, NEEDL - MAXFIELDL), Time::steadyNow(), FIELDLANDS))
+    if (Search::stepField(SESSION, monitor, scale->isBeingAnimated()))
         requestInputFrame();
+    const auto& FIELDMOTION = SESSION.fieldOn(monitor->m_id);
 
     // ---- LAYOUT: the animated values are sampled once, right here.
     const SSearchLayoutInputs IN{
@@ -226,19 +183,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // frame, gridTiles was measured at the top of this one, and both are read by
     // NEXT frame's band and strip. A field added here tomorrow needs the same
     // line, so keep them together.
-    LAYOUT.stripPlateL = searchLayoutHere().stripPlateL;
-    LAYOUT.gridTiles   = GRID_TILES;
-    LAYOUT.gridNudgeL  = searchLayoutHere().gridNudgeL;
-    LAYOUT.gridShiftL  = gridNudge->value();
-
-    SESSION.nav.selection = LAYOUT.selection;
-    searchLayoutHere()     = std::move(LAYOUT);
-
-    if (QUERIED && SESSION.nav.selection >= 0 && SESSION.nav.selection < sc<int>(RESULTS.size())) {
-        if (RESULTS[SESSION.nav.selection].omarchy && !RESULTS[SESSION.nav.selection].omarchy->filePath.empty()) {
-            SearchBackend::updateSushiIfActive(RESULTS[SESSION.nav.selection].omarchy->filePath);
-        }
-    }
+    Search::publish(SESSION, searchMonitorId(), std::move(LAYOUT), GRID_TILES, gridNudge->value(), QUERIED, RESULTS);
 
     // ---- DRAW: out of the published object, so the painter, the pointer and
     // the keyboard are provably looking at the same boxes.
