@@ -774,7 +774,14 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     const double OX   = std::clamp(sc<double>(CX), plate.x, plate.x + plate.width);
     const double OY   = plate.y + plate.height;
     const auto   XF   = [&](CBox b) { return b.empty() ? b : CBox{OX + (b.x - OX) * S, OY + (b.y - OY) * S, b.width * S, b.height * S}; };
-    const CBox   VIS  = XF(plate);
+    // The frame on whole pixels, edge by edge (user, 2026-11-17: its right
+    // border missing while it grew). Hyprland clips a border to the damage
+    // intersected with its box, and that region takes x and width as integers
+    // separately -- both truncated -- so a fractional box ended up to a pixel
+    // short of its own right edge, and the 1 px right border went with it.
+    const CBox   XP   = XF(plate);
+    const double VX0 = std::round(XP.x), VY0 = std::round(XP.y);
+    const CBox   VIS  = CBox{VX0, VY0, std::round(XP.x + XP.width) - VX0, std::round(XP.y + XP.height) - VY0};
     const double VISH = std::max(1.0, VIS.height);
     const float  PLATEA = Hyprdrive::Motion::smoothstep(std::clamp(OP / MENU_PLATE_IN, 0.F, 1.F));
     const float  ROWA = Hyprdrive::Motion::smoothstep(std::clamp(OP / MENU_ROWS_IN, 0.F, 1.F));
