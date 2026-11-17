@@ -758,56 +758,45 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
 
     M.box = plate;
 
-    // The part of the plate open so far (OPENP: 0 = only the icon, 1 = all of
-    // it), and everything drawn below is clipped to it and fades with it.
-    const float  OP      = std::clamp(OPENP, 0.F, 1.F);
-    const double STARTW  = std::min(plate.width, std::max(sc<double>(M.anchor.width) * 1.2, 40.0 * SCALE));
-    const double VISW    = STARTW + (plate.width - STARTW) * OP;
-    const double VISH    = std::max(1.0, plate.height * OP);
-    const double ACX     = std::clamp(sc<double>(CX), plate.x + VISW / 2.0, plate.x + plate.width - VISW / 2.0);
-    const double VISCX   = ACX + (plate.x + plate.width / 2.0 - ACX) * OP;
-    const CBox   VIS     = CBox{VISCX - VISW / 2.0, plate.y + plate.height - VISH, VISW, VISH}.round();
-    const float  CONTENT = std::clamp((OP - 0.2F) / 0.8F, 0.F, 1.F); // the rows come in once there is room for them
-    // THE ROWS CASCADE: each row comes in on its own stretch of CONTENT, the
-    // one nearest the dock first, rising a few px into its place as it fades
-    // in. Closing runs the same curve backwards, so the top row leaves first.
-    // ROWA / ROWDY are what the row being drawn has (set in the loop below).
-    float      ROWA = CONTENT, ROWDY = 0.F;
-    const auto rowIn = [&](size_t i) {
-        const size_t N  = std::max<size_t>(1, M.rows.size());
-        const float  ST = N > 1 ? std::min(0.07F, 0.55F / sc<float>(N - 1)) : 0.F; // stagger, in CONTENT
-        const float  K  = sc<float>(N - 1 - std::min(i, N - 1));                     // 0 = the row nearest the dock
-        const float  P  = std::clamp(CONTENT * (1.F + ST * sc<float>(N - 1)) - ST * K, 0.F, 1.F);
-        const float  E  = Hyprdrive::Motion::outCubic(P);
-        ROWA            = Hyprdrive::Motion::smoothstep(P);
-        ROWDY           = (1.F - E) * 9.F * SCALE;
-    };
+    // THE MENU GROWS AS ONE PIECE (user, 2026-11-17: "the entire button list
+    // and everything inside the context menu to expand along with it"). OPENP
+    // 0..1 is one scale, MENU_OPEN_FROM -> 1, about the point of the plate's
+    // bottom edge over the icon: the plate, its rows, their text, highlights
+    // and buttons are all laid out at full size and drawn through that one
+    // transform, so the whole menu zooms out of the icon and back into it.
+    // The plate fades in over the first stretch so it does not pop in at its
+    // start size; the rows fade in a little behind it.
+    constexpr float MENU_OPEN_FROM = 0.30F; // the scale it starts from
+    constexpr float MENU_PLATE_IN  = 0.30F; // the plate is opaque by this much of OPENP
+    constexpr float MENU_ROWS_IN   = 0.55F; // the rows by this much
+    const float  OP   = std::clamp(OPENP, 0.F, 1.F);
+    const double S    = MENU_OPEN_FROM + (1.0 - MENU_OPEN_FROM) * OP;
+    const double OX   = std::clamp(sc<double>(CX), plate.x, plate.x + plate.width);
+    const double OY   = plate.y + plate.height;
+    const auto   XF   = [&](CBox b) { return b.empty() ? b : CBox{OX + (b.x - OX) * S, OY + (b.y - OY) * S, b.width * S, b.height * S}; };
+    const CBox   VIS  = XF(plate);
+    const double VISH = std::max(1.0, VIS.height);
+    const float  PLATEA = Hyprdrive::Motion::smoothstep(std::clamp(OP / MENU_PLATE_IN, 0.F, 1.F));
+    const float  ROWA = Hyprdrive::Motion::smoothstep(std::clamp(OP / MENU_ROWS_IN, 0.F, 1.F));
     const auto   clipTo  = [&](CBox c) { return c.empty() ? VIS : c.intersection(VIS); };
     const auto   ADDTEX  = [&](CTexPassElement::SRenderData d) {
-        if (ROWDY != 0.F) {
-            d.box.y += ROWDY;
-            if (!d.clipBox.empty())
-                d.clipBox.y += ROWDY;
-        }
-        d.clipBox = clipTo(d.clipBox);
+        d.box     = XF(d.box);
+        d.clipBox = clipTo(XF(d.clipBox));
         d.a *= ROWA;
         if (!d.clipBox.empty() && d.a > 0.001F)
             g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(d));
     };
     const auto ADDRECT = [&](CRectPassElement::SRectData d) {
-        if (ROWDY != 0.F) {
-            d.box.y += ROWDY;
-            if (!d.clipBox.empty())
-                d.clipBox.y += ROWDY;
-        }
-        d.clipBox = clipTo(d.clipBox);
+        d.box     = XF(d.box);
+        d.clipBox = clipTo(XF(d.clipBox));
+        d.round   = sc<int>(std::round(d.round * S));
         d.color   = d.color.modifyA(d.color.a * ROWA);
         if (!d.clipBox.empty() && d.color.a > 0.001F)
             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(d));
     };
 
     // X13/X29/X86: menu frost -- shared chrome sample in overview, live on desktop.
-    frostedPlate(monitor, VIS, sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE, VISH / 2.0))), 1.F);
+    frostedPlate(monitor, VIS, sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE * S, VISH / 2.0))), PLATEA);
 
     const auto MOUSE = (g_pInputManager->getMouseCoordsInternal() - monitor->m_position) * monitor->m_scale;
 
@@ -908,7 +897,6 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
     for (size_t i = 0; i < M.rows.size(); ++i) {
         auto&       row = M.rows[i];
         const auto& TEX = textures[i];
-        rowIn(i);
 
         if (scrolling && sc<int>(i) == segFirst) {
             chevron(y, true, M.scrollTop > 0);
@@ -1164,9 +1152,9 @@ void renderMenuOne(PHLMONITOR monitor, const SLayout& layout, SMenu& M, float OP
         CBorderPassElement::SBorderData border;
         border.box = VIS;
         border.grad1.reset(Hyprdrive::Config::highlightColor().modifyA(1.F));
-        border.a             = 1.F;
+        border.a             = PLATEA;
         border.borderSize    = BORDERSIZE;
-        border.round         = sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE, VISH / 2.0)));
+        border.round         = sc<int>(std::round(std::min<double>(MENU_RADIUS * SCALE * S, VISH / 2.0)));
         border.roundingPower = 2.F;
         if (Stacks::drawableBox(border.box))
             g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
