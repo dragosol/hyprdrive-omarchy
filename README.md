@@ -481,3 +481,19 @@ so it follows the fingers; three-finger left/right stay workspace switching.
 - Super+1..0 dock hotkeys, which collided with Omarchy workspaces
 
 Upstream Hyprdrive remains at `dragosol/Hyprdrive`.
+
+## License
+
+Hyprdrive is free software under the GNU General Public License, version 3,
+from version 1.9.66 on (`LICENSE`, `NOTICE.md`). Earlier versions were BSD
+3-Clause and stay that way. The parts that come from Hypr Development's plugin
+code, and what other people contributed before 1.9.66, keep their BSD 3-Clause notice (`LICENSE.BSD`).
+
+You may use, study, change and share it. If you share a changed version:
+
+- it stays under the same license, with its source;
+- the settings keep the name "Hyprdrive" and the "by dragosol" signature, as
+  they are;
+- it says it is a modified version, and does not present your changes as mine.
+
+If you want something this does not allow, ask: github.com/dragosol.
