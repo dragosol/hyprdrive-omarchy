@@ -901,7 +901,7 @@ PHLWINDOW COverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) co
 // largeWorkspaceRadius + padding, a translucent surface colour. Drawn once,
 // before the cells, so the cells read as sitting on it.
 void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SStripStyle& STYLE) {
-    auto& S = searchSession();
+    auto& S = m_search;
     const float FADE  = STYLE.fade;
     const int   ROUND = STYLE.round;
 

@@ -495,8 +495,7 @@ bool searchHoverEasing() {
 }
 }
 
-void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part) {
-    auto& S = searchSession();
+void drawSearch(Search::CSession& S, const SSearchLayout& L, bool pillLit, bool resultsLit, int part) {
     if (!L.drawable)
         return;
     {
@@ -1233,7 +1232,7 @@ namespace {
 }
 
 std::string COverview::searchReport() const {
-    auto& S = searchSession();
+    auto& S = m_search;
     const auto  MON  = pMonitor.lock();
     std::string out  = std::format("mon {} closing={} keys={} tile={} matches={} band={:.1f}>{:.1f} width={:.1f} dock={:.2f}>{:.2f} pillNudgeWant={:.1f}",
                                    MON ? MON->m_name : std::string{"?"}, isClosing() ? 1 : 0, activeScrollOverview().get() == this ? 1 : 0,

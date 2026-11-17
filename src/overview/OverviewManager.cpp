@@ -1,6 +1,7 @@
 #include "IOverview.hpp"
 #include "Overview.hpp"
 #include "globals.hpp"
+#include "SearchSession.hpp"
 
 #include <algorithm>
 
@@ -37,6 +38,18 @@ static void emitOverviewState() {
     // revealing itself; the plugin does not get to decide when the user's
     // quickshell config is updated.
     g_pEventManager->postEvent(SHyprIPCEvent{.event = Hyprdrive::Compat::LEGACY_NAME, .data = OPEN ? "1" : "0"});
+}
+
+// THE search session, owned here next to the overviews that share it: one
+// keyboard, one cursor, one query, however many outputs show it. Each COverview
+// holds a reference (m_search); the entry points that run outside any one
+// overview -- the raw key hook, the debug dispatcher, the open paths, and the
+// layout helpers every overview's frame calls -- reach it through
+// searchSession().
+static Search::CSession g_search;
+
+Search::CSession& searchSession() {
+    return g_search;
 }
 
 const std::vector<SP<IOverview>>& scrollOverviews() {

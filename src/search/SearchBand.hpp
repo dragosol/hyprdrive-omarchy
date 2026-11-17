@@ -248,8 +248,7 @@ inline size_t overviewResultsRowCap(PHLMONITOR monitor, size_t gridTiles) {
     return std::max<size_t>(1, std::min(RATIO, FITS));
 }
 
-inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHLMONITOR monitor, size_t gridTiles) {
-    auto& S = searchSession();
+inline void overviewTrimSectionsToFit(Search::CSession& S, std::vector<SSearchSection>& sections, PHLMONITOR monitor, size_t gridTiles) {
     if (sections.empty() || !monitor)
         return;
 
