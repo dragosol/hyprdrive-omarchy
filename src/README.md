@@ -7,7 +7,7 @@ One compiled plugin (`hyprdrive.so`). Each folder is one subsystem; every
 | --- | --- |
 | `core/` | plugin entry (`main.cpp`), the settings registry (`Config`), names kept for old configs (`Compat`), small shared helpers |
 | `overview/` | the overview: its window grid, cards, hit-testing, input, rendering and frame policy |
-| `search/` | type-to-search: the result sources (apps, windows, files, tools, GNOME providers), the session state and the letter animation |
+| `search/` | type-to-search: the result sources (apps, windows, files, tools, GNOME providers), the session and everything the overview's search does with it (see below), the letter animation |
 | `dock/` | the dock: items, layout and autohide, menu, input, live previews, minimize and scratchpad flights |
 | `stacks/` | dock folders: fan and grid stacks, the file reader, thumbnails, drives and Trash |
 | `apps/` | what an app is: desktop entries, icons, games and Wine windows |
@@ -17,6 +17,22 @@ One compiled plugin (`hyprdrive.so`). Each folder is one subsystem; every
 | `input/` | trackpad gestures: raw fingers, swipe models, the gesture driver |
 | `platform/` | what differs between a plain Hyprland desktop and Omarchy: detection, theme sources, fonts, the settings app |
 | `debug/` | the `hyprdrive:debug` instruments: profiler, synthetic gestures, log paths |
+
+THE SEARCH is one module with one explicit session (`Search::CSession`,
+`SearchSession.hpp`), owned by the overview registry (`OverviewManager.cpp`) and
+shared by every output's overview, which holds it as `m_search`. Its parts:
+`SearchNav`/`SearchField`/`SearchLayout` (the session's types: zone, the pill's
+springs, the per-monitor published layout), `SearchRows` (the rows and the one
+row memo), `SearchFilter` (the window gate's query half), `SearchBand` (band
+and column maths), `SearchActions` (activate, menu steps), `SearchInput` (the
+text keys), `SearchKeys` and `SearchPointer` (the search half of the arrows,
+Tab, Return and the pointer), `SearchFrame` (the search half of the render
+step), `SearchView` (layout, draw, the debug report). The overview keeps the
+render step itself (`overview/OverviewSearchStep.cpp`: the animated values, the
+frame order, the draw call), the tile and desktop zones, and every effect on
+itself. Code outside any one overview (the raw key hook, the debug dispatcher,
+the open paths, the window gate and the layout heights every frame reads)
+reaches the session through `searchSession()`.
 
 A header that ends in `Model`, `Math`, `Layout`, `Plan` or `Decision` is pure
 (no compositor) and has a host test in `tests/unit/`.

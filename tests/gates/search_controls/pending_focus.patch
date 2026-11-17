@@ -1,13 +1,13 @@
-diff --git a/src/overview/OverviewInternal.hpp b/src/overview/OverviewInternal.hpp
-index 8daee97..43df42d 100644
---- a/src/overview/OverviewInternal.hpp
-+++ b/src/overview/OverviewInternal.hpp
-@@ -971,7 +971,7 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
+diff --git a/src/search/SearchActions.hpp b/src/search/SearchActions.hpp
+index 758bf04..56616c3 100644
+--- a/src/search/SearchActions.hpp
++++ b/src/search/SearchActions.hpp
+@@ -122,7 +122,7 @@ inline bool activateSearchResult(Search::CSession& S, int index, bool newInstanc
      } else if (ROW.app) {
          if (!newInstance) {
              if (const auto W = overviewWindowForApp(*ROW.app)) {
--                g_search.nav.pendingFocus = W;
-+                (void)W; // CONTROL pending_focus: g_search.nav.pendingFocus = W;
+-                S.nav.pendingFocus = W;
++                (void)W; // CONTROL pending_focus: S.nav.pendingFocus = W;
                  return true;
              }
          }

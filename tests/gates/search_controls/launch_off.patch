@@ -1,8 +1,8 @@
-diff --git a/src/overview/OverviewInternal.hpp b/src/overview/OverviewInternal.hpp
-index 8daee97..a41d431 100644
---- a/src/overview/OverviewInternal.hpp
-+++ b/src/overview/OverviewInternal.hpp
-@@ -975,7 +975,7 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
+diff --git a/src/search/SearchActions.hpp b/src/search/SearchActions.hpp
+index 758bf04..229455d 100644
+--- a/src/search/SearchActions.hpp
++++ b/src/search/SearchActions.hpp
+@@ -126,7 +126,7 @@ inline bool activateSearchResult(Search::CSession& S, int index, bool newInstanc
                  return true;
              }
          }
@@ -10,4 +10,4 @@ index 8daee97..a41d431 100644
 +        // CONTROL launch_off: AppSearch::launch(*ROW.app, Hyprdrive::Config::getTerminal());
          return true;
      } else {
-         SearchProviders::activate(ROW.provider, g_search.query.text);
+         SearchProviders::activate(ROW.provider, S.query.text);

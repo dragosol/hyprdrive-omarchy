@@ -1,8 +1,8 @@
 diff --git a/src/overview/OverviewStrip.cpp b/src/overview/OverviewStrip.cpp
-index 8ddbdce..ac91cfa 100644
+index b37091f..b585190 100644
 --- a/src/overview/OverviewStrip.cpp
 +++ b/src/overview/OverviewStrip.cpp
-@@ -1611,7 +1611,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
+@@ -1612,7 +1612,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
          // rendered-per-logical under the same card transform.
          if (PUB.scale > 0.01F) {
              const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(monitor);

@@ -1,13 +1,13 @@
 diff --git a/src/search/SearchInput.cpp b/src/search/SearchInput.cpp
-index 07a5a80..0697d35 100644
+index d095252..b9851f9 100644
 --- a/src/search/SearchInput.cpp
 +++ b/src/search/SearchInput.cpp
-@@ -210,7 +210,7 @@ bool handleSearchPress(uint32_t keycode) {
+@@ -211,7 +211,7 @@ bool handleSearchPress(Search::CSession& S, uint32_t keycode) {
                      overview->close();
              return true;
          }
--        g_search.query.text.clear();
-+        // CONTROL esc_clear: g_search.query.text.clear();
-         g_search.query.active = false;
-         g_search.nav.zone = EOverviewNavZone::Tile;
-         g_search.nav.selection = -1;
+-        S.query.text.clear();
++        // CONTROL esc_clear: S.query.text.clear();
+         S.query.active = false;
+         S.nav.zone = EOverviewNavZone::Tile;
+         S.nav.selection = -1;
