@@ -83,8 +83,8 @@ static SSearchKey searchKeyFor(uint32_t keycode) {
 
 static constexpr int     LETTER_TICK_MS    = 8;
 
-static int letterTickCb(void*) {
-    auto& S = searchSession();
+static int letterTickCb(void* data) {
+    auto& S = *static_cast<Search::CSession*>(data);
     const auto NOW     = SearchLetters::clock::now();
     // The easter egg is a video: it wants every frame while it plays, and the
     // tick stays up while it does -- with or without an overview, so its
@@ -120,12 +120,12 @@ static int letterTickCb(void*) {
 
 // Armed by the edit, not by the render: the edit is what starts something
 // moving, and it happens off the render pass.
-static void armLetterTick() {
+static void armLetterTick(Search::CSession& S) {
     if (!g_pCompositor)
         return;
 
     if (!g_letterTickTimer)
-        g_letterTickTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, letterTickCb, nullptr);
+        g_letterTickTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, letterTickCb, &S);
 
     wl_event_source_timer_update(g_letterTickTimer, LETTER_TICK_MS);
 }
@@ -148,7 +148,7 @@ void afterQueryEdit(Search::CSession& S) {
 
     // The pop starts now, so the frames that carry it start now too -- from
     // here rather than from the render pass. See armLetterTick.
-    armLetterTick();
+    armLetterTick(S);
 
     // X20: every keystroke starts a new provider generation. Non-blocking, so
     // this costs the keystroke nothing; results land over the next frames.
@@ -179,8 +179,7 @@ void afterQueryEdit(Search::CSession& S) {
     }
 }
 
-bool handleSearchPress(uint32_t keycode) {
-    auto& S = searchSession();
+bool handleSearchPress(Search::CSession& S, uint32_t keycode) {
     if (!overviewAcceptsSearch())
         return false;
 
@@ -257,7 +256,7 @@ bool handleSearchPress(uint32_t keycode) {
             S.query.active = false;
         afterQueryEdit(S);
         if (Hyprdrive::KeyboardCat::noteBackspace())
-            armLetterTick(); // its frames start with the trigger
+            armLetterTick(S); // its frames start with the trigger
         return true;
     }
 
@@ -297,13 +296,13 @@ void stopSearchRepeat() {
 }
 } // namespace PluginDetail
 
-static int searchRepeatCb(void*) {
-    auto& S = searchSession();
+static int searchRepeatCb(void* data) {
+    auto& S = *static_cast<Search::CSession*>(data);
     if (g_searchRepeatKey == ~0u || !overviewAcceptsSearch() || g_consumedPresses.count(g_searchRepeatKey) == 0) {
         stopSearchRepeat();
         return 0;
     }
-    handleSearchPress(g_searchRepeatKey);
+    handleSearchPress(S, g_searchRepeatKey);
     if (g_searchRepeatKey == EVDEV_KEY_BACKSPACE && S.query.text.empty()) {
         stopSearchRepeat();
         return 0;
@@ -317,11 +316,11 @@ static int searchRepeatCb(void*) {
 }
 
 namespace PluginDetail {
-void startSearchRepeat(uint32_t keycode) {
+void startSearchRepeat(Search::CSession& S, uint32_t keycode) {
     if (!g_pCompositor)
         return;
     if (!g_searchRepeatTimer)
-        g_searchRepeatTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, searchRepeatCb, nullptr);
+        g_searchRepeatTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, searchRepeatCb, &S);
     g_searchRepeatKey = keycode;
     int delay = 600;
     if (const auto KB = g_pSeatManager ? g_pSeatManager->m_keyboard.lock() : nullptr; KB && KB->m_repeatDelay > 0)

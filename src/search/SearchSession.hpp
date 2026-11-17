@@ -47,7 +47,7 @@
 
 namespace Search {
 
-// THE search session. One instance (SearchSession.cpp, reached through
+// THE search session. One instance (the overview registry's, reached through
 // searchSession() below); there is exactly one keyboard and one cursor, so this
 // is per-session state and not per-monitor.
 struct CSession {
@@ -191,16 +191,6 @@ struct CSession {
 } // namespace Search
 
 // The one session, plugin-wide: both outputs' overviews share it, exactly as
-// they share the keyboard. Defined in SearchSession.cpp.
+// they share the keyboard. Owned by the overview registry (OverviewManager.cpp);
+// a COverview uses its m_search.
 Search::CSession& searchSession();
-
-// G12/X62. The result row under a point, or nullptr. The pointer's half of "one
-// hit list, two devices"; moveSelection() walks the same vector.
-inline const SSearchRowHit* searchRowAt(MONITORID monitor, const Vector2D& point) {
-    auto& S = searchSession();
-    for (const auto& ROW : S.layoutOn(monitor).hits) {
-        if (ROW.box.containsPoint(point))
-            return &ROW;
-    }
-    return nullptr;
-}

@@ -173,7 +173,7 @@ CBox COverview::tileCloseButtonBox(const PHLWINDOW& window) const {
 // pokes a few px past the slot, and without this the hover (and the button with
 // it) would vanish exactly as the cursor arrived on it.
 void COverview::updateTileHover() {
-    auto& S = searchSession();
+    auto& S = m_search;
     // The pointer moved, so the pointer owns the ring again. Whatever the
     // arrows had selected keeps its role for Return and for close(); it just
     // stops being the thing drawn.
@@ -216,7 +216,7 @@ void COverview::updateTileHover() {
     // selection and both devices move it. It also swallows the tile hover: the
     // panel is drawn over the grid while the band eases, and a tile lighting up
     // through it would be hovering something the user cannot click.
-    if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
+    if (const auto* ROW = searchRowAt(searchLayoutHere(), lastMousePosLocal); ROW) {
         TileChrome::setHovered(PHLWINDOW{});
         S.nav.zone = EOverviewNavZone::Result;
         if (S.nav.selection != ROW->index) {
@@ -242,7 +242,7 @@ void COverview::updateTileHover() {
 // See SHoverSignature. Read AFTER updateTileHover, so the tile half is the
 // answer that frame would draw rather than the one before it.
 COverview::SHoverSignature COverview::hoverSignature() const {
-    auto& S = searchSession();
+    auto& S = m_search;
     SHoverSignature sig;
 
     const auto MONITOR = pMonitor.lock();
@@ -668,7 +668,7 @@ void COverview::focusOverviewWorkspace(const PHLWORKSPACE& workspace, size_t wor
 // The full default click action, shared between the plain mouse path and the
 // submap's `window click` dispatcher so SUPER-held clicks behave identically.
 void COverview::performPrimaryClickAction() {
-    auto& S = searchSession();
+    auto& S = m_search;
     // E6: the strip band floats above the main tiles, so it has to be
     // tested before them, exactly as the drop path does.
     //
@@ -741,7 +741,7 @@ void COverview::selectHoveredWorkspace() {
 // keyboard's after the arrows, else the one under the pointer, over empty
 // space none.
 PHLWINDOW COverview::actionTile() {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (closing)
         return {};
     PHLWINDOW window;

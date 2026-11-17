@@ -39,4 +39,4 @@ struct SSearchLayoutInputs {
 SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSearchRow>& RESULTS, const std::vector<SSearchSection>& SECTIONS);
 
 // `part`: 0 everything, 1 the pill only, 2 the results body only.
-void drawSearch(const SSearchLayout& L, bool pillLit, bool resultsLit, int part = 0);
+void drawSearch(Search::CSession& S, const SSearchLayout& L, bool pillLit, bool resultsLit, int part = 0);

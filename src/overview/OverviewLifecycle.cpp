@@ -78,7 +78,7 @@ static bool currentBindIsWheel() {
 }
 
 COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
-    auto& S = searchSession();
+    auto& S = m_search;
     // A shown desktop's windows back first: the overview shows the real ones.
     Hyprdrive::ShowDesktop::restoreNow();
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
@@ -304,7 +304,7 @@ void COverview::stepDesktopCard(bool next) {
 }
 
 void COverview::close() {
-    auto& S = searchSession();
+    auto& S = m_search;
     // Set at the top, before the dock teardown below, so it doubles as the
     // guard against a second close() -- setClosing(true) further down re-affirms
     // it (idempotent) alongside the state teardown it also owns.
@@ -563,7 +563,7 @@ void COverview::close() {
 }
 
 void COverview::onPreRender() {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (pMonitor)
         pMonitor->m_solitaryClient.reset();
 

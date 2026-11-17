@@ -201,7 +201,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
     const auto  NEIGHBOURALPHA = [&](bool promoted) { return NEIGHBOUR && !promoted ? CHROMEFADE : 1.F; };
 
     const auto renderOverviewWindow = [&](const PHLWINDOW& window) {
-        auto& S = searchSession();
+        auto& S = m_search;
         // F3-b outbound: a releasing tile no longer matches, so the search half
         // of shouldShowOverviewWindow would delete it on its first outbound
         // frame. overviewGridReleasing only admits a window that was legally
@@ -661,7 +661,7 @@ void COverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float 
 }
 
 bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (!monitor)
         return false;
 
@@ -742,7 +742,7 @@ void COverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewSc
 
 void COverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox,
                                        bool dragged, float alphaMul, bool ownsPass) {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (!window)
         return;
 
@@ -901,7 +901,7 @@ void COverview::renderListShadow() {
 }
 
 void COverview::redrawAll(bool forcelowres) {
-    auto& S = searchSession();
+    auto& S = m_search;
     lastBuiltQuery = S.query.text;
     rebuildWorkspaceImages();
     seedRememberedSelections();

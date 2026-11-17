@@ -226,3 +226,13 @@ struct SSearchLayout {
     std::vector<CBox> dividers;
     std::vector<SCard> cards;
 };
+
+// G12/X62. The result row under a point, or nullptr. The pointer's half of "one
+// hit list, two devices"; moveSelection() walks the same vector.
+inline const SSearchRowHit* searchRowAt(const SSearchLayout& view, const Vector2D& point) {
+    for (const auto& ROW : view.hits) {
+        if (ROW.box.containsPoint(point))
+            return &ROW;
+    }
+    return nullptr;
+}

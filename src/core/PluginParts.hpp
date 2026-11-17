@@ -196,9 +196,9 @@ namespace PluginDetail {
     extern bool overviewAcceptsSearch();
     extern void resetCompose();
     extern void afterQueryEdit(Search::CSession& S);
-    extern bool handleSearchPress(uint32_t keycode);
+    extern bool handleSearchPress(Search::CSession& S, uint32_t keycode);
     extern void stopSearchRepeat();
-    extern void startSearchRepeat(uint32_t keycode);
+    extern void startSearchRepeat(Search::CSession& S, uint32_t keycode);
     extern int onFileResultsReady(int fd, uint32_t mask, void* data);
     extern void onSessionLock();
     extern void registerRawKeyHooks();

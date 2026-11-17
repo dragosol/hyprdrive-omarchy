@@ -482,7 +482,7 @@ void COverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscr
 }
 
 void COverview::render() {
-    auto& S = searchSession();
+    auto& S = m_search;
     Prof::Timer PROF{Prof::frameNs, Prof::frameCalls};
     const auto  OPENPROF_T0 = std::chrono::steady_clock::now();
     auto        openProfGuard = Hyprutils::Utils::CScopeGuard([OPENPROF_T0] {

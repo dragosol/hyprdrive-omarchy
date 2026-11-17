@@ -206,7 +206,7 @@ bool COverview::shouldAllowRealtimePreviewFrame() const {
 }
 
 bool COverview::shouldAllowRealtimePreviewSchedule() {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (inputFramePending) {
         inputFramePending = false;
         return true;
@@ -497,7 +497,7 @@ int COverview::realtimePreviewTimerCallback(void* data) {
 // chrome). If none of them is running, the pixels this frame would produce are
 // the pixels already on the screen.
 bool COverview::needsIdleRepaint() const {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (closing || drag.activeWindow || resize.activeWindow || pan.pointerDown)
         return true;
 

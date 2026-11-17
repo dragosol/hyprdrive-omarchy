@@ -137,7 +137,7 @@ std::vector<PHLWINDOW> COverview::navTilesOf(const PHLWORKSPACE& workspace) cons
 // reached with no query: a filtered grid already holds the matches from every
 // desktop, so "the next desktop" is not a place its walk can go.
 bool COverview::stepTileDesktop(int delta) {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (delta == 0 || images.empty())
         return false;
 
@@ -188,7 +188,7 @@ bool COverview::stepTileDesktop(int delta) {
 // Monitors run left to right (then top to bottom); a monitor with no tiles is
 // passed over, and the search is the first monitor's.
 bool COverview::tabAcrossMonitors() {
-    auto& SESSION = searchSession();
+    auto& SESSION = m_search;
     std::vector<std::pair<COverview*, SP<IOverview>>> order;
     for (const auto& OV : scrollOverviews()) {
         auto* S = dynamic_cast<COverview*>(OV.get());
@@ -215,7 +215,7 @@ bool COverview::tabAcrossMonitors() {
         setKeyboardOverview(ov.second);
     };
     const auto ENTERTILES = [&](const std::pair<COverview*, SP<IOverview>>& ov) {
-        auto& S = searchSession();
+        auto& S = m_search;
         auto*      OV    = ov.first;
         const auto FIRST = OV->isNavTile(OV->closeOnWindow.lock()) ? OV->closeOnWindow.lock() : OV->firstNavTile();
         Hyprdrive::Stacks::traceEvent(std::format("tab: try monitor {} closeOn={} navTile={} first={}", OV->pMonitor->m_name, (uintptr_t)OV->closeOnWindow.lock().get(),
@@ -232,7 +232,7 @@ bool COverview::tabAcrossMonitors() {
         return true;
     };
     const auto ENTERSEARCH = [&]() {
-        auto& S = searchSession();
+        auto& S = m_search;
         auto&      FIRST   = order.front();
         const auto RESULTS = overviewSearchRows(S);
         S.nav.keyboardTile = false;
@@ -305,7 +305,7 @@ bool COverview::isNavTile(const PHLWINDOW& window) const {
 // Where the selection is NOW. Empty when the zone has nothing selected in it,
 // which is what the caller's "land somewhere" fallback keys off.
 CBox COverview::currentNavBox(const std::vector<SOverviewNavTarget>& targets, PHLMONITOR MONITOR) const {
-    auto& S = searchSession();
+    auto& S = m_search;
     CBox current;
     switch (S.nav.zone) {
         case EOverviewNavZone::Search:
@@ -401,7 +401,7 @@ static const SOverviewNavTarget* pickNavTarget(const std::vector<SOverviewNavTar
 }
 
 bool COverview::moveSelection(const std::string& direction) {
-    auto& S = searchSession();
+    auto& S = m_search;
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return false;

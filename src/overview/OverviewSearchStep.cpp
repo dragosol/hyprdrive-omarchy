@@ -13,7 +13,7 @@ using namespace OverviewDetail;
 // just the focused one: the strip shows matching minis from elsewhere, so "no
 // matches" has to agree with that.
 size_t COverview::matchingWindowCount() const {
-    auto& S = searchSession();
+    auto& S = m_search;
     if (S.query.text.empty())
         return 0;
 
@@ -80,12 +80,12 @@ MONITORID COverview::searchMonitorId() const {
 }
 
 SSearchLayout& COverview::searchLayoutHere() const {
-    auto& S = searchSession();
+    auto& S = m_search;
     return S.layoutOn(searchMonitorId());
 }
 
 void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
-    auto& SESSION = searchSession();
+    auto& SESSION = m_search;
     Prof::Timer PROF{Prof::srchNs, Prof::srchCalls};
     if (!monitor)
         return;
@@ -119,7 +119,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     const size_t GRID_TILES = QUERIED && monitor->m_activeWorkspace ? overviewMainGridWindows(monitor->m_activeWorkspace, monitor).size() : 0;
 
     auto SECTIONS = overviewSearchSections(RESULTS);
-    overviewTrimSectionsToFit(SECTIONS, monitor, GRID_TILES);
+    overviewTrimSectionsToFit(SESSION, SECTIONS, monitor, GRID_TILES);
 
     // Typing arms first-app selection; results land over the next frames, so
     // the spend lives here -- once, on the first frame that actually has an
@@ -265,7 +265,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         if (GROWING) {
             const float PCT  = std::max(resultsBand->isBeingAnimated() ? resultsBand->getPercent() : 0.F, resultsWidth->isBeingAnimated() ? resultsWidth->getPercent() : 0.F);
             const CBox  PREV = Hyprdrive::FlightBlur::shape(Hyprdrive::FlightBlur::ESite::SEARCH_PANE, PREVBOX, SL.containerBox, PCT);
-            blurred = Hyprdrive::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SL, PILLLIT, BODYLIT, 2); },
+            blurred = Hyprdrive::FlightBlur::drawBlurred(monitor, nullptr, PREV, SL.containerBox, [&] { drawSearch(SESSION, SL, PILLLIT, BODYLIT, 2); },
                                                               Hyprdrive::FlightBlur::layoutSamples());
         }
         if (std::abs(g_pillPress.x - 1.F) > 0.0005F) {
@@ -275,7 +275,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
             // outline). Every corner is drawn from these boxes as usual; the
             // type keeps its size and is clipped to the narrower field.
             if (!blurred)
-                drawSearch(SL, PILLLIT, BODYLIT, 2);
+                drawSearch(SESSION, SL, PILLLIT, BODYLIT, 2);
             const float    S  = g_pillPress.x;
             const Vector2D C  = SL.pill.middle();
             const auto     SQ = [&](const CBox& b) {
@@ -288,9 +288,9 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
             squeezed.fieldW        = std::max(1.F, SL.fieldW * S);
             if (SL.fieldXExact > 0.F)
                 squeezed.fieldXExact = sc<float>(C.x + (SL.fieldXExact - C.x) * S);
-            drawSearch(squeezed, PILLLIT, BODYLIT, 1);
+            drawSearch(SESSION, squeezed, PILLLIT, BODYLIT, 1);
         } else
-            drawSearch(SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
+            drawSearch(SESSION, SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
         // The easter egg (KeyboardCat.hpp) opens out of the pill, over it.
         Hyprdrive::KeyboardCat::render(g_pHyprRenderer->context(), monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
     }
@@ -311,8 +311,7 @@ static const std::string* searchPreviewPath(const std::vector<SSearchRow>& resul
     return nullptr;
 }
 
-bool overviewToggleSushiForSelection() {
-    auto& S = searchSession();
+bool overviewToggleSushiForSelection(Search::CSession& S) {
     const auto        RESULTS = overviewSearchRows(S);
     const std::string* PATH   = searchPreviewPath(RESULTS, S.nav.selection);
     if (!PATH)
@@ -321,8 +320,7 @@ bool overviewToggleSushiForSelection() {
     return true;
 }
 
-bool overviewHandleSearchSpace() {
-    auto& S = searchSession();
+bool overviewHandleSearchSpace(Search::CSession& S) {
     const auto RESULTS = overviewSearchRows(S);
     const std::string* HOVER = searchPreviewPath(RESULTS, S.nav.hoverIndex);
     const std::string* SEL   = searchPreviewPath(RESULTS, S.nav.selection);
@@ -339,8 +337,7 @@ bool overviewHandleSearchSpace() {
     return true;
 }
 
-bool overviewHandleShiftTap() {
-    auto& S = searchSession();
+bool overviewHandleShiftTap(Search::CSession& S) {
     if (S.query.text.empty())
         return false;
 
@@ -364,8 +361,7 @@ bool overviewHandleShiftTap() {
 // browsing, the keyboard selection otherwise. The agent then leads the AI &
 // Tools column, and the selection follows it there -- left where it was, the
 // highlight would sit on whichever agent slid into the old slot.
-bool overviewHandleCtrlTap() {
-    auto& S = searchSession();
+bool overviewHandleCtrlTap(Search::CSession& S) {
     const auto RESULTS = overviewSearchRows(S);
 
     const auto agentAt = [&](int idx) -> std::optional<SearchBackend::SSearchItem> {

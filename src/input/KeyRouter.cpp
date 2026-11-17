@@ -160,7 +160,7 @@ void                registerRawKeyHooks() {
 
                 if (event.keycode == EVDEV_KEY_SPACE) {
                     if (overviewAcceptsSearch()) {
-                        if (overviewHandleSearchSpace()) {
+                        if (overviewHandleSearchSpace(S)) {
                             for (const auto& overview : scrollOverviews())
                                 if (overview)
                                     overview->damage();
@@ -181,10 +181,10 @@ void                registerRawKeyHooks() {
                     }
                 }
 
-                if (handleSearchPress(event.keycode)) {
+                if (handleSearchPress(S, event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
                     if (event.keycode == EVDEV_KEY_BACKSPACE && !S.query.text.empty())
-                        startSearchRepeat(event.keycode);
+                        startSearchRepeat(S, event.keycode);
                     info.cancelled = true;
                     return;
                 }
@@ -229,7 +229,7 @@ void                registerRawKeyHooks() {
                 const bool WASTAP    = event.timeMs - g_tapShiftPressedAt <= TAP_SHIFT_HOLD_MS;
                 const bool PAIRED    = WASTAP && g_tapShiftLastTapMs != 0 && event.timeMs - g_tapShiftLastTapMs <= TAP_SHIFT_GAP_MS;
                 g_tapShiftLastTapMs  = PAIRED || !WASTAP ? 0 : event.timeMs;
-                if (PAIRED && overviewAcceptsSearch() && overviewHandleShiftTap()) {
+                if (PAIRED && overviewAcceptsSearch() && overviewHandleShiftTap(S)) {
                     info.cancelled = true;
                     return;
                 }
@@ -248,7 +248,7 @@ void                registerRawKeyHooks() {
                 const bool WASTAP  = event.timeMs - g_tapCtrlPressedAt <= TAP_SHIFT_HOLD_MS;
                 const bool PAIRED  = WASTAP && g_tapCtrlLastTapMs != 0 && event.timeMs - g_tapCtrlLastTapMs <= TAP_SHIFT_GAP_MS;
                 g_tapCtrlLastTapMs = PAIRED || !WASTAP ? 0 : event.timeMs;
-                if (PAIRED && overviewAcceptsSearch() && overviewHandleCtrlTap()) {
+                if (PAIRED && overviewAcceptsSearch() && overviewHandleCtrlTap(S)) {
                     info.cancelled = true;
                     return;
                 }

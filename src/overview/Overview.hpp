@@ -164,6 +164,10 @@ struct COverviewFrostCache {
 };
 
 struct SSearchLayout;
+namespace Search {
+    struct CSession;
+}
+Search::CSession& searchSession(); // the registry's (OverviewManager.cpp)
 
 // See normalizeFittingScrollingOffset (OverviewInternal.hpp): a scrolling
 // desktop whose columns fit the screen is put back to its centred camera.
@@ -230,6 +234,10 @@ class COverview : public IOverview {
     // The recorded frame cadence for an output, kept across closes, for
     // `hyprdrive:debug frames`. See the note in Overview.cpp.
     static std::string frameCadence(MONITORID monitor);
+
+    // THE search session, shared with every other overview (the registry owns
+    // it). Bound once, at construction.
+    Search::CSession& m_search = searchSession();
 
     // This monitor's slot in the per-monitor search session state (SearchSession.hpp).
     MONITORID      searchMonitorId() const;
@@ -1095,14 +1103,14 @@ class COverview : public IOverview {
 
 };
 
-bool overviewToggleSushiForSelection();
+bool overviewToggleSushiForSelection(Search::CSession& S);
 // SPACE while the overview search is up: true if consumed as Quick Look,
 // false if the key should type a space into the query.
-bool overviewHandleSearchSpace();
+bool overviewHandleSearchSpace(Search::CSession& S);
 // Double-tap Shift: launch a new instance of the selected app even if one
 // is already open. True if the tap was consumed as that launch.
-bool overviewHandleShiftTap();
-bool overviewHandleCtrlTap();
+bool overviewHandleShiftTap(Search::CSession& S);
+bool overviewHandleCtrlTap(Search::CSession& S);
 
 namespace Hyprdrive {
     // The wallpaper caches kept between opens (Overview.cpp).

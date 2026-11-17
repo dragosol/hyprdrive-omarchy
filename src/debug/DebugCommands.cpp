@@ -266,7 +266,7 @@ SDispatchResult onDebugDispatcher(std::string arg) {
             if (Hyprdrive::KeyboardCat::active())
                 Hyprdrive::KeyboardCat::handleKey(CODE);
             else
-                handleSearchPress(CODE);
+                handleSearchPress(S, CODE);
         } catch (...) { return {.success = false, .error = "press needs an evdev keycode"}; }
         for (const auto& overview : scrollOverviews())
             if (overview)
