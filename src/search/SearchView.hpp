@@ -31,6 +31,9 @@ struct SSearchLayoutInputs {
     int                            selection = -1;
     // The live field's width, logical px, as its spring has it THIS frame.
     float                          fieldWL = OVERVIEW_PILL_FIELDL;
+    // Where the keyboard is: a row is drawn selected only in the Result zone.
+    // Sampled from the session with the rest, so the layout reads no session.
+    EOverviewNavZone               zone = EOverviewNavZone::Tile;
 };
 
 SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSearchRow>& RESULTS, const std::vector<SSearchSection>& SECTIONS);

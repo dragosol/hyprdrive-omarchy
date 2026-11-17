@@ -9,12 +9,13 @@
 using namespace OverviewDetail;
 
 
-// LAYOUT. Pure: monitor, animation values and the section set in, boxes out. It
-// reads no global and no member and writes nothing -- which is exactly what
-// lets the painter, the pointer hit-test and the keyboard walk all be handed
-// the same answer instead of each deriving its own.
+// LAYOUT. Monitor, animation values, the keyboard's zone and the section set
+// in, boxes out. It reads no search state and no member and writes nothing --
+// which is exactly what lets the painter, the pointer hit-test and the keyboard
+// walk all be handed the same answer instead of each deriving its own. It is not
+// free of Hyprland: the helpers it calls read the monitor's top-chrome layers
+// and the window list, and the tool rows rasterise text, all as it runs.
 SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSearchRow>& RESULTS, const std::vector<SSearchSection>& SECTIONS) {
-    auto& S = searchSession();
     SSearchLayout out;
     out.bandH       = IN.band;
     out.rowL        = IN.rowLCarry;
@@ -211,7 +212,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
                 .text     = RESULTS[i].name,
                 .example  = RESULTS[i].toolExample,
                 .status   = RESULTS[i].toolStatus,
-                .selected = S.nav.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
+                .selected = IN.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
             });
             y += ROWHL + OVERVIEW_TOOL_GAPL;
         }
@@ -219,7 +220,6 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     }
 
     const auto ADDITEM = [&](const CBox& box, size_t I, int col, int rowInCol) {
-        auto& S = searchSession();
         out.hits.emplace_back(SSearchRowHit{
             .box       = box,
             .desktopId = RESULTS[I].app ? RESULTS[I].app->id : "",
@@ -234,7 +234,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
             .description = RESULTS[I].description,
             .icon        = RESULTS[I].icon,
             .iconFont    = RESULTS[I].iconFont,
-            .selected    = (S.nav.zone == EOverviewNavZone::Result && sc<int>(I) == out.selection),
+            .selected    = (IN.zone == EOverviewNavZone::Result && sc<int>(I) == out.selection),
         };
     };
 
@@ -1262,8 +1262,8 @@ std::string overviewSearchReport() {
     auto& S = searchSession();
     const auto& Q    = S.query;
     const auto& N    = S.nav;
-    const bool  PANE = overviewSearchPaneUp();
-    const auto  ROWS = PANE ? overviewSearchRows() : std::vector<SSearchRow>{};
+    const bool  PANE = overviewSearchPaneUp(S);
+    const auto  ROWS = PANE ? overviewSearchRows(S) : std::vector<SSearchRow>{};
     std::string out  = std::format("hyprdrive search: overviews={} q={} active={} windowsOnly={} pane={} menuBack={} zone={} sel={} explicit={} firstPending={} "
                                    "intent={} hover={} kbTile={} drag={} rows={}",
                                    scrollOverviews().size(), searchQuoted(Q.text), Q.active ? 1 : 0, Q.windowsOnly ? 1 : 0, PANE ? 1 : 0,

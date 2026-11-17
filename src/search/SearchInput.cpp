@@ -132,8 +132,7 @@ static void armLetterTick() {
 
 namespace PluginDetail {
 // The trailing work every edit to the query owes, whatever made the edit.
-void afterQueryEdit() {
-    auto& S = searchSession();
+void afterQueryEdit(Search::CSession& S) {
     S.query.windowsOnly = false;
 
     // The gate reads the query twice -- "is it empty" for the Y9 minimized rule
@@ -203,7 +202,7 @@ bool handleSearchPress(uint32_t keycode) {
         if (S.nav.zone == EOverviewNavZone::Result && SearchBackend::canNavigateMenuBack()) {
             SearchBackend::navigateMenuBack();
             S.nav.selection = 0;
-            afterQueryEdit();
+            afterQueryEdit(S);
             return true;
         }
         // X5, GNOME-style: the first ESC drops the filter, the next one leaves.
@@ -217,7 +216,7 @@ bool handleSearchPress(uint32_t keycode) {
         S.query.active = false;
         S.nav.zone = EOverviewNavZone::Tile;
         S.nav.selection = -1;
-        afterQueryEdit();
+        afterQueryEdit(S);
         return true;
     }
 
@@ -232,13 +231,13 @@ bool handleSearchPress(uint32_t keycode) {
         if (S.query.windowsOnly) {
             S.query.text.clear();
             S.query.active = false;
-            afterQueryEdit();
+            afterQueryEdit(S);
             return true;
         }
         if (S.nav.zone == EOverviewNavZone::Result && S.query.text.empty()) {
             if (SearchBackend::navigateMenuBack()) {
                 S.nav.selection = 0;
-                afterQueryEdit();
+                afterQueryEdit(S);
                 return true;
             }
         }
@@ -256,7 +255,7 @@ bool handleSearchPress(uint32_t keycode) {
         popCodepoint(S.query.text);
         if (S.query.text.empty())
             S.query.active = false;
-        afterQueryEdit();
+        afterQueryEdit(S);
         if (Hyprdrive::KeyboardCat::noteBackspace())
             armLetterTick(); // its frames start with the trigger
         return true;
@@ -287,7 +286,7 @@ bool handleSearchPress(uint32_t keycode) {
         S.query.text.clear();
     S.query.text += KEY.text;
     Hyprdrive::KeyboardCat::noteTyped();
-    afterQueryEdit();
+    afterQueryEdit(S);
     return true;
 }
 

@@ -122,7 +122,7 @@ using namespace Hyprutils::String;
 typedef void (*origSendWindowSize)(void*, bool);
 // Declared in OverviewInternal.hpp, which this file does not include.
 namespace OvInternal {
-    void overviewQueryEdited();
+    void overviewQueryEdited(Search::CSession& S);
     void cancelPointerHandoff(); // Overview.cpp
     bool pointerOnTopLayer(PHLMONITOR monitor); // OverviewInput.cpp
     void gridTileOrderReload(); // GridLayout.cpp
@@ -195,7 +195,7 @@ namespace PluginDetail {
     extern bool isGlobalPassthroughKeycode(uint32_t keycode);
     extern bool overviewAcceptsSearch();
     extern void resetCompose();
-    extern void afterQueryEdit();
+    extern void afterQueryEdit(Search::CSession& S);
     extern bool handleSearchPress(uint32_t keycode);
     extern void stopSearchRepeat();
     extern void startSearchRepeat(uint32_t keycode);

@@ -15,16 +15,14 @@ namespace OvInternal {
 // clicked with nothing typed, which BROWSES: the menu's root, the folder
 // shortcuts, the agent help rows. Every "are there results to walk into"
 // question asks this one, so the pane and the keys cannot disagree.
-inline bool overviewSearchPaneUp() {
-    auto& S = searchSession();
+inline bool overviewSearchPaneUp(Search::CSession& S) {
     return !S.query.text.empty() || (S.query.active && Hyprdrive::Config::getSearchBrowseOnClick()) || SearchBackend::canNavigateMenuBack();
 }
 
-void overviewQueryEdited(); // main.cpp
+void overviewQueryEdited(Search::CSession& S); // OverviewOpen.cpp
 
-inline bool activateSearchResult(int index, bool newInstance = false) {
-    auto& S = searchSession();
-    const auto RESULTS = overviewSearchRows();
+inline bool activateSearchResult(Search::CSession& S, int index, bool newInstance = false) {
+    const auto RESULTS = overviewSearchRows(S);
     if (index < 0 || index >= sc<int>(RESULTS.size()))
         return false;
 
@@ -43,7 +41,7 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
         S.nav.hoverIndex         = -1;
         // The rewritten query owes the same trailing work as a typed one --
         // without it no provider (and no lookup) ever saw `define <word>`.
-        overviewQueryEdited();
+        overviewQueryEdited(S);
         return false;
     }
 
@@ -65,7 +63,7 @@ inline bool activateSearchResult(int index, bool newInstance = false) {
                 S.nav.hoverIndex        = -1;
             }
             // Skip the ‹ Back row so a second Enter launches the first child.
-            const auto NEXT = overviewSearchRows();
+            const auto NEXT = overviewSearchRows(S);
             int        sel  = 0;
             for (int i = 0; i < sc<int>(NEXT.size()); ++i) {
                 if (NEXT[sc<size_t>(i)].column != 0)
