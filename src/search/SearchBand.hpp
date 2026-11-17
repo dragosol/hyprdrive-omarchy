@@ -49,7 +49,8 @@ inline constexpr float OVERVIEW_CARD_CELLGAPL     = 4.F;  // that cell's icon ->
 inline constexpr float OVERVIEW_CARD_CELLPX       = 13.F; // that label
 
 inline float overviewResultsLogicalHeight(PHLMONITOR monitor) {
-    return monitor ? std::max(0.F, g_search.layoutOn(monitor->m_id).bandH) : 0.F;
+    auto& S = searchSession();
+    return monitor ? std::max(0.F, S.layoutOn(monitor->m_id).bandH) : 0.F;
 }
 
 // The width the result cards span: the monitor inset by the mission-control
@@ -248,6 +249,7 @@ inline size_t overviewResultsRowCap(PHLMONITOR monitor, size_t gridTiles) {
 }
 
 inline void overviewTrimSectionsToFit(std::vector<SSearchSection>& sections, PHLMONITOR monitor, size_t gridTiles) {
+    auto& S = searchSession();
     if (sections.empty() || !monitor)
         return;
 

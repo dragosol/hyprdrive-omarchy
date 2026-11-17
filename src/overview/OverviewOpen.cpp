@@ -135,6 +135,7 @@ bool hyprdriveSessionLocked() {
 }
 
 bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
+    auto& S = searchSession();
     if (!monitor)
         return false;
     if (!openScrollOverviewForMonitor(monitor)) {
@@ -143,22 +144,22 @@ bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
             return false;
     }
 
-    g_search.query.text             = query;
-    g_search.query.active           = !query.empty();
-    g_search.nav.zone               = EOverviewNavZone::Search;
-    g_search.nav.selection          = -1;
-    g_search.nav.explicitSelection  = false;
-    g_search.nav.selectFirstPending = false;
-    g_search.nav.intent             = ESearchIntent::Typing;
-    g_search.nav.hoverIndex         = -1;
+    S.query.text             = query;
+    S.query.active           = !query.empty();
+    S.nav.zone               = EOverviewNavZone::Search;
+    S.nav.selection          = -1;
+    S.nav.explicitSelection  = false;
+    S.nav.selectFirstPending = false;
+    S.nav.intent             = ESearchIntent::Typing;
+    S.nav.hoverIndex         = -1;
     afterQueryEdit();
     // After the edit, which clears it. With no results there is nothing for
     // the search zone to hold: the keyboard starts on the tiles.
-    g_search.query.windowsOnly      = !query.empty();
-    if (g_search.query.windowsOnly) {
-        g_search.nav.zone               = EOverviewNavZone::Tile;
-        g_search.nav.selection          = -1;
-        g_search.nav.selectFirstPending = false;
+    S.query.windowsOnly      = !query.empty();
+    if (S.query.windowsOnly) {
+        S.nav.zone               = EOverviewNavZone::Tile;
+        S.nav.selection          = -1;
+        S.nav.selectFirstPending = false;
     }
     for (const auto& overview : scrollOverviews())
         if (overview)
@@ -174,15 +175,16 @@ void OvInternal::overviewQueryEdited() {
 }
 
 void overviewAdmitWindow(const PHLWINDOW& window) {
-    if (!window || (g_search.query.text.empty() && !g_search.query.active))
+    auto& S = searchSession();
+    if (!window || (S.query.text.empty() && !S.query.active))
         return;
     if (!overviewSearchHides(window))
         return;
 
-    g_search.query.text.clear();
-    g_search.query.active  = false;
-    g_search.nav.zone      = EOverviewNavZone::Tile;
-    g_search.nav.selection = -1;
+    S.query.text.clear();
+    S.query.active  = false;
+    S.nav.zone      = EOverviewNavZone::Tile;
+    S.nav.selection = -1;
     afterQueryEdit();
     for (const auto& overview : scrollOverviews())
         if (overview)
@@ -201,8 +203,9 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
 // still filtered by the query. Anything a new session has to forget goes here,
 // not into either caller.
 void resetSearchSession() {
+    auto& S = searchSession();
     SearchBackend::closeSushi();
-    g_search.reset();
+    S.reset();
     SearchLetters::g_searchLetters.reset();
     SearchBackend::resetMenuRoute();
     Membership::bump("search session reset");

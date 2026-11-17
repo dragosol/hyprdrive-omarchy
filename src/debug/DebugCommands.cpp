@@ -18,6 +18,7 @@ namespace PluginDetail {
 // dispatcher has no other way to say anything back. It is also written to the
 // Hyprland log for whoever reads that instead.
 SDispatchResult onDebugDispatcher(std::string arg) {
+    auto& S = searchSession();
     CConstVarList     data(arg, 0, 's', true);
     const std::string TOPIC = std::string{data[0]};
     // `gesture state`: how many overviews are open, and the modifiers held --
@@ -237,17 +238,17 @@ SDispatchResult onDebugDispatcher(std::string arg) {
     if (TOPIC == "lockstate")
         return {.success = false,
                 .error   = std::format("hyprdrive lockstate: locked={} overviews={} accepting={} qlen={}", hyprdriveSessionLocked() ? 1 : 0, scrollOverviews().size(),
-                                       overviewAcceptsSearch() ? 1 : 0, g_search.query.text.size())};
+                                       overviewAcceptsSearch() ? 1 : 0, S.query.text.size())};
     // `search`: the search session and each overview's last published search
     // frame -- query, zone, selection, rows, pill, band, hit boxes (read-only).
     if (TOPIC == "search")
         return {.success = false, .error = overviewSearchReport()};
     if (TOPIC == "type") {
         const std::string Q = data.size() > 1 ? std::string{data[1]} : std::string{};
-        g_search.query.text   = Q;
-        g_search.query.active = !Q.empty();
-        g_search.nav.zone     = EOverviewNavZone::Search;
-        g_search.nav.intent   = ESearchIntent::Typing;
+        S.query.text   = Q;
+        S.query.active = !Q.empty();
+        S.nav.zone     = EOverviewNavZone::Search;
+        S.nav.intent   = ESearchIntent::Typing;
         afterQueryEdit();
         for (const auto& overview : scrollOverviews())
             if (overview)

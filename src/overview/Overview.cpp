@@ -482,6 +482,7 @@ void COverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscr
 }
 
 void COverview::render() {
+    auto& S = searchSession();
     Prof::Timer PROF{Prof::frameNs, Prof::frameCalls};
     const auto  OPENPROF_T0 = std::chrono::steady_clock::now();
     auto        openProfGuard = Hyprutils::Utils::CScopeGuard([OPENPROF_T0] {
@@ -865,7 +866,7 @@ void COverview::render() {
             // The query's LENGTH, never its text: a log of timings has no
             // business holding what was searched for (marketplace review, #11392).
             std::fprintf(F, "qlen=%-3zu f=%llu sinceKey=%7.2fms  FRAME=%6.2fms  bg=%6.2fms  live=%6.2fms  strip=%6.2fms  renderSearch=%6.2fms  match=%5.2fms/%llu  rows=%5.2fms  app=%5.2fms  scan=%5.2fms/%llu  TEXT[cold=%llu %6.2fms]  ICON[cold=%llu resolve=%6.2f decode=%6.2f upload=%6.2f]  LETTERS[n=%zu busy=%d]  RETARGET[%d]  SCALE[%.5f]  FIELDW[%.3f]\n",
-                         g_search.query.text.size(), (unsigned long long)Prof::frames, SINCEKEY,
+                         S.query.text.size(), (unsigned long long)Prof::frames, SINCEKEY,
                          Prof::frameNs / 1e6, Prof::bgNs / 1e6, Prof::liveNs / 1e6, Prof::stripNs / 1e6, Prof::srchNs / 1e6,
                          Prof::matchNs / 1e6, (unsigned long long)Prof::matchCalls,
                          Prof::rowsNs / 1e6, Prof::appNs / 1e6, Prof::scanNs / 1e6, (unsigned long long)Prof::scanCalls,
@@ -887,8 +888,8 @@ void COverview::render() {
     // G12. The dragged result follows the pointer, AFTER the dock: the whole
     // gesture is a journey from the panel to the pill, and an icon that vanished
     // under the thing it is being dropped on would read as a failed drop.
-    if (g_search.pointer.drag && g_search.pointer.drag->live) {
-        if (const auto TEX = OverviewRender::appIcon(g_search.pointer.drag->icon); TEX && TEX->ok()) {
+    if (S.pointer.drag && S.pointer.drag->live) {
+        if (const auto TEX = OverviewRender::appIcon(S.pointer.drag->icon); TEX && TEX->ok()) {
             const float        D = std::round(48.F * sc<float>(MONITOR->m_scale));
             CTexPassElement::SRenderData ghost;
             ghost.tex = TEX;

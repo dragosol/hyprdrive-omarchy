@@ -78,6 +78,7 @@ static bool currentBindIsWheel() {
 }
 
 COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
+    auto& S = searchSession();
     // A shown desktop's windows back first: the overview shows the real ones.
     Hyprdrive::ShowDesktop::restoreNow();
     const auto          PMONITOR = monitor_ ? monitor_ : (startedOn_ && startedOn_->m_monitor ? startedOn_->m_monitor.lock() : Desktop::focusState()->monitor());
@@ -231,7 +232,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     // state this may touch: the query and the nav zone belong to the dispatcher
     // that asked for the overview, and a second monitor opening must not wipe
     // the query the first one is showing.
-    g_search.resetLayout(PMONITOR ? PMONITOR->m_id : MONITOR_INVALID);
+    S.resetLayout(PMONITOR ? PMONITOR->m_id : MONITOR_INVALID);
 
     if (!swipe)
         *scale = Hyprdrive::Config::getScale();
@@ -303,6 +304,7 @@ void COverview::stepDesktopCard(bool next) {
 }
 
 void COverview::close() {
+    auto& S = searchSession();
     // Set at the top, before the dock teardown below, so it doubles as the
     // guard against a second close() -- setClosing(true) further down re-affirms
     // it (idempotent) alongside the state teardown it also owns.
@@ -363,7 +365,7 @@ void COverview::close() {
     if (scrollOverviews().size() <= 1)
         resetSearchSession();
     else
-        g_search.endInteraction();
+        S.endInteraction();
 
     setClosing(true);
 
@@ -561,6 +563,7 @@ void COverview::close() {
 }
 
 void COverview::onPreRender() {
+    auto& S = searchSession();
     if (pMonitor)
         pMonitor->m_solitaryClient.reset();
 
@@ -679,7 +682,7 @@ void COverview::onPreRender() {
     //
     // The EDGE, not every keystroke. Empty <-> non-empty is the only transition
     // that changes the answer, and X52 is about what a keystroke costs.
-    if (const bool QUERYEMPTY = g_search.query.text.empty(); QUERYEMPTY != lastQueryEmpty) {
+    if (const bool QUERYEMPTY = S.query.text.empty(); QUERYEMPTY != lastQueryEmpty) {
         lastQueryEmpty = QUERYEMPTY;
         rebuildPending = true;
     }
@@ -689,7 +692,7 @@ void COverview::onPreRender() {
     // (Show Windows, then typing) never passes through empty, and the windows
     // "f" matches that "Ghostty" did not -- the scratchpad's among them -- were
     // laid out by the grid but never drawn (user, 2026-09-24).
-    if (!g_search.query.text.starts_with(lastBuiltQuery))
+    if (!S.query.text.starts_with(lastBuiltQuery))
         rebuildPending = true;
 
     if (rebuildPending) {

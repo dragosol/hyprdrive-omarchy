@@ -173,6 +173,7 @@ CBox COverview::tileCloseButtonBox(const PHLWINDOW& window) const {
 // pokes a few px past the slot, and without this the hover (and the button with
 // it) would vanish exactly as the cursor arrived on it.
 void COverview::updateTileHover() {
+    auto& S = searchSession();
     // The pointer moved, so the pointer owns the ring again. Whatever the
     // arrows had selected keeps its role for Return and for close(); it just
     // stops being the thing drawn.
@@ -181,8 +182,8 @@ void COverview::updateTileHover() {
     // conditional on the hover signature moving, and this can fire on a motion
     // over empty space where nothing else changes at all -- the arrow-selected
     // tile's ring would then stay on screen until something else repainted.
-    if (g_search.nav.keyboardTile) {
-        g_search.nav.keyboardTile = false;
+    if (S.nav.keyboardTile) {
+        S.nav.keyboardTile = false;
         damage();
         requestInputFrame();
     }
@@ -217,9 +218,9 @@ void COverview::updateTileHover() {
     // through it would be hovering something the user cannot click.
     if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW) {
         TileChrome::setHovered(PHLWINDOW{});
-        g_search.nav.zone = EOverviewNavZone::Result;
-        if (g_search.nav.selection != ROW->index) {
-            g_search.nav.selection = ROW->index;
+        S.nav.zone = EOverviewNavZone::Result;
+        if (S.nav.selection != ROW->index) {
+            S.nav.selection = ROW->index;
             damage();
         }
         return;
@@ -241,6 +242,7 @@ void COverview::updateTileHover() {
 // See SHoverSignature. Read AFTER updateTileHover, so the tile half is the
 // answer that frame would draw rather than the one before it.
 COverview::SHoverSignature COverview::hoverSignature() const {
+    auto& S = searchSession();
     SHoverSignature sig;
 
     const auto MONITOR = pMonitor.lock();
@@ -252,9 +254,9 @@ COverview::SHoverSignature COverview::hoverSignature() const {
         sig.closeButton = tileCloseButtonBox(HOVERED).containsPoint(lastMousePosLocal);
     }
 
-    sig.searchHover     = g_search.nav.hoverIndex;
-    sig.searchSelection = g_search.nav.selection;
-    sig.searchZone      = sc<int>(g_search.nav.zone);
+    sig.searchHover     = S.nav.hoverIndex;
+    sig.searchSelection = S.nav.selection;
+    sig.searchZone      = sc<int>(S.nav.zone);
 
     // The two invisible reveal zones. They are read by the RENDER (from
     // updateScratchpadReveal / updateAltStripsReveal), so entering one has to
@@ -666,6 +668,7 @@ void COverview::focusOverviewWorkspace(const PHLWORKSPACE& workspace, size_t wor
 // The full default click action, shared between the plain mouse path and the
 // submap's `window click` dispatcher so SUPER-held clicks behave identically.
 void COverview::performPrimaryClickAction() {
+    auto& S = searchSession();
     // E6: the strip band floats above the main tiles, so it has to be
     // tested before them, exactly as the drop path does.
     //
@@ -718,7 +721,7 @@ void COverview::performPrimaryClickAction() {
     }
 
     selectHoveredWorkspace();
-    g_search.nav.zone = EOverviewNavZone::Tile;
+    S.nav.zone = EOverviewNavZone::Tile;
     selectWindowAtOverviewCursor(true);
     close();
 }
@@ -738,10 +741,11 @@ void COverview::selectHoveredWorkspace() {
 // keyboard's after the arrows, else the one under the pointer, over empty
 // space none.
 PHLWINDOW COverview::actionTile() {
+    auto& S = searchSession();
     if (closing)
         return {};
     PHLWINDOW window;
-    if (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile)
+    if (S.nav.keyboardTile && S.nav.zone == EOverviewNavZone::Tile)
         window = getOverviewWindowToShow(closeOnWindow.lock());
     else {
         lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());

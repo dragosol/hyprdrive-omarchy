@@ -901,6 +901,7 @@ PHLWINDOW COverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) co
 // largeWorkspaceRadius + padding, a translucent surface colour. Drawn once,
 // before the cells, so the cells read as sitting on it.
 void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SStripStyle& STYLE) {
+    auto& S = searchSession();
     const float FADE  = STYLE.fade;
     const int   ROUND = STYLE.round;
 
@@ -953,7 +954,7 @@ void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SS
                 // not the dock's Dash-to-Dock 24.
                 // Lit only while the pointer is on it or Tab has the keyboard
                 // in it; otherwise the resting tile border (user, 2026-09-27).
-                const bool LIT = (g_search.nav.zone == EOverviewNavZone::Desktop && activeScrollOverview().get() == this) || pointerOnChrome(PANEL);
+                const bool LIT = (S.nav.zone == EOverviewNavZone::Desktop && activeScrollOverview().get() == this) || pointerOnChrome(PANEL);
                 OverviewRender::themePlate(PANEL, PANELROUND, STYLE.power, FADE, true, LIT, Hyprdrive::BorderFade::key("strip-desktops", sc<uint64_t>(monitor->m_id)));
             }
         }

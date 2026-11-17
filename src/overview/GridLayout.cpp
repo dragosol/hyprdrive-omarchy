@@ -276,12 +276,13 @@ namespace OvInternal {
     // built fresh each time) ran W times per grid query and the grid is queried
     // 4-6 times per tile per frame.
     static SPromoteCtx overviewGridPromoteCtx(PHLMONITOR monitor) {
+        auto& S = searchSession();
         SPromoteCtx ctx;
         if (!monitor)
             return ctx;
 
         ctx.active  = monitor->m_activeWorkspace;
-        ctx.enabled = !g_search.query.text.empty() && overviewMissionControlOn() && !!ctx.active;
+        ctx.enabled = !S.query.text.empty() && overviewMissionControlOn() && !!ctx.active;
         return ctx;
     }
 
@@ -630,6 +631,7 @@ namespace OvInternal {
     }
 
     bool overviewGridLayout(const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out) {
+        auto& S = searchSession();
         if (!workspace || !monitor || !target)
             return false;
 
@@ -742,7 +744,7 @@ namespace OvInternal {
                 continue;
             if (memo.membersGen != MEMBERSGEN)
                 continue;
-            if (!sameBox(memo.usable, usable) || memo.query != g_search.query.text)
+            if (!sameBox(memo.usable, usable) || memo.query != S.query.text)
                 continue;
             if (memo.members != MEMBERS || memo.orderGen != ORDERGEN)
                 continue;
@@ -763,7 +765,7 @@ namespace OvInternal {
             hit               = &MEMOS.back();
             hit->ws           = Hyprdrive::Compat::id(workspace);
             hit->mon          = monitor->m_id;
-            hit->query        = g_search.query.text;
+            hit->query        = S.query.text;
             hit->membersGen   = MEMBERSGEN;
             hit->excluded     = EXCLUDED;
             hit->keepExcluded = KEEPEXCLUDED;
@@ -784,7 +786,7 @@ namespace OvInternal {
         out = hit->slots[index];
         // The strip label's slide (gridShiftL): every slot, after the solve, so
         // the grid keeps its size and just moves.
-        out.y += g_search.layoutOn(monitor->m_id).gridShiftL;
+        out.y += S.layoutOn(monitor->m_id).gridShiftL;
         return true;
     }
 

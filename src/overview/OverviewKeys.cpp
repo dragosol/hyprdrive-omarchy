@@ -137,6 +137,7 @@ std::vector<PHLWINDOW> COverview::navTilesOf(const PHLWORKSPACE& workspace) cons
 // reached with no query: a filtered grid already holds the matches from every
 // desktop, so "the next desktop" is not a place its walk can go.
 bool COverview::stepTileDesktop(int delta) {
+    auto& S = searchSession();
     if (delta == 0 || images.empty())
         return false;
 
@@ -160,9 +161,9 @@ bool COverview::stepTileDesktop(int delta) {
     // selection simply has nothing to sit on until the next arrow.
     if (!TILES.empty()) {
         const auto TARGET         = delta > 0 ? TILES.front() : TILES.back();
-        g_search.nav.zone         = EOverviewNavZone::Tile;
-        g_search.nav.selection    = -1;
-        g_search.nav.keyboardTile = true;
+        S.nav.zone         = EOverviewNavZone::Tile;
+        S.nav.selection    = -1;
+        S.nav.keyboardTile = true;
         closeOnWindow             = TARGET;
         TileChrome::setHovered(TARGET, false);
     } else {
@@ -173,7 +174,7 @@ bool COverview::stepTileDesktop(int delta) {
         // landed on ws 2). With no window selected, close() takes its
         // no-selection path and stays on the desktop in view.
         closeOnWindow.reset();
-        g_search.nav.keyboardTile = false;
+        S.nav.keyboardTile = false;
         TileChrome::setHovered(PHLWINDOW{}, false);
     }
 
@@ -187,6 +188,7 @@ bool COverview::stepTileDesktop(int delta) {
 // Monitors run left to right (then top to bottom); a monitor with no tiles is
 // passed over, and the search is the first monitor's.
 bool COverview::tabAcrossMonitors() {
+    auto& SESSION = searchSession();
     std::vector<std::pair<COverview*, SP<IOverview>>> order;
     for (const auto& OV : scrollOverviews()) {
         auto* S = dynamic_cast<COverview*>(OV.get());
@@ -213,6 +215,7 @@ bool COverview::tabAcrossMonitors() {
         setKeyboardOverview(ov.second);
     };
     const auto ENTERTILES = [&](const std::pair<COverview*, SP<IOverview>>& ov) {
+        auto& S = searchSession();
         auto*      OV    = ov.first;
         const auto FIRST = OV->isNavTile(OV->closeOnWindow.lock()) ? OV->closeOnWindow.lock() : OV->firstNavTile();
         Hyprdrive::Stacks::traceEvent(std::format("tab: try monitor {} closeOn={} navTile={} first={}", OV->pMonitor->m_name, (uintptr_t)OV->closeOnWindow.lock().get(),
@@ -220,42 +223,43 @@ bool COverview::tabAcrossMonitors() {
         if (!FIRST)
             return false;
         OV->closeOnWindow              = FIRST;
-        g_search.nav.zone              = EOverviewNavZone::Tile;
-        g_search.nav.selection         = -1;
-        g_search.nav.keyboardTile      = true;
-        g_search.nav.explicitSelection = true;
+        S.nav.zone              = EOverviewNavZone::Tile;
+        S.nav.selection         = -1;
+        S.nav.keyboardTile      = true;
+        S.nav.explicitSelection = true;
         TileChrome::setHovered(FIRST, false);
         HANDOVER(ov);
         return true;
     };
     const auto ENTERSEARCH = [&]() {
+        auto& S = searchSession();
         auto&      FIRST   = order.front();
         const auto RESULTS = overviewSearchRows();
-        g_search.nav.keyboardTile = false;
+        S.nav.keyboardTile = false;
         TileChrome::setHovered(PHLWINDOW{}, false);
         if (overviewSearchPaneUp() && !RESULTS.empty()) {
-            g_search.nav.zone              = EOverviewNavZone::Result;
-            g_search.nav.explicitSelection = true;
-            g_search.nav.intent            = ESearchIntent::Browsing;
-            if (g_search.nav.selection < 0 || g_search.nav.selection >= sc<int>(RESULTS.size()))
-                g_search.nav.selection = 0;
+            S.nav.zone              = EOverviewNavZone::Result;
+            S.nav.explicitSelection = true;
+            S.nav.intent            = ESearchIntent::Browsing;
+            if (S.nav.selection < 0 || S.nav.selection >= sc<int>(RESULTS.size()))
+                S.nav.selection = 0;
         } else {
-            g_search.nav.zone      = EOverviewNavZone::Search;
-            g_search.nav.selection = -1;
-            g_search.nav.intent    = ESearchIntent::Typing;
+            S.nav.zone      = EOverviewNavZone::Search;
+            S.nav.selection = -1;
+            S.nav.intent    = ESearchIntent::Typing;
         }
         HANDOVER(FIRST);
     };
 
-    const bool IN_GRID = g_search.nav.zone == EOverviewNavZone::Tile || g_search.nav.zone == EOverviewNavZone::Desktop;
-    Hyprdrive::Stacks::traceEvent(std::format("tab: from monitor {} zone={} self={}", pMonitor->m_name, (int)g_search.nav.zone, self));
+    const bool IN_GRID = SESSION.nav.zone == EOverviewNavZone::Tile || SESSION.nav.zone == EOverviewNavZone::Desktop;
+    Hyprdrive::Stacks::traceEvent(std::format("tab: from monitor {} zone={} self={}", pMonitor->m_name, (int)SESSION.nav.zone, self));
 
     // NO RESULTS UP (user, 2026-09-27): "monitor 1 strip -> grid -> monitor 2
     // strip -> grid monitor 2" and round again -- search has nothing to offer,
     // so it is not a stop. Every strip is a stop; a grid with no tiles is not.
     if (const auto RESULTS = overviewSearchRows(); !(overviewSearchPaneUp() && !RESULTS.empty())) {
         const size_t STOPS = order.size() * 2;
-        const size_t FROM  = g_search.nav.zone == EOverviewNavZone::Desktop ? self * 2 : g_search.nav.zone == EOverviewNavZone::Tile ? self * 2 + 1 : STOPS - 1;
+        const size_t FROM  = SESSION.nav.zone == EOverviewNavZone::Desktop ? self * 2 : SESSION.nav.zone == EOverviewNavZone::Tile ? self * 2 + 1 : STOPS - 1;
         for (size_t step = 1; step <= STOPS; ++step) {
             const size_t STOP = (FROM + step) % STOPS;
             auto&        ov   = order[STOP / 2];
@@ -264,10 +268,10 @@ bool COverview::tabAcrossMonitors() {
                     break;
                 continue;
             }
-            g_search.nav.zone              = EOverviewNavZone::Desktop;
-            g_search.nav.selection         = -1;
-            g_search.nav.keyboardTile      = false;
-            g_search.nav.explicitSelection = true;
+            SESSION.nav.zone              = EOverviewNavZone::Desktop;
+            SESSION.nav.selection         = -1;
+            SESSION.nav.keyboardTile      = false;
+            SESSION.nav.explicitSelection = true;
             TileChrome::setHovered(PHLWINDOW{}, false);
             HANDOVER(ov);
             break;
@@ -301,14 +305,15 @@ bool COverview::isNavTile(const PHLWINDOW& window) const {
 // Where the selection is NOW. Empty when the zone has nothing selected in it,
 // which is what the caller's "land somewhere" fallback keys off.
 CBox COverview::currentNavBox(const std::vector<SOverviewNavTarget>& targets, PHLMONITOR MONITOR) const {
+    auto& S = searchSession();
     CBox current;
-    switch (g_search.nav.zone) {
+    switch (S.nav.zone) {
         case EOverviewNavZone::Search:
             current = searchLayoutHere().pill;
             break;
         case EOverviewNavZone::Result:
             for (const auto& TARGET : targets)
-                if (TARGET.zone == EOverviewNavZone::Result && TARGET.index == g_search.nav.selection)
+                if (TARGET.zone == EOverviewNavZone::Result && TARGET.index == S.nav.selection)
                     current = TARGET.box;
             break;
         case EOverviewNavZone::Tile:
@@ -396,6 +401,7 @@ static const SOverviewNavTarget* pickNavTarget(const std::vector<SOverviewNavTar
 }
 
 bool COverview::moveSelection(const std::string& direction) {
+    auto& S = searchSession();
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR)
         return false;
@@ -405,32 +411,32 @@ bool COverview::moveSelection(const std::string& direction) {
         return false;
 
     // 2D Navigation inside the Results zone
-    if (g_search.nav.zone == EOverviewNavZone::Result && !searchLayoutHere().hits.empty()) {
+    if (S.nav.zone == EOverviewNavZone::Result && !searchLayoutHere().hits.empty()) {
         const SSearchRowHit* curHit = nullptr;
         for (const auto& hit : searchLayoutHere().hits) {
-            if (hit.index == g_search.nav.selection) {
+            if (hit.index == S.nav.selection) {
                 curHit = &hit;
                 break;
             }
         }
 
         if (curHit) {
-            g_search.nav.explicitSelection = true;
-            g_search.nav.intent            = ESearchIntent::Browsing;
+            S.nav.explicitSelection = true;
+            S.nav.intent            = ESearchIntent::Browsing;
 
             if (UP) {
                 if (curHit->rowInCol == 0) {
                     // Return focus to search bar
-                    g_search.nav.zone              = EOverviewNavZone::Search;
-                    g_search.nav.selection         = -1;
-                    g_search.nav.explicitSelection = false;
-                    g_search.nav.intent            = ESearchIntent::Typing;
+                    S.nav.zone              = EOverviewNavZone::Search;
+                    S.nav.selection         = -1;
+                    S.nav.explicitSelection = false;
+                    S.nav.intent            = ESearchIntent::Typing;
                     damage();
                     return true;
                 }
                 for (const auto& hit : searchLayoutHere().hits) {
                     if (hit.column == curHit->column && hit.rowInCol == curHit->rowInCol - 1) {
-                        g_search.nav.selection = hit.index;
+                        S.nav.selection = hit.index;
                         damage();
                         return true;
                     }
@@ -441,7 +447,7 @@ bool COverview::moveSelection(const std::string& direction) {
             if (DOWN) {
                 for (const auto& hit : searchLayoutHere().hits) {
                     if (hit.column == curHit->column && hit.rowInCol == curHit->rowInCol + 1) {
-                        g_search.nav.selection = hit.index;
+                        S.nav.selection = hit.index;
                         damage();
                         return true;
                     }
@@ -467,7 +473,7 @@ bool COverview::moveSelection(const std::string& direction) {
                         }
                     }
                     if (bestHit) {
-                        g_search.nav.selection = bestHit->index;
+                        S.nav.selection = bestHit->index;
                         damage();
                         return true;
                     }
@@ -479,7 +485,7 @@ bool COverview::moveSelection(const std::string& direction) {
                 if (curHit->column == 0) {
                     if (SearchBackend::canNavigateMenuBack()) {
                         SearchBackend::navigateMenuBack();
-                        g_search.nav.selection = 0;
+                        S.nav.selection = 0;
                         damage();
                         return true;
                     }
@@ -499,7 +505,7 @@ bool COverview::moveSelection(const std::string& direction) {
                         }
                     }
                     if (bestHit) {
-                        g_search.nav.selection = bestHit->index;
+                        S.nav.selection = bestHit->index;
                         damage();
                         return true;
                     }
@@ -513,12 +519,12 @@ bool COverview::moveSelection(const std::string& direction) {
     // Result` also matched the window grid and the strip, so with a query up
     // every Down in the grid jumped back to the results instead of walking to
     // the next row of tiles (user, 2026-09-29).
-    if (g_search.nav.zone == EOverviewNavZone::Search && DOWN) {
+    if (S.nav.zone == EOverviewNavZone::Search && DOWN) {
         if (!searchLayoutHere().hits.empty()) {
-            g_search.nav.zone              = EOverviewNavZone::Result;
-            g_search.nav.selection         = searchLayoutHere().hits[0].index;
-            g_search.nav.explicitSelection = true;
-            g_search.nav.intent            = ESearchIntent::Browsing;
+            S.nav.zone              = EOverviewNavZone::Result;
+            S.nav.selection         = searchLayoutHere().hits[0].index;
+            S.nav.explicitSelection = true;
+            S.nav.intent            = ESearchIntent::Browsing;
             damage();
             return true;
         }
@@ -529,10 +535,10 @@ bool COverview::moveSelection(const std::string& direction) {
     // whatever lay between that phantom and the direction pressed, and Enter
     // would have picked a window that is not on screen. Land on the first
     // visible tile instead; the NEXT arrow walks from there.
-    if (g_search.nav.zone == EOverviewNavZone::Tile && !isNavTile(closeOnWindow.lock())) {
+    if (S.nav.zone == EOverviewNavZone::Tile && !isNavTile(closeOnWindow.lock())) {
         if (const auto FIRST = firstNavTile()) {
             closeOnWindow             = FIRST;
-            g_search.nav.keyboardTile = true;
+            S.nav.keyboardTile = true;
             TileChrome::setHovered(FIRST, false);
             damage();
             return true;
@@ -566,7 +572,7 @@ bool COverview::moveSelection(const std::string& direction) {
     // because a target had been found. Confining the pick to this card is what
     // routes "off the end" through stepTileDesktop, which changes desktop and
     // lands on that desktop's first tile (or its last, going left).
-    if (g_search.nav.zone == EOverviewNavZone::Tile) {
+    if (S.nav.zone == EOverviewNavZone::Tile) {
         std::unordered_set<const Desktop::View::CWindow*> here;
         if (viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace] && images[viewportCurrentWorkspace]->pWorkspace)
             for (const auto& W : overviewMainGridWindows(images[viewportCurrentWorkspace]->pWorkspace, MONITOR))
@@ -575,21 +581,21 @@ bool COverview::moveSelection(const std::string& direction) {
         std::erase_if(targets, [&](const SOverviewNavTarget& t) { return t.zone != EOverviewNavZone::Tile || !here.contains(t.window.get()); });
     }
 
-    const auto* const best = pickNavTarget(targets, current, g_search.nav.zone, LEFT, RIGHT, DOWN);
+    const auto* const best = pickNavTarget(targets, current, S.nav.zone, LEFT, RIGHT, DOWN);
     if (!best) {
         // Off the end of the grid. With no query the desktops are a line the
         // walk continues along; with one, the grid already IS every match and
         // there is nowhere further to go, so the selection stops.
-        if (g_search.nav.zone == EOverviewNavZone::Tile && (LEFT || RIGHT) && g_search.query.text.empty())
+        if (S.nav.zone == EOverviewNavZone::Tile && (LEFT || RIGHT) && S.query.text.empty())
             return stepTileDesktop(LEFT ? -1 : 1);
         return false;
     }
 
     switch (best->zone) {
         case EOverviewNavZone::Desktop:
-            g_search.nav.zone      = EOverviewNavZone::Desktop;
-            g_search.nav.selection = -1;
-            g_search.nav.keyboardTile = false;
+            S.nav.zone      = EOverviewNavZone::Desktop;
+            S.nav.selection = -1;
+            S.nav.keyboardTile = false;
             TileChrome::setHovered(PHLWINDOW{}, false);
             if (const auto WORKSPACE = images[sc<size_t>(best->index)]->pWorkspace; WORKSPACE) {
                 focusOverviewWorkspace(WORKSPACE, sc<size_t>(best->index));
@@ -597,26 +603,26 @@ bool COverview::moveSelection(const std::string& direction) {
             }
             break;
         case EOverviewNavZone::Result:
-            g_search.nav.zone              = EOverviewNavZone::Result;
-            g_search.nav.selection         = best->index;
-            g_search.nav.explicitSelection = true;
-            g_search.nav.intent            = ESearchIntent::Browsing;
-            g_search.nav.keyboardTile      = false;
+            S.nav.zone              = EOverviewNavZone::Result;
+            S.nav.selection         = best->index;
+            S.nav.explicitSelection = true;
+            S.nav.intent            = ESearchIntent::Browsing;
+            S.nav.keyboardTile      = false;
             TileChrome::setHovered(PHLWINDOW{}, false);
             break;
         case EOverviewNavZone::Tile:
-            g_search.nav.zone         = EOverviewNavZone::Tile;
-            g_search.nav.selection    = -1;
+            S.nav.zone         = EOverviewNavZone::Tile;
+            S.nav.selection    = -1;
             closeOnWindow             = best->window;
-            g_search.nav.keyboardTile = true;
+            S.nav.keyboardTile = true;
             TileChrome::setHovered(best->window, false);
             break;
         case EOverviewNavZone::Search:
-            g_search.nav.zone              = EOverviewNavZone::Search;
-            g_search.nav.selection         = -1;
-            g_search.nav.explicitSelection = false;
-            g_search.nav.intent            = ESearchIntent::Typing;
-            g_search.nav.keyboardTile      = false;
+            S.nav.zone              = EOverviewNavZone::Search;
+            S.nav.selection         = -1;
+            S.nav.explicitSelection = false;
+            S.nav.intent            = ESearchIntent::Typing;
+            S.nav.keyboardTile      = false;
             TileChrome::setHovered(PHLWINDOW{}, false);
             break;
     }

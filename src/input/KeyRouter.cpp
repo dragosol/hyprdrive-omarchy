@@ -48,6 +48,7 @@ namespace PluginDetail {
 // next -- two listeners could not.
 void                registerRawKeyHooks() {
     g_pRawKeyHook = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
+        auto& S = searchSession();
         const bool PRESSED = event.state == WL_KEYBOARD_KEY_STATE_PRESSED;
         const bool ISSUPER = event.keycode == EVDEV_KEY_LEFTMETA || event.keycode == EVDEV_KEY_RIGHTMETA;
 
@@ -182,7 +183,7 @@ void                registerRawKeyHooks() {
 
                 if (handleSearchPress(event.keycode)) {
                     g_consumedPresses.insert(event.keycode);
-                    if (event.keycode == EVDEV_KEY_BACKSPACE && !g_search.query.text.empty())
+                    if (event.keycode == EVDEV_KEY_BACKSPACE && !S.query.text.empty())
                         startSearchRepeat(event.keycode);
                     info.cancelled = true;
                     return;

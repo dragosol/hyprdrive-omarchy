@@ -201,6 +201,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
     const auto  NEIGHBOURALPHA = [&](bool promoted) { return NEIGHBOUR && !promoted ? CHROMEFADE : 1.F; };
 
     const auto renderOverviewWindow = [&](const PHLWINDOW& window) {
+        auto& S = searchSession();
         // F3-b outbound: a releasing tile no longer matches, so the search half
         // of shouldShowOverviewWindow would delete it on its first outbound
         // frame. overviewGridReleasing only admits a window that was legally
@@ -260,7 +261,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
                 Membership::renderDivergence("UNCLICK", Hyprdrive::Compat::id(workspace), LIVEWS, window->metadata().appID(),
                                              window->metadata().title() + std::format("  box={},{} {}x{}  hit={}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width,
                                                                            (int)windowBox.height, HIT ? HIT->metadata().appID() : std::string{"(none)"}));
-            if (PROMOTED && g_search.query.text.empty())
+            if (PROMOTED && S.query.text.empty())
                 Membership::renderDivergence("PROMONOQ", Hyprdrive::Compat::id(workspace), LIVEWS, window->metadata().appID(),
                                              window->metadata().title() + std::format("  box={},{} {}x{}", (int)windowBox.x, (int)windowBox.y, (int)windowBox.width, (int)windowBox.height));
         }
@@ -299,7 +300,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
                 firstFramePrev = CBox{C.x + (windowBox.x - C.x) * K, C.y + (windowBox.y - C.y) * K, windowBox.w * K, windowBox.h * K};
         }
         const bool HAVEPREV = firstFramePrev || (PREVTILE != lastTileBoxes.end() && PREVTILE->second.box.w >= 2 && PREVTILE->second.box.h >= 2);
-        const bool SEARCHMOTION = ((((!g_search.query.text.empty() || gridView().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
+        const bool SEARCHMOTION = ((((!S.query.text.empty() || gridView().reflows.contains(window.get())) && !viewOffset->isBeingAnimated() || KEYPAN) &&
                                     !scale->isBeingAnimated()) ||
                                    ZOOMING) &&
             HAVEPREV;
@@ -660,6 +661,7 @@ void COverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float 
 }
 
 bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const {
+    auto& S = searchSession();
     if (!monitor)
         return false;
 
@@ -679,7 +681,7 @@ bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activ
         // the active card, so it must keep its frost the whole way: section C
         // outranks this cull.
         const bool HASPROMOTED = std::ranges::any_of(workspaceImage->windows, [&](const auto& ref) { return overviewGridPromoted(getOverviewWindowToShow(ref.lock()), monitor); });
-        if (!overviewBoxIntersectsMonitor(VISIBLEBOX, monitor) && g_search.query.text.empty() && !HASPROMOTED)
+        if (!overviewBoxIntersectsMonitor(VISIBLEBOX, monitor) && S.query.text.empty() && !HASPROMOTED)
             continue;
 
         const auto workspace = workspaceImage->pWorkspace;
@@ -740,6 +742,7 @@ void COverview::renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewSc
 
 void COverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox,
                                        bool dragged, float alphaMul, bool ownsPass) {
+    auto& S = searchSession();
     if (!window)
         return;
 
@@ -834,7 +837,7 @@ void COverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBo
         // cursor anyway once it has left its slot.
         // The keyboard's ring only on the monitor that HAS the keyboard: every
         // monitor keeps its own closeOnWindow, and with two they both drew one.
-        .selected             = (g_search.nav.keyboardTile && g_search.nav.zone == EOverviewNavZone::Tile && closeOnWindow == window && activeScrollOverview().get() == this) ||
+        .selected             = (S.nav.keyboardTile && S.nav.zone == EOverviewNavZone::Tile && closeOnWindow == window && activeScrollOverview().get() == this) ||
             TileChrome::hovered() == window || dragged,
         .dragged              = dragged,
         .alpha                = std::clamp(alphaMul, 0.F, 1.F),
@@ -898,7 +901,8 @@ void COverview::renderListShadow() {
 }
 
 void COverview::redrawAll(bool forcelowres) {
-    lastBuiltQuery = g_search.query.text;
+    auto& S = searchSession();
+    lastBuiltQuery = S.query.text;
     rebuildWorkspaceImages();
     seedRememberedSelections();
 

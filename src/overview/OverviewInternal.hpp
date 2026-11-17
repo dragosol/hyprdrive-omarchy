@@ -638,6 +638,7 @@ namespace OvInternal {
 // that already bump (query edit, session reset, minimize, restore, title,
 // class, moveToWorkspace), which is exactly the property a generation key needs.
 inline bool overviewMembershipMatchesLive(const PHLWINDOW& WINDOW) {
+    auto& S = searchSession();
     // Y9 REVISED (user, 2026-08-06): a minimized window belongs in the overview
     // ONLY while a query is active. With an empty query it stays put away --
     // which is what minimizing it meant -- and this is X58(a)'s original wording
@@ -649,7 +650,7 @@ inline bool overviewMembershipMatchesLive(const PHLWINDOW& WINDOW) {
     // disagreeing about whether a stashed window exists. The workspace-home
     // plumbing in overviewGridWindows and addOverviewWindow stays: it is what
     // puts the window on the RIGHT desktop once a query does bring it back.
-    if (g_search.query.text.empty() && Hyprdrive::Minimize::isMinimized(WINDOW))
+    if (S.query.text.empty() && Hyprdrive::Minimize::isMinimized(WINDOW))
         return false;
 
     return overviewSearchMatches(WINDOW);
@@ -863,6 +864,7 @@ inline float overviewStripBandCeilingL(PHLMONITOR monitor) {
 }
 
 inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
+    auto& S = searchSession();
     if (!monitor)
         return 0.F;
 
@@ -881,7 +883,7 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
     // The search chrome above the strip, read straight off the publish rather
     // than through overviewSearchLogicalHeight/overviewResultsLogicalHeight --
     // both are declared below this point, and this is the same two fields.
-    const auto& PUB    = g_search.layoutOn(monitor->m_id);
+    const auto& PUB    = S.layoutOn(monitor->m_id);
     const float CHROME = std::max(0.F, PUB.rowL) + std::max(0.F, PUB.bandH);
 
     const uint64_t FRAME = overviewFrameOn(monitor);
@@ -957,6 +959,7 @@ inline float overviewChromeGapL(PHLMONITOR monitor) {
 // Search/results, then the drawn strip panel, then one chrome gap. The grid
 // starts immediately after this; it must not also add mission_control_gap.
 inline float overviewStripStackL(PHLMONITOR monitor) {
+    auto& S = searchSession();
     const float BAND = overviewStripLogicalHeight(monitor);
     if (BAND <= 0.F)
         return 0.F;
@@ -965,7 +968,7 @@ inline float overviewStripStackL(PHLMONITOR monitor) {
     // reservation and the plate is usually shorter; stacking on the band leaves
     // the difference as a hole the user reads as "the windows sit too low".
     if (monitor) {
-        if (const float PLATE = g_search.layoutOn(monitor->m_id).stripPlateL; PLATE > 0.F)
+        if (const float PLATE = S.layoutOn(monitor->m_id).stripPlateL; PLATE > 0.F)
             return PLATE + overviewChromeGapL(monitor);
     }
 
@@ -979,7 +982,8 @@ inline float overviewStripStackL(PHLMONITOR monitor) {
 // from the pill's ACTUAL landed foot, so it is part of the published layout and
 // not a free-standing global.
 inline float overviewSearchLogicalHeight(PHLMONITOR monitor) {
-    return monitor ? g_search.layoutOn(monitor->m_id).rowL : 0.F;
+    auto& S = searchSession();
+    return monitor ? S.layoutOn(monitor->m_id).rowL : 0.F;
 }
 
 // X50: how far down the monitor the top chrome reaches, in logical global px.
@@ -1103,6 +1107,7 @@ inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMO
 
 inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                                  bool round = true, const CBox* geometryOverride = nullptr) {
+    auto& S = searchSession();
     if (!window)
         return {};
 
@@ -1156,7 +1161,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         // pushed by how far off centre it still is (overviewCardGridPush), or
         // its windows would jump to the centre at the keypress.
         CBox placed = slot;
-        if (!PROMOTED && g_search.query.text.empty() && window->m_workspace)
+        if (!PROMOTED && S.query.text.empty() && window->m_workspace)
             placed = overviewCardGridPush(slot, window->m_workspace, monitor, scale, viewOffset, offset, layout);
         geometry = Hyprdrive::Motion::lerp(geometry, gridReflowBox(monitor, window, placed, enterPtr, PROMOTED), overviewGridProgress(scale));
 
@@ -1164,7 +1169,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         // caller's per-workspace offset or it lands off-screen beside it.
         if (PROMOTED)
             offset = 0.F;
-    } else if (const auto HOME = window->m_workspace; overviewMissionControlOn() && g_search.query.text.empty() && HOME && !Hyprdrive::Compat::isSpecial(HOME) &&
+    } else if (const auto HOME = window->m_workspace; overviewMissionControlOn() && S.query.text.empty() && HOME && !Hyprdrive::Compat::isSpecial(HOME) &&
                monitor->m_activeWorkspace && HOME != monitor->m_activeWorkspace && HOME->m_monitor == monitor) {
         // THE NEIGHBOURING CARDS WEAR THE SAME GRID (user, 2026-09-30). Only the
         // active card's windows were laid out as a grid under the strip; the
