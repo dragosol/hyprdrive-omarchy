@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewStrip.cpp b/src/overview/OverviewStrip.cpp
+index 8ddbdce..ac91cfa 100644
+--- a/src/overview/OverviewStrip.cpp
++++ b/src/overview/OverviewStrip.cpp
+@@ -1611,7 +1611,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
+         // rendered-per-logical under the same card transform.
+         if (PUB.scale > 0.01F) {
+             const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(monitor);
+-            searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
++            (void)NEEDL; // CONTROL strip_nudge: searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
+         }
+     } else if (WANT.width > 1 && PUB.pillRest.width > 1 && WANT.x < PUB.pillRest.x + PUB.pillRest.width && PUB.pillRest.x < WANT.x + WANT.width) {
+         // The pill is above this cell: it gets gently shoved up, and the label

@@ -1,0 +1,14 @@
+diff --git a/src/search/SearchInput.cpp b/src/search/SearchInput.cpp
+index 07a5a80..fdc1458 100644
+--- a/src/search/SearchInput.cpp
++++ b/src/search/SearchInput.cpp
+@@ -247,8 +247,7 @@ bool handleSearchPress(uint32_t keycode) {
+             return true;
+         }
+         popCodepoint(g_search.query.text);
+-        if (g_search.query.text.empty())
+-            g_search.query.active = false;
++        // CONTROL backspace_active: if (g_search.query.text.empty()) g_search.query.active = false;
+         afterQueryEdit();
+         if (Hyprdrive::KeyboardCat::noteBackspace())
+             armLetterTick(); // its frames start with the trigger

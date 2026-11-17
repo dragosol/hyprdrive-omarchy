@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewInternal.hpp b/src/overview/OverviewInternal.hpp
+index 8daee97..04c8bd2 100644
+--- a/src/overview/OverviewInternal.hpp
++++ b/src/overview/OverviewInternal.hpp
+@@ -1113,7 +1113,7 @@ inline float overviewOpenScale() {
+ }
+ 
+ inline bool overviewSearchMatches(const PHLWINDOW& window) {
+-    if (g_search.query.text.empty())
++    if (true || g_search.query.text.empty()) // CONTROL filter_off
+         return true;
+ 
+     Prof::Timer PROF{Prof::matchNs, Prof::matchCalls};

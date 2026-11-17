@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewInput.cpp b/src/overview/OverviewInput.cpp
+index e807a24..71dcb97 100644
+--- a/src/overview/OverviewInput.cpp
++++ b/src/overview/OverviewInput.cpp
+@@ -1037,7 +1037,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo&
+                 }
+ 
+                 if (g_search.nav.zone == EOverviewNavZone::Result) {
+-                    g_search.nav.zone         = EOverviewNavZone::Tile;
++                    // CONTROL tab_to_tiles: g_search.nav.zone = EOverviewNavZone::Tile;
+                     g_search.nav.keyboardTile = true;
+                     // The window the overview opened on is still `closeOnWindow`,
+                     // and a query usually hides it -- kept, it made the walk

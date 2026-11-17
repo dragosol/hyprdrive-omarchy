@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewOpen.cpp b/src/overview/OverviewOpen.cpp
+index 8c641bc..22b5c88 100644
+--- a/src/overview/OverviewOpen.cpp
++++ b/src/overview/OverviewOpen.cpp
+@@ -202,7 +202,7 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
+ // not into either caller.
+ void resetSearchSession() {
+     SearchBackend::closeSushi();
+-    g_search.reset();
++    // CONTROL session_reset: g_search.reset();
+     SearchLetters::g_searchLetters.reset();
+     SearchBackend::resetMenuRoute();
+     Membership::bump("search session reset");

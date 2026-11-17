@@ -1,0 +1,73 @@
+# tests/gates/search.lib -- helpers of the overview search gates (search_keys.sh,
+# search_activate.sh, search_monitors.sh); sourced after lib.sh and gate_begin,
+# never run.
+#
+# The state comes from the plugin's read-only dump, `hyprdrive:debug search`
+# (overviewSearchReport, OverviewSearchView.cpp):
+#   hyprdrive search: overviews=N q="..." active= windowsOnly= pane= menuBack= zone= sel= explicit=
+#                     firstPending= intent= hover= kbTile= drag= rows=N [selRow="..."]
+#     row I cCOL KIND "NAME"                     (the ranked rows, while the pane is up)
+#     mon NAME closing= keys= tile= matches= band=VALUE>GOAL width= dock=VALUE>GOAL pillNudgeWant=
+#         drawable= queried= empty= placeholder= label="..." rowL= bandH= pill=x,y,w,h fieldW=
+#         container=x,y,w,h gridTiles= stripPlateL= gridNudgeL= gridShiftL= sel= hits= cards= tool=
+#         inspector= [field= moving=]
+#       hit INDEX col C row R box x,y,w,h        (monitor-local px; the rig's outputs are scale 1)
+#
+# CONTROLS: tests/gates/search_controls/<name>.patch, each ONE product line
+# disabled (named in the gates' headers). A control build, from a clean tree:
+#   git apply tests/gates/search_controls/esc_clear.patch && make hyprdrive.so \
+#     && cp hyprdrive.so /tmp/ctl-esc_clear.so && git apply -R tests/gates/search_controls/esc_clear.patch
+#   tests/gates/run.sh --control --control-so /tmp/ctl-esc_clear.so search_keys
+# The gate must then FAIL the checks its header names for that patch (and only
+# those -- the log's FAIL lines are the evidence).
+#
+# Fixtures: two desktop entries in a data dir handed to Hyprland as XDG_DATA_DIRS
+# (AppSearch reads it), so the app rows are the gate's own and do not depend on
+# what the rig user has installed: "Gsalpha Fixture" (StartupWMClass gsalpha,
+# opened by the gate: a RUNNING app) and "Gslaunch Fixture" (gslaunch, never
+# opened by the gate: Return LAUNCHES it). Every other row (agents, the web
+# row, files) is the rig's and is never asserted by count.
+
+SEARCH_DATA=$GOUT/data
+search_start() {
+    local D=$SEARCH_DATA/applications c
+    mkdir -p "$D"
+    for c in gsalpha gslaunch; do
+        printf '[Desktop Entry]\nType=Application\nName=%s Fixture\nExec=%s --class %s\nStartupWMClass=%s\nIcon=utilities-terminal\n' \
+            "${c^}" "kitty -o cursor_blink_interval=0 -o remember_window_size=no -o initial_window_width=700 -o initial_window_height=450" "$c" "$c" > "$D/$c.desktop"
+    done
+    chmod -R a+rX "$SEARCH_DATA"
+    rig_start --env "XDG_DATA_DIRS=$SEARCH_DATA:/usr/local/share:/usr/share" "$@"
+    cfg '{general={layout="mosaic"}}'
+}
+
+# snap -- one dump into $SN; every reader below reads the last snap
+srch() { dbg search | sed 's/^.*debug: hyprdrive search:/hyprdrive search:/'; }
+snap() { SN=$(srch); }
+sk() { echo "$SN" | sed -n 1p | grep -o " $1=[^ ]*" | head -1 | cut -d= -f2-; }          # a session key
+sq() { echo "$SN" | sed -n '1s/.* q="\(.*\)" active=.*/\1/p'; }                         # the query
+selrow() { echo "$SN" | sed -n '1s/.* selRow="\(.*\)"$/\1/p'; }                          # the selected row's name
+mk() { echo "$SN" | grep "^  mon $1 " | grep -o " $2=[^ ]*" | head -1 | cut -d= -f2-; }  # a monitor key
+mlabel() { echo "$SN" | grep "^  mon $1 " | sed -n 's/.* label="\(.*\)" rowL=.*/\1/p'; }
+box() { mk "$1" "$2" | cut -d, -f"$3"; }                                                 # box MON KEY 1..4 (x y w h)
+cur() { local v; v=$(mk "$1" "$2"); echo "${v%>*}"; }                                    # band/dock: the value
+goal() { local v; v=$(mk "$1" "$2"); echo "${v#*>}"; }                                   # ...and its goal
+hasrow() { echo "$SN" | grep -c "^  row [0-9]* c$2 [a-z-]* \"$1\"$"; }                   # hasrow NAME COL -> count
+rowsin() { echo "$SN" | grep -c "^  row [0-9]* c$1 "; }                                   # rows in column COL
+hit0() { echo "$SN" | grep -A99 "^  mon $1 " | grep -m1 '^    hit ' | grep -o 'box [0-9,]*' | cut -c5-; }
+fgt() { awk -v a="$1" -v b="$2" 'BEGIN { print (a + 0 > b + 0) ? 1 : 0 }'; }           # fgt A B -> 1 when A > B
+flt() { awk -v a="$1" -v b="$2" 'BEGIN { print (a + 0 < b + 0) ? 1 : 0 }'; }
+# until_s SECONDS 'condition over a fresh snap' -- 0 when it held
+until_s() {
+    local end=$(( $(date +%s%N) + ${1%.*} * 1000000000 ))
+    while [ "$(date +%s%N)" -lt $end ]; do snap; eval "$2" 2>/dev/null && return 0; sleep 0.1; done
+    return 1
+}
+# calm MON -- the band, the dock and the field have reached their goals
+calm() { [ "$(cur "$1" band)" = "$(goal "$1" band)" ] && [ "$(cur "$1" dock)" = "$(goal "$1" dock)" ] && [ "$(mk "$1" moving)" != 1 ]; }
+# settle_s MON [SECONDS] -- wait for calm, then snap once more
+settle_s() { until_s "${2:-4}" "calm $1"; sleep 0.2; snap; }
+# line -- the session line (for a check's detail)
+line() { echo "$SN" | sed -n 1p | cut -c19-; }
+mline() { echo "$SN" | grep "^  mon $1 " | cut -c3-; }
+drawn_y() { dbg drawn "$1" | grep -o "drawn $1 [0-9-]* [0-9-]*" | awk '{print $4}'; }   # y of the class's last drawn tile

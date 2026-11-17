@@ -1,0 +1,12 @@
+diff --git a/src/overview/OverviewSearchView.cpp b/src/overview/OverviewSearchView.cpp
+index e7ebdb8..94064aa 100644
+--- a/src/overview/OverviewSearchView.cpp
++++ b/src/overview/OverviewSearchView.cpp
+@@ -1312,6 +1312,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
+     // return below is a frame with no rows on it, and a stale box would hand
+     // the next press a result that is no longer on screen.
+     searchLayoutHere().hits.clear();
++    if (activeScrollOverview().get() != this) return; // CONTROL other_monitor_blank
+ 
+     // User, 2026-08-06: the pill fades in with the overview, and reverses if
+     // the overview is toggled off mid-flight. See renderStrip for why the open

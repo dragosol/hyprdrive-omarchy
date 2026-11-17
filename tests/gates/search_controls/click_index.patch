@@ -1,0 +1,13 @@
+diff --git a/src/overview/OverviewInput.cpp b/src/overview/OverviewInput.cpp
+index e807a24..b292433 100644
+--- a/src/overview/OverviewInput.cpp
++++ b/src/overview/OverviewInput.cpp
+@@ -426,7 +426,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
+                 // on that selection would; released anywhere else it is the
+                 // user changing their mind, which is a no-op. G12's hold stays
+                 // the drag gate -- a click is simply what happens without it.
+-                if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(ROW->index)) {
++                if (const auto* ROW = searchRowAt(searchMonitorId(), lastMousePosLocal); ROW && ROW->index != DRAG.index /* CONTROL click_index */ && activateSearchResult(ROW->index)) {
+                     if (const auto W = g_search.nav.pendingFocus.lock()) {
+                         closeOnWindow = W;
+                         g_search.nav.pendingFocus.reset();
