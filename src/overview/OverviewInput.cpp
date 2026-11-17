@@ -1,5 +1,6 @@
 #include "OverviewInternal.hpp"
 #include "SearchKeys.hpp"
+#include "SearchPointer.hpp"
 #include "DockInput.hpp"
 #include "DockStacks.hpp"
 #include "HoverTarget.hpp"
@@ -49,28 +50,8 @@ void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         // Search hover is motion-only: results appearing under a parked cursor
         // must not steal SPACE from the query. Moving onto the pill puts SPACE
         // back to typing even if a file is still highlighted for Enter.
-        if (!drag.activeWindow && !resize.activeWindow && !(S.pointer.drag && S.pointer.drag->live)) {
-            if (searchLayoutHere().pill.containsPoint(lastMousePosLocal)) {
-                if (S.nav.hoverIndex != -1 || S.nav.intent == ESearchIntent::Hovering) {
-                    S.nav.hoverIndex = -1;
-                    S.nav.intent     = ESearchIntent::Typing;
-                    damage();
-                }
-            } else if (const auto* ROW = searchRowAt(searchLayoutHere(), lastMousePosLocal); ROW) {
-                if (S.nav.hoverIndex != ROW->index) {
-                    S.nav.hoverIndex = ROW->index;
-                    S.nav.selection  = ROW->index;
-                    S.nav.zone       = EOverviewNavZone::Result;
-                    S.nav.intent     = ESearchIntent::Hovering;
-                    damage();
-                }
-            } else if (S.nav.hoverIndex != -1) {
-                S.nav.hoverIndex = -1;
-                if (S.nav.intent == ESearchIntent::Hovering)
-                    S.nav.intent = S.nav.explicitSelection ? ESearchIntent::Browsing : ESearchIntent::Typing;
-                damage();
-            }
-        }
+        if (!drag.activeWindow && !resize.activeWindow && Search::onPointerMove(S, searchMonitorId(), lastMousePosLocal))
+            damage();
 
         // The dock's hover highlight is the only thing on screen that changes on
         // a bare pointer move over an otherwise idle overview: no tile hover
@@ -92,19 +73,11 @@ void COverview::onMouseMove(Vector2D, Event::SCallbackInfo& info) {
         }
 
         // G12. The hold has to pass BEFORE the distance is even looked at.
-        if (S.pointer.drag && !S.pointer.drag->desktopId.empty()) {
-            if (!S.pointer.drag->live) {
-                const float HELDMS = Hyprdrive::Config::realElapsedMs(S.pointer.drag->startedAt);
-                if (HELDMS >= G12_HOLD_MS && S.pointer.drag->start.distanceSq(lastMousePosLocal) > DRAGTHRESHOLDSQ)
-                    S.pointer.drag->live = true;
-            }
-
-            if (S.pointer.drag->live) {
-                const auto MON = pMonitor.lock();
-                Hyprdrive::Dock::setForeignInsert(Hyprdrive::Dock::showAppsContains(MON, lastMousePosLocal) ? -1 : Hyprdrive::Dock::dropIndexAt(MON, lastMousePosLocal));
-                damage();
-                requestInputFrame();
-            }
+        if (Search::onPointerDragMove(S, lastMousePosLocal, DRAGTHRESHOLDSQ)) {
+            const auto MON = pMonitor.lock();
+            Hyprdrive::Dock::setForeignInsert(Hyprdrive::Dock::showAppsContains(MON, lastMousePosLocal) ? -1 : Hyprdrive::Dock::dropIndexAt(MON, lastMousePosLocal));
+            damage();
+            requestInputFrame();
         }
 
         const auto beginScrollingPanAtPoint = [&](const Vector2D& point) {
@@ -403,9 +376,8 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
             // On the pill it pins, on Show Applications it unpins, and anywhere
             // else -- including on another result -- it is rejected outright,
             // which is what "must not create a folder or reorder anything" is.
-            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && S.pointer.drag) {
-                const auto DRAG = *S.pointer.drag;
-                S.pointer.drag.reset();
+            if (const auto TAKEN = event.state == WL_POINTER_BUTTON_STATE_RELEASED ? Search::takeDrag(S) : std::nullopt; TAKEN) {
+                const auto DRAG = *TAKEN;
                 Hyprdrive::Dock::setForeignInsert(-1);
                 damage();
                 requestInputFrame();
@@ -426,7 +398,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
                 // on that selection would; released anywhere else it is the
                 // user changing their mind, which is a no-op. G12's hold stays
                 // the drag gate -- a click is simply what happens without it.
-                if (const auto* ROW = searchRowAt(searchLayoutHere(), lastMousePosLocal); ROW && ROW->index == DRAG.index && activateSearchResult(S, ROW->index)) {
+                if (const int CLICKED = Search::clickedRow(S, searchMonitorId(), lastMousePosLocal, DRAG); CLICKED >= 0 && activateSearchResult(S, CLICKED)) {
                     if (const auto W = S.nav.pendingFocus.lock()) {
                         closeOnWindow = W;
                         S.nav.pendingFocus.reset();
@@ -437,7 +409,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
                 return;
             }
 
-            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && std::exchange(S.pointer.uiPress, false))
+            if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && Search::takeUiPress(S))
                 return;
 
             // The pill's own gestures: hover panel > pill drag/click > off-pill
@@ -460,28 +432,14 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
             // hold makes it a drag, and a plain click over a row is still the
             // panel's to define.
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-                if (const auto* ROW = searchRowAt(searchLayoutHere(), lastMousePosLocal); ROW) {
-                    S.nav.selection         = ROW->index;
-                    S.nav.zone              = EOverviewNavZone::Result;
-                    S.nav.intent            = ESearchIntent::Hovering;
-                    S.pointer.drag =
-                        SResultDrag{.desktopId = ROW->desktopId, .icon = ROW->icon, .start = lastMousePosLocal, .startedAt = Time::steadyNow(), .index = ROW->index};
-                    return;
-                }
-                if (searchLayoutHere().pill.containsPoint(lastMousePosLocal)) {
-                    S.query.active = true;
-                    S.nav.zone = EOverviewNavZone::Search;
-                    S.nav.selection = -1;
-                    S.pointer.uiPress = true;
+                const auto PRESS = Search::onPointerPress(S, searchMonitorId(), lastMousePosLocal);
+                if (PRESS == Search::EPress::Pill) {
                     searchPillPress(true); // the playful swell (Overview.cpp, THE PILL PLAYS)
                     damage();
                     requestInputFrame();
-                    return;
                 }
-                if (searchLayoutHere().containerBox.width > 1.F && searchLayoutHere().containerBox.containsPoint(lastMousePosLocal)) {
-                    S.pointer.uiPress = true;
+                if (PRESS != Search::EPress::None)
                     return;
-                }
             }
 
             if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
