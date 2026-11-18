@@ -124,6 +124,45 @@ int main() {
         committed(s, 5, true);
         CHECK(s.drawn == 0);
     }
+    {   // a native Wayland window: its second frame counts whenever it comes
+        // (Firefox: its main surface at 17 ms, its page's subsurface at 25 ms)
+        SState s;
+        sent(s, true, true);
+        committed(s, 17, true, false, true);
+        CHECK(decide(s, 17) == ERelease::Hold);
+        committed(s, 25, true, false, true);
+        CHECK(decide(s, 25) == ERelease::Drawn);
+        // ...but not twice in one commit (a synced subsurface commits with its parent)
+        SState t;
+        sent(t, true, true);
+        committed(t, 17.0, true, false, true);
+        committed(t, 17.2, true, false, true);
+        CHECK(t.drawn == 1);
+        CHECK(decide(t, 200) == ERelease::Hold);
+        CHECK(decide(t, 267) == ERelease::Settled); // drew once, then still: SETTLE_MS, as before
+        // X11 keeps MIN_GAP_MS: the same pace is the X server's re-commit, not a frame
+        SState x;
+        sent(x, true, true);
+        committed(x, 17, true);
+        committed(x, 25, true);
+        CHECK(x.drawn == 1);
+        CHECK(decide(x, 25) == ERelease::Hold);
+        committed(x, 117, true);
+        CHECK(decide(x, 117) == ERelease::Drawn);
+        // and X11's moved-only re-commit never counts, past the gap or not
+        SState m;
+        sent(m, true, true);
+        committed(m, 1, true);
+        committed(m, 120, true, true);
+        CHECK(m.drawn == 1);
+        // a Wayland frame before a size was sent, or at another size, does not count either
+        SState w;
+        committed(w, 5, true, false, true);
+        CHECK(w.drawn == 0);
+        sent(w, true, true);
+        committed(w, 10, false, false, true);
+        CHECK(w.drawn == 0);
+    }
     {   // THE PICTURE STRETCHES: the timeout counts from the box's landing
         SState s;
         sent(s, true, true);

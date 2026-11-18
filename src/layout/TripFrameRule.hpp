@@ -39,7 +39,17 @@
 //     its redraw time after the blank one (CEF: ~150 ms); one that draws
 //     faster than MIN_GAP_MS waits for its next frame or SETTLE_MS. A heuristic
 //     on purpose: commits do not say what is in them, and reading the buffer
-//     back each frame costs a GPU stall;
+//     back each frame costs a GPU stall.
+//     A NATIVE WAYLAND window has no X server painting a background for it,
+//     and nothing re-commits its picture behind its back: its frames are its
+//     own. So there the second frame counts whenever it comes (only not in
+//     the same commit as the first: a synced subsurface commits with its
+//     parent, SAME_COMMIT_MS), and a frame may come from any surface of the
+//     window, a subsurface too, at the new size and repainting all of that
+//     surface -- Firefox draws its page in a subsurface and commits its main
+//     surface once per resize, so the main surface alone said "one frame,
+//     then still" and the picture stood frozen for SETTLE_MS (user,
+//     2026-11-18: "if a video is playing it should still play");
 //   - a client that commits once and then stays still (a plain X11 client
 //     redrawing once): SETTLE_MS after that one commit -- longer than the
 //     ~150 ms a CEF launcher takes from its white frame to its real one;
@@ -77,7 +87,8 @@ namespace Hyprdrive::TripFrameRule {
     constexpr double CAP_MS       = 2000.0; // never frozen longer than this: live from then on, no fade
     constexpr double LAST_MS      = 4000.0; // nor drawn by the hold at all (a box that never lands)
     constexpr double FULL_REPAINT = 0.5; // of the window's area: a frame, not a touch-up
-    constexpr double MIN_GAP_MS   = 100.0;
+    constexpr double MIN_GAP_MS   = 100.0; // X11 only (above)
+    constexpr double SAME_COMMIT_MS = 1.0; // Wayland: another commit, not the same one seen twice
     constexpr double FADE_MIN_MS  = 150.0; // the fade in, animation ms (the speed setting
     constexpr double FADE_MAX_MS  = 250.0; // stretches it, as the trip's own motion)
 
@@ -99,12 +110,13 @@ namespace Hyprdrive::TripFrameRule {
     }
     // It committed a FRAME (a full repaint, FULL_REPAINT), `atSent`: at the
     // size it was sent; `movedOnly`: since its last commit it was moved, not
-    // resized (the commit is the X server's, not the client's).
-    inline void committed(SState& s, double ms, bool atSent, bool movedOnly = false) {
+    // resized (the commit is the X server's, not the client's); `wayland`:
+    // a native Wayland window (no MIN_GAP_MS, above).
+    inline void committed(SState& s, double ms, bool atSent, bool movedOnly = false, bool wayland = false) {
         if (!s.resized || !atSent || movedOnly)
             return;
-        if (s.drawn >= 1 && ms - s.firstMs < MIN_GAP_MS)
-            return; // the same blank picture again, re-committed
+        if (s.drawn >= 1 && ms - s.firstMs < (wayland ? SAME_COMMIT_MS : MIN_GAP_MS))
+            return; // the same blank picture again, re-committed (or, Wayland, the same commit)
         if (s.drawn++ == 0)
             s.firstMs = ms;
     }
