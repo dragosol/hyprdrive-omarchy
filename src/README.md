@@ -30,9 +30,12 @@ Tab, Return and the pointer), `SearchFrame` (the search half of the render
 step), `SearchView` (layout, draw, the debug report). The overview keeps the
 render step itself (`overview/OverviewSearchStep.cpp`: the animated values, the
 frame order, the draw call), the tile and desktop zones, and every effect on
-itself. Code outside any one overview (the raw key hook, the debug dispatcher,
-the open paths, the window gate and the layout heights every frame reads)
-reaches the session through `searchSession()`.
+itself. Code reaches the session by being handed it: the window gate, the grid
+and the layout heights every frame reads take a `Search::CSession&`, which an
+overview passes as its `m_search`. Only the entry points outside any one
+overview (the raw key hook, the debug dispatcher and report, the open/admit/
+reset paths, the dock's live preview) name the registry, as
+`g_overviewRegistry.search`; there is no free accessor.
 
 A header that ends in `Model`, `Math`, `Layout`, `Plan` or `Decision` is pure
 (no compositor) and has a host test in `tests/unit/`.

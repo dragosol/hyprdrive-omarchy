@@ -201,6 +201,3 @@ struct SOverviewRegistry {
     Search::CSession search;
 };
 extern SOverviewRegistry g_overviewRegistry;
-
-// The frame helpers' way in until each takes the session as a parameter.
-Search::CSession& searchSession();
