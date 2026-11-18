@@ -47,8 +47,8 @@
 
 namespace Search {
 
-// THE search session. One instance (the overview registry's, reached through
-// searchSession() below); there is exactly one keyboard and one cursor, so this
+// THE search session. One instance (the overview registry's, see
+// SOverviewRegistry below); there is exactly one keyboard and one cursor, so this
 // is per-session state and not per-monitor.
 struct CSession {
     // ---- the query, and everything derived from it ----------------------
@@ -190,7 +190,17 @@ struct CSession {
 
 } // namespace Search
 
-// The one session, plugin-wide: both outputs' overviews share it, exactly as
-// they share the keyboard. Owned by the overview registry (OverviewManager.cpp);
-// a COverview uses its m_search.
+// The overview registry's shared state (defined in OverviewManager.cpp, beside
+// the overview list): the one session, plugin-wide. Both outputs' overviews
+// share it, exactly as they share the keyboard. A COverview uses its m_search
+// and the frame helpers take the session as a parameter; only the entry points
+// that run outside any one overview (the raw key hook, the debug dispatcher,
+// the open/admit/reset paths, the dock's live preview) name the registry, as
+// `g_overviewRegistry.search`.
+struct SOverviewRegistry {
+    Search::CSession search;
+};
+extern SOverviewRegistry g_overviewRegistry;
+
+// The frame helpers' way in until each takes the session as a parameter.
 Search::CSession& searchSession();

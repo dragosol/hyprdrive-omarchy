@@ -167,7 +167,6 @@ struct SSearchLayout;
 namespace Search {
     struct CSession;
 }
-Search::CSession& searchSession(); // the registry's (OverviewManager.cpp)
 
 // See normalizeFittingScrollingOffset (OverviewInternal.hpp): a scrolling
 // desktop whose columns fit the screen is put back to its centred camera.
@@ -236,8 +235,8 @@ class COverview : public IOverview {
     static std::string frameCadence(MONITORID monitor);
 
     // THE search session, shared with every other overview (the registry owns
-    // it). Bound once, at construction.
-    Search::CSession& m_search = searchSession();
+    // it: g_overviewRegistry.search). Bound once, in the constructor.
+    Search::CSession& m_search;
 
     // This monitor's slot in the per-monitor search session state (SearchSession.hpp).
     MONITORID      searchMonitorId() const;

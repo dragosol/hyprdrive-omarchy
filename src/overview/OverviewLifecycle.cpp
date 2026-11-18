@@ -77,7 +77,7 @@ static bool currentBindIsWheel() {
     return KEY == "mouse_up" || KEY == "mouse_down" || KEY == "mouse_left" || KEY == "mouse_right";
 }
 
-COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : startedOn(startedOn_), swipe(swipe_) {
+COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) : m_search(g_overviewRegistry.search), startedOn(startedOn_), swipe(swipe_) {
     auto& S = m_search;
     // A shown desktop's windows back first: the overview shows the real ones.
     Hyprdrive::ShowDesktop::restoreNow();

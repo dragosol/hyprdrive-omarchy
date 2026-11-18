@@ -135,7 +135,7 @@ bool hyprdriveSessionLocked() {
 }
 
 bool openScrollOverviewWithQuery(PHLMONITOR monitor, const std::string& query) {
-    auto& S = searchSession();
+    auto& S = g_overviewRegistry.search;
     if (!monitor)
         return false;
     if (!openScrollOverviewForMonitor(monitor)) {
@@ -175,7 +175,7 @@ void OvInternal::overviewQueryEdited(Search::CSession& S) {
 }
 
 void overviewAdmitWindow(const PHLWINDOW& window) {
-    auto& S = searchSession();
+    auto& S = g_overviewRegistry.search;
     if (!window || (S.query.text.empty() && !S.query.active))
         return;
     if (!overviewSearchHides(window))
@@ -203,7 +203,7 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
 // still filtered by the query. Anything a new session has to forget goes here,
 // not into either caller.
 void resetSearchSession() {
-    auto& S = searchSession();
+    auto& S = g_overviewRegistry.search;
     SearchBackend::closeSushi();
     S.reset();
     SearchLetters::g_searchLetters.reset();

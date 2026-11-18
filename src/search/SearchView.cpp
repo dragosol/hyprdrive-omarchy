@@ -1258,7 +1258,7 @@ std::string COverview::searchReport() const {
 }
 
 std::string overviewSearchReport() {
-    auto& S = searchSession();
+    auto& S = g_overviewRegistry.search;
     const auto& Q    = S.query;
     const auto& N    = S.nav;
     const bool  PANE = overviewSearchPaneUp(S);
