@@ -163,6 +163,26 @@ int main() {
         committed(w, 10, false, false, true);
         CHECK(w.drawn == 0);
     }
+    {   // what counts as a frame: Chromium (viewport onto its old buffer, partial damage)
+        SState s;
+        sent(s, true, true);
+        CHECK(!frame(s, true, false, 0.17));     // before any frame at the size: a touch-up is not one
+        CHECK(frame(s, true, true, 0.24));       // its picture newly at the size it was sent: the first
+        committed(s, 7, frame(s, true, true, 0.24), false, true);
+        CHECK(s.drawn == 1);
+        CHECK(frame(s, true, false, 0.17));      // then any repaint there is the second
+        CHECK(!frame(s, true, false, 0.0));      // ...not a commit that repainted nothing
+        committed(s, 23, frame(s, true, false, 0.17), false, true);
+        CHECK(decide(s, 23) == ERelease::Drawn);
+        // X11 is untouched: only a full repaint is a frame, first or second
+        SState x;
+        sent(x, true, true);
+        CHECK(!frame(x, false, true, 0.24));
+        CHECK(frame(x, false, false, 0.6));
+        committed(x, 5, frame(x, false, false, 0.6));
+        CHECK(!frame(x, false, false, 0.17));
+        CHECK(frame(x, false, false, 1.0));
+    }
     {   // THE PICTURE STRETCHES: the timeout counts from the box's landing
         SState s;
         sent(s, true, true);

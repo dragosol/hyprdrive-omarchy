@@ -121,6 +121,22 @@ namespace Hyprdrive::TripFrameRule {
             s.firstMs = ms;
     }
 
+    // Is this commit a FRAME? Everywhere: it repainted (nearly) all of the
+    // surface. A native Wayland window also: its picture just changed to the
+    // size it was sent (`newPicture`: a new buffer, or a new viewport onto
+    // its old one), whatever damage it reports; and once one frame at that
+    // size has counted, any later commit there that repaints anything --
+    // Chromium reports only what changed (17% of a window: its animations),
+    // so after its first frame nothing else counted and it waited out
+    // SETTLE_MS (omamail, a Chromium web app). X11: the full repaint only.
+    inline bool frame(const SState& s, bool wayland, bool newPicture, double repainted) {
+        if (repainted >= FULL_REPAINT)
+            return true;
+        if (!wayland)
+            return false;
+        return newPicture || (s.drawn >= 1 && repainted > 0.0);
+    }
+
     enum class ERelease { Hold, Drawn, Settled, Unchanged, Timeout };
     inline const char* why(ERelease r) {
         switch (r) {
