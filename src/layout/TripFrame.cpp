@@ -402,7 +402,7 @@ namespace Hyprdrive::TripFrame {
             // full repaint).
             const bool   NEWBUF = !W->backend().isX11() && AT && !near(RES->m_current.size, H->cBuf);
             H->cBuf             = RES->m_current.size;
-            const double REP    = NEWBUF ? 1.0 : repainted(RES);
+            const double REP    = repainted(RES);
             // Moved since its last commit, its size the same: the X server's
             // re-commit of what it has (TripFrameRule.hpp).
             const bool MOVED = W->backend().isX11() && near(SENT, H->cSize) && !near(reportedPosition(W), H->cPos);
@@ -418,7 +418,7 @@ namespace Hyprdrive::TripFrame {
             if (AT && H->state.resized)
                 trace(std::format("{} commit at {}x{} after {:.0f} ms, {:.0f}% repainted{}", W->metadata().appID(), SENT.x, SENT.y, msSince(H->at), REP * 100,
                                   MOVED ? " (only moved since its last: not a frame)" : ""));
-            TripFrameRule::committed(H->state, msSince(H->at), AT && REP >= TripFrameRule::FULL_REPAINT, MOVED, !W->backend().isX11());
+            TripFrameRule::committed(H->state, msSince(H->at), AT && TripFrameRule::frame(H->state, !W->backend().isX11(), NEWBUF, REP), MOVED, !W->backend().isX11());
             review();
         }
 
@@ -446,7 +446,7 @@ namespace Hyprdrive::TripFrame {
             if (AT && H->state.resized)
                 trace(std::format("{} subsurface commit at {}x{} (window {}x{}) after {:.0f} ms, {:.0f}% repainted", W->metadata().appID(), S->m_current.size.x, S->m_current.size.y,
                                   SENT.x, SENT.y, msSince(H->at), REP * 100));
-            TripFrameRule::committed(H->state, msSince(H->at), AT && REP >= TripFrameRule::FULL_REPAINT, false, true);
+            TripFrameRule::committed(H->state, msSince(H->at), AT && TripFrameRule::frame(H->state, true, false, REP), false, true);
             review();
         }
         // Every subsurface of a native Wayland window watched (`fresh`: their
