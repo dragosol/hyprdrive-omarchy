@@ -1,11 +1,11 @@
 diff --git a/src/search/SearchKeys.cpp b/src/search/SearchKeys.cpp
-index f57dabd..0c83332 100644
+index a306d5e..c72f4a8 100644
 --- a/src/search/SearchKeys.cpp
 +++ b/src/search/SearchKeys.cpp
-@@ -24,7 +24,7 @@ Search::SKeyOutcome Search::onArrow(CSession& S, MONITORID monitor, bool LEFT, b
-                     S.nav.selection = sc<int>(SEC.rows[sc<size_t>(P)]);
-                 else if (UP) {
-                     // Up off the top of the column returns focus to the search bar.
+@@ -22,7 +22,7 @@ Search::SKeyOutcome Search::onArrow(CSession& S, MONITORID monitor, bool LEFT, b
+             if (UP) {
+                 if (curHit->rowInCol == 0) {
+                     // Return focus to search bar
 -                    S.nav.zone              = EOverviewNavZone::Search;
 +                    // CONTROL up_to_search: S.nav.zone = EOverviewNavZone::Search;
                      S.nav.selection         = -1;
