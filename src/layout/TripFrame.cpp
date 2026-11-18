@@ -83,9 +83,10 @@ namespace Hyprdrive::TripFrame {
             // one (TripFrameRule.hpp); `old` its size when held.
             struct SSub {
                 WP<CWLSurfaceResource> surf;
-                Vector2D               old;
-                CHyprSignalListener    commit;
+                Vector2D               old; // {}: made during the hold
+                CHyprSignalListener    commit, precommit;
             };
+            Vector2D                 cBuf; // the main surface's size at its last commit
             std::vector<SSub>        subs;
             int                      frames = 0, seen = 0, live = 0; // drawn from the snapshot / frames that drew the window / ... live
             // The phases (TripFrameRule.hpp, "THE PICTURE STRETCHES").
@@ -389,7 +390,15 @@ namespace Hyprdrive::TripFrame {
             H->sent = SENT;
             const auto RES = W->wlSurface()->resource();
             const bool AT  = near(RES->m_current.size, SENT);
-            const double REP = repainted(RES);
+            // A native Wayland client's picture newly at the size it was sent
+            // (a new buffer, or a new viewport onto its old one) is a whole
+            // frame, whatever damage it reports (Chromium keeps its fullscreen
+            // buffer, crops it with a viewport and reports only what changed:
+            // 17-24% of a window just resized, and its hold waited ~1 s for a
+            // full repaint).
+            const bool   NEWBUF = !W->m_isX11 && AT && !near(RES->m_current.size, H->cBuf);
+            H->cBuf             = RES->m_current.size;
+            const double REP    = NEWBUF ? 1.0 : repainted(RES);
             // Moved since its last commit, its size the same: the X server's
             // re-commit of what it has (TripFrameRule.hpp).
             const bool MOVED = W->m_isX11 && near(SENT, H->cSize) && !near(W->m_reportedPosition, H->cPos);
@@ -426,6 +435,10 @@ namespace Hyprdrive::TripFrame {
                     old = SUB.old;
             const bool   AT  = near(MAIN->m_current.size, SENT) && !near(S->m_current.size, old);
             const double REP = repainted(S);
+            if (!H->fresh && old.x > 0 && !near(S->m_current.size, old)) {
+                H->fresh = true; // (its precommit did not see it coming)
+                trace(std::format("{} a subsurface at {}x{} after {:.0f} ms: the snapshot until it has drawn", W->m_class, S->m_current.size.x, S->m_current.size.y, msSince(H->at)));
+            }
             if (AT && H->state.resized)
                 trace(std::format("{} subsurface commit at {}x{} (window {}x{}) after {:.0f} ms, {:.0f}% repainted", W->m_class, S->m_current.size.x, S->m_current.size.y,
                                   SENT.x, SENT.y, msSince(H->at), REP * 100));
@@ -435,6 +448,7 @@ namespace Hyprdrive::TripFrame {
         // Every subsurface of a native Wayland window watched (`fresh`: their
         // sizes now are the old ones -- a new hold; else only new ones are
         // added, with no old size: any size is a new one).
+        void onSubPrecommit(const PHLWINDOWREF& ref, const WP<CWLSurfaceResource>& surf); // (below)
         void watchSubs(SHeld& h, const PHLWINDOW& w, bool fresh) {
             if (w->m_isX11 || !w->wlSurface() || !w->wlSurface()->resource())
                 return;
@@ -450,7 +464,8 @@ namespace Hyprdrive::TripFrame {
                         return;
                     const WP<CWLSurfaceResource> WS = s;
                     h.subs.push_back({.surf = s, .old = fresh ? s->m_current.size : Vector2D{}});
-                    h.subs.back().commit = s->m_events.commit.listen([REF, WS] { onSubCommit(REF, WS); });
+                    h.subs.back().commit    = s->m_events.commit.listen([REF, WS] { onSubCommit(REF, WS); });
+                    h.subs.back().precommit = s->m_events.precommit.listen([REF, WS] { onSubPrecommit(REF, WS); });
                 },
                 nullptr);
         }
@@ -510,6 +525,31 @@ namespace Hyprdrive::TripFrame {
                 return;
             if (resnap(*H, W))
                 trace(std::format("{} snapshot again from its last {}x{} frame, {:.0f} ms in", W->m_class, RES->m_current.size.x, RES->m_current.size.y, msSince(H->at)));
+        }
+        // ...or a subsurface of a native Wayland window first: Firefox's page
+        // takes its new size ~6 ms before the window does. Every surface is
+        // still at its old size here, so the snapshot is taken now, and the
+        // old frames end (phase A): the snapshot taken at the window's own
+        // commit had the page at its new size in the old window -- cropped
+        // in a corner of black, the fade's underlay leaving fullscreen.
+        void onSubPrecommit(const PHLWINDOWREF& ref, const WP<CWLSurfaceResource>& surf) {
+            const auto W = ref.lock();
+            SHeld*     H = W ? find(W) : nullptr;
+            const auto S = surf.lock();
+            if (!H || !S || H->fresh || !W->wlSurface() || !W->wlSurface()->resource())
+                return;
+            Vector2D old = {};
+            for (const auto& SUB : H->subs)
+                if (SUB.surf == surf)
+                    old = SUB.old;
+            if (old.x <= 0 || !S->m_pending.updated.bits.buffer || !S->m_pending.buffer || near(S->m_pending.size, old) || !near(S->m_current.size, old))
+                return;
+            const auto MAIN = W->wlSurface()->resource();
+            if (H->good && near(MAIN->m_current.size, H->oldSurf) && resnap(*H, W))
+                trace(std::format("{} snapshot again from its last {}x{} frame, {:.0f} ms in (a subsurface's new size first)", W->m_class, MAIN->m_current.size.x,
+                                  MAIN->m_current.size.y, msSince(H->at)));
+            H->fresh = true;
+            trace(std::format("{} a subsurface goes to {}x{} after {:.0f} ms: the snapshot until it has drawn", W->m_class, S->m_pending.size.x, S->m_pending.size.y, msSince(H->at)));
         }
 
         // The window's surface elements from `start` on: the main one drawn
@@ -631,6 +671,7 @@ namespace Hyprdrive::TripFrame {
             H->fresh    = false;
             H->released = false;
             H->landedMs = 0;
+            H->cBuf     = w->wlSurface()->resource()->m_current.size;
             watchSubs(*H, w, true);
             trace(std::format("{} held again ({})", w->m_class, H->good ? "its live picture is a drawn one" : "it has not drawn since"));
             armTimer();
@@ -660,6 +701,7 @@ namespace Hyprdrive::TripFrame {
         const PHLWINDOWREF REF  = w;
         g_held.back().commit    = w->wlSurface()->resource()->m_events.commit.listen([REF] { onCommit(REF); });
         g_held.back().precommit = w->wlSurface()->resource()->m_events.precommit.listen([REF] { onPrecommit(REF); });
+        g_held.back().cBuf      = w->wlSurface()->resource()->m_current.size;
         watchSubs(g_held.back(), w, true);
         trace(std::format("{} held at {}x{} (its last good frame)", w->m_class, SIZE.x, SIZE.y));
         armTimer();
