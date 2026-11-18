@@ -195,14 +195,28 @@ namespace Hyprdrive::TripFrame {
                 const auto MON = ctx.m_data.pMonitor.lock();
                 if (!MON)
                     return {};
+                // Inside a transformed window (the frost of a moving window:
+                // FlightBlur), Hyprland 0.57 draws the window's elements onto
+                // a canvas the size of the window: the damage is the canvas's
+                // own (0,0 at the window's corner) and a render modifier moves
+                // the boxes onto it. A box is matched against that damage once
+                // moved too, and the clip (monitor px) does not apply, as in
+                // Hyprland's own surface drawing (ElementRenderer drawSurface).
+                // Matching the monitor-px box against the canvas's damage drew
+                // only the part of the picture right of the box's own x: a
+                // black band from the left, growing as the box moved right.
+                const bool CANVAS    = ctx.m_data.renderingTransformedSource;
                 const auto SAVEDCLIP = ctx.m_data.clipBox;
-                if (!m_d.clip.empty())
+                if (!m_d.clip.empty() && !CANVAS)
                     ctx.m_data.clipBox = m_d.clip;
                 for (const auto& L : m_d.layers) {
                     if (!L.tex || !L.tex->ok() || !finiteBox(L.box) || !finiteBox(L.src) || L.texSize.x < 2 || L.texSize.y < 2 || L.alpha <= 0.F)
                         continue;
+                    CBox target = L.box;
+                    if (CANVAS)
+                        ctx.m_data.renderModif.applyToBox(target);
                     CRegion damage{ctx.m_data.damage};
-                    damage.intersect(L.box);
+                    damage.intersect(target);
                     if (damage.empty())
                         continue;
                     Render::GL::g_pHyprOpenGL->renderTexture(ctx, L.tex, L.box,
