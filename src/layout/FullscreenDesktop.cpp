@@ -276,6 +276,7 @@ namespace Hyprdrive::FullscreenDesktop {
             // to a moved goal at the same progress jumped it by the difference.
             std::optional<std::pair<Vector2D, Vector2D>> goal;
             double                                       t0 = 0, lastT = 0;
+            bool                                         slideBound = false; // the slide, not the time floor, held it back last frame
         };
         std::vector<STravel> g_travels;
         constexpr double     TRAVEL_MIN_MS = 220.0;
@@ -1343,9 +1344,12 @@ namespace Hyprdrive::FullscreenDesktop {
                 it->seenSize = it->drawn->second;
                 it->t0       = std::min(it->lastT, 0.999);
             }
-            it->goal  = {GOAL, GSIZE};
-            it->lastT = std::max(it->lastT, T);
+            it->goal       = {GOAL, GSIZE};
+            it->lastT      = std::max(it->lastT, T);
+            it->slideBound = SLIDT < Hyprdrive::Motion::outCubicPow(TIMEL);
             if (T >= 1.0 - 1e-4) {
+                trace(std::format("{} travel landed at {}x{} (set off at {}x{}, {:.0f} ms)", W->m_class, GSIZE.x, GSIZE.y, it->seenSize.x, it->seenSize.y,
+                                  Hyprdrive::Motion::msBetween<double>(std::chrono::steady_clock::now(), it->at)));
                 W->positionAnimation()->setValueAndWarp(GOAL);
                 W->sizeAnimation()->setValueAndWarp(GSIZE);
                 followDecos(W);
@@ -1362,6 +1366,34 @@ namespace Hyprdrive::FullscreenDesktop {
             it->drawn = {it->screen ? PLACE : PLACE + offsetOf(W->m_workspace), SIZE};
             ++it;
         }
+        // The held windows' boxes are where they are drawn this frame.
+        TripFrame::preRender(monitor);
+    }
+
+    bool resizing(const PHLWINDOW& w, double* leftMs) {
+        if (!w)
+            return false;
+        const auto NEAR = [](const Vector2D& a, const Vector2D& b) { return std::abs(a.x - b.x) <= 1.0 && std::abs(a.y - b.y) <= 1.0; };
+        const Vector2D GSIZE = w->sizeAnimation()->goal();
+        for (const auto& T : g_travels) {
+            if (T.win.lock() != w)
+                continue;
+            if (NEAR(T.seenSize, GSIZE) && (!T.drawn || NEAR(T.drawn->second, GSIZE)))
+                break; // a travel that only moves it
+            if (leftMs) {
+                // The time floor's rest; held back by the slide, as long as it takes.
+                const double EL = Hyprdrive::Motion::Clock::animMsBetween<double>(std::chrono::steady_clock::now(), T.at);
+                *leftMs         = T.slideBound ? 1e9 : std::max(TRAVEL_MIN_MS - EL, 0.0);
+            }
+            return true;
+        }
+        // Not ours: Hyprland's own size animation.
+        if (w->sizeAnimation()->isBeingAnimated() && !NEAR(w->sizeAnimation()->value(), GSIZE)) {
+            if (leftMs)
+                *leftMs = 1e9;
+            return true;
+        }
+        return false;
     }
 
     bool travelling(const PHLWINDOW& w, const PHLMONITOR& monitor) {

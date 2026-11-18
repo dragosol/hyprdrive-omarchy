@@ -43,16 +43,43 @@
 //   - a client that commits once and then stays still (a plain X11 client
 //     redrawing once): SETTLE_MS after that one commit -- longer than the
 //     ~150 ms a CEF launcher takes from its white frame to its real one;
-//   - a client that never draws at all still appears: TIMEOUT_MS after the
-//     snapshot, whatever it did.
+//   - a client that never draws at all still appears: TIMEOUT_MS after its
+//     box stopped changing size (from the snapshot when it never did), and
+//     never later than CAP_MS after the snapshot.
 // All in real time: it is the client's pace, not an animation (the speed
 // setting does not slow the client down).
+//
+// THE PICTURE STRETCHES ALL THE WAY (user, 2026-11-18: "Zen snaps jankily
+// partway through the transition ... make the snapshot LIVE, like if a video
+// is playing it should still play, then crossfade into the new aspect ratio
+// and size"). The rule above says when the live picture is GOOD; it is not
+// when the box is done. Released at the client's pace (Firefox: 275 ms) while
+// the trip's box still had a fifth of its way to go (it lands ~1.15 s in),
+// the live window was drawn by Hyprland, which crops a buffer bigger than its
+// box and smears one smaller -- the snap. So while a trip's box changes size,
+// the held window is drawn stretched into it, in three phases:
+//   A. its OLD frames, live (liveNow): the client has not committed another
+//      size yet, and its picture is known good;
+//   B. from its first commit at another size until the rule above releases
+//      it: the snapshot, re-taken from its last old frame (the only frozen
+//      moment: what keeps the blank-frame protection);
+//   C. released: the live window fades in over the snapshot (fadeMs), still
+//      stretched into the box until it lands (over).
+// CAP_MS after the snapshot it is released whatever it did, live at once
+// (no fade), and still stretched until its box lands -- at a slowed speed
+// setting the box can travel longer than that.
+// A hold whose box never changed size (a trip that kept its size, a slide
+// that only moves it) ends the moment the rule releases it, as before.
 namespace Hyprdrive::TripFrameRule {
     constexpr double UNCHANGED_MS = 100.0;
     constexpr double SETTLE_MS    = 250.0;
     constexpr double TIMEOUT_MS   = 400.0;
+    constexpr double CAP_MS       = 2000.0; // never frozen longer than this: live from then on, no fade
+    constexpr double LAST_MS      = 4000.0; // nor drawn by the hold at all (a box that never lands)
     constexpr double FULL_REPAINT = 0.5; // of the window's area: a frame, not a touch-up
     constexpr double MIN_GAP_MS   = 100.0;
+    constexpr double FADE_MIN_MS  = 150.0; // the fade in, animation ms (the speed setting
+    constexpr double FADE_MAX_MS  = 250.0; // stretches it, as the trip's own motion)
 
     struct SState {
         bool   resized = false; // it was sent a size other than the snapshot's
@@ -94,16 +121,47 @@ namespace Hyprdrive::TripFrameRule {
         return "?";
     }
     // `ms`: real time since the snapshot; `waiting`: a size is still to be
-    // sent to it (the trip's own, held back by its gate).
-    inline ERelease decide(const SState& s, double ms, bool waiting = false) {
+    // sent to it (the trip's own, held back by its gate); `landedMs`: when
+    // its box last stopped changing size (ms since the snapshot), < 0 while
+    // it still changes -- 0, a box that never changed: the timeout counts
+    // from the snapshot, as it did.
+    inline ERelease decide(const SState& s, double ms, bool waiting = false, double landedMs = 0.0) {
         if (s.resized && s.drawn >= 2)
             return ERelease::Drawn;
         if (s.resized && s.drawn == 1 && ms - s.firstMs >= SETTLE_MS)
             return ERelease::Settled;
-        if (ms >= TIMEOUT_MS)
+        if (ms >= CAP_MS || (landedMs >= 0 && ms - landedMs >= TIMEOUT_MS))
             return ERelease::Timeout;
         if (!s.resized && !waiting && ms >= UNCHANGED_MS)
             return ERelease::Unchanged;
         return ERelease::Hold;
+    }
+
+    // Phase A: its live picture is shown before the rule releases it --
+    // its size changes (it was sent another, or its box changes), it has not
+    // committed at another size than its old one (`fresh`), and its picture
+    // is a drawn one (`good`: not a hold taken again before it had drawn).
+    inline bool liveNow(const SState& s, bool boxResized, bool fresh, bool good) {
+        return (s.resized || boxResized) && !fresh && good;
+    }
+    // Phase C's length: the travel it has left (animation ms), in
+    // [FADE_MIN_MS, FADE_MAX_MS]; landed already, FADE_MIN_MS at rest.
+    inline double fadeMs(bool landed, double leftMs) {
+        if (landed)
+            return FADE_MIN_MS;
+        return leftMs < FADE_MIN_MS ? FADE_MIN_MS : leftMs > FADE_MAX_MS ? FADE_MAX_MS : leftMs;
+    }
+    // The hold ends (Hyprland draws the window again): once released, at
+    // once if its box never changed size (as before), or once the box has
+    // landed (`resizing` false) and the live picture is all that is drawn
+    // (`live` 1); LAST_MS after the snapshot, whatever.
+    inline bool over(ERelease r, double ms, bool boxResized, bool resizing, double live) {
+        if (ms >= LAST_MS)
+            return true;
+        if (r == ERelease::Hold)
+            return false;
+        if (!boxResized)
+            return true;
+        return !resizing && live >= 1.0;
     }
 }
