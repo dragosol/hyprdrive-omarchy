@@ -1,11 +1,11 @@
 diff --git a/src/search/SearchFilter.hpp b/src/search/SearchFilter.hpp
-index 50f24e0..d3915eb 100644
+index e34a21e..c7a0b97 100644
 --- a/src/search/SearchFilter.hpp
 +++ b/src/search/SearchFilter.hpp
-@@ -23,7 +23,7 @@ namespace OvInternal {
+@@ -22,7 +22,7 @@ namespace OvInternal {
+ // the window class -- dropping the class would regress the F2 behaviour that
  // shipped long before X18.
- inline bool overviewSearchMatches(const PHLWINDOW& window) {
-     auto& S = searchSession();
+ inline bool overviewSearchMatches(Search::CSession& S, const PHLWINDOW& window) {
 -    if (S.query.text.empty())
 +    if (true || S.query.text.empty()) // CONTROL filter_off
          return true;

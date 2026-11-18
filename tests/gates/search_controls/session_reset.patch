@@ -1,10 +1,10 @@
 diff --git a/src/overview/OverviewOpen.cpp b/src/overview/OverviewOpen.cpp
-index a2f99a7..2b2d5fb 100644
+index a03111a..1f35d93 100644
 --- a/src/overview/OverviewOpen.cpp
 +++ b/src/overview/OverviewOpen.cpp
 @@ -205,7 +205,7 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
  void resetSearchSession() {
-     auto& S = searchSession();
+     auto& S = g_overviewRegistry.search;
      SearchBackend::closeSushi();
 -    S.reset();
 +    // CONTROL session_reset: S.reset();

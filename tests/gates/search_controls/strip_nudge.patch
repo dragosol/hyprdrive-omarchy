@@ -1,11 +1,11 @@
 diff --git a/src/overview/OverviewStrip.cpp b/src/overview/OverviewStrip.cpp
-index b37091f..b585190 100644
+index 9fb5b04..9e83902 100644
 --- a/src/overview/OverviewStrip.cpp
 +++ b/src/overview/OverviewStrip.cpp
 @@ -1612,7 +1612,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
          // rendered-per-logical under the same card transform.
          if (PUB.scale > 0.01F) {
-             const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(monitor);
+             const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(m_search, monitor);
 -            searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
 +            (void)NEEDL; // CONTROL strip_nudge: searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
          }
