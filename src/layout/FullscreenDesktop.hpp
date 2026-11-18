@@ -43,6 +43,12 @@ namespace Hyprdrive::FullscreenDesktop {
     // A window on that journey: drawn wherever its stored place is (Hyprland's
     // culling, which does not count the strip's slide, would skip it).
     bool travelling(const PHLWINDOW& w, const PHLMONITOR& monitor);
+    // The box `w` is drawn in still changes SIZE: a trip's travel that
+    // resizes it has not landed (its positionAnimation/sizeAnimation values
+    // are ours, set each frame), or Hyprland's own size animation runs. A
+    // travel that only moves it is not. `leftMs`: about how long it has
+    // left, animation ms (1e9: as long as the slide takes).
+    bool resizing(const PHLWINDOW& w, double* leftMs = nullptr);
     // Desktop `ws` belongs to a fullscreen app (the overview's cards say so).
     bool isFullscreenDesktop(const PHLWORKSPACE& ws);
     // `ws` was a fullscreen app's desktop a moment ago (its trip just ended):

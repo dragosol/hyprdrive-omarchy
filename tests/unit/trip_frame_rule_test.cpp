@@ -124,6 +124,62 @@ int main() {
         committed(s, 5, true);
         CHECK(s.drawn == 0);
     }
+    {   // THE PICTURE STRETCHES: the timeout counts from the box's landing
+        SState s;
+        sent(s, true, true);
+        CHECK(decide(s, 400, false, -1) == ERelease::Hold); // still travelling: not yet
+        CHECK(decide(s, 1199, false, -1) == ERelease::Hold);
+        CHECK(decide(s, 1559, false, 1160) == ERelease::Hold); // landed at 1160
+        CHECK(decide(s, 1560, false, 1160) == ERelease::Timeout);
+        // ...but never past the cap, landed or not
+        CHECK(decide(s, CAP_MS, false, -1) == ERelease::Timeout);
+        CHECK(decide(s, CAP_MS, false, 1900) == ERelease::Timeout);
+        // the client's own frames release it mid-travel, as before (the fade starts there)
+        committed(s, 20, true);
+        CHECK(decide(s, 270, false, -1) == ERelease::Settled);
+        committed(s, 130, true);
+        CHECK(decide(s, 130, false, -1) == ERelease::Drawn);
+    }
+    {   // ...a box that never changed size: the timeout from the snapshot, as before
+        SState s;
+        sent(s, true, true);
+        CHECK(decide(s, 399, false, 0) == ERelease::Hold);
+        CHECK(decide(s, 400, false, 0) == ERelease::Timeout);
+        SState u; // and a trip that kept its size releases as it did
+        sent(u, false, false);
+        CHECK(decide(u, 100, false, 0) == ERelease::Unchanged);
+    }
+    {   // the hold ends once the box has landed and the live picture is all there is
+        CHECK(!over(ERelease::Hold, 500, true, true, 0));
+        CHECK(!over(ERelease::Settled, 300, true, true, 1)); // released, still travelling: drawn stretched
+        CHECK(!over(ERelease::Settled, 1200, true, false, 0.6)); // landed, still fading in
+        CHECK(over(ERelease::Settled, 1200, true, false, 1));
+        CHECK(!over(ERelease::Timeout, CAP_MS, true, true, 1)); // the cap: live, stretched until it lands
+        CHECK(over(ERelease::Timeout, CAP_MS, true, false, 1));
+        CHECK(over(ERelease::Hold, LAST_MS, true, true, 0));    // and never drawn by the hold past this
+        // a box that never changed size (kept its size, or a slide that only
+        // moves it): released means over, at once, as before
+        CHECK(over(ERelease::Unchanged, 100, false, false, 0));
+        CHECK(over(ERelease::Drawn, 150, false, false, 0));
+        CHECK(!over(ERelease::Hold, 150, false, false, 0));
+    }
+    {   // phase A: live old frames while it has not committed another size, if they are drawn ones
+        SState s;
+        CHECK(!liveNow(s, false, false, true)); // nothing changes size: the snapshot, as before
+        sent(s, true, true);
+        CHECK(liveNow(s, false, false, true));
+        CHECK(liveNow(s, true, false, true));
+        CHECK(!liveNow(s, true, true, true));  // it committed at its new size: the snapshot
+        CHECK(!liveNow(s, true, false, false)); // held again before it had drawn: the snapshot
+        SState u;
+        CHECK(liveNow(u, true, false, true));   // its box changes size (held again mid-trip)
+    }
+    {   // the fade: the travel's rest, in [150, 250] ms; landed, 150 at rest
+        CHECK(fadeMs(true, 900) == FADE_MIN_MS);
+        CHECK(fadeMs(false, 0) == FADE_MIN_MS);
+        CHECK(fadeMs(false, 200) == 200);
+        CHECK(fadeMs(false, 1e9) == FADE_MAX_MS);
+    }
     for (auto r : {ERelease::Hold, ERelease::Drawn, ERelease::Settled, ERelease::Unchanged, ERelease::Timeout})
         CHECK(why(r)[0] != '?');
 
