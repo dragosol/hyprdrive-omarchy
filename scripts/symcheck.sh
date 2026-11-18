@@ -41,7 +41,14 @@ PROVIDED=$( { nm -D --defined-only "$SO" "$HOST";
                 | xargs -r -n1 nm -D --defined-only 2>/dev/null; } \
             | awk 'NF>=3{print $NF}' | sed 's/@.*//' | sort -u)
 
-BAD=$(comm -23 <(printf '%s\n' "$NEEDED") <(printf '%s\n' "$PROVIDED"))
+# A set difference that does not care how either list is ordered (2026-11-17,
+# a user on Ubuntu: every libc, GLib and fontconfig symbol listed as missing,
+# after "comm: file 1 is not in sorted order"). comm needs both inputs sorted
+# the way IT compares, and sort and comm need not agree on that: there
+# sort ordered by the locale (underscores and case ignored) while
+# comm compared bytes, and comm's answer on input it calls unsorted is junk.
+# The lists are only ever looked up in, so nothing here needs an order.
+BAD=$(awk 'NR == FNR { have[$0]; next } !($0 in have)' <(printf '%s\n' "$PROVIDED") <(printf '%s\n' "$NEEDED"))
 if [ -n "$BAD" ]; then
     echo "symcheck: FAIL -- undefined symbols nothing at runtime will provide:"
     printf '%s\n' "$BAD" | c++filt | sed 's/^/  /'
