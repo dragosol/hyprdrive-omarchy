@@ -107,7 +107,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // Results exist once there is query text, or while browsing an Omarchy
     // submenu after Enter (query is cleared so children are listed).
     auto         FRAME       = Search::frameRows(SESSION, monitor, searchMonitorId(), [this] { return matchingWindowCount(); },
-                                                 [&] { return overviewMainGridWindows(monitor->m_activeWorkspace, monitor).size(); });
+                                                 [&] { return overviewMainGridWindows(m_search, monitor->m_activeWorkspace, monitor).size(); });
     const bool   QUERIED     = FRAME.queried;
     const bool   EMPTYRESULT = FRAME.emptyResult;
     const auto&  RESULTS     = FRAME.results;

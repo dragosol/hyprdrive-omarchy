@@ -573,7 +573,7 @@ bool COverview::shouldSuppressRenderDamage() const {
         if (!shouldShowOverviewWindow(window) || window == DRAGGED)
             return false;
 
-        const auto WINDOWBOX = getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), workspaceOffset, layout);
+        const auto WINDOWBOX = getOverviewWindowBox(m_search, window, MONITOR, SCALE, viewOffset->value(), workspaceOffset, layout);
         return overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR) && windowHasOverviewAnimation(window);
     };
 
@@ -716,7 +716,7 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
 
         const bool ISDRAGGED = window == DRAGGED;
         if (!ISDRAGGED) {
-            const auto WINDOWBOX = getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), workspaceOffset, layout);
+            const auto WINDOWBOX = getOverviewWindowBox(m_search, window, MONITOR, SCALE, viewOffset->value(), workspaceOffset, layout);
             if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR))
                 return;
         }
@@ -1020,7 +1020,7 @@ bool COverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Ti
         // nonetheless showing, so testing it disagreed with the pass that draws.
         const auto WINDOWBOX = FULLSCREENWINDOW == window ?
             workspaceOverviewVisibleBox(workspaceIdx, getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout), SCALE, MONITOR) :
-            getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
+            getOverviewWindowBox(m_search, window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
         if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR)) {
             noteFrameGate(window, "card-offscreen");
             return false;
@@ -1200,7 +1200,7 @@ bool COverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) {
         // nonetheless showing, so testing it disagreed with the pass that draws.
         const auto WINDOWBOX = FULLSCREENWINDOW == window ?
             workspaceOverviewVisibleBox(workspaceIdx, getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout), SCALE, MONITOR) :
-            getOverviewWindowBox(window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
+            getOverviewWindowBox(m_search, window, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
         if (!overviewBoxIntersectsMonitor(WINDOWBOX, MONITOR)) {
             noteDamageGate(window, "card-offscreen");
             return false;

@@ -28,16 +28,16 @@ PHLWINDOW COverview::windowAtOverviewPoint(const Vector2D& point, size_t* hovere
         if (fullscreenWindow) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto window = getOverviewWindowToShow(it->lock());
-                if (!overviewTileShown(window, MONITOR) || !window->isFloating())
+                if (!overviewTileShown(m_search, window, MONITOR) || !window->isFloating())
                     continue;
 
-                const auto texbox = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
+                const auto texbox = getOverviewWindowBox(m_search, window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
 
                 if (texbox.containsPoint(point))
                     return selectWindow(window);
             }
 
-            const auto texbox = getOverviewWindowBox(fullscreenWindow, MONITOR, scale->value(), viewOffset->value(), offset, layout);
+            const auto texbox = getOverviewWindowBox(m_search, fullscreenWindow, MONITOR, scale->value(), viewOffset->value(), offset, layout);
 
             if (texbox.containsPoint(point))
                 return selectWindow(fullscreenWindow);
@@ -48,10 +48,10 @@ PHLWINDOW COverview::windowAtOverviewPoint(const Vector2D& point, size_t* hovere
         for (const bool floating : {true, false}) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto window = getOverviewWindowToShow(it->lock());
-                if (!overviewTileShown(window, MONITOR) || window->isFloating() != floating)
+                if (!overviewTileShown(m_search, window, MONITOR) || window->isFloating() != floating)
                     continue;
 
-                const auto texbox = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
+                const auto texbox = getOverviewWindowBox(m_search, window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
 
                 if (texbox.containsPoint(point))
                     return selectWindow(window);
@@ -91,7 +91,7 @@ CBox COverview::tileBox(const PHLWINDOW& window) const {
         return {};
 
     const auto OFFSET = workspaceOverviewOffset(workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
-    return TileChrome::scaledBox(window, getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout));
+    return TileChrome::scaledBox(window, getOverviewWindowBox(m_search, window, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout));
 }
 
 CBox COverview::drawnTileBox(const PHLWINDOW& window) const {
@@ -326,7 +326,7 @@ PHLWINDOW COverview::windowClosestToWorkspaceCenter(size_t workspaceIdx) const {
         if (HASFULLSCREENPATH && WINDOW != FULLSCREENWINDOW && !WINDOW->isFloating())
             continue;
 
-        const auto WINDOWBOX = getOverviewWindowBox(WINDOW, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
+        const auto WINDOWBOX = getOverviewWindowBox(m_search, WINDOW, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
         const auto DISTANCE  = overviewBoxCenterDistanceSquared(WINDOWBOX, WORKSPACEBOX);
         if (DISTANCE >= bestDistance)
             continue;
@@ -365,7 +365,7 @@ CDropIndicator::SDropAnchor COverview::dropAnchorAtOverviewCursorOnWorkspace(siz
     const auto boxesForWindow = [&](const PHLWINDOW& window) {
         const auto TARGET = window->layoutTarget();
         return std::pair{
-            getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout, false),
+            getOverviewWindowBox(m_search, window, MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout, false),
             TARGET ? getOverviewGlobalBox(TARGET->position(), MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout, false) : CBox{},
         };
     };
@@ -589,7 +589,7 @@ PHLWORKSPACE COverview::workspaceAtOverviewDropPoint(const Vector2D& point, size
                 if (!shouldShowOverviewWindow(WINDOW) || WINDOW == draggedWindow || WINDOW->isFloating() != floating)
                     continue;
 
-                const auto WINDOWBOX = getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
+                const auto WINDOWBOX = getOverviewDragWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
                 if (!WINDOWBOX.containsPoint(point))
                     continue;
 

@@ -577,7 +577,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
 
                 const auto WORKSPACEOFFSET =
                     workspaceOverviewOffset(resizeWorkspace, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
-                const auto WINDOWBOX = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
+                const auto WINDOWBOX = getOverviewWindowBox(m_search, window, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
 
                 resize.pointerDown    = true;
                 resize.startMouseLocal = lastMousePosLocal;
