@@ -135,7 +135,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
     // active card's offset. So an off-screen workspace still has to be walked.
     const auto ACTIVECARDBOX = getOverviewWorkspaceBox(monitor, renderScale, viewOffset->value(), 0.F, layout);
     const bool HASPROMOTED   = !WORKSPACEVISIBLE && std::ranges::any_of(workspaceImage->windows, [&](const auto& ref) {
-        return overviewGridPromoted(getOverviewWindowToShow(ref.lock()), monitor);
+        return overviewGridPromoted(m_search, getOverviewWindowToShow(ref.lock()), monitor);
     });
 
     // A SUSPENDED CLIENT CANNOT ASK FOR THE FRAME THAT WOULD WAKE IT (user,
@@ -210,7 +210,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         // ONE predicate, and windowAtOverviewPoint asks the same one -- a tile
         // this function paints is a tile that function can hand back.
         bool PROMOTED = false;
-        if (!overviewTileShown(window, monitor, &PROMOTED))
+        if (!overviewTileShown(m_search, window, monitor, &PROMOTED))
             return;
         if (drag.activeWindow && window == getOverviewWindowToShow(drag.activeWindow.lock()))
             return;
@@ -218,7 +218,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         if (!WORKSPACEVISIBLE && !PROMOTED)
             return;
 
-        auto       windowBox = TileChrome::scaledBox(window, getOverviewWindowBox(window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout));
+        auto       windowBox = TileChrome::scaledBox(window, getOverviewWindowBox(m_search, window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout));
         // With its card, when that is further back (cardDepth); a promoted tile
         // sits on the card in view, not this one.
         if (!PROMOTED)
@@ -679,7 +679,7 @@ bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activ
         // ...and after the query is EMPTIED a releasing tile is still crossing
         // the active card, so it must keep its frost the whole way: section C
         // outranks this cull.
-        const bool HASPROMOTED = std::ranges::any_of(workspaceImage->windows, [&](const auto& ref) { return overviewGridPromoted(getOverviewWindowToShow(ref.lock()), monitor); });
+        const bool HASPROMOTED = std::ranges::any_of(workspaceImage->windows, [&](const auto& ref) { return overviewGridPromoted(m_search, getOverviewWindowToShow(ref.lock()), monitor); });
         if (!overviewBoxIntersectsMonitor(VISIBLEBOX, monitor) && S.query.text.empty() && !HASPROMOTED)
             continue;
 
@@ -689,7 +689,7 @@ bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activ
             if (window == DRAGGEDWINDOW || !OverviewWindow::shouldUseBlurFramebuffer(window))
                 return false;
 
-            const auto windowBox = getOverviewWindowBox(window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
+            const auto windowBox = getOverviewWindowBox(m_search, window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
             return overviewBoxIntersectsMonitor(windowBox, monitor);
         };
 
@@ -979,7 +979,7 @@ void COverview::redrawAll(bool forcelowres) {
         // an empty query shouldShowOverviewWindow already dropped the window
         // above, so Y9's "put away stays put away" is untouched, and a window
         // whose home card still exists never reaches this line.
-        if (imageIt == imagesByWorkspace.end() && ACTIVEID != WORKSPACE_INVALID && overviewGridPromotable(overviewWindow, MONITOR))
+        if (imageIt == imagesByWorkspace.end() && ACTIVEID != WORKSPACE_INVALID && overviewGridPromotable(m_search, overviewWindow, MONITOR))
             imageIt = imagesByWorkspace.find(ACTIVEID);
 
         if (imageIt == imagesByWorkspace.end())

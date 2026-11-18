@@ -27,7 +27,7 @@ CBox COverview::draggedWindowBox(size_t workspaceIdx) const {
         return {};
 
     const auto WORKSPACE_OFFSET = workspaceOverviewOffset(workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
-    auto       box               = getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout);
+    auto       box               = getOverviewDragWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout);
     box.x = lastMousePosLocal.x - drag.grabOffsetLocal.x;
     box.y = lastMousePosLocal.y - drag.grabOffsetLocal.y;
 
@@ -41,7 +41,7 @@ CBox COverview::draggedWindowBoxFor(PHLWINDOW window, size_t workspaceIdx, const
         return {};
 
     const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
-    auto       box             = getOverviewDragWindowBox(window, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
+    auto       box             = getOverviewDragWindowBox(m_search, window, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
     box.x = pointLocal.x - box.width * std::clamp(grabRatio.x, 0.0, 1.0);
     box.y = pointLocal.y - box.height * std::clamp(grabRatio.y, 0.0, 1.0);
     return box;
@@ -113,7 +113,7 @@ CBox COverview::draggedWindowGlobalBox() const {
     const auto WORKSPACEOFFSET =
         workspaceOverviewOffset(WORKSPACEIDX, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
     auto SOURCEBOX =
-        getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout, false);
+        getOverviewDragWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout, false);
 
     // A dock tear-out is not coming from a card, so its source box is the
     // geometry it had on its OWN desktop scaled into the overview -- and a
@@ -135,7 +135,7 @@ CBox COverview::draggedWindowGlobalBox() const {
     // Anything without a slot of its own -- a strip grab, a dock tear-out -- is
     // sized by the slot it would get on the card being looked at instead.
     CBox ownSlot;
-    if ((drag.fromDockPreview || !overviewGridSlot(WINDOW, MONITOR, ownSlot)) && viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace]) {
+    if ((drag.fromDockPreview || !overviewGridSlot(m_search, WINDOW, MONITOR, ownSlot)) && viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace]) {
         const auto& DESTIMG = images[viewportCurrentWorkspace];
         CBox        slot;
         bool        sized = false;
@@ -147,7 +147,7 @@ CBox COverview::draggedWindowGlobalBox() const {
         // one is joining at.
         for (const auto& REF : DESTIMG->windows) {
             const auto W = REF.lock();
-            if (W && W != WINDOW && overviewGridSlot(W, MONITOR, slot) && slot.width >= 1 && slot.height >= 1) {
+            if (W && W != WINDOW && overviewGridSlot(m_search, W, MONITOR, slot) && slot.width >= 1 && slot.height >= 1) {
                 sized = true;
                 break;
             }
@@ -155,7 +155,7 @@ CBox COverview::draggedWindowGlobalBox() const {
 
         // Empty card: nothing to measure against, so ask the grid directly.
         if (!sized) {
-            if (const auto DEST = DESTIMG->pWorkspace; DEST && overviewGridLayout(DEST, MONITOR, WINDOW, slot) && slot.width >= 1 && slot.height >= 1)
+            if (const auto DEST = DESTIMG->pWorkspace; DEST && overviewGridLayout(m_search, DEST, MONITOR, WINDOW, slot) && slot.width >= 1 && slot.height >= 1)
                 sized = true;
         }
 
@@ -251,8 +251,8 @@ void COverview::refreshDragOriginalOverviewBoxes() {
     // never fired, so every drag, however short, fell through to anchor selection
     // and swapped the window into another tiling slot. Both windows then took
     // their new slots' sizes -- the user sees "dragging resizes my windows".
-    drag.originalOverviewBox    = getOverviewWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout, true, &visualBox);
-    drag.originalOverviewHitbox = getOverviewWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout, false, &hitbox);
+    drag.originalOverviewBox    = getOverviewWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout, true, &visualBox);
+    drag.originalOverviewHitbox = getOverviewWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout, false, &hitbox);
 }
 
 CBox COverview::resizedWindowBox() const {
@@ -338,7 +338,7 @@ void COverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOrigin) {
         // from the mini the cursor actually pressed, not from the tile the
         // window would occupy in a card that may be off-screen.
         const auto WINDOWBOX       = stripMiniOrigin ? *stripMiniOrigin :
-                                                       getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
+                                                       getOverviewDragWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
         drag.grabOffsetLocal        = drag.startMouseLocal - WINDOWBOX.pos();
         drag.grabRatio              = Vector2D{
             WINDOWBOX.width > 0.0 ? drag.grabOffsetLocal.x / WINDOWBOX.width : 0.5,
@@ -398,7 +398,7 @@ void COverview::beginWindowResize() {
     }
 
     const auto WORKSPACEOFFSET = workspaceOverviewOffset(resize.workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
-    resize.originalBox   = getOverviewWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
+    resize.originalBox   = getOverviewWindowBox(m_search, WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
     resize.activeWindow  = WINDOW;
     resize.lastMouseLocal = lastMousePosLocal;
 
@@ -627,7 +627,7 @@ PHLWINDOW COverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
                     const auto W = getOverviewWindowToShow(it->lock());
                     if (!shouldShowOverviewWindow(W) || W == DRAGGED || W->m_isFloating != floating)
                         continue;
-                    const auto BOX = getOverviewDragWindowBox(W, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout);
+                    const auto BOX = getOverviewDragWindowBox(m_search, W, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout);
                     if (BOX.containsPoint(point)) {
                         hit    = W;
                         hitBox = BOX;
@@ -1208,7 +1208,7 @@ void COverview::commitDropCancel(const SOverviewDropSite& site) {
     // rejected drop. U4's reflow already eases a tile from wherever it is to
     // its slot, so hand it the proxy's box and it carries the return.
     if (const auto MON = pMonitor.lock(); site.window && MON) {
-        if (CBox slot; overviewGridSlot(site.window, MON, slot)) {
+        if (CBox slot; overviewGridSlot(m_search, site.window, MON, slot)) {
             const auto  WSIDX    = dragWorkspaceIndex(site.window);
             const auto  FLOATBOX = draggedWindowBox(WSIDX);
             const float SCALEDIV = std::max(scale->value(), 0.01F) * std::max(MON->m_scale, 0.01F);

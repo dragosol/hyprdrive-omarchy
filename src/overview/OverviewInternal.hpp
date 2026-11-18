@@ -737,8 +737,8 @@ inline bool shouldShowOverviewWindow(const PHLWINDOW& window) {
 // of every one of these loops calls getOverviewWindowBox, which has always
 // called overviewGridReleasing unconditionally -- and the release clock is
 // idempotent within a frame by construction (GridLayout.hpp).
-inline bool overviewTileShown(const PHLWINDOW& window, PHLMONITOR monitor, bool* promoted = nullptr) {
-    const bool PROMOTED = overviewGridPromoted(window, monitor);
+inline bool overviewTileShown(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, bool* promoted = nullptr) {
+    const bool PROMOTED = overviewGridPromoted(S, window, monitor);
     if (promoted)
         *promoted = PROMOTED;
 
@@ -1066,7 +1066,7 @@ inline float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, Hyprdriv
 // scaled by how far the card is off centre RIGHT NOW -- its offset minus the
 // animated pan, over the card pitch -- so a card sliding in eases from pushed to
 // centred and nothing jumps at a keypress. `slot` is the card's own grid slot.
-inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset,
+inline CBox overviewCardGridPush(Search::CSession& S, CBox slot, const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset,
                                  Hyprdrive::Config::ELayout layout) {
     const bool   HORIZ = layout == Hyprdrive::Config::ELayout::HORIZONTAL;
     const double MS    = std::max(monitor->m_scale, 0.01F);
@@ -1077,8 +1077,8 @@ inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMO
         return slot;
 
     double lo = 1e18, hi = -1e18;
-    for (const auto& W : overviewMainGridWindows(workspace, monitor)) {
-        if (CBox b; overviewGridLayout(workspace, monitor, W, b)) {
+    for (const auto& W : overviewMainGridWindows(S, workspace, monitor)) {
+        if (CBox b; overviewGridLayout(S, workspace, monitor, W, b)) {
             lo = std::min(lo, HORIZ ? b.x : b.y);
             hi = std::max(hi, HORIZ ? b.x + b.w : b.y + b.h);
         }
@@ -1097,9 +1097,8 @@ inline CBox overviewCardGridPush(CBox slot, const PHLWORKSPACE& workspace, PHLMO
     return slot;
 }
 
-inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
+inline CBox getOverviewWindowBox(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                                  bool round = true, const CBox* geometryOverride = nullptr) {
-    auto& S = searchSession();
     if (!window)
         return {};
 
@@ -1121,14 +1120,14 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
     // destination is OFF THE MONITOR, so the entrance curve would spend the
     // animation getting there and leave one or two visible frames behind it.
     // See gridReflowEase for the measurement.
-    if (overviewGridReleasing(window, monitor)) {
+    if (overviewGridReleasing(S, window, monitor)) {
         CBox home = geometry;
         if (const float UNIT = scale * std::max(monitor->m_scale, 0.01F); UNIT > 0.01F && std::abs(offset) > 0.01F)
             home.translate(axisOffsetVector(offset / UNIT, layout));
 
         geometry = Hyprdrive::Motion::lerp(geometry, gridReflowBox(monitor, window, home, nullptr, false, true), overviewGridProgress(scale));
         offset   = 0.F;
-    } else if (SGridSlot hit; overviewGridSlot(window, monitor, hit.slot, &hit.promoted)) {
+    } else if (SGridSlot hit; overviewGridSlot(S, window, monitor, hit.slot, &hit.promoted)) {
         // The B2 answer comes back OUT of the slot lookup. It used to be asked
         // for again here, which re-walked the promotable test and re-armed the
         // release map for a value the line above had already settled.
@@ -1154,7 +1153,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         // its windows would jump to the centre at the keypress.
         CBox placed = slot;
         if (!PROMOTED && S.query.text.empty() && window->m_workspace)
-            placed = overviewCardGridPush(slot, window->m_workspace, monitor, scale, viewOffset, offset, layout);
+            placed = overviewCardGridPush(S, slot, window->m_workspace, monitor, scale, viewOffset, offset, layout);
         geometry = Hyprdrive::Motion::lerp(geometry, gridReflowBox(monitor, window, placed, enterPtr, PROMOTED), overviewGridProgress(scale));
 
         // The active card sits at offset 0. A promoted tile must ignore the
@@ -1170,8 +1169,8 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
         // a shrink the motion blur then smeared across the pan. Each card now
         // solves its own grid, the same way and under the same chrome, and just
         // rides its card offset: a desktop switch only slides.
-        if (CBox slot; overviewGridLayout(HOME, monitor, window, slot)) {
-            slot = overviewCardGridPush(slot, HOME, monitor, scale, viewOffset, offset, layout);
+        if (CBox slot; overviewGridLayout(S, HOME, monitor, window, slot)) {
+            slot = overviewCardGridPush(S, slot, HOME, monitor, scale, viewOffset, offset, layout);
             geometry = Hyprdrive::Motion::lerp(geometry, slot, overviewGridProgress(scale));
         }
     }
@@ -1179,7 +1178,7 @@ inline CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
     return getOverviewGlobalBox(geometry, monitor, scale, viewOffset, offset, layout, round);
 }
 
-inline CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
+inline CBox getOverviewDragWindowBox(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, Hyprdrive::Config::ELayout layout,
                                      bool round = true) {
     if (!window)
         return {};
@@ -1188,7 +1187,7 @@ inline CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor
     if (window->m_group && TARGET)
         return getOverviewGlobalBox(TARGET->position(), monitor, scale, viewOffset, offset, layout, round);
 
-    return getOverviewWindowBox(window, monitor, scale, viewOffset, offset, layout, round);
+    return getOverviewWindowBox(S, window, monitor, scale, viewOffset, offset, layout, round);
 }
 
 inline float overviewPointDistanceSqToBox(const Vector2D& point, const CBox& box) {

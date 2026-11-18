@@ -172,10 +172,10 @@ namespace OvInternal {
     std::vector<PHLWINDOW> overviewGridWindows(const PHLWORKSPACE& workspace);
     // B2: with a query typed, matches from every workspace join the ACTIVE
     // workspace's grid.
-    std::vector<PHLWINDOW> overviewMainGridWindows(const PHLWORKSPACE& workspace, PHLMONITOR monitor);
-    bool                   overviewGridPromotable(const PHLWINDOW& window, PHLMONITOR monitor);
-    bool                   overviewGridReleasing(const PHLWINDOW& window, PHLMONITOR monitor);
-    bool                   overviewGridPromoted(const PHLWINDOW& window, PHLMONITOR monitor);
+    std::vector<PHLWINDOW> overviewMainGridWindows(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor);
+    bool                   overviewGridPromotable(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor);
+    bool                   overviewGridReleasing(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor);
+    bool                   overviewGridPromoted(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor);
     Vector2D               overviewGridWindowSize(const PHLWINDOW& window);
 
     // --- order ----------------------------------------------------------------
@@ -193,12 +193,12 @@ namespace OvInternal {
     void                   gridTileOrderReload();
 
     // --- layout ---------------------------------------------------------------
-    bool overviewGridLayout(const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out);
+    bool overviewGridLayout(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out);
     // The slot `window` owns on `monitor`, if it owns one at all. `promotedOut`
     // receives the B2 answer this function had to work out anyway: asking
     // overviewGridPromoted a second time at the call site re-armed the release
     // map for a value that cannot have changed in between.
-    bool overviewGridSlot(const PHLWINDOW& window, PHLMONITOR monitor, CBox& out, bool* promotedOut = nullptr);
+    bool overviewGridSlot(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, CBox& out, bool* promotedOut = nullptr);
 
     // --- animation ------------------------------------------------------------
     // 0 while the overview is closed, 1 once it is fully open, so windows travel

@@ -60,7 +60,7 @@ void COverview::collectNavTargets(PHLMONITOR MONITOR, std::vector<SOverviewNavTa
         if (!IMAGE || !IMAGE->pWorkspace)
             continue;
 
-        for (const auto& WINDOW : overviewMainGridWindows(IMAGE->pWorkspace, MONITOR)) {
+        for (const auto& WINDOW : overviewMainGridWindows(m_search, IMAGE->pWorkspace, MONITOR)) {
             if (!WINDOW || !seen.insert(WINDOW.get()).second)
                 continue;
             const CBox BOX = tileBox(WINDOW);
@@ -112,13 +112,13 @@ std::vector<PHLWINDOW> COverview::navTilesOf(const PHLWORKSPACE& workspace) cons
     };
     std::vector<SOrdered> ordered;
 
-    for (const auto& WINDOW : overviewMainGridWindows(workspace, MONITOR)) {
+    for (const auto& WINDOW : overviewMainGridWindows(m_search, workspace, MONITOR)) {
         if (!WINDOW)
             continue;
         // The SLOT, not the drawn box: the drawn box carries the viewport pan,
         // and the desktop being walked ONTO has not been panned to yet.
         CBox slot;
-        if (!overviewGridLayout(workspace, MONITOR, WINDOW, slot) || slot.width <= 1.F || slot.height <= 1.F)
+        if (!overviewGridLayout(m_search, workspace, MONITOR, WINDOW, slot) || slot.width <= 1.F || slot.height <= 1.F)
             continue;
         ordered.push_back({WINDOW, slot});
     }
@@ -452,7 +452,7 @@ bool COverview::moveSelection(const std::string& direction) {
     if (S.nav.zone == EOverviewNavZone::Tile) {
         std::unordered_set<const Desktop::View::CWindow*> here;
         if (viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace] && images[viewportCurrentWorkspace]->pWorkspace)
-            for (const auto& W : overviewMainGridWindows(images[viewportCurrentWorkspace]->pWorkspace, MONITOR))
+            for (const auto& W : overviewMainGridWindows(m_search, images[viewportCurrentWorkspace]->pWorkspace, MONITOR))
                 if (W)
                     here.insert(W.get());
         std::erase_if(targets, [&](const SOverviewNavTarget& t) { return t.zone != EOverviewNavZone::Tile || !here.contains(t.window.get()); });

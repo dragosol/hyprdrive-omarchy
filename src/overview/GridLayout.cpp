@@ -275,8 +275,7 @@ namespace OvInternal {
     // getMissionControl() config lookup (a string-keyed map probe, with the key
     // built fresh each time) ran W times per grid query and the grid is queried
     // 4-6 times per tile per frame.
-    static SPromoteCtx overviewGridPromoteCtx(PHLMONITOR monitor) {
-        auto& S = searchSession();
+    static SPromoteCtx overviewGridPromoteCtx(Search::CSession& S, PHLMONITOR monitor) {
         SPromoteCtx ctx;
         if (!monitor)
             return ctx;
@@ -298,8 +297,8 @@ namespace OvInternal {
         return HOME != WORKSPACE_INVALID && HOME != ctx.active->m_id && shouldShowOverviewWindow(window);
     }
 
-    bool overviewGridPromotable(const PHLWINDOW& window, PHLMONITOR monitor) {
-        return overviewGridPromotableIn(overviewGridPromoteCtx(monitor), window, monitor);
+    bool overviewGridPromotable(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor) {
+        return overviewGridPromotableIn(overviewGridPromoteCtx(S, monitor), window, monitor);
     }
 
     int gridReleaseMs() {
@@ -316,12 +315,12 @@ namespace OvInternal {
     // (SGridOwnerScope). A query outside it reads the same answer without
     // writing it: armed-but-not-started counts as releasing from now, and an
     // expired or stale entry as gone, but nothing is armed, started or erased.
-    static bool overviewGridReleasingPeek(const PHLWINDOW& window, PHLMONITOR monitor) {
+    static bool overviewGridReleasingPeek(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor) {
         const int DURATION = gridReleaseMs();
         if (DURATION <= 0 || !window)
             return false;
 
-        if (overviewGridPromotable(window, monitor))
+        if (overviewGridPromotable(S, window, monitor))
             return false;
 
         const auto& G  = gridView();
@@ -335,7 +334,7 @@ namespace OvInternal {
         return overviewAnimElapsedMs(IT->second.start) <= sc<float>(DURATION) + GRID_RELEASE_GRACE_MS;
     }
 
-    static bool overviewGridReleasingStep(const SGridOwnerScope&, const PHLWINDOW& window, PHLMONITOR monitor) {
+    static bool overviewGridReleasingStep(Search::CSession& S, const SGridOwnerScope&, const PHLWINDOW& window, PHLMONITOR monitor) {
         const int DURATION = gridReleaseMs();
         if (DURATION <= 0 || !window)
             return false;
@@ -343,7 +342,7 @@ namespace OvInternal {
         const auto NOW = Time::steadyNow();
         auto&      G   = grid();
 
-        if (overviewGridPromotable(window, monitor)) {
+        if (overviewGridPromotable(S, window, monitor)) {
             if (G.releases.size() > 64)
                 std::erase_if(G.releases, [](const auto& entry) { return !entry.second.window.lock(); });
 
@@ -376,14 +375,14 @@ namespace OvInternal {
         return true;
     }
 
-    bool overviewGridReleasing(const PHLWINDOW& window, PHLMONITOR monitor) {
+    bool overviewGridReleasing(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor) {
         if (const auto* OWNER = SGridOwnerScope::current(monitor))
-            return overviewGridReleasingStep(*OWNER, window, monitor);
-        return overviewGridReleasingPeek(window, monitor);
+            return overviewGridReleasingStep(S, *OWNER, window, monitor);
+        return overviewGridReleasingPeek(S, window, monitor);
     }
 
-    bool overviewGridPromoted(const PHLWINDOW& window, PHLMONITOR monitor) {
-        return overviewGridPromotable(window, monitor) || overviewGridReleasing(window, monitor);
+    bool overviewGridPromoted(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor) {
+        return overviewGridPromotable(S, window, monitor) || overviewGridReleasing(S, window, monitor);
     }
 
     // Membership of the MAIN grid. Identical to overviewGridWindows for an empty
@@ -392,10 +391,10 @@ namespace OvInternal {
     // The membership walk, into a buffer the caller owns, so the per-frame memo
     // below can rebuild its key without allocating. `out` is cleared, never
     // shrunk: the same two buffers are reused every call.
-    static void overviewMainGridWindowsInto(const PHLWORKSPACE& workspace, PHLMONITOR monitor, std::vector<PHLWINDOW>& out) {
+    static void overviewMainGridWindowsInto(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor, std::vector<PHLWINDOW>& out) {
         overviewGridWindowsInto(workspace, out);
 
-        const auto CTX = overviewGridPromoteCtx(monitor);
+        const auto CTX = overviewGridPromoteCtx(S, monitor);
         if (!CTX.enabled)
             return;
 
@@ -413,9 +412,9 @@ namespace OvInternal {
         Hyprdrive::GridSolve::order(out, OWN, out.size(), orderKey);
     }
 
-    std::vector<PHLWINDOW> overviewMainGridWindows(const PHLWORKSPACE& workspace, PHLMONITOR monitor) {
+    std::vector<PHLWINDOW> overviewMainGridWindows(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor) {
         std::vector<PHLWINDOW> windows;
-        overviewMainGridWindowsInto(workspace, monitor, windows);
+        overviewMainGridWindowsInto(S, workspace, monitor, windows);
         return windows;
     }
 
@@ -630,8 +629,7 @@ namespace OvInternal {
         std::ranges::stable_sort(windows, [&PLACE](const PHLWINDOW& a, const PHLWINDOW& b) { return PLACE(a) < PLACE(b); });
     }
 
-    bool overviewGridLayout(const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out) {
-        auto& S = searchSession();
+    bool overviewGridLayout(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor, const PHLWINDOW& target, CBox& out) {
         if (!workspace || !monitor || !target)
             return false;
 
@@ -646,7 +644,7 @@ namespace OvInternal {
 
         auto dropWindowRefs = Hyprutils::Utils::CScopeGuard([] { WINDOWS.clear(); });
 
-        overviewMainGridWindowsInto(workspace, monitor, WINDOWS);
+        overviewMainGridWindowsInto(S, workspace, monitor, WINDOWS);
 
         // The dragged window keeps a slot for its OWN query: the drag proxy is sized
         // off it, and a proxy sized from the N-1 layout would jump the frame the
@@ -790,7 +788,7 @@ namespace OvInternal {
         return true;
     }
 
-    bool overviewGridSlot(const PHLWINDOW& window, PHLMONITOR monitor, CBox& out, bool* promotedOut) {
+    bool overviewGridSlot(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, CBox& out, bool* promotedOut) {
         if (promotedOut)
             *promotedOut = false;
 
@@ -811,14 +809,14 @@ namespace OvInternal {
         // getOverviewWindowBox was asking it twice per box for a value that
         // cannot differ between the two calls.
         if (overviewGridHomeWorkspace(window) != ACTIVE->m_id) {
-            if (!overviewGridPromoted(window, monitor))
+            if (!overviewGridPromoted(S, window, monitor))
                 return false;
 
             if (promotedOut)
                 *promotedOut = true;
         }
 
-        return overviewGridLayout(ACTIVE, monitor, window, out);
+        return overviewGridLayout(S, ACTIVE, monitor, window, out);
     }
 
     float overviewGridProgress(float scale) {
