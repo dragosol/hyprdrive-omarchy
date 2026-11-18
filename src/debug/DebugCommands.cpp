@@ -18,7 +18,7 @@ namespace PluginDetail {
 // dispatcher has no other way to say anything back. It is also written to the
 // Hyprland log for whoever reads that instead.
 SDispatchResult onDebugDispatcher(std::string arg) {
-    auto& S = searchSession();
+    auto& S = g_overviewRegistry.search;
     CConstVarList     data(arg, 0, 's', true);
     const std::string TOPIC = std::string{data[0]};
     // `gesture state`: how many overviews are open, and the modifiers held --

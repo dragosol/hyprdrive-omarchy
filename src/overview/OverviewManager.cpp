@@ -42,14 +42,13 @@ static void emitOverviewState() {
 
 // THE search session, owned here next to the overviews that share it: one
 // keyboard, one cursor, one query, however many outputs show it. Each COverview
-// holds a reference (m_search); the entry points that run outside any one
-// overview -- the raw key hook, the debug dispatcher, the open paths, and the
-// layout helpers every overview's frame calls -- reach it through
-// searchSession().
-static Search::CSession g_search;
+// holds a reference (m_search, bound at construction); the entry points that run
+// outside any one overview -- the raw key hook, the debug dispatcher, the
+// open/admit/reset paths -- name it as g_overviewRegistry.search.
+SOverviewRegistry g_overviewRegistry;
 
 Search::CSession& searchSession() {
-    return g_search;
+    return g_overviewRegistry.search;
 }
 
 const std::vector<SP<IOverview>>& scrollOverviews() {

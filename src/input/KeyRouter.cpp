@@ -48,7 +48,7 @@ namespace PluginDetail {
 // next -- two listeners could not.
 void                registerRawKeyHooks() {
     g_pRawKeyHook = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
-        auto& S = searchSession();
+        auto& S = g_overviewRegistry.search;
         const bool PRESSED = event.state == WL_KEYBOARD_KEY_STATE_PRESSED;
         const bool ISSUPER = event.keycode == EVDEV_KEY_LEFTMETA || event.keycode == EVDEV_KEY_RIGHTMETA;
 
