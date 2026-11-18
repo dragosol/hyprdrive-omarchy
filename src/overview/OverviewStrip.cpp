@@ -482,7 +482,7 @@ void COverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Tim
             // the forced state back.
             for (const auto& REF : WIMG->windows) {
                 const auto WINDOW = getOverviewWindowToShow(REF.lock());
-                if (!overviewStripMiniShown(WINDOW, WIMG->pWorkspace) || WINDOW == DRAGGED)
+                if (!overviewStripMiniShown(m_search, WINDOW, WIMG->pWorkspace) || WINDOW == DRAGGED)
                     continue;
 
                 const auto MINI = OTHER->stripMiniBox(CELL, WINDOW, OTHERMON);
@@ -850,7 +850,7 @@ PHLWINDOW COverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) co
         const auto& WIMG = HIT->overview->images[HIT->workspaceIdx];
         for (auto it = WIMG->windows.rbegin(); it != WIMG->windows.rend(); ++it) {
             const auto WINDOW = getOverviewWindowToShow(it->lock());
-            if (!overviewStripMiniShown(WINDOW, WIMG->pWorkspace))
+            if (!overviewStripMiniShown(m_search, WINDOW, WIMG->pWorkspace))
                 continue;
 
             const auto MINI = HIT->overview->stripMiniBox(HIT->cell, WINDOW, HIT->monitor);
@@ -877,7 +877,7 @@ PHLWINDOW COverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) co
 
         for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
             const auto WINDOW = getOverviewWindowToShow(it->lock());
-            if (!overviewStripMiniShown(WINDOW, wimg->pWorkspace))
+            if (!overviewStripMiniShown(m_search, WINDOW, wimg->pWorkspace))
                 continue;
 
             const auto MINI = stripMiniBox(CELL, WINDOW, MONITOR);
@@ -1085,7 +1085,7 @@ void COverview::renderStripCell(PHLMONITOR monitor, size_t workspaceIdx, const C
 
     for (const auto& windowRef : wimg->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (!overviewStripMiniShown(WINDOW, wimg->pWorkspace) || WINDOW == DRAGGED)
+        if (!overviewStripMiniShown(m_search, WINDOW, wimg->pWorkspace) || WINDOW == DRAGGED)
             continue;
 
         const auto MINI = stripMiniBox(CELL, WINDOW, monitor);

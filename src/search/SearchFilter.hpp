@@ -21,8 +21,7 @@ namespace OvInternal {
 // Haystack is the extension's own, `${wsIndex + 1}: ${title} ${appName}`, plus
 // the window class -- dropping the class would regress the F2 behaviour that
 // shipped long before X18.
-inline bool overviewSearchMatches(const PHLWINDOW& window) {
-    auto& S = searchSession();
+inline bool overviewSearchMatches(Search::CSession& S, const PHLWINDOW& window) {
     if (S.query.text.empty())
         return true;
 

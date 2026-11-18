@@ -9,6 +9,9 @@
 #include <vector>
 
 class CWLSurfaceResource;
+namespace Search {
+    struct CSession;
+}
 
 // An overview object exists in one of two phases, and "exists" is not one of
 // them: a closing overview stays in the registry until its animation ends
@@ -219,7 +222,7 @@ void                              overviewAdmitWindow(const PHLWINDOW& window);
 struct xkb_state* overviewActiveXkbState();
 // Whether the running search keeps `window` out of the overview (OverviewInput.cpp,
 // which can see the gate).
-bool                              overviewSearchHides(const PHLWINDOW& window);
+bool                              overviewSearchHides(Search::CSession& S, const PHLWINDOW& window);
 
 // Start a NEW search session: no query, no selection, nothing held, no
 // half-typed compose sequence. What the dispatcher does before every open, for

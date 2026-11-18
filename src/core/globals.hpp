@@ -168,6 +168,10 @@ namespace Membership {
 bool ensureScrollOverviewHooks();
 void disableScrollOverviewHooks();
 
+namespace Search {
+    struct CSession;
+}
+
 // THE overview membership gate, reachable from a TU that cannot include the
 // internals header. Defined in Overview.cpp as a one-line forwarder to
 // `shouldShowOverviewWindow` in OverviewInternal.hpp, which is the single
@@ -180,4 +184,4 @@ void disableScrollOverviewHooks();
 // differently about the same window is the exact shape of the Z20/Y9 bug class,
 // and it was one `#include` away from being unfixable: OverviewInternal.hpp
 // pulls in Overview.hpp AND Dock.hpp, so Window.cpp cannot have it.
-bool overviewShowsWindow(const PHLWINDOW& window);
+bool overviewShowsWindow(Search::CSession& S, const PHLWINDOW& window);

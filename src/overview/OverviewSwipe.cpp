@@ -27,7 +27,7 @@ void COverview::moveViewportWorkspace(bool up) {
 
     if (const auto it = rememberedSelection.find(TARGETWORKSPACEIMAGE->pWorkspace->m_id); it != rememberedSelection.end()) {
         const auto rememberedWindow = getOverviewWindowToShow(it->second.lock());
-        if (rememberedWindow && rememberedWindow->m_workspace == TARGETWORKSPACEIMAGE->pWorkspace && shouldShowOverviewWindow(rememberedWindow))
+        if (rememberedWindow && rememberedWindow->m_workspace == TARGETWORKSPACEIMAGE->pWorkspace && shouldShowOverviewWindow(m_search, rememberedWindow))
             closeOnWindow = rememberedWindow;
     }
 
@@ -228,7 +228,7 @@ void COverview::syncSelectionToViewport() {
 
     if (const auto it = rememberedSelection.find(WSPACE->pWorkspace->m_id); it != rememberedSelection.end()) {
         const auto rememberedWindow = getOverviewWindowToShow(it->second.lock());
-        if (rememberedWindow && rememberedWindow->m_workspace == WSPACE->pWorkspace && shouldShowOverviewWindow(rememberedWindow)) {
+        if (rememberedWindow && rememberedWindow->m_workspace == WSPACE->pWorkspace && shouldShowOverviewWindow(m_search, rememberedWindow)) {
             for (const auto& windowRef : WSPACE->windows) {
                 if (getOverviewWindowToShow(windowRef.lock()) == rememberedWindow) {
                     closeOnWindow = rememberedWindow;
@@ -240,7 +240,7 @@ void COverview::syncSelectionToViewport() {
     }
 
     const auto focusedWindow = Desktop::focusState()->window();
-    if (shouldShowOverviewWindow(focusedWindow) && focusedWindow->m_workspace == WSPACE->pWorkspace) {
+    if (shouldShowOverviewWindow(m_search, focusedWindow) && focusedWindow->m_workspace == WSPACE->pWorkspace) {
         closeOnWindow = focusedWindow;
         rememberSelection(focusedWindow);
         syncFocusedSelection();
@@ -261,7 +261,7 @@ void COverview::syncSelectionToViewport() {
 
 void COverview::syncFocusedSelection() {
     const auto window = getOverviewWindowToShow(closeOnWindow.lock());
-    if (!shouldShowOverviewWindow(window))
+    if (!shouldShowOverviewWindow(m_search, window))
         return;
 
     closeOnWindow = window;

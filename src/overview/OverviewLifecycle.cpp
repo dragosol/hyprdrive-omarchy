@@ -38,7 +38,7 @@ COverview::~COverview() {
     OverviewWindow::trimTexturePrefilterCache();
     const auto MONITOR = pMonitor.lock();
     const auto WORKSPACE = MONITOR ? MONITOR->m_activeWorkspace : PHLWORKSPACE{};
-    emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(WORKSPACE, Desktop::focusState()->window()), false);
+    emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(m_search, WORKSPACE, Desktop::focusState()->window()), false);
     restoreWorkspaceAnimationOverrides();
     restoreInputConfigOverrides();
     // Whatever has focus NOW. Each monitor's overview reaches this when its own
@@ -386,7 +386,7 @@ void COverview::close() {
         viewportCurrentWorkspace < images.size() && images[viewportCurrentWorkspace] ? images[viewportCurrentWorkspace]->pWorkspace : PHLWORKSPACE{};
 
     const auto finishClose = [&](const PHLWORKSPACE& finalWorkspace, const PHLWINDOW& finalWindow) {
-        emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(finalWorkspace, finalWindow), false);
+        emitFullscreenVisibilityState(getOverviewFullscreenVisibilityWindow(m_search, finalWorkspace, finalWindow), false);
 
         useAnimDirection(false);
         *scale = 1.F;
@@ -502,7 +502,7 @@ void COverview::close() {
         if (pickKeepsFocus() && !BYSTANDER && focusSyncedFromWorkspaceID != WORKSPACE_INVALID && SELECTEDWORKSPACE &&
             SELECTEDWORKSPACE == pMonitor->m_activeWorkspace) {
             const auto LAST = getOverviewWindowToShow(SELECTEDWORKSPACE->getLastFocusedWindow());
-            if (LAST && LAST->m_workspace == SELECTEDWORKSPACE && shouldShowOverviewWindow(LAST))
+            if (LAST && LAST->m_workspace == SELECTEDWORKSPACE && shouldShowOverviewWindow(m_search, LAST))
                 Desktop::focusState()->fullWindowFocus(LAST, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
             else {
                 Desktop::focusState()->rawMonitorFocus(pMonitor.lock());

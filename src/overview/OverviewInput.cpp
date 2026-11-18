@@ -565,7 +565,7 @@ void COverview::onMouseButton(IPointer::SButtonEvent event, Event::SCallbackInfo
 
                 size_t resizeWorkspace = 0;
                 const auto window      = windowAtOverviewCursor(&resizeWorkspace);
-                if (!shouldShowOverviewWindow(window) || shouldShowPinnedFloatingOverviewWindow(window)) {
+                if (!shouldShowOverviewWindow(m_search, window) || shouldShowPinnedFloatingOverviewWindow(window)) {
                     resize.pointerDown = false;
                     resize.pendingWindow.reset();
                     return;
@@ -752,12 +752,12 @@ void COverview::onWindowActive(PHLWINDOW window, Desktop::eFocusReason) {
         const auto overviewWindow = getOverviewWindowToShow(window);
         const auto fullscreenWindow = overviewWindow && overviewWindow->m_workspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(overviewWindow->m_workspace)) : PHLWINDOW{};
 
-        if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == overviewWindow->m_workspace && overviewWindow->m_isFloating)
+        if (shouldShowOverviewWindow(m_search, fullscreenWindow) && fullscreenWindow->m_workspace == overviewWindow->m_workspace && overviewWindow->m_isFloating)
             emitFullscreenVisibilityState(fullscreenWindow, true);
         else
             emitFullscreenVisibilityState(overviewWindow, true);
 
-        if (shouldShowOverviewWindow(overviewWindow) && overviewWindow->m_monitor == pMonitor) {
+        if (shouldShowOverviewWindow(m_search, overviewWindow) && overviewWindow->m_monitor == pMonitor) {
             rebuildPending = true;
             closeOnWindow  = overviewWindow;
             rememberSelection(overviewWindow);
@@ -1000,7 +1000,7 @@ void COverview::onKeyboardKey(IKeyboard::SKeyEvent event, Event::SCallbackInfo& 
         info.cancelled = true;
 }
 
-bool overviewSearchHides(const PHLWINDOW& window) {
+bool overviewSearchHides(Search::CSession& S, const PHLWINDOW& window) {
     const auto SHOWN = getOverviewWindowToShow(window);
-    return SHOWN && !shouldShowOverviewWindow(SHOWN);
+    return SHOWN && !shouldShowOverviewWindow(S, SHOWN);
 }

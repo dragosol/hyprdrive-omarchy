@@ -570,7 +570,7 @@ bool COverview::shouldSuppressRenderDamage() const {
     const auto DRAGGED   = getOverviewWindowToShow(drag.activeWindow.lock());
 
     const auto isVisibleAnimatedWindow = [&](const PHLWINDOW& window, float workspaceOffset) {
-        if (!shouldShowOverviewWindow(window) || window == DRAGGED)
+        if (!shouldShowOverviewWindow(m_search, window) || window == DRAGGED)
             return false;
 
         const auto WINDOWBOX = getOverviewWindowBox(m_search, window, MONITOR, SCALE, viewOffset->value(), workspaceOffset, layout);
@@ -599,7 +599,7 @@ bool COverview::shouldSuppressRenderDamage() const {
 
         const auto workspace = workspaceImage->pWorkspace;
         {
-            const auto fullscreenWindow = overviewFullscreenPathWindow(workspace);
+            const auto fullscreenWindow = overviewFullscreenPathWindow(m_search, workspace);
             if (fullscreenWindow) {
                 if (isVisibleAnimatedWindow(fullscreenWindow, WORKSPACEOFFSET))
                     return false;
@@ -711,7 +711,7 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
     auto resetSendingFrameCallbacks      = Hyprutils::Utils::CScopeGuard([this, PREVSENDINGFRAMECALLBACKS] { sendingOverviewFrameCallbacks = PREVSENDINGFRAMECALLBACKS; });
 
     const auto frameWindow = [&](const PHLWINDOW& window, float workspaceOffset, bool realtime) {
-        if (!shouldShowOverviewWindow(window))
+        if (!shouldShowOverviewWindow(m_search, window))
             return;
 
         const bool ISDRAGGED = window == DRAGGED;
@@ -802,7 +802,7 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
         const auto workspace = workspaceImage->pWorkspace;
         const bool REALTIME  = isSelectedWorkspace(workspace);
         {
-            const auto fullscreenWindow = overviewFullscreenPathWindow(workspace);
+            const auto fullscreenWindow = overviewFullscreenPathWindow(m_search, workspace);
             if (fullscreenWindow) {
                 frameWindow(fullscreenWindow, WORKSPACEOFFSET, REALTIME);
                 for (const auto& windowRef : workspaceImage->windows) {
@@ -846,8 +846,8 @@ void COverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
 
 // The one line that lets a TU without the internals header ask THE gate; see
 // the declaration in globals.hpp for why Window.cpp needs it.
-bool overviewShowsWindow(const PHLWINDOW& window) {
-    return shouldShowOverviewWindow(window);
+bool overviewShowsWindow(Search::CSession& S, const PHLWINDOW& window) {
+    return shouldShowOverviewWindow(S, window);
 }
 
 namespace {
@@ -981,7 +981,7 @@ bool COverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Ti
         return false;
     }
 
-    if (!shouldShowOverviewWindow(window) || !window->m_workspace) {
+    if (!shouldShowOverviewWindow(m_search, window) || !window->m_workspace) {
         noteFrameGate(window, "not-shown-in-overview");
         return true;
     }
@@ -997,7 +997,7 @@ bool COverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Ti
             continue;
 
         sawCard = true;
-        const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
+        const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(m_search, workspaceImage->pWorkspace);
         if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->m_isFloating) {
             noteFrameGate(window, "occluded-by-fullscreen");
             return false;
@@ -1157,7 +1157,7 @@ bool COverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) {
         return true;
     }
 
-    if (!shouldShowOverviewWindow(window) || !window->m_workspace) {
+    if (!shouldShowOverviewWindow(m_search, window) || !window->m_workspace) {
         noteDamageGate(window, "not-shown");
         return false;
     }
@@ -1183,7 +1183,7 @@ bool COverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) {
         if (!workspaceImage || workspaceImage->pWorkspace != window->m_workspace)
             continue;
 
-        const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(workspaceImage->pWorkspace);
+        const auto FULLSCREENWINDOW = overviewFullscreenPathWindow(m_search, workspaceImage->pWorkspace);
         if (FULLSCREENWINDOW && FULLSCREENWINDOW != window && !window->m_isFloating) {
             noteDamageGate(window, "occluded-by-fullscreen");
             return false;
