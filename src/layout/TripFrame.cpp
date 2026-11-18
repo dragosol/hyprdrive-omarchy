@@ -86,8 +86,10 @@ namespace Hyprdrive::TripFrame {
                 WP<CWLSurfaceResource> surf;
                 Vector2D               old; // {}: made during the hold
                 CHyprSignalListener    commit, precommit;
+                double                 rep = 0; // what its commits since its last commit event repainted (pendingRepaint)
             };
             Vector2D                 cBuf; // the main surface's size at its last commit
+            double                   rep = 0; // the main surface's, as SSub::rep
             std::vector<SSub>        subs;
             int                      frames = 0, seen = 0, live = 0; // drawn from the snapshot / frames that drew the window / ... live
             // The phases (TripFrameRule.hpp, "THE PICTURE STRETCHES").
@@ -381,14 +383,13 @@ namespace Hyprdrive::TripFrame {
         // client DREW repaints all of it; X / XWayland also commit for
         // other reasons (a frame callback, an exposure elsewhere), with
         // little or no damage -- those are not a frame.
-        double repainted(const SP<CWLSurfaceResource>& s) {
+        double repainted(const SSurfaceState& C) {
             const auto AREA = [](const CRegion& r) {
                 double a = 0;
                 for (const auto& R : r.getRects())
                     a += double(R.x2 - R.x1) * double(R.y2 - R.y1);
                 return a;
             };
-            const auto&  C  = s->m_current;
             const double SA = C.size.x * C.size.y, BA = C.bufferSize.x * C.bufferSize.y;
             double       f  = 0;
             if (SA > 0)
@@ -396,6 +397,23 @@ namespace Hyprdrive::TripFrame {
             if (BA > 0)
                 f = std::max(f, AREA(C.bufferDamage.copy().intersect(CBox{{}, C.bufferSize})) / BA);
             return f;
+        }
+        // ...read from the commit's PENDING state, at its precommit: by its
+        // commit event the damage is gone. Hyprland 0.57's own commit
+        // handler (it listens first) damages the surface, and that takes the
+        // damage (SSurfaceState::accumulateBufferDamage clears the surface
+        // damage, and the buffer damage too for a dmabuf buffer); 0.56 moved
+        // it into the buffer damage and left it there. Every Firefox page
+        // commit read 0% and its hold always waited out SETTLE_MS. `acc` is
+        // the most repainted of the commits since the last commit event (a
+        // synced subsurface's commits arrive as one); the commit event takes it.
+        void pendingRepaint(const SP<CWLSurfaceResource>& s, double& acc) {
+            acc = std::max(acc, repainted(s->m_pending));
+        }
+        double takeRepaint(const SP<CWLSurfaceResource>& s, double& acc) {
+            const double R = std::max(acc, repainted(s->m_current));
+            acc            = 0;
+            return R;
         }
 
         void onCommit(const PHLWINDOWREF& ref) {
@@ -416,7 +434,7 @@ namespace Hyprdrive::TripFrame {
             // full repaint).
             const bool   NEWBUF = !W->backend().isX11() && AT && !near(RES->m_current.size, H->cBuf);
             H->cBuf             = RES->m_current.size;
-            const double REP    = repainted(RES);
+            const double REP    = takeRepaint(RES, H->rep);
             // Moved since its last commit, its size the same: the X server's
             // re-commit of what it has (TripFrameRule.hpp).
             const bool MOVED = W->backend().isX11() && near(SENT, H->cSize) && !near(reportedPosition(W), H->cPos);
@@ -448,11 +466,13 @@ namespace Hyprdrive::TripFrame {
             const auto     MAIN = W->wlSurface()->resource();
             const Vector2D SENT = sentSize(W);
             Vector2D       old  = {};
-            for (const auto& SUB : H->subs)
-                if (SUB.surf == surf)
+            double         REP  = repainted(S->m_current);
+            for (auto& SUB : H->subs)
+                if (SUB.surf == surf) {
                     old = SUB.old;
-            const bool   AT  = near(MAIN->m_current.size, SENT) && !near(S->m_current.size, old);
-            const double REP = repainted(S);
+                    REP = takeRepaint(S, SUB.rep);
+                }
+            const bool AT = near(MAIN->m_current.size, SENT) && !near(S->m_current.size, old);
             if (!H->fresh && old.x > 0 && !near(S->m_current.size, old)) {
                 H->fresh = true; // (its precommit did not see it coming)
                 trace(std::format("{} a subsurface at {}x{} after {:.0f} ms: the snapshot until it has drawn", W->metadata().appID(), S->m_current.size.x, S->m_current.size.y, msSince(H->at)));
@@ -536,9 +556,12 @@ namespace Hyprdrive::TripFrame {
         void onPrecommit(const PHLWINDOWREF& ref) {
             const auto W = ref.lock();
             SHeld*     H = W ? find(W) : nullptr;
-            if (!H || H->fresh || !H->good || !W->wlSurface() || !W->wlSurface()->resource())
+            if (!H || !W->wlSurface() || !W->wlSurface()->resource())
                 return;
             const auto RES = W->wlSurface()->resource();
+            pendingRepaint(RES, H->rep);
+            if (H->fresh || !H->good)
+                return;
             if (!RES->m_pending.updated.bits.buffer || !RES->m_pending.buffer || near(RES->m_pending.size, H->oldSurf) || !near(RES->m_current.size, H->oldSurf))
                 return;
             if (resnap(*H, W))
@@ -554,12 +577,16 @@ namespace Hyprdrive::TripFrame {
             const auto W = ref.lock();
             SHeld*     H = W ? find(W) : nullptr;
             const auto S = surf.lock();
-            if (!H || !S || H->fresh || !W->wlSurface() || !W->wlSurface()->resource())
+            if (!H || !S || !W->wlSurface() || !W->wlSurface()->resource())
                 return;
             Vector2D old = {};
-            for (const auto& SUB : H->subs)
-                if (SUB.surf == surf)
+            for (auto& SUB : H->subs)
+                if (SUB.surf == surf) {
                     old = SUB.old;
+                    pendingRepaint(S, SUB.rep);
+                }
+            if (H->fresh)
+                return;
             if (old.x <= 0 || !S->m_pending.updated.bits.buffer || !S->m_pending.buffer || near(S->m_pending.size, old) || !near(S->m_current.size, old))
                 return;
             const auto MAIN = W->wlSurface()->resource();
