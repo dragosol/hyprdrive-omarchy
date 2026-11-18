@@ -70,7 +70,7 @@ float COverview::SStripClean::alpha() const {
 // The strip's plate at rest -- the cells, the gaps and the panel padding --
 // as stripUiContains builds it, in rendered monitor-local px.
 CBox COverview::stripPlateBox(PHLMONITOR monitor, float renderScale) const {
-    if (!monitor || images.empty() || overviewStripLogicalHeight(monitor) <= 0.F)
+    if (!monitor || images.empty() || overviewStripLogicalHeight(m_search, monitor) <= 0.F)
         return {};
     const auto FIRST = stripCellLogicalBox(0);
     const auto LAST  = stripCellLogicalBox(images.size() - 1);

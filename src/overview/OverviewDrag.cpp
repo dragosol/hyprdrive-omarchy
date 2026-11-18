@@ -190,7 +190,7 @@ CBox COverview::draggedWindowGlobalBox() const {
     // the fallback for a session with the strip turned off.
     const float P          = dragMiniProgress();
     Vector2D    miniTarget = SOURCEBOX.size() * Hyprdrive::Config::getDragMiniScale();
-    if (!images.empty() && overviewStripLogicalHeight(MONITOR) > 0.F) {
+    if (!images.empty() && overviewStripLogicalHeight(m_search, MONITOR) > 0.F) {
         const CBox CELL = stripCellBox(0, MONITOR, scale->value());
         const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
         if (CELL.height > 1 && GEOM.w >= 1 && GEOM.h >= 1) {
@@ -603,7 +603,7 @@ PHLWINDOW COverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
 
     // The strip first: its band floats over the grid's tiles (the drop path
     // says the same). On a cell but not on one of its minis is no target.
-    if (overviewStripLogicalHeight(MONITOR) > 0.F) {
+    if (overviewStripLogicalHeight(m_search, MONITOR) > 0.F) {
         CBox mini;
         if (const auto W = windowAtStripPoint(point, &mini)) {
             hit    = W;

@@ -48,8 +48,7 @@ inline constexpr float OVERVIEW_CARD_CELLPADL     = 6.F;  // G5 grid cell: its o
 inline constexpr float OVERVIEW_CARD_CELLGAPL     = 4.F;  // that cell's icon -> its label
 inline constexpr float OVERVIEW_CARD_CELLPX       = 13.F; // that label
 
-inline float overviewResultsLogicalHeight(PHLMONITOR monitor) {
-    auto& S = searchSession();
+inline float overviewResultsLogicalHeight(Search::CSession& S, PHLMONITOR monitor) {
     return monitor ? std::max(0.F, S.layoutOn(monitor->m_id).bandH) : 0.F;
 }
 
@@ -211,7 +210,7 @@ inline float overviewResultsSectionHeight(const SSearchSection& section, float s
 // The alone cap is a ceiling on the WORK, not on the space -- each row
 // rasterises text and uploads a texture -- so the geometry below almost always
 // binds first and the 20 only matters on a very tall panel.
-inline float overviewResultsBudgetL(PHLMONITOR monitor, size_t gridTiles) {
+inline float overviewResultsBudgetL(Search::CSession& S, PHLMONITOR monitor, size_t gridTiles) {
     if (!monitor)
         return 0.F;
 
@@ -228,21 +227,21 @@ inline float overviewResultsBudgetL(PHLMONITOR monitor, size_t gridTiles) {
     // leftover ceiling, but that ceiling is gated on gridTiles > 0, so with no
     // tiles the stack depends on nothing this budget can move.
     if (gridTiles == 0) {
-        const float SPARE = sc<float>(monitor->m_size.y) - OVERVIEW_SEARCH_ROWHL - overviewStripStackL(monitor) - sc<float>(overviewMissionControlGap());
+        const float SPARE = sc<float>(monitor->m_size.y) - OVERVIEW_SEARCH_ROWHL - overviewStripStackL(S, monitor) - sc<float>(overviewMissionControlGap());
         budget            = std::max(budget, SPARE);
     }
 
     return budget;
 }
 
-inline size_t overviewResultsRowCap(PHLMONITOR monitor, size_t gridTiles) {
+inline size_t overviewResultsRowCap(Search::CSession& S, PHLMONITOR monitor, size_t gridTiles) {
     const size_t RATIO = gridTiles == 0                         ? OVERVIEW_RESULT_ROWS_ALONE :
         gridTiles > OVERVIEW_RESULT_TILES_CROWDED               ? OVERVIEW_RESULT_ROWS_CROWDED :
                                                                   OVERVIEW_RESULT_ROWS_NORMAL;
 
     // The ratio is the intent; the room is the hard limit. Trimming to more
     // rows than the budget can draw would spill the card past its container.
-    const float  ROOM = overviewResultsBudgetL(monitor, gridTiles) - OVERVIEW_RESULT_CARD_CHROMEL - (OVERVIEW_RESULT_PANELGAPL * 2.F);
+    const float  ROOM = overviewResultsBudgetL(S, monitor, gridTiles) - OVERVIEW_RESULT_CARD_CHROMEL - (OVERVIEW_RESULT_PANELGAPL * 2.F);
     const size_t FITS = ROOM >= OVERVIEW_RESULT_ROWHL_FULL ? sc<size_t>(ROOM / OVERVIEW_RESULT_ROWHL_FULL) : 1;
 
     return std::max<size_t>(1, std::min(RATIO, FITS));
@@ -257,7 +256,7 @@ inline void overviewTrimSectionsToFit(Search::CSession& S, std::vector<SSearchSe
     // decided the answer: the band measured an already-truncated list and no
     // ceiling above 8 could ever be reached, however much room there was
     // (user, 2026-09-23: "I never saw more than 8 rows in the results pane").
-    const size_t MAX_ROWS = overviewResultsRowCap(monitor, gridTiles);
+    const size_t MAX_ROWS = overviewResultsRowCap(S, monitor, gridTiles);
     for (auto& sec : sections) {
         if (sec.rows.size() > MAX_ROWS)
             sec.rows.resize(MAX_ROWS);
@@ -284,7 +283,7 @@ inline float overviewResultsWidthTarget(PHLMONITOR monitor, const std::vector<SS
     return overviewResultsSpanW(monitor);
 }
 
-inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSearchSection>& sections, size_t gridTiles, bool toolPane = false, float toolRowsHL = -1.F) {
+inline float overviewResultsBandTarget(Search::CSession& S, PHLMONITOR monitor, const std::vector<SSearchSection>& sections, size_t gridTiles, bool toolPane = false, float toolRowsHL = -1.F) {
     if (sections.empty() || !monitor)
         return 0.F;
 
@@ -303,7 +302,7 @@ inline float overviewResultsBandTarget(PHLMONITOR monitor, const std::vector<SSe
             (OVERVIEW_RESULT_PANELGAPL * 2.F) :
         OVERVIEW_RESULT_CARD_CHROMEL + (sc<float>(maxRows) * OVERVIEW_RESULT_ROWHL_FULL) + (OVERVIEW_RESULT_PANELGAPL * 2.F);
 
-    return std::min(CARD_H, overviewResultsBudgetL(monitor, gridTiles));
+    return std::min(CARD_H, overviewResultsBudgetL(S, monitor, gridTiles));
 }
 
 } // namespace OvInternal

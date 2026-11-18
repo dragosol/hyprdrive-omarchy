@@ -42,7 +42,7 @@ namespace Search {
 
     // The band's target (the easter egg's frame takes the same band), the
     // container width's, and the pill's dock goal.
-    float bandTarget(const SFrameRows& F, PHLMONITOR monitor);
+    float bandTarget(Search::CSession& S, const SFrameRows& F, PHLMONITOR monitor);
     float widthTarget(const SFrameRows& F, PHLMONITOR monitor);
     float dockGoal(const SFrameRows& F);
 
