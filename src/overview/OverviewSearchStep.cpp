@@ -29,7 +29,7 @@ size_t COverview::matchingWindowCount() const {
     size_t matches = 0;
     for (const auto& wimg : images) {
         if (wimg && wimg->pWorkspace)
-            matches += overviewGridWindows(wimg->pWorkspace).size();
+            matches += overviewGridWindows(m_search, wimg->pWorkspace).size();
     }
 
     matchCountQuery   = S.query.text;

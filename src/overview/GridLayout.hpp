@@ -169,7 +169,7 @@ namespace OvInternal {
     WORKSPACEID            overviewGridHomeWorkspace(const PHLWINDOW& window);
     // Windows of one workspace that belong in a grid, minimized ones included at
     // the desktop they were minimized FROM.
-    std::vector<PHLWINDOW> overviewGridWindows(const PHLWORKSPACE& workspace);
+    std::vector<PHLWINDOW> overviewGridWindows(Search::CSession& S, const PHLWORKSPACE& workspace);
     // B2: with a query typed, matches from every workspace join the ACTIVE
     // workspace's grid.
     std::vector<PHLWINDOW> overviewMainGridWindows(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor);

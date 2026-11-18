@@ -345,7 +345,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
     };
 
 
-    const auto fullscreenWindow  = overviewFullscreenPathWindow(workspace);
+    const auto fullscreenWindow  = overviewFullscreenPathWindow(m_search, workspace);
     const bool scrollingLayout   = isWorkspaceScrolling(workspace);
     const bool hasFullscreenPath = fullscreenWindow != nullptr;
 
@@ -354,7 +354,7 @@ void COverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, siz
         OverviewRender::flushPass(monitor);
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!shouldShowOverviewWindow(window) || !window->isFloating() || window == fullscreenWindow)
+            if (!shouldShowOverviewWindow(m_search, window) || !window->isFloating() || window == fullscreenWindow)
                 continue;
 
             renderOverviewWindow(window);
@@ -571,7 +571,7 @@ float COverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, 
     if (wimgPtr && !wimgPtr->windows.empty()) {
         for (const auto& winRef : wimgPtr->windows) {
             const auto WINDOW = getOverviewWindowToShow(winRef.lock());
-            if (!WINDOW || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->isFloating())
+            if (!WINDOW || !overviewStripMiniShown(m_search, WINDOW, workspace) || WINDOW->isFloating())
                 continue;
 
             const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -585,7 +585,7 @@ float COverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, 
     } else {
         for (const auto& w : Desktop::windowState()->windows()) {
             const auto WINDOW = getOverviewWindowToShow(w);
-            if (!WINDOW || WINDOW->m_workspace != workspace || !overviewStripMiniShown(WINDOW, workspace) || WINDOW->isFloating())
+            if (!WINDOW || WINDOW->m_workspace != workspace || !overviewStripMiniShown(m_search, WINDOW, workspace) || WINDOW->isFloating())
                 continue;
 
             const auto GEOM = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -620,7 +620,7 @@ float COverview::workspaceScrollingSpanRatioLive(const PHLWORKSPACE& workspace, 
 void COverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now) {
     auto*      dragOwner = g_pointerGrabOverview && g_pointerGrabOverview->drag.activeWindow ? g_pointerGrabOverview : this;
     const auto WINDOW    = getOverviewWindowToShow(dragOwner->drag.activeWindow.lock());
-    if (!shouldShowOverviewWindow(WINDOW) || !WINDOW->m_workspace)
+    if (!shouldShowOverviewWindow(m_search, WINDOW) || !WINDOW->m_workspace)
         return;
 
     const auto GLOBALBOX  = dragOwner->draggedWindowGlobalBox();
@@ -687,7 +687,7 @@ bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activ
         const auto workspace = workspaceImage->pWorkspace;
 
         const auto isVisiblePrecomputedBlurWindow = [&](const PHLWINDOW& window) {
-            if (window == DRAGGEDWINDOW || !OverviewWindow::shouldUseBlurFramebuffer(window))
+            if (window == DRAGGEDWINDOW || !OverviewWindow::shouldUseBlurFramebuffer(m_search, window))
                 return false;
 
             const auto windowBox = getOverviewWindowBox(m_search, window, monitor, renderScale, viewOffset->value(), WORKSPACEOFFSET, layout);
@@ -695,7 +695,7 @@ bool COverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activ
         };
 
         {
-            const auto fullscreenWindow = overviewFullscreenPathWindow(workspace);
+            const auto fullscreenWindow = overviewFullscreenPathWindow(m_search, workspace);
             if (fullscreenWindow) {
                 if (isVisiblePrecomputedBlurWindow(fullscreenWindow))
                     return true;
@@ -818,7 +818,7 @@ void COverview::renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBo
     // window's own alpha, which only the surface reads -- the chrome stayed
     // solid around a window that was still invisible.
 
-    OverviewWindow::renderOverviewWindow({
+    OverviewWindow::renderOverviewWindow(m_search, {
         .monitor              = monitor,
         .window               = window,
         .windowBox            = windowBox,
@@ -867,7 +867,7 @@ void COverview::renderListShadow() {
         std::vector<PHLWINDOW> snapshot;
         for (const auto& ref : img->windows) {
             const auto WINDOW = getOverviewWindowToShow(ref.lock());
-            if (!WINDOW || !shouldShowOverviewWindow(WINDOW))
+            if (!WINDOW || !shouldShowOverviewWindow(m_search, WINDOW))
                 continue;
 
             const auto LIVEWS = WINDOW->m_workspace ? Hyprdrive::Compat::id(WINDOW->m_workspace) : WORKSPACE_INVALID;
@@ -884,7 +884,7 @@ void COverview::renderListShadow() {
                 seenOnCard.emplace(WINDOW.get(), CARDID);
         }
 
-        const auto LIVE = overviewGridWindows(img->pWorkspace);
+        const auto LIVE = overviewGridWindows(m_search, img->pWorkspace);
 
         for (const auto& WINDOW : snapshot) {
             if (std::ranges::find(LIVE, WINDOW) == LIVE.end())
@@ -937,7 +937,7 @@ void COverview::redrawAll(bool forcelowres) {
 
     const auto addOverviewWindow = [&](const PHLWINDOW& window) {
         const auto overviewWindow = getOverviewWindowToShow(window);
-        if (!shouldShowOverviewWindow(overviewWindow) || !overviewWindow->m_workspace)
+        if (!shouldShowOverviewWindow(m_search, overviewWindow) || !overviewWindow->m_workspace)
             return;
 
         if (std::ranges::find(addedWindows, overviewWindow) != addedWindows.end())

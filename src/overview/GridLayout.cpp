@@ -221,13 +221,13 @@ namespace OvInternal {
 
     // The home-workspace membership rule, into a buffer the caller owns so the
     // per-frame layout memo can rebuild its key without allocating.
-    static void overviewGridWindowsInto(const PHLWORKSPACE& workspace, std::vector<PHLWINDOW>& out) {
+    static void overviewGridWindowsInto(Search::CSession& S, const PHLWORKSPACE& workspace, std::vector<PHLWINDOW>& out) {
         out.clear();
         if (!workspace)
             return;
 
         for (const auto& window : Desktop::windowState()->windows()) {
-            if (getOverviewWindowToShow(window) != window || !shouldShowOverviewWindow(window))
+            if (getOverviewWindowToShow(window) != window || !shouldShowOverviewWindow(S, window))
                 continue;
 
             // Y9 (user): "when an app window is minimized it should still be
@@ -256,9 +256,9 @@ namespace OvInternal {
         Hyprdrive::GridSolve::order(out, 0, out.size(), orderKey);
     }
 
-    std::vector<PHLWINDOW> overviewGridWindows(const PHLWORKSPACE& workspace) {
+    std::vector<PHLWINDOW> overviewGridWindows(Search::CSession& S, const PHLWORKSPACE& workspace) {
         std::vector<PHLWINDOW> windows;
-        overviewGridWindowsInto(workspace, windows);
+        overviewGridWindowsInto(S, workspace, windows);
         return windows;
     }
 
@@ -286,7 +286,7 @@ namespace OvInternal {
     }
 
     // Identical to the published predicate below, minus the two hoisted reads.
-    static bool overviewGridPromotableIn(const SPromoteCtx& ctx, const PHLWINDOW& window, PHLMONITOR monitor) {
+    static bool overviewGridPromotableIn(Search::CSession& S, const SPromoteCtx& ctx, const PHLWINDOW& window, PHLMONITOR monitor) {
         if (!ctx.enabled || !window || !monitor)
             return false;
 
@@ -294,11 +294,11 @@ namespace OvInternal {
             return false;
 
         const auto HOME = overviewGridHomeWorkspace(window);
-        return HOME != WORKSPACE_INVALID && HOME != Hyprdrive::Compat::id(ctx.active) && shouldShowOverviewWindow(window);
+        return HOME != WORKSPACE_INVALID && HOME != Hyprdrive::Compat::id(ctx.active) && shouldShowOverviewWindow(S, window);
     }
 
     bool overviewGridPromotable(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor) {
-        return overviewGridPromotableIn(overviewGridPromoteCtx(S, monitor), window, monitor);
+        return overviewGridPromotableIn(S, overviewGridPromoteCtx(S, monitor), window, monitor);
     }
 
     int gridReleaseMs() {
@@ -392,7 +392,7 @@ namespace OvInternal {
     // below can rebuild its key without allocating. `out` is cleared, never
     // shrunk: the same two buffers are reused every call.
     static void overviewMainGridWindowsInto(Search::CSession& S, const PHLWORKSPACE& workspace, PHLMONITOR monitor, std::vector<PHLWINDOW>& out) {
-        overviewGridWindowsInto(workspace, out);
+        overviewGridWindowsInto(S, workspace, out);
 
         const auto CTX = overviewGridPromoteCtx(S, monitor);
         if (!CTX.enabled)
@@ -403,7 +403,7 @@ namespace OvInternal {
             // Promotable, not promoted: a RELEASING tile must leave the grid
             // immediately so the survivors close up WHILE it travels (F3-b-iii,
             // outbound). It keeps being drawn -- it just no longer owns a slot.
-            if (getOverviewWindowToShow(window) == window && overviewGridPromotableIn(CTX, window, monitor))
+            if (getOverviewWindowToShow(window) == window && overviewGridPromotableIn(S, CTX, window, monitor))
                 out.emplace_back(window);
         }
         // The promoted ones after the desktop's own, as before, in the same

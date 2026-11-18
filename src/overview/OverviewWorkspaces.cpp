@@ -343,12 +343,12 @@ void COverview::seedRememberedSelections() {
 
         if (const auto it = rememberedSelection.find(WORKSPACEID); it != rememberedSelection.end()) {
             const auto rememberedWindow = getOverviewWindowToShow(it->second.lock());
-            if (rememberedWindow && rememberedWindow->m_workspace == img->pWorkspace && shouldShowOverviewWindow(rememberedWindow))
+            if (rememberedWindow && rememberedWindow->m_workspace == img->pWorkspace && shouldShowOverviewWindow(m_search, rememberedWindow))
                 continue;
         }
 
         const auto lastFocusedWindow = getOverviewWindowToShow(img->pWorkspace->getLastFocusedWindow());
-        if (!lastFocusedWindow || lastFocusedWindow->m_workspace != img->pWorkspace || !shouldShowOverviewWindow(lastFocusedWindow))
+        if (!lastFocusedWindow || lastFocusedWindow->m_workspace != img->pWorkspace || !shouldShowOverviewWindow(m_search, lastFocusedWindow))
             continue;
 
         rememberedSelection[WORKSPACEID] = lastFocusedWindow;
@@ -392,7 +392,7 @@ void COverview::updateWorkspaceOverflow() {
 
         for (const auto& windowRef : img->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!shouldShowOverviewWindow(window) || window->isFloating())
+            if (!shouldShowOverviewWindow(m_search, window) || window->isFloating())
                 continue;
 
             const auto POS  = window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - MONITOR->m_position;

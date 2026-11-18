@@ -178,7 +178,7 @@ void overviewAdmitWindow(const PHLWINDOW& window) {
     auto& S = g_overviewRegistry.search;
     if (!window || (S.query.text.empty() && !S.query.active))
         return;
-    if (!overviewSearchHides(window))
+    if (!overviewSearchHides(S, window))
         return;
 
     S.query.text.clear();

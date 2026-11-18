@@ -297,7 +297,7 @@ void COverview::beginWindowDragFrom(const PHLWINDOW& window, const CBox& miniOri
 
 void COverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOrigin) {
     const auto WINDOW = getOverviewWindowToShow(window);
-    if (!shouldShowOverviewWindow(WINDOW) || !WINDOW->layoutTarget())
+    if (!shouldShowOverviewWindow(m_search, WINDOW) || !WINDOW->layoutTarget())
         return;
 
     // Before the drag moves anything: the window the user was working in, which
@@ -383,7 +383,7 @@ void COverview::beginWindowDrag(PHLWINDOW window, const CBox* stripMiniOrigin) {
 void COverview::beginWindowResize() {
     const auto WINDOW  = getOverviewWindowToShow(resize.pendingWindow.lock());
     const auto MONITOR = pMonitor.lock();
-    if (!shouldShowOverviewWindow(WINDOW) || shouldShowPinnedFloatingOverviewWindow(WINDOW) || !WINDOW->layoutTarget() || !MONITOR || resize.workspaceIdx >= images.size())
+    if (!shouldShowOverviewWindow(m_search, WINDOW) || shouldShowPinnedFloatingOverviewWindow(WINDOW) || !WINDOW->layoutTarget() || !MONITOR || resize.workspaceIdx >= images.size())
         return;
 
     closeOnWindow = WINDOW;
@@ -625,7 +625,7 @@ PHLWINDOW COverview::swapCandidateAt(const Vector2D& point, CBox* targetBox) {
             for (const bool floating : {true, false}) {
                 for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend() && !hit; ++it) {
                     const auto W = getOverviewWindowToShow(it->lock());
-                    if (!shouldShowOverviewWindow(W) || W == DRAGGED || W->isFloating() != floating)
+                    if (!shouldShowOverviewWindow(m_search, W) || W == DRAGGED || W->isFloating() != floating)
                         continue;
                     const auto BOX = getOverviewDragWindowBox(m_search, W, MONITOR, scale->value(), viewOffset->value(), OFFSET, layout);
                     if (BOX.containsPoint(point)) {
@@ -929,7 +929,7 @@ void COverview::focusMostVisibleScrollingWindow(const PHLWORKSPACE& workspace) {
         WORKSPACEBOX.translate(MONITOR->m_position);
 
     const auto preferredWindow = getOverviewWindowToShow(pan.initialWindow.lock());
-    if (shouldShowOverviewWindow(preferredWindow) && preferredWindow->m_workspace == workspace && !preferredWindow->isFloating() && preferredWindow->layoutTarget()) {
+    if (shouldShowOverviewWindow(m_search, preferredWindow) && preferredWindow->m_workspace == workspace && !preferredWindow->isFloating() && preferredWindow->layoutTarget()) {
         const auto WINDOWBOX   = preferredWindow->layoutTarget()->position();
         const auto AREA        = overviewBoxArea(WINDOWBOX);
         const auto VISIBLEAREA = overviewBoxIntersectionArea(WINDOWBOX, WORKSPACEBOX);
@@ -943,7 +943,7 @@ void COverview::focusMostVisibleScrollingWindow(const PHLWORKSPACE& workspace) {
 
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_workspace != workspace || WINDOW->isFloating() || !WINDOW->layoutTarget())
+        if (!shouldShowOverviewWindow(m_search, WINDOW) || WINDOW->m_workspace != workspace || WINDOW->isFloating() || !WINDOW->layoutTarget())
             continue;
 
         const auto WINDOWBOX = WINDOW->layoutTarget()->position();
@@ -992,7 +992,7 @@ bool COverview::moveScrollingColumnSelection(bool next) {
     if (!ALGO || !ALGO->m_scrollingData || ALGO->m_scrollingData->columns.empty())
         return false;
 
-    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->isFloating())
+    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(m_search, closeOnWindow.lock()) || closeOnWindow->isFloating())
         syncSelectionToViewport();
 
     const auto CURRENT = getOverviewWindowToShow(closeOnWindow.lock());
@@ -1011,7 +1011,7 @@ bool COverview::moveScrollingColumnSelection(bool next) {
 
             for (const auto& windowRef : WORKSPACEIMAGE->windows) {
                 const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-                if (shouldShowOverviewWindow(WINDOW) && !WINDOW->isFloating() && WINDOW->layoutTarget() == targetData->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace)
+                if (shouldShowOverviewWindow(m_search, WINDOW) && !WINDOW->isFloating() && WINDOW->layoutTarget() == targetData->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace)
                     return WINDOW;
             }
         }
@@ -1141,7 +1141,7 @@ void COverview::gatherDropAnchor(SOverviewDropSite& site) {
     site.sourceFullscreenWindow =
         site.originalWorkspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(site.originalWorkspace)) : PHLWINDOW{};
     site.facts.restoreSourceFullscreenFocus = site.window && site.window->isFloating() && site.facts.moveWorkspace &&
-        shouldShowOverviewWindow(site.sourceFullscreenWindow) && site.sourceFullscreenWindow != site.window &&
+        shouldShowOverviewWindow(m_search, site.sourceFullscreenWindow) && site.sourceFullscreenWindow != site.window &&
         site.sourceFullscreenWindow->m_workspace == site.originalWorkspace && Fullscreen::controller()->isFullscreen(site.sourceFullscreenWindow);
 
     site.monitor                       = pMonitor.lock();
@@ -1335,7 +1335,7 @@ void COverview::commitDrop(const SOverviewDropSite& site, const Hyprdrive::Drop:
 
     if (DROPWORKSPACE && DROPMONITOR && DROPWORKSPACE == DROPMONITOR->m_activeWorkspace) {
         const auto FULLSCREENWINDOW = getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(DROPWORKSPACE));
-        if (shouldShowOverviewWindow(FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == DROPWORKSPACE)
+        if (shouldShowOverviewWindow(m_search, FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == DROPWORKSPACE)
             dropOverview->emitFullscreenVisibilityState(FULLSCREENWINDOW, true);
     }
 

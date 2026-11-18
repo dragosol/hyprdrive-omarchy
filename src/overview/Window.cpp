@@ -1175,14 +1175,14 @@ static bool overviewWorkspaceBoxReadyForPrecomputedBlur(PHLMONITOR monitor, cons
         workspaceBox->y + workspaceBox->height <= RENDERSIZE.y + EPSILON;
 }
 
-bool shouldUsePrecomputedBlur(const PHLWINDOW& window, PHLMONITOR monitor, const CBox* workspaceBox, const CBox* windowBox, bool dragged) {
-    return !dragged && Hyprdrive::Config::getValue<bool>("decoration:blur:new_optimizations") && overviewShowsWindow(window) && !window->isFloating() && shouldBlurBackground(window) &&
+bool shouldUsePrecomputedBlur(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, const CBox* workspaceBox, const CBox* windowBox, bool dragged) {
+    return !dragged && Hyprdrive::Config::getValue<bool>("decoration:blur:new_optimizations") && overviewShowsWindow(S, window) && !window->isFloating() && shouldBlurBackground(window) &&
         overviewWindowFitsWorkspaceBox(workspaceBox, windowBox) && overviewWorkspaceBoxReadyForPrecomputedBlur(monitor, workspaceBox);
 }
 
-bool shouldUseBlurFramebuffer(const PHLWINDOW& window, PHLMONITOR monitor, const CBox* workspaceBox, const CBox* windowBox) {
-    return shouldUsePrecomputedBlur(window, monitor, workspaceBox, windowBox) ||
-        (overviewShowsWindow(window) && shouldBlurBackground(window) && window->m_ruleApplicator->xray().valueOr(false) &&
+bool shouldUseBlurFramebuffer(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor, const CBox* workspaceBox, const CBox* windowBox) {
+    return shouldUsePrecomputedBlur(S, window, monitor, workspaceBox, windowBox) ||
+        (overviewShowsWindow(S, window) && shouldBlurBackground(window) && window->m_ruleApplicator->xray().valueOr(false) &&
          overviewWindowFitsWorkspaceBox(workspaceBox, windowBox) && overviewWorkspaceBoxReadyForPrecomputedBlur(monitor, workspaceBox));
 }
 
@@ -1248,7 +1248,7 @@ void forceDecoRecalc(const PHLWINDOW& window) {
     WINDOW->presentation().updateDecorations();
 }
 
-void renderOverviewWindow(const SRenderParams& params) {
+void renderOverviewWindow(Search::CSession& S, const SRenderParams& params) {
     if (!params.window)
         return;
 
@@ -1472,7 +1472,7 @@ void renderOverviewWindow(const SRenderParams& params) {
 
     const size_t firstWindowPassElement = Render::IHyprRenderer::currentPass(g_pHyprRenderer->context()).m_passElements.size();
     // Never rebuild m_blurFB under a temporary blur size.
-    const bool   usePrecomputedBlur     = !scaleBlur && shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
+    const bool   usePrecomputedBlur     = !scaleBlur && shouldUsePrecomputedBlur(S, params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
     {
         Hyprdrive::FlightBlur::CSuspend noFlightBlur(params.window);
         g_pHyprRenderer->renderWindow(g_pHyprRenderer->context(), params.window, params.monitor, params.window->presentation().renderPresentation(), params.now, false, Render::RENDER_PASS_ALL, false, false);

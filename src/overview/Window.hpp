@@ -5,12 +5,15 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 
 class CWLSurfaceResource;
+namespace Search {
+    struct CSession;
+}
 
 namespace OverviewWindow {
 
 bool shouldBlurBackground(const PHLWINDOW& window);
-bool shouldUsePrecomputedBlur(const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr, bool dragged = false);
-bool shouldUseBlurFramebuffer(const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr);
+bool shouldUsePrecomputedBlur(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr, bool dragged = false);
+bool shouldUseBlurFramebuffer(Search::CSession& S, const PHLWINDOW& window, PHLMONITOR monitor = nullptr, const CBox* workspaceBox = nullptr, const CBox* windowBox = nullptr);
 // Drops the U2 texture-prefilter cache. A no-op while any overview is still
 // up: the cache is shared by every overview (both monitors sample the same
 // client textures), and ~COverview used to clear it for ALL of them
@@ -67,7 +70,7 @@ struct SRenderParams {
     int                   previewRoundingPx      = -1;
 };
 
-void renderOverviewWindow(const SRenderParams& params);
+void renderOverviewWindow(Search::CSession& S, const SRenderParams& params);
 
 // TEST INSTRUMENT (`hyprdrive:debug probe_draw on`), unset in normal use.
 // Called while a tile's window carries the geometry it is being DRAWN with --

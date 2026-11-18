@@ -2,6 +2,7 @@
 // pointer focus over the dock and the retile tracker.
 #include "DockParts.hpp"
 #include "HoverTargetRule.hpp"
+#include "SearchSession.hpp"
 
 namespace Hyprdrive::Dock {
 using namespace DockDetail;
@@ -130,7 +131,10 @@ void renderLivePreview(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& 
     const auto  SIZE        = window->m_realSize->value();
     const float RENDERSCALE = SIZE.y >= 1.0 ? sc<float>(box.height / (SIZE.y * monitor->m_scale)) : 1.F;
 
-    OverviewWindow::renderOverviewWindow({
+    // The dock draws outside any one overview, so the session comes from the
+    // registry (the precomputed-blur test inside asks the window gate, which
+    // reads the query).
+    OverviewWindow::renderOverviewWindow(g_overviewRegistry.search, {
         .monitor                 = monitor,
         .window                  = window,
         .windowBox               = box,

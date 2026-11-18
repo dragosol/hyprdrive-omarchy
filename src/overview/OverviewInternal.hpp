@@ -245,7 +245,7 @@ inline OvGeom::EAxis axisOf(Hyprdrive::Config::ELayout layout) {
     return sc<OvGeom::EAxis>(layout);
 }
 
-inline PHLWINDOW getOverviewFullscreenVisibilityWindow(const PHLWORKSPACE& workspace, const PHLWINDOW& fallback = {});
+inline PHLWINDOW getOverviewFullscreenVisibilityWindow(Search::CSession& S, const PHLWORKSPACE& workspace, const PHLWINDOW& fallback = {});
 inline constexpr const char* OVERVIEW_SUBMAP = "hyprdrive";
 // ONE RELEASE. The submap is defined by the USER's config, not by the plugin,
 // so a config written before the rename binds its clicks under the old name and
@@ -637,8 +637,7 @@ namespace OvInternal {
 // and a linear scan of the minimize stash. Both change only through mutators
 // that already bump (query edit, session reset, minimize, restore, title,
 // class, moveToWorkspace), which is exactly the property a generation key needs.
-inline bool overviewMembershipMatchesLive(const PHLWINDOW& WINDOW) {
-    auto& S = searchSession();
+inline bool overviewMembershipMatchesLive(Search::CSession& S, const PHLWINDOW& WINDOW) {
     // Y9 REVISED (user, 2026-08-06): a minimized window belongs in the overview
     // ONLY while a query is active. With an empty query it stays put away --
     // which is what minimizing it meant -- and this is X58(a)'s original wording
@@ -653,7 +652,7 @@ inline bool overviewMembershipMatchesLive(const PHLWINDOW& WINDOW) {
     if (S.query.text.empty() && Hyprdrive::Minimize::isMinimized(WINDOW))
         return false;
 
-    return overviewSearchMatches(WINDOW);
+    return overviewSearchMatches(S, WINDOW);
 }
 
 // THE CACHE READ, and the only one. Keyed on WINDOW -- the group's current --
@@ -665,14 +664,14 @@ inline bool overviewMembershipMatchesLive(const PHLWINDOW& WINDOW) {
 // compared, which is how the bump set gets re-proved after someone adds a
 // mutator -- and is why the comparison lives here rather than in a test that
 // would have to reconstruct sixty callers to mean anything.
-inline bool overviewMembershipMatches(const PHLWINDOW& WINDOW) {
+inline bool overviewMembershipMatches(Search::CSession& S, const PHLWINDOW& WINDOW) {
     bool       cached = false;
     const bool HIT    = Membership::lookup(WINDOW.get(), cached);
 
     if (HIT && !Membership::shadowEnabled())
         return cached;
 
-    const bool LIVE = overviewMembershipMatchesLive(WINDOW);
+    const bool LIVE = overviewMembershipMatchesLive(S, WINDOW);
 
     if (HIT && cached != LIVE)
         Membership::divergence(WINDOW->metadata().appID(), WINDOW->metadata().title(), LIVE);
@@ -696,7 +695,7 @@ inline bool isScreensaverWindow(const PHLWINDOW& window) {
     return window->metadata().appID() == "org.omarchy.screensaver" || window->metadata().initialAppID() == "org.omarchy.screensaver";
 }
 
-inline bool shouldShowOverviewWindow(const PHLWINDOW& window) {
+inline bool shouldShowOverviewWindow(Search::CSession& S, const PHLWINDOW& window) {
     // Z9r5: a window hidden for a dock flight is the proxy's alone -- drawing
     // its tile too would be the double image the spec forbids.
     if (window && window->isHidden())
@@ -716,7 +715,7 @@ inline bool shouldShowOverviewWindow(const PHLWINDOW& window) {
     if (Hyprdrive::Compat::pinned(WINDOW) && WINDOW->isFloating())
         return false;
 
-    return overviewMembershipMatches(WINDOW);
+    return overviewMembershipMatches(S, WINDOW);
 }
 
 // THE TILE PREDICATE. A tile is on screen if the membership gate admits it OR
@@ -748,7 +747,7 @@ inline bool overviewTileShown(Search::CSession& S, const PHLWINDOW& window, PHLM
     if (promoted)
         *promoted = PROMOTED;
 
-    return PROMOTED || shouldShowOverviewWindow(window);
+    return PROMOTED || shouldShowOverviewWindow(S, window);
 }
 
 // THE MINI PREDICATE. A strip mini answers a DIFFERENT question from a tile:
@@ -759,8 +758,8 @@ inline bool overviewTileShown(Search::CSession& S, const PHLWINDOW& window, PHLM
 // because that is where its TILE is laid out, and drawing its mini there too
 // would put a window on a desktop it is not on -- the user report 46bccac
 // closed. HOME is the same rule that decides its slot, asked one more time.
-inline bool overviewStripMiniShown(const PHLWINDOW& window, const PHLWORKSPACE& workspace) {
-    if (!workspace || !shouldShowOverviewWindow(window))
+inline bool overviewStripMiniShown(Search::CSession& S, const PHLWINDOW& window, const PHLWORKSPACE& workspace) {
+    if (!workspace || !shouldShowOverviewWindow(S, window))
         return false;
 
     return overviewGridHomeWorkspace(window) == Hyprdrive::Compat::id(workspace);
@@ -1740,10 +1739,10 @@ inline void syncWorkspaceGeometry(const PHLWORKSPACE& workspace) {
     }
 }
 
-inline PHLWINDOW getOverviewFullscreenVisibilityWindow(const PHLWORKSPACE& workspace, const PHLWINDOW& fallback) {
+inline PHLWINDOW getOverviewFullscreenVisibilityWindow(Search::CSession& S, const PHLWORKSPACE& workspace, const PHLWINDOW& fallback) {
     const auto FULLSCREENWINDOW = workspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(workspace)) : PHLWINDOW{};
 
-    if (shouldShowOverviewWindow(FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == workspace)
+    if (shouldShowOverviewWindow(S, FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == workspace)
         return FULLSCREENWINDOW;
 
     return getOverviewWindowToShow(fallback);
@@ -1763,14 +1762,14 @@ inline PHLWINDOW getOverviewFullscreenVisibilityWindow(const PHLWORKSPACE& works
 //
 // The fullscreen window when that path applies; null when every window gets its
 // own tile.
-inline PHLWINDOW overviewFullscreenPathWindow(const PHLWORKSPACE& workspace) {
+inline PHLWINDOW overviewFullscreenPathWindow(Search::CSession& S, const PHLWORKSPACE& workspace) {
     // The memoised read, so every overview decision in one frame answers the
     // same thing about mission control -- the grid below asks it too.
     if (!workspace || isWorkspaceScrolling(workspace) || overviewMissionControlOn())
         return nullptr;
 
     const auto FULLSCREENWINDOW = getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(workspace));
-    return shouldShowOverviewWindow(FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == workspace ? FULLSCREENWINDOW : nullptr;
+    return shouldShowOverviewWindow(S, FULLSCREENWINDOW) && FULLSCREENWINDOW->m_workspace == workspace ? FULLSCREENWINDOW : nullptr;
 }
 
 } // namespace OvInternal
