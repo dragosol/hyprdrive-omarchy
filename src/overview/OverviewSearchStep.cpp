@@ -116,7 +116,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
 
     // The easter egg's frame takes the same band (KeyboardCat::bandL), so the
     // strip makes room for it the way it does for results.
-    const float TARGET = Search::bandTarget(FRAME, monitor);
+    const float TARGET = Search::bandTarget(m_search, FRAME, monitor);
     if (std::abs(resultsBand->goal() - TARGET) > 0.5F)
         *resultsBand = TARGET;
 

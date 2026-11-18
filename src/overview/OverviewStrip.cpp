@@ -66,8 +66,8 @@ const Hyprdrive::StripLayout::SOutput& COverview::stripRow(float scratchRevealOv
     const uint64_t FRAME     = overviewFrameOn(MONITOR);
     const float    SCRATCH   = scratchRevealOverride >= 0.F ? std::clamp(scratchRevealOverride, 0.F, 1.F) : scratchpadRevealValue();
     const float    ALTREVEAL = altRevealOverride >= 0.F ? std::clamp(altRevealOverride, 0.F, 1.F) : altStripsRevealValue();
-    const float    TOPL      = overviewSearchLogicalHeight(MONITOR) + overviewResultsLogicalHeight(MONITOR);
-    const float    BANDL     = overviewStripLogicalHeight(MONITOR);
+    const float    TOPL      = overviewSearchLogicalHeight(m_search, MONITOR) + overviewResultsLogicalHeight(m_search, MONITOR);
+    const float    BANDL     = overviewStripLogicalHeight(m_search, MONITOR);
     const float    GAPL      = sc<float>(Hyprdrive::Config::getStripGap());
     const double   ASPECT    = MONITOR->m_size.y > 1 ? sc<double>(MONITOR->m_size.x) / sc<double>(MONITOR->m_size.y) : 1.6;
     // The other monitors' strips, as one number: how many there are, how many
@@ -710,7 +710,7 @@ bool COverview::pointerOnChrome(const CBox& box) const {
 
 bool COverview::stripUiContains(const Vector2D& point) const {
     const auto MONITOR = pMonitor.lock();
-    if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F || images.empty())
+    if (!MONITOR || overviewStripLogicalHeight(m_search, MONITOR) <= 0.F || images.empty())
         return false;
 
     const auto FIRST = stripCellLogicalBox(0);
@@ -728,7 +728,7 @@ bool COverview::stripUiContains(const Vector2D& point) const {
 
 PHLWORKSPACE COverview::workspaceAtStripPoint(const Vector2D& point, size_t* hoveredWorkspaceIdx) const {
     const auto MONITOR = pMonitor.lock();
-    if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F)
+    if (!MONITOR || overviewStripLogicalHeight(m_search, MONITOR) <= 0.F)
         return nullptr;
 
     for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
@@ -808,7 +808,7 @@ CBox COverview::stripMiniBox(const CBox& cell, PHLWINDOW window, PHLMONITOR moni
 // D6: which window mini is under the cursor, topmost first.
 PHLWINDOW COverview::windowAtStripPoint(const Vector2D& point, CBox* miniBox) const {
     const auto MONITOR = pMonitor.lock();
-    if (!MONITOR || overviewStripLogicalHeight(MONITOR) <= 0.F)
+    if (!MONITOR || overviewStripLogicalHeight(m_search, MONITOR) <= 0.F)
         return nullptr;
 
     // The detached scratchpad cell answers here too, FIRST, because it is the
@@ -1224,7 +1224,7 @@ void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
         return;
 
     // No strip, nothing to draw on.
-    if (overviewStripLogicalHeight(monitor) <= 0.F)
+    if (overviewStripLogicalHeight(m_search, monitor) <= 0.F)
         return;
 
     // Same driver the strip itself fades on, so the badge cannot outlive the
@@ -1303,7 +1303,7 @@ void COverview::renderDetentBadge(PHLMONITOR monitor, float renderScale) {
 // The strip: one container panel, then one pass per cell. The style the two
 // share is resolved once here; nothing else about the order moved.
 void COverview::renderStrip(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now) {
-    if (!monitor || overviewStripLogicalHeight(monitor) <= 0.F)
+    if (!monitor || overviewStripLogicalHeight(m_search, monitor) <= 0.F)
         return;
 
     // Ahead of every box below: the reveal is what the strip's own layout reads
@@ -1583,7 +1583,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
         // label is measured in rendered px, and the pill's published scale is
         // rendered-per-logical under the same card transform.
         if (PUB.scale > 0.01F) {
-            const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(monitor);
+            const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(m_search, monitor);
             searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
         }
     } else if (WANT.width > 1 && PUB.pillRest.width > 1 && WANT.x < PUB.pillRest.x + PUB.pillRest.width && PUB.pillRest.x < WANT.x + WANT.width) {

@@ -61,8 +61,8 @@ Search::SFrameRows Search::frameRows(CSession& S, PHLMONITOR monitor, MONITORID 
     };
 }
 
-float Search::bandTarget(const SFrameRows& F, PHLMONITOR monitor) {
-    return std::max(F.panel ? overviewResultsBandTarget(monitor, F.sections, F.gridTiles, F.toolPane, F.toolRowsHL) : 0.F, Hyprdrive::KeyboardCat::bandL());
+float Search::bandTarget(Search::CSession& S, const SFrameRows& F, PHLMONITOR monitor) {
+    return std::max(F.panel ? overviewResultsBandTarget(S, monitor, F.sections, F.gridTiles, F.toolPane, F.toolRowsHL) : 0.F, Hyprdrive::KeyboardCat::bandL());
 }
 
 float Search::widthTarget(const SFrameRows& F, PHLMONITOR monitor) {

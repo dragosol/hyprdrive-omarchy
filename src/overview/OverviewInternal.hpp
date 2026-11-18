@@ -854,8 +854,7 @@ inline float overviewStripBandCeilingL(PHLMONITOR monitor) {
     return std::min(H, sc<float>(monitor->m_size.y) * sc<float>(Hyprdrive::Config::getStripMaxScreenPct()) / 100.F);
 }
 
-inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
-    auto& S = searchSession();
+inline float overviewStripLogicalHeight(Search::CSession& S, PHLMONITOR monitor) {
     if (!monitor)
         return 0.F;
 
@@ -938,20 +937,19 @@ inline float overviewStripLogicalHeight(PHLMONITOR monitor) {
 inline constexpr float OVERVIEW_STRIP_BAND_PAD_FRAC = 0.18F;
 inline constexpr float OVERVIEW_STRIP_PANELPADL     = 10.F;
 
-inline float overviewStripPadL(PHLMONITOR monitor) {
-    return overviewStripLogicalHeight(monitor) * OVERVIEW_STRIP_BAND_PAD_FRAC;
+inline float overviewStripPadL(Search::CSession& S, PHLMONITOR monitor) {
+    return overviewStripLogicalHeight(S, monitor) * OVERVIEW_STRIP_BAND_PAD_FRAC;
 }
 
-inline float overviewChromeGapL(PHLMONITOR monitor) {
-    const float PAD = overviewStripPadL(monitor);
+inline float overviewChromeGapL(Search::CSession& S, PHLMONITOR monitor) {
+    const float PAD = overviewStripPadL(S, monitor);
     return std::max(0.F, PAD - OVERVIEW_STRIP_PANELPADL + OVERVIEW_SEARCH_DOCKPADL);
 }
 
 // Search/results, then the drawn strip panel, then one chrome gap. The grid
 // starts immediately after this; it must not also add mission_control_gap.
-inline float overviewStripStackL(PHLMONITOR monitor) {
-    auto& S = searchSession();
-    const float BAND = overviewStripLogicalHeight(monitor);
+inline float overviewStripStackL(Search::CSession& S, PHLMONITOR monitor) {
+    const float BAND = overviewStripLogicalHeight(S, monitor);
     if (BAND <= 0.F)
         return 0.F;
 
@@ -960,20 +958,19 @@ inline float overviewStripStackL(PHLMONITOR monitor) {
     // the difference as a hole the user reads as "the windows sit too low".
     if (monitor) {
         if (const float PLATE = S.layoutOn(monitor->m_id).stripPlateL; PLATE > 0.F)
-            return PLATE + overviewChromeGapL(monitor);
+            return PLATE + overviewChromeGapL(S, monitor);
     }
 
-    const float PAD   = overviewStripPadL(monitor);
+    const float PAD   = overviewStripPadL(S, monitor);
     const float CELLH = std::max(0.F, BAND - 2.F * PAD);
-    return PAD + CELLH + OVERVIEW_STRIP_PANELPADL + overviewChromeGapL(monitor);
+    return PAD + CELLH + OVERVIEW_STRIP_PANELPADL + overviewChromeGapL(S, monitor);
 }
 
 // X10 + the pill row's published height. OVERVIEW_SEARCH_ROWHL and the value
 // itself live in SearchSession.hpp: the row is written by the search render step
 // from the pill's ACTUAL landed foot, so it is part of the published layout and
 // not a free-standing global.
-inline float overviewSearchLogicalHeight(PHLMONITOR monitor) {
-    auto& S = searchSession();
+inline float overviewSearchLogicalHeight(Search::CSession& S, PHLMONITOR monitor) {
     return monitor ? S.layoutOn(monitor->m_id).rowL : 0.F;
 }
 

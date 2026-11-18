@@ -693,7 +693,7 @@ namespace OvInternal {
         // so it is a floor to clamp against, not a margin to add. Adding it to
         // a work area that already excluded a top bar counted that bar twice
         // and pushed every tile down by its height (22px under this rice).
-        if (const float TOPCHROME = overviewStripStackL(monitor) + overviewSearchLogicalHeight(monitor) + overviewResultsLogicalHeight(monitor); TOPCHROME > 0.F) {
+        if (const float TOPCHROME = overviewStripStackL(S, monitor) + overviewSearchLogicalHeight(S, monitor) + overviewResultsLogicalHeight(S, monitor); TOPCHROME > 0.F) {
             const double BOTTOM = usable.y + usable.h;
             usable.y            = std::max(usable.y, monitor->m_position.y + TOPCHROME);
             usable.h            = BOTTOM - usable.y;
