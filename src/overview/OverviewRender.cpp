@@ -1,6 +1,7 @@
 #include "OverviewRender.hpp"
 #include "IdentityLive.hpp"
 #include "OverviewPassElement.hpp"
+#include "UiScale.hpp"
 #include <chrono>
 #include <cstring>
 #include <vector>
@@ -484,9 +485,12 @@ namespace {
     void refillWarmTexts() {
         g_warmTexts.clear();
         std::unordered_set<float> scales;
+        // ...times the monitor's type factor: the search's text is drawn that
+        // much smaller off the reference screen (UiScale.hpp).
         for (const auto& M : State::monitorState()->monitors())
             if (M)
-                scales.insert(sc<float>(M->m_scale) * Hyprdrive::Config::getScale());
+                scales.insert(sc<float>(M->m_scale) * Hyprdrive::Config::getScale() *
+                              Hyprdrive::UiScale::factors(sc<float>(M->m_size.y), Hyprdrive::Config::getUiScale()).type);
         const auto FG    = Hyprdrive::Config::themeForeground();
         const auto MUTED = Hyprdrive::Config::themeMutedText();
         const auto px    = [](float base, float scale) { return std::max(1, sc<int>(std::round(base * scale))); };
