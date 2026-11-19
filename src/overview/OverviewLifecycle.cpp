@@ -233,6 +233,11 @@ COverview::COverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITOR monitor_) 
     // that asked for the overview, and a second monitor opening must not wipe
     // the query the first one is showing.
     S.resetLayout(PMONITOR ? PMONITOR->m_id : MONITOR_INVALID);
+    // ...and the row it starts with is this monitor's rest row (UiScale.hpp),
+    // not the reference screen's 64: the grid's first frame reads it before the
+    // search has laid out, and a different second frame started a reflow.
+    if (PMONITOR)
+        S.layoutOn(PMONITOR->m_id).rowL = overviewSearchRowRestL(PMONITOR);
 
     if (!swipe)
         *scale = Hyprdrive::Config::getScale();
