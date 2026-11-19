@@ -305,8 +305,14 @@ SDispatchResult onOverviewDispatcher(std::string arg) {
     SearchBackend::init();
 
     for (const auto& monitor : MONITORS) {
-        if (!openOverview(monitor))
+        if (!openOverview(monitor)) {
+            // Refused under the session lock (hyprdriveSessionLocked) is not a
+            // hook failure: say what it is. The Lua dispatch puts the
+            // dispatcher's name in front: "overview: the session is locked".
+            if (hyprdriveSessionLocked())
+                return {.success = false, .error = "the session is locked"};
             return {.success = false, .error = "failed enabling overview hooks (is other overview plugin enabled?)"};
+        }
     }
     return {};
 }
