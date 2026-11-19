@@ -16,7 +16,9 @@
 #      game (no `key` and no `kbenter` in its log after the lock)
 #   2. still locked, a left click on the game's dock icon (game focused: an
 #      unlocked click minimizes it): nothing happens -- same windows, same
-#      boxes, nothing minimized, the same window focused, no new client
+#      boxes, nothing minimized, the same window focused, no new client; and
+#      the overview dispatch opens nothing and returns "overview: the session
+#      is locked" (it used to say "failed enabling overview hooks")
 #   3. unlocked (the pointer back over the game, which Hyprland's unlock
 #      refocuses): the game gets kbenter and keys again, and the same click on its icon
 #      minimizes it (the guard is not sticky)
@@ -94,6 +96,8 @@ S0=$(state)
 click_icon
 check "2: locked, a click on the game's dock icon does nothing" "$(is "$(state)" "$S0")" "$(state) WAS $S0"
 check "2: ... nothing minimized" "$(is "$(J clients | jq '[.[] | select(.workspace.name | startswith("special:minimized"))] | length')" 0)" "$(geom)"
+OVL=$($R overview 2>&1); sleep 0.5
+check "2: locked, the overview dispatch is refused and says why" "$(echo "$OVL" | grep -q 'overview: the session is locked' && ! echo "$OVL" | grep -q 'overview: overview:' && [ "$(ovw)" = 0 ] && echo 1)" "dispatch: ...$(echo "$OVL" | tr '\n' ' ' | tail -c 120); overview open $(ovw)"
 check "2: ... still locked" "$(is "$(locked)" 1)" "lockstate $(dbg lockstate | grep -o 'locked=.*')"
 
 # ---- 3. unlocked: keyboard and dock back
