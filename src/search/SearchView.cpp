@@ -39,13 +39,23 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     // OVERVIEW_CHROME_NO_PAN).
     // The live field (SSearchFieldMotion): springs toward the query's width,
     // capped so the pill never passes OVERVIEW_PILL_MAXFRAC of the monitor.
+    //
+    // THE PROPORTIONS (UiScale.hpp). The pill is laid out at the TYPE factor --
+    // PILLWL and the metrics in SearchField.hpp stay its own units, and the box
+    // is that much smaller -- and its margins at the SPACE factor. Everything
+    // drawn inside the pill is measured off the landed box (TRANSFORMSCALE), so
+    // the badge, the glyph and the text follow the type factor for free.
+    const auto  UI          = overviewUi(MONITOR);
     const float FIELDWL     = IN.fieldWL;
     const float PILLWL      = OVERVIEW_PILL_WL(FIELDWL);
+    const float PILLHL      = OVERVIEW_PILL_HL * UI.type;
+    const float MARGINL     = (OVERVIEW_SEARCH_ROWHL - OVERVIEW_PILL_HL) / 2.F * UI.layout; // above and below the pill
+    const float ROWHL       = PILLHL + 2.F * MARGINL;                                       // 48 + 8 + 8 at the reference
     const CBox  PILLLOGICAL = {
-        sc<float>(MONITOR->m_position.x) + (sc<float>(MONITOR->m_size.x) - PILLWL) / 2.F,
-        sc<float>(MONITOR->m_position.y) + (OVERVIEW_SEARCH_ROWHL - OVERVIEW_PILL_HL) / 2.F,
-        PILLWL,
-        OVERVIEW_PILL_HL,
+        sc<float>(MONITOR->m_position.x) + (sc<float>(MONITOR->m_size.x) - PILLWL * UI.type) / 2.F,
+        sc<float>(MONITOR->m_position.y) + MARGINL,
+        PILLWL * UI.type,
+        PILLHL,
     };
 
     CBox pill = getOverviewGlobalBox(PILLLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
@@ -69,7 +79,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
         // On a short logical screen (1920x1200 at 1.0667, with a top bar) the
         // rest row lies ABOVE the docked line, and easing toward it docked the
         // pill DOWN as the first key was typed. There the pill stays at rest.
-        const float DOCKY = std::min((dockTopL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL) * sc<float>(MONITOR->m_scale), PILLUNDOCKEDY);
+        const float DOCKY = std::min((dockTopL - sc<float>(MONITOR->m_position.y) + overviewSearchDockPadL(MONITOR)) * sc<float>(MONITOR->m_scale), PILLUNDOCKEDY);
         pill.y += (DOCKY - sc<float>(pill.y)) * DOCK;
     }
 
@@ -87,7 +97,10 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     // pixels here -- the first attempt at this read the rounded width and the
     // loop kept running: widths 824/826, scale 1.3105/1.3135, logged
     // 2026-09-14. The unrounded transform of the same box is the real scale.)
+    // PILLWL is the pill's width in its own units, so this is the card transform
+    // times the type factor; CARDSCALE is the transform alone.
     const float TRANSFORMSCALE = sc<float>(getOverviewGlobalBox(PILLLOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout, false).width) / PILLWL;
+    const float CARDSCALE      = TRANSFORMSCALE / UI.type;
     pill.round();
 
     out.drawable = true;
@@ -102,6 +115,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     // Everything inside the pill is measured off the box as it actually landed,
     // so the badge and the type follow the card transform for free.
     out.scale          = TRANSFORMSCALE;
+    out.cardScale      = CARDSCALE;
     const float SCALE  = out.scale;
     const float BADGED = std::round(OVERVIEW_PILL_BADGEL * SCALE);
     const float PADL   = std::round(OVERVIEW_PILL_PADL * SCALE);
@@ -121,8 +135,8 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     // its scale, so the undocked box inverts it from one known point. Undocked
     // this evaluates to 8 + 48 + 8 = the full 64px row, so the un-queried
     // layout is unchanged by construction rather than by a special case.
-    const float PILLFOOTL = PILLLOGICAL.y + OVERVIEW_PILL_HL + ((sc<float>(pill.y) - PILLUNDOCKEDY) / std::max(0.001F, SCALE));
-    out.rowL              = std::clamp(PILLFOOTL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL, 0.F, OVERVIEW_SEARCH_ROWHL);
+    const float PILLFOOTL = PILLLOGICAL.y + PILLHL + ((sc<float>(pill.y) - PILLUNDOCKEDY) / std::max(0.001F, CARDSCALE));
+    out.rowL              = std::clamp(PILLFOOTL - sc<float>(MONITOR->m_position.y) + MARGINL, 0.F, ROWHL);
 
     // THE NUDGE, applied only AFTER rowL: the strip, the results and the grid
     // all hang off rowL, so lifting the pill before it would lift the strip too
@@ -151,8 +165,9 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     // do, each with the provider's icon and name on its leading edge and its
     // rows laid out across the rest. There is no outer panel -- the cards are
     // the surface.
-    const float BANDHL = std::max(0.F, out.bandH);
-    if (SECTIONS.empty() || BANDHL <= (OVERVIEW_RESULT_PANELGAPL * 2.F) + 1.F)
+    const float BANDHL   = std::max(0.F, out.bandH);
+    const float PANELGAP = OVERVIEW_RESULT_PANELGAPL * UI.layout; // the gaps around the results, space factor
+    if (SECTIONS.empty() || BANDHL <= (PANELGAP * 2.F) + 1.F)
         return out;
 
     // The ranking can shrink under a selection made against a longer list. It is
@@ -160,8 +175,10 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     if (out.selection >= sc<int>(RESULTS.size()))
         out.selection = sc<int>(RESULTS.size()) - 1;
 
-    const float PAD_L      = SEARCH_PAD_L;
-    const float DIV_GAPL   = SEARCH_DIV_GAPL;
+    // Inside the results everything is part of the rows: type factor.
+    const float UT         = UI.type;
+    const float PAD_L      = SEARCH_PAD_L * UT;
+    const float DIV_GAPL   = SEARCH_DIV_GAPL * UT;
     const float MAX_SPANWL = overviewResultsSpanW(MONITOR);
 
     float CONTAINER_WL = IN.width > 1.F ? std::min(IN.width, MAX_SPANWL) : 0.F;
@@ -169,8 +186,8 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
         return out;
 
     const float CONTAINER_XL = sc<float>(MONITOR->m_position.x) + ((sc<float>(MONITOR->m_size.x) - CONTAINER_WL) / 2.F);
-    const float CONTAINER_YL = sc<float>(MONITOR->m_position.y) + out.rowL + OVERVIEW_RESULT_PANELGAPL;
-    const float CONTAINER_HL = BANDHL - (OVERVIEW_RESULT_PANELGAPL * 2.F);
+    const float CONTAINER_YL = sc<float>(MONITOR->m_position.y) + out.rowL + PANELGAP;
+    const float CONTAINER_HL = BANDHL - (PANELGAP * 2.F);
 
     const CBox CONTAINER_LOGICAL{CONTAINER_XL, CONTAINER_YL, CONTAINER_WL, CONTAINER_HL};
     CBox container = getOverviewGlobalBox(CONTAINER_LOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
@@ -189,19 +206,20 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
         out.tool.title    = RESULTS[0].toolTitle;
         out.tool.subtitle = RESULTS[0].toolSubtitle;
 
-        const float LEFT  = CONTAINER_XL + OVERVIEW_TOOL_PADL;
-        const float WIDTH = CONTAINER_WL - (2.F * OVERVIEW_TOOL_PADL);
-        const float FOOT  = CONTAINER_YL + CONTAINER_HL - OVERVIEW_TOOL_PADL / 2.F;
-        out.tool.header   = getOverviewGlobalBox(CBox{LEFT, CONTAINER_YL + OVERVIEW_TOOL_PADL, WIDTH, OVERVIEW_TOOL_HEADL - 10.F}, MONITOR, IN.renderScale,
+        const float TPADL = OVERVIEW_TOOL_PADL * UT;
+        const float LEFT  = CONTAINER_XL + TPADL;
+        const float WIDTH = CONTAINER_WL - (2.F * TPADL);
+        const float FOOT  = CONTAINER_YL + CONTAINER_HL - TPADL / 2.F;
+        out.tool.header   = getOverviewGlobalBox(CBox{LEFT, CONTAINER_YL + TPADL, WIDTH, (OVERVIEW_TOOL_HEADL - 10.F) * UT}, MONITOR, IN.renderScale,
                                                  OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
         out.tool.header.round();
 
-        float y = CONTAINER_YL + OVERVIEW_TOOL_PADL + OVERVIEW_TOOL_HEADL;
+        float y = CONTAINER_YL + TPADL + OVERVIEW_TOOL_HEADL * UT;
         for (size_t i = 0; i < RESULTS.size(); ++i) {
             // Measured against the FULL span, as the band was: the container is
             // easing toward it, and measuring the eased width would re-wrap every
             // frame of the entrance.
-            const float ROWHL = overviewToolRowHL(RESULTS[i], MAX_SPANWL);
+            const float ROWHL = overviewToolRowHL(RESULTS[i], MAX_SPANWL, UT);
             if (y + ROWHL > FOOT)
                 break; // the band decides how many fit; the rest wait for a taller one
             CBox row = getOverviewGlobalBox(CBox{LEFT, y, WIDTH, ROWHL}, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
@@ -215,7 +233,7 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
                 .status   = RESULTS[i].toolStatus,
                 .selected = IN.zone == EOverviewNavZone::Result && sc<int>(i) == out.selection,
             });
-            y += ROWHL + OVERVIEW_TOOL_GAPL;
+            y += ROWHL + OVERVIEW_TOOL_GAPL * UT;
         }
         return out;
     }
@@ -239,9 +257,9 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
         };
     };
 
-    const float HEAD_HL  = 28.F;
-    const float ROW_HL   = 32.F;
-    const float ROW_GAPL = 4.F;
+    const float HEAD_HL  = 28.F * UT;
+    const float ROW_HL   = 32.F * UT;
+    const float ROW_GAPL = 4.F * UT;
 
     const SSearchSection* sectionByCol[3] = {};
     for (const auto& sec : SECTIONS) {
@@ -249,9 +267,18 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
             sectionByCol[sec.column] = &sec;
     }
 
-    const float INSP_WL = std::clamp(IN.inspectorW, 140.F, std::max(140.F, CONTAINER_WL - (PAD_L * 2.F)));
-    const float INSP_XL = CONTAINER_XL + CONTAINER_WL - PAD_L - INSP_WL;
+    // No inspector (a narrow screen, UiScale::inspectorShown: the column
+    // widths came with 0 for it): the columns run to the container's padding,
+    // and the last one has no divider after it.
+    const bool  INSP_ON = IN.inspectorW > 0.5F;
+    const float INSP_WL = INSP_ON ? std::clamp(IN.inspectorW, 140.F, std::max(140.F, CONTAINER_WL - (PAD_L * 2.F))) : 0.F;
+    const float INSP_XL = INSP_ON ? CONTAINER_XL + CONTAINER_WL - PAD_L - INSP_WL : CONTAINER_XL + CONTAINER_WL - PAD_L + DIV_GAPL;
     const float COL_MAX_R = INSP_XL - DIV_GAPL;
+    int         lastCol   = -1;
+    for (int c = 0; c < 3; ++c) {
+        if (IN.colW[c] >= SEARCH_COL_HIDE_WL && sectionByCol[c])
+            lastCol = c;
+    }
 
     float colX        = CONTAINER_XL + PAD_L;
     int   drawn       = 0;
@@ -301,18 +328,18 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
         ++drawn;
 
         const float DIV_XL = COL_XL + COL_WL + (DIV_GAPL / 2.F);
-        if (DIV_XL < INSP_XL - 2.F) {
+        if (DIV_XL < INSP_XL - 2.F && (INSP_ON || c != lastCol)) {
             const CBox DIV_LOGICAL{DIV_XL, CONTAINER_YL + PAD_L, 1.F, CONTAINER_HL - (PAD_L * 2.F)};
             CBox divBox = getOverviewGlobalBox(DIV_LOGICAL, MONITOR, IN.renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, IN.layout);
             divBox.round();
-            divBox.width = std::max(1.F, std::round(1.F * out.scale));
+            divBox.width = std::max(1.F, std::round(1.F * out.cardScale)); // a 1 px rule at any type size
             out.dividers.push_back(divBox);
         }
 
         colX += COL_WL + DIV_GAPL;
     }
 
-    if (drawn == 0)
+    if (drawn == 0 || !INSP_ON)
         return out;
 
     const float INSP_YL = CONTAINER_YL + PAD_L;
@@ -1251,6 +1278,14 @@ std::string COverview::searchReport() const {
                        L.stripPlateL, L.gridNudgeL, L.gridShiftL, L.selection, L.hits.size(), L.cards.size(), L.tool.active ? 1 : 0, L.inspector.visible ? 1 : 0);
     if (const auto F = S.fields.find(searchMonitorId()); F != S.fields.end())
         out += std::format(" field={:.1f} moving={}", F->second.drawWidthL, F->second.moving ? 1 : 0);
+    // The proportions (UiScale.hpp) and the strip label's plate as last drawn,
+    // rendered px (tests/gates/overview_proportions.sh).
+    if (MON) {
+        const auto UI = overviewUi(MON);
+        out += std::format(" ui={:.3f},{:.3f}", UI.layout, UI.type);
+        const CBox TIP = stripTip.text.empty() ? CBox{} : OverviewRender::labelPillBox(MON, stripTip.text, stripTip.cx, stripTip.bottom, MON->m_scale, UI.type);
+        out += TIP.width > 0 ? std::format(" tip={:.0f},{:.0f},{:.0f},{:.0f}", TIP.x, TIP.y, TIP.width, TIP.height) : std::string{" tip=none"};
+    }
     for (size_t i = 0; i < L.hits.size() && i < 16; ++i) {
         const auto& H = L.hits[i];
         out += std::format("\n    hit {} col {} row {} box {:.0f},{:.0f},{:.0f},{:.0f}", H.index, H.column, H.rowInCol, H.box.x, H.box.y, H.box.width, H.box.height);

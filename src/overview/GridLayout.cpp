@@ -700,7 +700,7 @@ namespace OvInternal {
             if (usable.h <= 1)
                 return false;
         }
-        const float GAP = sc<float>(overviewMissionControlGap());
+        const float GAP = overviewMissionControlGap(monitor); // px at the 2160 reference (UiScale.hpp)
 
         usable.x += GAP;
         usable.w -= 2.0 * GAP;

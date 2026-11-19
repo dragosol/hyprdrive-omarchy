@@ -124,7 +124,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
     // Grow from the pill, not from 0: a 0→span ease spends its first frames
     // on an invisible sliver, then pops. Warp onto the pill width once.
     if (WIDTH_TARGET > 50.F && resultsWidth->value() < 50.F)
-        resultsWidth->setValueAndWarp(std::min(WIDTH_TARGET, overviewPillTargetWL(true)));
+        resultsWidth->setValueAndWarp(std::min(WIDTH_TARGET, overviewPillTargetWL(true) * overviewUiT(monitor))); // the pill as drawn (UiScale.hpp)
     if (std::abs(resultsWidth->goal() - WIDTH_TARGET) > 0.5F)
         *resultsWidth = WIDTH_TARGET;
 
@@ -141,7 +141,13 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         *gridNudge = searchLayoutHere().gridNudgeL;
 
     const uint8_t COL_MASK = QUERIED ? overviewSearchColMask(SECTIONS) : 0;
-    const auto    COL_TGT  = overviewSearchColWidths(resultsWidth->value(), COL_MASK);
+    // The proportions (UiScale.hpp): paddings at the type factor; on a narrow or
+    // portrait screen the inspector and the columns' floor too, and under
+    // INSPECTOR_MIN_WL no inspector at all.
+    const auto    UI       = overviewUi(monitor);
+    const float   MONWL = sc<float>(monitor->m_size.x), MONHL = sc<float>(monitor->m_size.y);
+    const auto    COL_TGT  = overviewSearchColWidths(resultsWidth->value(), COL_MASK, UI.type, Hyprdrive::UiScale::narrowK(MONWL, MONHL, UI),
+                                                     Hyprdrive::UiScale::inspectorShown(MONWL, UI));
 
     // The LIVE FIELD. Aimed off the text as it was drawn last frame (the draw
     // pass is the only place a glyph's width is known), which one frame behind
@@ -237,7 +243,7 @@ void COverview::renderSearch(PHLMONITOR monitor, float renderScale) {
         } else
             drawSearch(SESSION, SL, PILLLIT, BODYLIT, blurred ? 1 : 0);
         // The easter egg (KeyboardCat.hpp) opens out of the pill, over it.
-        Hyprdrive::KeyboardCat::render(monitor, SL.pill, SL.scale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
+        Hyprdrive::KeyboardCat::render(monitor, SL.pill, SL.cardScale, SL.fade, SL.rounding, SL.roundingPower, SL.bandH);
     }
 
     // The letter bounce is timestamped, not a PHLANIMVAR, so the compositor

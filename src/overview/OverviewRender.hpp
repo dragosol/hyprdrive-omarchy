@@ -82,10 +82,13 @@ SP<Render::ITexture> roundedRect(int w, int h, int radius, const CHyprColor& col
 //
 // Centred horizontally on `cx`, with the plate's BOTTOM edge at `bottomY`.
 // Returns the plate box, or an empty box if the text could not be rendered.
-CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale);
+// `typeK` multiplies its text and padding only (the overview's type factor,
+// UiScale.hpp, for the strip's labels); the ring and the on-screen clamp stay
+// at `scale`.
+CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale, float typeK = 1.F);
 // Where labelPill WOULD draw, without drawing: the same box it computes, so a
 // caller can dodge something before committing to a position.
-CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale);
+CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale, float typeK = 1.F);
 
 // A plate with a ring around it, faded as ONE surface (PlateColor.hpp): the
 // body in `fill` over the opaque `ring` colour -- what it settles at -- times

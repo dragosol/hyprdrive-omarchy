@@ -59,7 +59,7 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
     if (!monitor)
         return 1.F;
 
-    const float GAPL = sc<float>(Hyprdrive::Config::getMissionControlGap());
+    const float GAPL = overviewMissionControlGap(monitor); // this monitor's (UiScale.hpp)
     return std::clamp(sc<float>(monitor->m_size.x) * 0.84F, 880.F, std::max(1.F, sc<float>(monitor->m_size.x) - (GAPL * 2.F)));
 }
 
@@ -69,6 +69,9 @@ inline float overviewResultsSpanW(PHLMONITOR monitor) {
 // lines and a short one sat in a gap. Measured at LOGICAL scale with the same
 // fonts and columns the drawing uses (Overview.cpp's tool pane), so the
 // layout and the pixels agree; OVERVIEW_TOOL_ROWHL stays the floor.
+// `typeK` is the monitor's type factor (UiScale.hpp): the pane is drawn that
+// much smaller, so the text is measured in TYPE px -- the width divided by it --
+// and the height comes back multiplied by it. At 1 both are the old numbers.
 inline constexpr float OVERVIEW_TOOL_ROWPADL = 10.F, OVERVIEW_TOOL_TEXTPX = 14.F, OVERVIEW_TOOL_EXPX = 11.F, OVERVIEW_TOOL_VPADL = 5.F;
 inline constexpr float OVERVIEW_TOOL_MAXLINES = 6.F;
 inline float overviewToolTagWL(uint8_t kind) {
@@ -77,15 +80,15 @@ inline float overviewToolTagWL(uint8_t kind) {
 inline float overviewToolTextWL(uint8_t kind, float containerWL) {
     return std::max(16.F, containerWL - (2.F * OVERVIEW_TOOL_PADL) - (2.F * OVERVIEW_TOOL_ROWPADL) - overviewToolTagWL(kind));
 }
-inline float overviewToolRowHL(const SSearchRow& row, float containerWL) {
+inline float overviewToolRowHL(const SSearchRow& row, float containerWL, float typeK = 1.F) {
     if (row.toolStatus || row.name.empty())
-        return OVERVIEW_TOOL_ROWHL;
-    const int   W    = std::max(16, ((sc<int>(overviewToolTextWL(row.tool, containerWL)) + 15) / 16) * 16);
+        return OVERVIEW_TOOL_ROWHL * typeK;
+    const int   W    = std::max(16, ((sc<int>(overviewToolTextWL(row.tool, containerWL / typeK)) + 15) / 16) * 16);
     const auto  TX   = OverviewRender::textWrapped(row.name, CHyprColor{1.F, 1.F, 1.F, 1.F}, sc<int>(OVERVIEW_TOOL_TEXTPX), W,
                                                    sc<int>(OVERVIEW_TOOL_TEXTPX * 1.35F * OVERVIEW_TOOL_MAXLINES), false, "", 400);
     const float TXH  = TX && TX->ok() ? sc<float>(TX->m_size.y) : OVERVIEW_TOOL_TEXTPX * 1.35F;
     const float EXH  = row.toolExample.empty() ? 0.F : OVERVIEW_TOOL_EXPX * 1.5F;
-    return std::max(OVERVIEW_TOOL_ROWHL, TXH + EXH + (2.F * OVERVIEW_TOOL_VPADL) + 8.F);
+    return std::max(OVERVIEW_TOOL_ROWHL, TXH + EXH + (2.F * OVERVIEW_TOOL_VPADL) + 8.F) * typeK;
 }
 
 // Unified search panel: visible columns + inspector fill the container.
@@ -115,7 +118,11 @@ inline uint8_t overviewSearchColMask(const std::vector<SSearchSection>& sections
     return mask;
 }
 
-inline SSearchColWidths overviewSearchColWidths(float containerWL, uint8_t mask) {
+// `typeK` (UiScale.hpp's type factor) scales the paddings and gaps the layout
+// draws with -- they are part of the rows; `narrowK` the inspector's widths and
+// the columns' floor (a narrow or portrait screen, UiScale::narrowK); with no
+// `inspector` its room goes to the columns. 1, 1, true is the old split.
+inline SSearchColWidths overviewSearchColWidths(float containerWL, uint8_t mask, float typeK = 1.F, float narrowK = 1.F, bool inspector = true) {
     SSearchColWidths w;
     w.container = containerWL;
     int   n    = 0;
@@ -130,17 +137,31 @@ inline SSearchColWidths overviewSearchColWidths(float containerWL, uint8_t mask)
     if (n == 0 || containerWL < SEARCH_COL_HIDE_WL)
         return w;
 
-    const float CHROME = (SEARCH_PAD_L * 2.F) + (SEARCH_DIV_GAPL * sc<float>(n));
-    float       insp   = SEARCH_INSP_WL;
+    if (!inspector) {
+        // No inspector, so no divider before it either: n - 1 between columns.
+        const float CHROME = (SEARCH_PAD_L * typeK * 2.F) + (SEARCH_DIV_GAPL * typeK * sc<float>(n - 1));
+        const float INNER  = std::max(0.F, containerWL - CHROME);
+        w.inspector        = 0.F;
+        if (flex <= 0.F)
+            return w;
+        for (int i = 0; i < 3; ++i) {
+            if (mask & (1u << i))
+                w.col[i] = INNER * (SEARCH_COL_FLEX[i] / flex);
+        }
+        return w;
+    }
+
+    const float CHROME = (SEARCH_PAD_L * typeK * 2.F) + (SEARCH_DIV_GAPL * typeK * sc<float>(n));
+    float       insp   = SEARCH_INSP_WL * narrowK;
     if (n == 1)
-        insp = SEARCH_INSP_WIDE_WL;
+        insp = SEARCH_INSP_WIDE_WL * narrowK;
     else if (n == 2)
-        insp = SEARCH_INSP_MID_WL;
-    const float MIN_COLS = 160.F * sc<float>(n);
-    insp                 = std::min(insp, std::max(200.F, containerWL - CHROME - MIN_COLS));
+        insp = SEARCH_INSP_MID_WL * narrowK;
+    const float MIN_COLS = 160.F * narrowK * sc<float>(n);
+    insp                 = std::min(insp, std::max(200.F * narrowK, containerWL - CHROME - MIN_COLS));
     float inner          = containerWL - CHROME - insp;
-    if (inner < 120.F) {
-        insp  = std::clamp(containerWL * 0.28F, 160.F, insp);
+    if (inner < 120.F * narrowK) {
+        insp  = std::clamp(containerWL * 0.28F, 160.F * narrowK, insp);
         inner = containerWL - CHROME - insp;
     }
     inner         = std::max(0.F, inner);
@@ -214,7 +235,9 @@ inline float overviewResultsBudgetL(Search::CSession& S, PHLMONITOR monitor, siz
     if (!monitor)
         return 0.F;
 
-    float budget = std::min(360.F, sc<float>(monitor->m_size.y) * 0.42F);
+    // min(360 x uT, a share of the screen): UiScale::resultsBudgetL. Pinned
+    // (ui_scale a number) the share is the old 0.42, so 1 is the old budget.
+    float budget = Hyprdrive::UiScale::resultsBudgetL(sc<float>(monitor->m_size.y), overviewUi(monitor));
 
     // With no previews the grid's own height goes to ZERO, so everything under
     // the strip is the panel's (user, 2026-09-23). What stays behind is one
@@ -227,7 +250,7 @@ inline float overviewResultsBudgetL(Search::CSession& S, PHLMONITOR monitor, siz
     // leftover ceiling, but that ceiling is gated on gridTiles > 0, so with no
     // tiles the stack depends on nothing this budget can move.
     if (gridTiles == 0) {
-        const float SPARE = sc<float>(monitor->m_size.y) - OVERVIEW_SEARCH_ROWHL - overviewStripStackL(S, monitor) - sc<float>(overviewMissionControlGap());
+        const float SPARE = sc<float>(monitor->m_size.y) - overviewSearchRowRestL(monitor) - overviewStripStackL(S, monitor) - overviewMissionControlGap(monitor);
         budget            = std::max(budget, SPARE);
     }
 
@@ -241,8 +264,12 @@ inline size_t overviewResultsRowCap(Search::CSession& S, PHLMONITOR monitor, siz
 
     // The ratio is the intent; the room is the hard limit. Trimming to more
     // rows than the budget can draw would spill the card past its container.
-    const float  ROOM = overviewResultsBudgetL(S, monitor, gridTiles) - OVERVIEW_RESULT_CARD_CHROMEL - (OVERVIEW_RESULT_PANELGAPL * 2.F);
-    const size_t FITS = ROOM >= OVERVIEW_RESULT_ROWHL_FULL ? sc<size_t>(ROOM / OVERVIEW_RESULT_ROWHL_FULL) : 1;
+    // The rows are drawn at the type factor, the gaps around the card at the
+    // space factor (UiScale.hpp).
+    const auto   UI   = overviewUi(monitor);
+    const float  ROWL = OVERVIEW_RESULT_ROWHL_FULL * UI.type;
+    const float  ROOM = overviewResultsBudgetL(S, monitor, gridTiles) - OVERVIEW_RESULT_CARD_CHROMEL * UI.type - (OVERVIEW_RESULT_PANELGAPL * UI.layout * 2.F);
+    const size_t FITS = ROOM >= ROWL ? sc<size_t>(ROOM / ROWL) : 1;
 
     return std::max<size_t>(1, std::min(RATIO, FITS));
 }
@@ -297,10 +324,13 @@ inline float overviewResultsBandTarget(Search::CSession& S, PHLMONITOR monitor, 
     // three answers is the same hole seen from the other side. The sections
     // arrive already trimmed to overviewResultsRowCap, so this only has to
     // honour what actually survived.
+    // Type factor inside the card (the tool rows arrive already scaled), space
+    // factor for the gaps around it (UiScale.hpp).
+    const auto  UI     = overviewUi(monitor);
     const float CARD_H = toolPane ?
-        (2.F * OVERVIEW_TOOL_PADL) + OVERVIEW_TOOL_HEADL + (toolRowsHL >= 0.F ? toolRowsHL : sc<float>(maxRows) * (OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL)) +
-            (OVERVIEW_RESULT_PANELGAPL * 2.F) :
-        OVERVIEW_RESULT_CARD_CHROMEL + (sc<float>(maxRows) * OVERVIEW_RESULT_ROWHL_FULL) + (OVERVIEW_RESULT_PANELGAPL * 2.F);
+        (2.F * OVERVIEW_TOOL_PADL * UI.type) + OVERVIEW_TOOL_HEADL * UI.type +
+            (toolRowsHL >= 0.F ? toolRowsHL : sc<float>(maxRows) * (OVERVIEW_TOOL_ROWHL + OVERVIEW_TOOL_GAPL) * UI.type) + (OVERVIEW_RESULT_PANELGAPL * UI.layout * 2.F) :
+        (OVERVIEW_RESULT_CARD_CHROMEL + (sc<float>(maxRows) * OVERVIEW_RESULT_ROWHL_FULL)) * UI.type + (OVERVIEW_RESULT_PANELGAPL * UI.layout * 2.F);
 
     return std::min(CARD_H, overviewResultsBudgetL(S, monitor, gridTiles));
 }

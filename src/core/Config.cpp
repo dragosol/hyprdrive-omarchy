@@ -1,5 +1,6 @@
 #include "ConfigParts.hpp"
 #include "MotionClock.hpp"
+#include "UiScale.hpp"
 using namespace ConfigDetail;
 
 namespace ConfigDetail {
@@ -559,7 +560,7 @@ static void registerConfigValuesFor() {
                                    "mipmap-prefilter a tile's texture when it is minified below this fraction (0 = never)", 0.55F,
                                    SFloatValueOptions{.min = 0.F, .max = 1.F}));
     addKey(makeShared<CBoolValue>(KEY("mission_control"), "lay the focused workspace out as a mission-control grid", true));
-    addKey(makeShared<CIntValue>(KEY("mission_control_gap"), "gap between mission-control grid tiles", 40, SIntValueOptions{.min = 0}));
+    addKey(makeShared<CIntValue>(KEY("mission_control_gap"), "gap between mission-control grid tiles, px at full size (ui_scale scales it)", 40, SIntValueOptions{.min = 0}));
     addKey(makeShared<CIntValue>(KEY("mission_control_reflow_ms"), "ms for a grid tile to travel to a new slot", 300, SIntValueOptions{.min = 0}));
     // The default: Config.hpp OVERVIEW_TILE_ORDER_DEFAULT, spelled here as the
     // literal docs/CONFIG.md and the settings read (config_defaults_test).
@@ -568,11 +569,18 @@ static void registerConfigValuesFor() {
                                     "order the windows were opened) or position (as the windows sit on the desktop); taken as the overview opens",
                                     Hyprlang::STRING{"recent"}));
     addKey(makeShared<CBoolValue>(KEY("strip"), "workspace thumbnail strip across the top of the overview", true));
-    addKey(makeShared<CIntValue>(KEY("strip_height"), "logical px the strip band reserves at the top of the workspace", 260,
+    addKey(makeShared<CIntValue>(KEY("strip_height"), "logical px the strip band reserves at the top of the workspace, at full size (ui_scale scales it)", 260,
                                  SIntValueOptions{.min = 0}));
     addKey(makeShared<CIntValue>(KEY("strip_max_screen_pct"), "ceiling on the strip band as a percent of screen height, so a strip cell never dwarfs a window preview", 30,
                                  SIntValueOptions{.min = 1, .max = 100}));
-    addKey(makeShared<CIntValue>(KEY("strip_gap"), "gap between strip cells", 5, SIntValueOptions{.min = 0}));
+    addKey(makeShared<CIntValue>(KEY("strip_gap"), "gap between strip cells, px at full size (ui_scale scales it)", 5, SIntValueOptions{.min = 0}));
+    // THE OVERVIEW'S PROPORTIONS (UiScale.hpp; owner, 2026-11-19). The search
+    // pill, results, desktop strip and their gaps were sized for a 2160 px tall
+    // screen; auto scales them to the monitor's logical height.
+    addKey(makeShared<CStringValue>(KEY("ui_scale"),
+                                    "the overview's search, results and desktop strip sized to the screen: auto (from the monitor's logical height; "
+                                    "2160 = full size) or a number from 0.5 to 1 used on every monitor (1 = full size everywhere, the look before auto)",
+                                    Hyprlang::STRING{"auto"}));
     addKey(makeShared<CBoolValue>(KEY("strip_cleanup_button"),
                                   "hold Super over the overview's desktop strip: a Clean Up Empty Desktops button under it removes that monitor's empty desktops between the others", true));
     addKey(makeShared<CBoolValue>(KEY("tap_super"), "tapping SUPER alone toggles the overview", true));
@@ -840,6 +848,11 @@ int getStripMaxScreenPct() {
 int getStripGap() {
     static auto& VAL = valueRef<Hyprlang::INT>("plugin:hyprdrive:strip_gap");
     return std::max<int>(0, sc<int>(*VAL));
+}
+
+float getUiScale() {
+    static auto& VAL = valueRef<std::string>("plugin:hyprdrive:ui_scale");
+    return Hyprdrive::UiScale::parse(*VAL);
 }
 
 float getDragMiniScale() {
