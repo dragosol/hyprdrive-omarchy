@@ -15,6 +15,7 @@
 #include "IdentityLive.hpp"
 #include "MotionClock.hpp"
 #include "MotionMath.hpp"
+#include "UiScale.hpp"
 #include "Overview.hpp"
 
 #include <cctype>
@@ -552,7 +553,40 @@ inline bool overviewMissionControlOn() {
     return value;
 }
 
-inline int overviewMissionControlGap() {
+// THE OVERVIEW'S PROPORTIONS (UiScale.hpp, owner 2026-11-19). The setting is
+// read once per drawn frame like the getters around it; the factors are pure
+// arithmetic on the monitor's logical height. At 3840x2160 scale 1, and with
+// ui_scale = 1 anywhere, both are exactly 1 and every product below is the old
+// number bit for bit.
+inline float overviewUiScaleSetting() {
+    static uint64_t frame  = 0;
+    static float    value  = Hyprdrive::UiScale::AUTO;
+    static bool     filled = false;
+
+    if (!filled || frame != g_overviewFrame) {
+        frame  = g_overviewFrame;
+        value  = Hyprdrive::Config::getUiScale();
+        filled = true;
+    }
+
+    return value;
+}
+
+inline Hyprdrive::UiScale::SFactors overviewUi(const PHLMONITOR& monitor) {
+    return Hyprdrive::UiScale::factors(monitor ? sc<float>(monitor->m_size.y) : 0.F, overviewUiScaleSetting());
+}
+// The SPACE factor: bands, pads, gaps.
+inline float overviewUiL(const PHLMONITOR& monitor) {
+    return overviewUi(monitor).layout;
+}
+// The TYPE factor: the pill, rows, text, the strip label.
+inline float overviewUiT(const PHLMONITOR& monitor) {
+    return overviewUi(monitor).type;
+}
+
+// mission_control_gap is px at the 2160 reference: with a monitor it is that
+// monitor's gap, scaled by the space factor.
+inline float overviewMissionControlGap(const PHLMONITOR& monitor = nullptr) {
     static uint64_t frame  = 0;
     static int      value  = 0;
     static bool     filled = false;
@@ -563,7 +597,7 @@ inline int overviewMissionControlGap() {
         filled = true;
     }
 
-    return value;
+    return monitor ? sc<float>(value) * overviewUiL(monitor) : sc<float>(value);
 }
 
 inline int overviewMissionControlReflowMs() {
@@ -859,7 +893,9 @@ inline float overviewStripBandCeilingL(PHLMONITOR monitor) {
     if (H <= 1.F)
         return 0.F;
 
-    return std::min(H, sc<float>(monitor->m_size.y) * sc<float>(Hyprdrive::Config::getStripMaxScreenPct()) / 100.F);
+    // strip_height is px at the 2160 reference (UiScale.hpp); the screen share
+    // stays the ceiling over that.
+    return std::min(H * overviewUiL(monitor), sc<float>(monitor->m_size.y) * sc<float>(Hyprdrive::Config::getStripMaxScreenPct()) / 100.F);
 }
 
 inline float overviewStripLogicalHeight(Search::CSession& S, PHLMONITOR monitor) {
@@ -917,7 +953,7 @@ inline float overviewStripLogicalHeight(Search::CSession& S, PHLMONITOR monitor)
             // grid is empty, the panel has taken the room on purpose, and
             // clamping the strip here would shrink it to protect tiles that do
             // not exist.
-            const float AVAIL = MONH - CHROME - sc<float>(overviewMissionControlGap()) - OVERVIEW_STRIP_STACK_SLACKL;
+            const float AVAIL = MONH - CHROME - overviewMissionControlGap(monitor) - OVERVIEW_STRIP_STACK_SLACKL * overviewUiL(monitor);
             if (PUB.gridTiles > 0 && AVAIL > 1.F)
                 value = std::min(value, AVAIL * OVERVIEW_STRIP_MAX_AVAIL_FRAC);
 
@@ -945,13 +981,31 @@ inline float overviewStripLogicalHeight(Search::CSession& S, PHLMONITOR monitor)
 inline constexpr float OVERVIEW_STRIP_BAND_PAD_FRAC = 0.18F;
 inline constexpr float OVERVIEW_STRIP_PANELPADL     = 10.F;
 
+// The spacing above, at THIS monitor's proportions (UiScale.hpp): the plate's
+// padding, the strip's cell gap (strip_gap is px at the 2160 reference) and the
+// pad under a docked pill all follow the space factor.
+inline float overviewStripPanelPadL(const PHLMONITOR& monitor) {
+    return OVERVIEW_STRIP_PANELPADL * overviewUiL(monitor);
+}
+inline float overviewStripGapL(const PHLMONITOR& monitor) {
+    return sc<float>(Hyprdrive::Config::getStripGap()) * overviewUiL(monitor);
+}
+inline float overviewSearchDockPadL(const PHLMONITOR& monitor) {
+    return OVERVIEW_SEARCH_DOCKPADL * overviewUiL(monitor);
+}
+// The search row at rest: the pill at the type factor, its two margins at the
+// space factor -- 48 + 8 + 8 = 64 at the reference.
+inline float overviewSearchRowRestL(const PHLMONITOR& monitor) {
+    return OVERVIEW_PILL_HL * overviewUiT(monitor) + (OVERVIEW_SEARCH_ROWHL - OVERVIEW_PILL_HL) * overviewUiL(monitor);
+}
+
 inline float overviewStripPadL(Search::CSession& S, PHLMONITOR monitor) {
     return overviewStripLogicalHeight(S, monitor) * OVERVIEW_STRIP_BAND_PAD_FRAC;
 }
 
 inline float overviewChromeGapL(Search::CSession& S, PHLMONITOR monitor) {
     const float PAD = overviewStripPadL(S, monitor);
-    return std::max(0.F, PAD - OVERVIEW_STRIP_PANELPADL + OVERVIEW_SEARCH_DOCKPADL);
+    return std::max(0.F, PAD - overviewStripPanelPadL(monitor) + overviewSearchDockPadL(monitor));
 }
 
 // Search/results, then the drawn strip panel, then one chrome gap. The grid
@@ -971,7 +1025,7 @@ inline float overviewStripStackL(Search::CSession& S, PHLMONITOR monitor) {
 
     const float PAD   = overviewStripPadL(S, monitor);
     const float CELLH = std::max(0.F, BAND - 2.F * PAD);
-    return PAD + CELLH + OVERVIEW_STRIP_PANELPADL + overviewChromeGapL(S, monitor);
+    return PAD + CELLH + overviewStripPanelPadL(monitor) + overviewChromeGapL(S, monitor);
 }
 
 // X10 + the pill row's published height. OVERVIEW_SEARCH_ROWHL and the value

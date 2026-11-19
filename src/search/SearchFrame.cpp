@@ -45,9 +45,10 @@ Search::SFrameRows Search::frameRows(CSession& S, PHLMONITOR monitor, MONITORID 
     float      toolRowsHL = -1.F;
     if (PANEL && TOOLPANE) {
         const float SPAN = overviewResultsSpanW(monitor);
+        const float UT   = overviewUiT(monitor); // the rows are type (UiScale.hpp)
         toolRowsHL       = 0.F;
         for (const auto& ROW : RESULTS)
-            toolRowsHL += overviewToolRowHL(ROW, SPAN) + OVERVIEW_TOOL_GAPL;
+            toolRowsHL += overviewToolRowHL(ROW, SPAN, UT) + OVERVIEW_TOOL_GAPL * UT;
     }
     return {
         .queried     = QUERIED,
@@ -75,7 +76,9 @@ float Search::dockGoal(const SFrameRows& F) {
 
 bool Search::stepField(CSession& S, PHLMONITOR monitor, bool zooming) {
     auto&       FIELDMOTION = S.fieldOn(monitor->m_id);
-    const float MAXFIELDL   = std::max(OVERVIEW_PILL_FIELDL, sc<float>(monitor->m_size.x) * OVERVIEW_PILL_MAXFRAC - OVERVIEW_PILL_WL(0.F));
+    // The cap is a share of the monitor's width; the pill is drawn at the type
+    // factor (UiScale.hpp), so in its own units the share is that much wider.
+    const float MAXFIELDL   = std::max(OVERVIEW_PILL_FIELDL, sc<float>(monitor->m_size.x) * OVERVIEW_PILL_MAXFRAC / overviewUiT(monitor) - OVERVIEW_PILL_WL(0.F));
     // Whole logical px: the measurement is a glyph run divided by a float scale,
     // and a target that wanders by a fraction of a pixel re-arms the spring --
     // which snaps within its epsilon -- every frame it steps.

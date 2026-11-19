@@ -76,8 +76,8 @@ CBox COverview::stripPlateBox(PHLMONITOR monitor, float renderScale) const {
     const auto LAST  = stripCellLogicalBox(images.size() - 1);
     if (FIRST.width <= 1 || LAST.width <= 1)
         return {};
-    constexpr float PAD = OVERVIEW_STRIP_PANELPADL;
-    const CBox      LOGICAL{FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD, sc<float>(FIRST.height) + 2.F * PAD};
+    const float PAD = overviewStripPanelPadL(monitor); // UiScale.hpp
+    const CBox  LOGICAL{FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD, sc<float>(FIRST.height) + 2.F * PAD};
     const CBox      BOX = getOverviewGlobalBox(LOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
     return SC::drawable(sbox(BOX)) ? BOX : CBox{};
 }
@@ -195,7 +195,7 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
     // The menu's side padding both ways, the glyph column, the label, and the
     // few px a hovered row's content lifts to the right.
     const float W   = std::round(2.F * D::MENU_PAD_X * SCALE + GLYPHCOLW + LW + 4.F * SCALE);
-    const float GAP = OverviewRender::LABEL_PILL_GAP * SCALE; // the strip label's gap to the plate
+    const float GAP = OverviewRender::LABEL_PILL_GAP * SCALE * overviewUiL(monitor); // the strip label's gap to the plate (UiScale.hpp)
     const float Y   = std::round(sc<float>(PLATE.y + PLATE.height) + GAP);
 
     // ACROSS: after the pointer while it is on the strip (held while it is on
@@ -228,8 +228,8 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
     // its two gaps (bounded: a layout that does not move its tiles cannot run
     // it away).
     const auto& PUB = searchLayoutHere();
-    if (WANT && PUB.scale > 0.01F) {
-        const float              SHIFTR = gridNudge ? gridNudge->value() * PUB.scale : 0.F;
+    if (WANT && PUB.cardScale > 0.01F) {
+        const float              SHIFTR = gridNudge ? gridNudge->value() * PUB.cardScale : 0.F;
         std::vector<SC::SBox>    under;
         const CBox               MON{0, 0, monitor->m_size.x * SCALE, monitor->m_size.y * SCALE};
         const auto               DRAGGED = drag.activeWindow.lock();
@@ -241,8 +241,8 @@ void COverview::renderStripCleanup(PHLMONITOR monitor, float renderScale, float 
             under.push_back({LAST.box.x, LAST.box.y - SHIFTR, LAST.box.width, LAST.box.height});
         }
         const double NEED  = SC::bumpFor(sbox(S.box), GAP, under, PLATE.y + PLATE.height);
-        const float  LIMIT = ((2.F * GAP) + ROWH) / PUB.scale; // the button and a gap each side: never more
-        S.bumpL            = std::clamp(sc<float>(NEED) / PUB.scale, 0.F, LIMIT);
+        const float  LIMIT = ((2.F * GAP) + ROWH) / PUB.cardScale; // the button and a gap each side: never more
+        S.bumpL            = std::clamp(sc<float>(NEED) / PUB.cardScale, 0.F, LIMIT);
         if (S.bumpL > 0.5F)
             searchLayoutHere().gridNudgeL = std::max(searchLayoutHere().gridNudgeL, S.bumpL);
     }
@@ -370,8 +370,8 @@ bool COverview::stripCleanupClick() {
     // ...and the plate, logical, as stripPlateBox measures it.
     CBox plateFrom;
     if (const auto FIRST = stripCellLogicalBox(0), LAST = stripCellLogicalBox(images.size() - 1); FIRST.width > 1 && LAST.width > 1) {
-        constexpr float PAD = OVERVIEW_STRIP_PANELPADL;
-        plateFrom = {FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD, sc<float>(FIRST.height) + 2.F * PAD};
+        const float PAD = overviewStripPanelPadL(MON);
+        plateFrom       = {FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD, sc<float>(FIRST.height) + 2.F * PAD};
     }
 
     if (!Hyprdrive::FullscreenDesktop::compactRow(MON, "the strip's Clean Up button"))

@@ -1140,17 +1140,18 @@ void ringedPlate(const CBox& plate, int round, float roundingPower, const CHyprC
     Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CBorderPassElement>(border));
 }
 
-CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale) {
+CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float scale, float typeK) {
     if (str.empty() || !monitor)
         return {};
 
     const float SCALE = std::max(scale, 0.01F);
-    const auto  TEX   = text(str, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::max(1, sc<int>(std::round(PILL_FONT * SCALE))), false, "", 0, 500);
+    const float TYPE  = SCALE * typeK;
+    const auto  TEX   = text(str, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::max(1, sc<int>(std::round(PILL_FONT * TYPE))), false, "", 0, 500);
     if (!TEX || !TEX->ok())
         return {};
 
-    const float PADX = PILL_PAD_X * SCALE;
-    const float PADY = PILL_PAD_Y * SCALE;
+    const float PADX = PILL_PAD_X * TYPE;
+    const float PADY = PILL_PAD_Y * TYPE;
     const float W    = sc<float>(TEX->m_size.x) + 2.F * PADX;
     const float H    = sc<float>(TEX->m_size.y) + 2.F * PADY;
 
@@ -1161,18 +1162,19 @@ CBox labelPillBox(PHLMONITOR monitor, const std::string& str, double cx, double 
     return plate;
 }
 
-CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale) {
+CBox labelPill(PHLMONITOR monitor, const std::string& str, double cx, double bottomY, float alpha, float scale, float typeK) {
     if (str.empty() || alpha <= 0.F || !monitor)
         return {};
 
     const float SCALE = std::max(scale, 0.01F);
-    const auto  TEX   = text(str, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::max(1, sc<int>(std::round(PILL_FONT * SCALE))), false, "", 0, 500);
+    const float TYPE  = SCALE * typeK;
+    const auto  TEX   = text(str, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::max(1, sc<int>(std::round(PILL_FONT * TYPE))), false, "", 0, 500);
     if (!TEX || !TEX->ok())
         return {};
 
-    const float PADX  = PILL_PAD_X * SCALE;
-    const float PADY  = PILL_PAD_Y * SCALE;
-    const CBox  plate = labelPillBox(monitor, str, cx, bottomY, scale);
+    const float PADX  = PILL_PAD_X * TYPE;
+    const float PADY  = PILL_PAD_Y * TYPE;
+    const CBox  plate = labelPillBox(monitor, str, cx, bottomY, scale, typeK);
     if (plate.width < 1)
         return {};
 

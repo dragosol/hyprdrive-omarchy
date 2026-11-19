@@ -68,7 +68,7 @@ const Hyprdrive::StripLayout::SOutput& COverview::stripRow(float scratchRevealOv
     const float    ALTREVEAL = altRevealOverride >= 0.F ? std::clamp(altRevealOverride, 0.F, 1.F) : altStripsRevealValue();
     const float    TOPL      = overviewSearchLogicalHeight(m_search, MONITOR) + overviewResultsLogicalHeight(m_search, MONITOR);
     const float    BANDL     = overviewStripLogicalHeight(m_search, MONITOR);
-    const float    GAPL      = sc<float>(Hyprdrive::Config::getStripGap());
+    const float    GAPL      = overviewStripGapL(MONITOR); // px at the 2160 reference (UiScale.hpp)
     const double   ASPECT    = MONITOR->m_size.y > 1 ? sc<double>(MONITOR->m_size.x) / sc<double>(MONITOR->m_size.y) : 1.6;
     // The other monitors' strips, as one number: how many there are, how many
     // cells each has, and where each output sits -- the only things about them
@@ -100,8 +100,8 @@ const Hyprdrive::StripLayout::SOutput& COverview::stripRow(float scratchRevealOv
     in.top      = TOPL;
     in.band     = BANDL;
     in.padFrac  = OVERVIEW_STRIP_BAND_PAD_FRAC;
-    in.gap      = Hyprdrive::Config::getStripGap();
-    in.panelPad = OVERVIEW_STRIP_PANELPADL;
+    in.gap      = GAPL;
+    in.panelPad = overviewStripPanelPadL(MONITOR);
     in.detach   = OVERVIEW_SCRATCHPAD_DETACH_GAPS;
 
     in.ratios.reserve(images.size());
@@ -144,7 +144,7 @@ const Hyprdrive::StripLayout::SOutput& COverview::stripRow(float scratchRevealOv
         // No centring term: StripLayout top-aligns the row in the band, so the
         // whole of the shrink is below the plate and this is its real foot.
         const float PAD = BANDL * OVERVIEW_STRIP_BAND_PAD_FRAC;
-        searchLayoutHere().stripPlateL = PAD + sc<float>(OUT.cellH) + OVERVIEW_STRIP_PANELPADL;
+        searchLayoutHere().stripPlateL = PAD + sc<float>(OUT.cellH) + overviewStripPanelPadL(MONITOR);
     } else
         searchLayoutHere().stripPlateL = 0.F;
 
@@ -210,8 +210,8 @@ CBox COverview::scratchpadZoneLogicalBox() const {
     if (LAST.width <= 1)
         return {};
 
-    const float GAP = sc<float>(Hyprdrive::Config::getStripGap());
-    const float PAD = OVERVIEW_STRIP_PANELPADL + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
+    const float GAP = overviewStripGapL(MONITOR);
+    const float PAD = overviewStripPanelPadL(MONITOR) + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
     const float X   = sc<float>(LAST.x) + sc<float>(LAST.width) + PAD;
     const float W   = sc<float>(MONITOR->m_position.x) + sc<float>(MONITOR->m_size.x) - X;
 
@@ -319,8 +319,8 @@ CBox COverview::altZoneLogicalBox() const {
     if (FIRST.width <= 1)
         return {};
 
-    const float GAP = sc<float>(Hyprdrive::Config::getStripGap());
-    const float PAD = OVERVIEW_STRIP_PANELPADL + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
+    const float GAP = overviewStripGapL(MONITOR);
+    const float PAD = overviewStripPanelPadL(MONITOR) + std::max(GAP * OVERVIEW_SCRATCHPAD_ZONE_PAD_GAPS, 1.F);
     const float X   = sc<float>(MONITOR->m_position.x);
     const float W   = sc<float>(FIRST.x) - PAD - X;
 
@@ -510,8 +510,10 @@ void COverview::renderAltStrips(PHLMONITOR monitor, float renderScale, const Tim
 
         // Which monitor this is, over its plate, the scratchpad label's plate
         // and gap -- always, because unlike the scratchpad it has no other name.
+        // The gap at the space factor, the label at the type factor (UiScale.hpp).
         OverviewRender::labelPill(monitor, overviewMonitorLabel(OTHERMON), sc<float>(PLATE.x) + sc<float>(PLATE.width) / 2.F,
-                                  sc<float>(PLATE.y) - OverviewRender::LABEL_PILL_GAP * monitor->m_scale, FADE, monitor->m_scale);
+                                  sc<float>(PLATE.y) - OverviewRender::LABEL_PILL_GAP * monitor->m_scale * overviewUiL(monitor), FADE, monitor->m_scale,
+                                  overviewUiT(monitor));
     }
 }
 
@@ -531,7 +533,7 @@ void COverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale, cons
     // Its OWN plate. The cell is detached, so it cannot borrow the strip's --
     // which is the whole visual point: two plates read as two things, and a
     // swipe stops at the edge of the first.
-    const auto PLATELOGICAL = scratchpadCellLogicalBox(-1.F).copy().expand(OVERVIEW_STRIP_PANELPADL);
+    const auto PLATELOGICAL = scratchpadCellLogicalBox(-1.F).copy().expand(overviewStripPanelPadL(monitor));
     const auto PLATE        = getOverviewGlobalBox(PLATELOGICAL, monitor, renderScale, OVERVIEW_CHROME_NO_PAN, 0.F, layout);
     if (PLATE.width > 1) {
         const int PADPX      = std::max(0, sc<int>(std::round(sc<float>(CELL.x) - sc<float>(PLATE.x))));
@@ -605,9 +607,9 @@ void COverview::renderScratchpadCell(PHLMONITOR monitor, float renderScale, cons
     // the cell is inset from the plate by exactly the panel padding it was
     // lifted by.
     if (!PARKED.empty()) {
-        const float TOP = PLATE.width > 1 ? sc<float>(PLATE.y) : sc<float>(CELL.y) - OVERVIEW_STRIP_PANELPADL * monitor->m_scale;
+        const float TOP = PLATE.width > 1 ? sc<float>(PLATE.y) : sc<float>(CELL.y) - overviewStripPanelPadL(monitor) * monitor->m_scale;
         OverviewRender::labelPill(monitor, Hyprdrive::Scratchpad::label(WORKSPACE), sc<float>(CELL.x) + sc<float>(CELL.width) / 2.F,
-                                  TOP - OverviewRender::LABEL_PILL_GAP * monitor->m_scale, FADE, monitor->m_scale);
+                                  TOP - OverviewRender::LABEL_PILL_GAP * monitor->m_scale * overviewUiL(monitor), FADE, monitor->m_scale, overviewUiT(monitor));
     }
 }
 
@@ -716,8 +718,8 @@ bool COverview::stripUiContains(const Vector2D& point) const {
     const auto FIRST = stripCellLogicalBox(0);
     const auto LAST  = stripCellLogicalBox(images.size() - 1);
     if (FIRST.width > 1 && LAST.width > 1) {
-        constexpr float PAD = OVERVIEW_STRIP_PANELPADL;
-        const CBox      PANELLOGICAL{FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD,
+        const float PAD = overviewStripPanelPadL(MONITOR);
+        const CBox  PANELLOGICAL{FIRST.x - PAD, FIRST.y - PAD, sc<float>(LAST.x) + sc<float>(LAST.width) - sc<float>(FIRST.x) + 2.F * PAD,
                                 sc<float>(FIRST.height) + 2.F * PAD};
         if (getOverviewGlobalBox(PANELLOGICAL, MONITOR, scale->value(), OVERVIEW_CHROME_NO_PAN, 0.F, layout).containsPoint(point))
             return true;
@@ -914,7 +916,9 @@ void COverview::renderStripPanel(PHLMONITOR monitor, float renderScale, const SS
             // already settled that the theme's absolute radii are used unshrunk;
             // a padding derived from them has to follow the same rule or the
             // panel's curve stops being concentric with the corner cells.
-            constexpr float PANELPAD = OVERVIEW_STRIP_PANELPADL;
+            // At the space factor (UiScale.hpp); the radius below is still the
+            // cells' plus the pad as drawn, so the curves stay concentric.
+            const float PANELPAD = overviewStripPanelPadL(monitor);
 
             const CBox PANELLOGICAL = {
                 FIRSTLOGICAL.x - PANELPAD,
@@ -1553,10 +1557,13 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
     // every desktop and on the scratchpad (user, 2026-09-23). The first version
     // subtracted a rendered 10px from the cell, which is not the same thing once
     // the overview's card transform has scaled the padding.
-    const CBox  PLATE  = getOverviewGlobalBox(stripCellLogicalBox(idx).copy().expand(OVERVIEW_STRIP_PANELPADL), monitor, renderScale, OVERVIEW_CHROME_NO_PAN,
+    const CBox  PLATE  = getOverviewGlobalBox(stripCellLogicalBox(idx).copy().expand(overviewStripPanelPadL(monitor)), monitor, renderScale, OVERVIEW_CHROME_NO_PAN,
                                               0.F, layout);
     const float CX     = sc<float>(CELL.x) + sc<float>(CELL.width) / 2.F;
-    const float GAP    = OverviewRender::LABEL_PILL_GAP * monitor->m_scale; // the scratchpad label's gap
+    // The proportions (UiScale.hpp): the gaps at the space factor, the label's
+    // text and padding at the type factor.
+    const float GAP    = OverviewRender::LABEL_PILL_GAP * monitor->m_scale * overviewUiL(monitor); // the scratchpad label's gap
+    const float TYPEK  = overviewUiT(monitor);
     const float ABOVE  = sc<float>(PLATE.y) - GAP;
     float       bottom = ABOVE;
 
@@ -1565,7 +1572,7 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
     // in that same gap -- a label there would be drawn over both. Below the
     // plate is the gap to the windows, which is the same size by construction
     // (overviewChromeGapL), so the label fits there instead.
-    const CBox  WANT = OverviewRender::labelPillBox(monitor, label, CX, ABOVE, monitor->m_scale);
+    const CBox  WANT = OverviewRender::labelPillBox(monitor, label, CX, ABOVE, monitor->m_scale, TYPEK);
     const auto& PUB  = searchLayoutHere();
 
     if (WANT.width > 1 && PUB.containerBox.width > 1 && !WANT.intersection(PUB.containerBox).empty()) {
@@ -1582,8 +1589,8 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
         // plate, so only the difference is asked for, in LOGICAL px -- the
         // label is measured in rendered px, and the pill's published scale is
         // rendered-per-logical under the same card transform.
-        if (PUB.scale > 0.01F) {
-            const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.scale - overviewChromeGapL(m_search, monitor);
+        if (PUB.cardScale > 0.01F) {
+            const float NEEDL             = ((2.F * GAP) + sc<float>(WANT.height)) / PUB.cardScale - overviewChromeGapL(m_search, monitor);
             searchLayoutHere().gridNudgeL = std::max(0.F, NEEDL);
         }
     } else if (WANT.width > 1 && PUB.pillRest.width > 1 && WANT.x < PUB.pillRest.x + PUB.pillRest.width && PUB.pillRest.x < WANT.x + WANT.width) {
@@ -1650,7 +1657,7 @@ void COverview::renderStripCellLabel(PHLMONITOR monitor, float renderScale, floa
         return;
     }
 
-    OverviewRender::labelPill(monitor, T.text, T.cx, T.bottom, T.alpha() * fade, monitor->m_scale);
+    OverviewRender::labelPill(monitor, T.text, T.cx, T.bottom, T.alpha() * fade, monitor->m_scale, overviewUiT(monitor));
 }
 
 // The animation clock, like the dock tooltip it copies (Dock.cpp).

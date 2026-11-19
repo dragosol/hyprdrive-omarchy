@@ -129,6 +129,11 @@ struct SSearchLayout {
 
     float fade  = 0.F; // the overview's open progress; every element rides it
     float scale = 1.F; // pill.width / its logical width: the card transform, MEASURED
+    // ...times the monitor's type factor (UiScale.hpp), because the pill is laid
+    // out that much smaller: everything drawn at `scale` is type. `cardScale` is
+    // the transform alone -- rendered px per LOGICAL px -- for converting a
+    // rendered distance back into the logical space the layout works in.
+    float cardScale = 1.F;
     // decoration:rounding / rounding_power, same source as workspace cards.
     int   rounding      = 0;
     float roundingPower = 2.F;

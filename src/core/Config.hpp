@@ -326,6 +326,7 @@ bool          getSearchTranslate();
 std::string   getSearchTranslateEndpoint();
 std::string   getSearchTranslateTarget();
 int           getStripGap();
+float         getUiScale(); // plugin:hyprdrive:ui_scale: UiScale::AUTO or the pinned factor
 bool          getTapSuper();
 int           getTapSuperTimeoutMs();
 ::Config::CCssGapData getCssGapData(const std::string& name);
