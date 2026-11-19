@@ -65,7 +65,11 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
                 dockTopL = std::max(dockTopL, sc<float>(WA.y)); // a bar that DOES reserve
         }
 
-        const float DOCKY = (dockTopL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL) * sc<float>(MONITOR->m_scale);
+        // Docking never moves the pill below where it rests (owner, 2026-11-19).
+        // On a short logical screen (1920x1200 at 1.0667, with a top bar) the
+        // rest row lies ABOVE the docked line, and easing toward it docked the
+        // pill DOWN as the first key was typed. There the pill stays at rest.
+        const float DOCKY = std::min((dockTopL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL) * sc<float>(MONITOR->m_scale), PILLUNDOCKEDY);
         pill.y += (DOCKY - sc<float>(pill.y)) * DOCK;
     }
 
@@ -123,20 +127,17 @@ SSearchLayout layoutSearch(const SSearchLayoutInputs& IN, const std::vector<SSea
     // THE NUDGE, applied only AFTER rowL: the strip, the results and the grid
     // all hang off rowL, so lifting the pill before it would lift the strip too
     // -- and the label the pill is making room for would chase it upward. Here
-    // it moves the pill and nothing else. Capped at the docked height, just
-    // under the bar, which is as high as the pill ever goes.
+    // it moves the pill and nothing else. NOT capped by the room above the
+    // pill: it rises as far as the label needs, under the bar or off the top of
+    // the screen if that is what it takes (owner, 2026-11-19: "you can push the
+    // search bar up regardless, doesn't need to be fully visible or even on
+    // screen when hovering over the strip"). The cap at the docked line left a
+    // short screen no lift at all, and the label squeezed against the pill.
     {
-        float dockTopL = overviewTopChromeBottomL(MONITOR);
-        if (const auto WS = MONITOR->m_activeWorkspace; WS && WS->space()) {
-            if (const auto WA = WS->space()->workArea(); WA.w > 1 && WA.h > 1)
-                dockTopL = std::max(dockTopL, sc<float>(WA.y));
-        }
-        const float CEIL = (dockTopL - sc<float>(MONITOR->m_position.y) + OVERVIEW_SEARCH_DOCKPADL) * sc<float>(MONITOR->m_scale);
-        out.pillRest     = out.pill;
-        out.pillMaxUp    = std::max(0.F, sc<float>(out.pill.y) - CEIL);
+        out.pillRest = out.pill;
 
         if (IN.nudge > 0.5F) {
-            const float UP = std::round(std::clamp(IN.nudge, 0.F, out.pillMaxUp));
+            const float UP = std::round(std::max(0.F, IN.nudge));
             out.pill.y -= UP;
             out.badge.y -= UP;
         }

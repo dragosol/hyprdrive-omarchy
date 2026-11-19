@@ -1590,19 +1590,16 @@ bool COverview::stripCellLabelLive(PHLMONITOR monitor, float renderScale, std::s
         // The pill is above this cell: it gets gently shoved up, and the label
         // keeps the SAME gap to the pill as to the plate (user, 2026-09-23).
         //
-        // Both gaps are GAP when there is room. When there is not -- the pill
-        // can only rise to just under the bar -- they shrink TOGETHER, so the
-        // label always sits centred between the lifted pill and the plate
-        // rather than hard against one of them.
+        // Both gaps are always GAP. The pill rises as far as that takes, even
+        // partly or fully off the screen (owner, 2026-11-19); it used to stop
+        // just under the bar and squeeze both gaps, to nothing on a short
+        // screen.
         const float H          = sc<float>(WANT.height);
         const float RESTBOTTOM = sc<float>(PUB.pillRest.y + PUB.pillRest.height);
-        const float CEILBOTTOM = RESTBOTTOM - PUB.pillMaxUp; // the pill's foot at its highest
-        const float ROOM       = sc<float>(PLATE.y) - CEILBOTTOM - H;
-        const float G          = std::clamp(ROOM / 2.F, 0.F, GAP);
 
-        bottom                 = sc<float>(PLATE.y) - G;
+        bottom                 = ABOVE;
         const float LABELTOP   = bottom - H;
-        pillNudgeWant          = std::clamp(RESTBOTTOM + G - LABELTOP, 0.F, PUB.pillMaxUp);
+        pillNudgeWant          = std::max(0.F, RESTBOTTOM + GAP - LABELTOP);
     }
 
     keyOut    = std::to_string(Hyprdrive::Compat::id(images[idx]->pWorkspace));
