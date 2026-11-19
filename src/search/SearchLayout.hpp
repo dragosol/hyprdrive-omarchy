@@ -138,13 +138,11 @@ struct SSearchLayout {
     bool  placeholder = true;
 
     CBox  pill, badge;
-    // The pill BEFORE the strip label's nudge, and how far it may be lifted
-    // (to just under the bar). The label sizes its gaps off these, never off
-    // `pill`: `pill` already carries the lift, and measuring the lift against
-    // itself is a loop -- once the ceiling capped it, the wanted lift grew by a
-    // frame's worth every frame (measured: 331 -> 347 -> 365 px and climbing).
+    // The pill BEFORE the strip label's nudge. The label sizes its lift off
+    // this, never off `pill`: `pill` already carries the lift, and measuring
+    // the lift against itself is a loop -- the wanted lift grew by a frame's
+    // worth every frame (measured: 331 -> 347 -> 365 px and climbing).
     CBox  pillRest;
-    float pillMaxUp = 0.F;
     float fieldW = 0.F; // the text field, rendered px
     float gap    = 0.F; // badge -> field, rendered px
     // The field's left edge with NO pixel snapping, in the same rendered px.
