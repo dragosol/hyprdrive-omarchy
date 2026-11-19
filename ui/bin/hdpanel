@@ -74,6 +74,38 @@ TEXT_SIZES = [
     {"value": "system", "label": "Match the system"},
     {"value": "custom", "label": "Custom"},
 ]
+# plugin:hyprdrive:ui_scale (src/core/UiScale.hpp): "auto", or a number from
+# 0.5 to 1 used on every monitor. The panel offers these; a number set by hand
+# in the config is shown as its own entry (ui_scale_options).
+UI_SCALES = [{"value": "auto", "label": "Fit the screen"}, {"value": "1", "label": "100% (full size)"}] + [
+    {"value": ("%.2f" % (p / 100.0)).rstrip("0").rstrip("."), "label": "%d%%" % p} for p in range(95, 45, -5)
+]
+
+
+def ui_scale_value(value):
+    """The setting as the plugin reads it, spelled one way: "auto" for anything
+    that is not a positive number, else the number clamped to 0.5..1 with no
+    trailing zeros ("1", "0.85")."""
+    try:
+        n = float(str(value).strip())
+    except ValueError:
+        return "auto"
+    if not n > 0 or n != n or n in (float("inf"),):
+        return "auto"
+    n = min(1.0, max(0.5, n))
+    return ("%.2f" % n).rstrip("0").rstrip(".")
+
+
+UI_SCALE_KEY = PLUGIN + "ui_scale"
+
+
+def ui_scale_options(current):
+    opts = list(UI_SCALES)
+    if current not in [o["value"] for o in opts]:
+        opts.append({"value": current, "label": "%d%%" % round(float(current) * 100)})
+    return opts
+
+
 FULLSCREEN_DESKTOPS = [
     {"value": "next", "label": "Its own desktop"},
     {"value": "free", "label": "The next free desktop"},
@@ -144,6 +176,7 @@ KEY_META = [
     _k(PLUGIN + "strip_cleanup_button", "bool", "overview", True),
     _k(PLUGIN + "scale", "float", "overview", 0.82, min=0.4, max=0.9),
     _k(PLUGIN + "mission_control_gap", "int", "overview", 40, min=0, max=160),
+    _k(PLUGIN + "ui_scale", "enum", "overview", "auto", options=UI_SCALES),
     _k(PLUGIN + "overview_tile_order", "enum", "overview", "recent", options=TILE_ORDERS),
     _k(PLUGIN + "backdrop", "enum", "overview", "snapshot", options=BACKDROPS),
     _k(PLUGIN + "search:dictionary", "bool", "overview", False),
@@ -1467,6 +1500,8 @@ def coerce(meta, value):
         if not mods:
             raise SystemExit("hdpanel: %s needs at least one modifier" % meta["key"])
         return " + ".join(mods)
+    if meta["key"] == UI_SCALE_KEY:
+        return ui_scale_value(value)
     if kind == "enum":
         v = str(value)
         if meta.get("options") and v not in [o["value"] for o in meta["options"]]:
@@ -1775,6 +1810,9 @@ def dump():
     if live.get(fm_key) == "[[EMPTY]]":
         live[fm_key] = ""
     meta = [dict(m, options=file_manager_options(live.get(fm_key, ""))) if m["key"] == fm_key else m for m in meta]
+    if UI_SCALE_KEY in live:
+        live[UI_SCALE_KEY] = ui_scale_value(live[UI_SCALE_KEY])
+    meta = [dict(m, options=ui_scale_options(live.get(UI_SCALE_KEY, "auto"))) if m["key"] == UI_SCALE_KEY else m for m in meta]
     gestures = store.get("gestures")
     if not gestures:
         gestures = [dict(g) for g in DEFAULT_GESTURES]
