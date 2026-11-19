@@ -397,3 +397,29 @@ Baseline e17a1e9 rebuilt (/tmp/hdg-search/base), run right after: 40/40 PASS,
 749 checks; identical gate by gate. No reruns needed, no flakes. Runs:
 /tmp/hdg-search/runs/s3c{1..4}.txt (six gates per commit), s3-full-new.txt,
 s3-full-base.txt.
+
+## 6. Proportions (ui_scale, 2026-11-19)
+
+The search row, the results and the strip were drawn for 3840x2160 at scale 1
+(2160 logical px tall) and kept those logical sizes on every screen. Owner's
+design ("option B"), in `src/core/UiScale.hpp`, read through `overviewUi()`
+(OverviewInternal.hpp):
+
+| factor | value | applies to |
+| --- | --- | --- |
+| space `uL` | clamp(H / 2160, 0.5, 1), H = the monitor's logical height (not the work area: a bar coming and going must not resize the overview, and 4K with a bar is still exactly 1) | strip band (`strip_height`, under `strip_max_screen_pct`), `OVERVIEW_STRIP_PANELPADL`, `strip_gap`, `mission_control_gap` (grid inset and tile gaps, the results span), the search row's margins and dock pad, `OVERVIEW_RESULT_PANELGAPL`, the label/plate gaps (strip, scratchpad, other monitors, Clean Up button) |
+| type `uT` | clamp(sqrt(uL), 0.9, 1) | the pill (laid out uT smaller; everything inside follows the measured transform), result and tool rows, headers, paddings and their fonts, the strip labels' text and padding |
+| budget | min(360 x uT, 0.25 x H); pinned: the old 0.42 x H | the results band |
+| fixed | | 1 px dividers and rings, hit and drag slop, tile close button and window-pill buttons, the dock |
+
+`SSearchLayout::scale` is the card transform times uT (what text is drawn at);
+`cardScale` is the transform alone, for turning a rendered distance back into
+logical px. The inspector is dropped below 1200 logical px of width; on a
+portrait or narrower-than-1600 screen it and the columns' 160 px floor shrink by
+uT. `ui_scale` = a number pins uL to it (uT follows) and turns the two
+screen-relative rules off, so 1 is the old look on every screen. The Omarchy
+text scale still stops at 14/12 (TextScale.hpp): the rows follow uT, not the
+text size.
+
+Gate: `overview_proportions` (control `ui_scale = 1`). 3840x2160 at scale 1 is
+pixel-identical to the build before.
