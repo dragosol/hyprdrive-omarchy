@@ -176,7 +176,7 @@ KEY_META = [
     _k(PLUGIN + "strip_cleanup_button", "bool", "overview", True),
     _k(PLUGIN + "scale", "float", "overview", 0.82, min=0.4, max=0.9),
     _k(PLUGIN + "mission_control_gap", "int", "overview", 40, min=0, max=160),
-    _k(PLUGIN + "ui_scale", "enum", "overview", "auto", options=UI_SCALES),
+    _k(PLUGIN + "ui_scale", "enum", "overview", "1", options=UI_SCALES),
     _k(PLUGIN + "overview_tile_order", "enum", "overview", "recent", options=TILE_ORDERS),
     _k(PLUGIN + "backdrop", "enum", "overview", "snapshot", options=BACKDROPS),
     _k(PLUGIN + "search:dictionary", "bool", "overview", False),
@@ -1812,7 +1812,7 @@ def dump():
     meta = [dict(m, options=file_manager_options(live.get(fm_key, ""))) if m["key"] == fm_key else m for m in meta]
     if UI_SCALE_KEY in live:
         live[UI_SCALE_KEY] = ui_scale_value(live[UI_SCALE_KEY])
-    meta = [dict(m, options=ui_scale_options(live.get(UI_SCALE_KEY, "auto"))) if m["key"] == UI_SCALE_KEY else m for m in meta]
+    meta = [dict(m, options=ui_scale_options(live.get(UI_SCALE_KEY, "1"))) if m["key"] == UI_SCALE_KEY else m for m in meta]
     gestures = store.get("gestures")
     if not gestures:
         gestures = [dict(g) for g in DEFAULT_GESTURES]

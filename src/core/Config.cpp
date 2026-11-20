@@ -579,8 +579,8 @@ static void registerConfigValuesFor() {
     // screen; auto scales them to the monitor's logical height.
     addKey(makeShared<CStringValue>(KEY("ui_scale"),
                                     "the overview's search, results and desktop strip sized to the screen: auto (from the monitor's logical height; "
-                                    "2160 = full size) or a number from 0.5 to 1 used on every monitor (1 = full size everywhere, the look before auto)",
-                                    Hyprlang::STRING{"auto"}));
+                                    "2160 = full size) or a number from 0.5 to 1 used on every monitor (1, the default, = full size everywhere)",
+                                    Hyprlang::STRING{"1"}));
     addKey(makeShared<CBoolValue>(KEY("strip_cleanup_button"),
                                   "hold Super over the overview's desktop strip: a Clean Up Empty Desktops button under it removes that monitor's empty desktops between the others", true));
     addKey(makeShared<CBoolValue>(KEY("tap_super"), "tapping SUPER alone toggles the overview", true));
