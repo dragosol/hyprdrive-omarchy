@@ -97,7 +97,7 @@ var sections = [
         { type: "slider", key: P + "mission_control_gap", label: "Grid spacing", min: 0, max: 120, step: 2, unit: "px",
           desc: "Room between windows in the grid, at full size. Fit the screen below scales it with the rest." },
         { type: "choice", dropdown: true, key: P + "ui_scale", label: "Search and strip size",
-          desc: "How large the search bar, its results and the desktop strip are. Fit the screen sizes them to the screen\u2019s height, so a laptop keeps more room for the windows, and text never shrinks by more than a tenth. A percentage is one size on every screen; 100% is the full size." },
+          desc: "How large the search bar, its results and the desktop strip are. Fit the screen sizes them to the screen\u2019s height, so a laptop keeps more room for the windows, and text never shrinks by more than a tenth. A percentage is one size on every screen; 100%, the default, is the full size." },
         { type: "choice", key: P + "overview_tile_order", label: "Window order",
           desc: "How the windows are ordered in the grid, from the top left. Last used puts the window you used most recently first; Order opened, the oldest first; Match desktop position lays them out as they sit on the desktop. Taken as the overview opens, so nothing moves while it is up." }
       ]},

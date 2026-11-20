@@ -37,7 +37,7 @@ gate_begin sp
 source "$GATES_DIR/search.lib"
 GEOMS="1280x800:1 1920x1080:1 1920x1200:1.0666667 2880x1800:1.6 2560x1440:1 3840x2160:1 1080x1920:1"
 M=HEADLESS-1
-UIS=; [ "$CONTROL" = 1 ] && UIS=',ui_scale="1"'
+UIS=',ui_scale="auto"'; [ "$CONTROL" = 1 ] && UIS=',ui_scale="1"'
 plate() { dbg stripclean | grep -m1 -o 'plate=[0-9-]*,[0-9-]* [0-9]*x[0-9]*' | tr '=,x' '   ' | awk '{print $2, $3, $4, $5}'; }  # x y w h
 cell0() { set -- $(plate); echo $(( $1 + $3 / 6 )) $(( $2 + $4 / 2 )); }
 gridtop() { local c t m=999999; for c in gsbeta gsgamma gsdelta; do t=$(drawn_y $c); [ -n "$t" ] && [ "$t" -lt "$m" ] && m=$t; done; echo $m; }

@@ -47,11 +47,11 @@ your Omarchy theme instead of shipping one of its own.
   default), by the order the windows were opened, or laid out to match where
   the windows sit on the desktop. The order holds still while the overview is
   open.
-- **Sized to the screen** (`ui_scale`, `auto` by default): the search bar, its
-  results and the desktop strip take the same share of a laptop screen as of a
+- **Sized to the screen** (`ui_scale`, `1` by default; `auto` to turn it on): the search
+  bar, its results and the desktop strip take the same share of a laptop screen as of a
   4K one, so the windows keep the room. Text and click targets shrink by a
-  tenth at most. A number from 0.5 to 1 picks one size for every monitor; `1`
-  is the full size everywhere, as before.
+  tenth at most. A number from 0.5 to 1 picks one size for every monitor; `1`,
+  the default, is the full size everywhere.
 - **Keys act on what you point at:** Super+F, Super+T and the other window
   shortcuts act on the hovered tile, and on a hovered window preview in the
   dock.

@@ -48,7 +48,7 @@ Prefix: `plugin:hyprdrive:`
 | `strip_height` | int | `260` | >= 0 | logical px the strip band reserves at the top of the workspace, at full size (ui_scale scales it) |
 | `strip_max_screen_pct` | int | `30` | 1 .. 100 | ceiling on the strip band as a percent of screen height, so a strip cell never dwarfs a window preview |
 | `strip_gap` | int | `5` | >= 0 | gap between strip cells, px at full size (ui_scale scales it) |
-| `ui_scale` | string | `"auto"` |  | the overview's search, results and desktop strip sized to the screen: auto (from the monitor's logical height; 2160 = full size) or a number from 0.5 to 1 used on every monitor (1 = full size everywhere, the look before auto) |
+| `ui_scale` | string | `"1"` |  | the overview's search, results and desktop strip sized to the screen: auto (from the monitor's logical height; 2160 = full size) or a number from 0.5 to 1 used on every monitor (1, the default, = full size everywhere) |
 | `strip_cleanup_button` | bool | `true` |  | hold Super over the overview's desktop strip: a Clean Up Empty Desktops button under it removes that monitor's empty desktops between the others |
 | `tap_super` | bool | `true` |  | tapping SUPER alone toggles the overview |
 | `tap_super_timeout_ms` | int | `250` | >= 0 | longest press-to-release still counted as a SUPER tap (0 = no limit) |
